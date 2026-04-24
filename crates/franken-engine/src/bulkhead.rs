@@ -622,7 +622,7 @@ mod tests {
                 pressure_threshold_pct: 80,
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(reg.bulkhead_count(), 1);
     }
 
@@ -655,18 +655,18 @@ mod tests {
                 pressure_threshold_pct: 80,
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
-        let p1 = reg.acquire("test", "t1").unwrap();
+        let p1 = reg.acquire("test", "t1").expect("serde deserialization should succeed");
         assert_eq!(reg.active_count("test"), Some(1));
 
-        let p2 = reg.acquire("test", "t2").unwrap();
+        let p2 = reg.acquire("test", "t2").expect("serde deserialization should succeed");
         assert_eq!(reg.active_count("test"), Some(2));
 
-        reg.release("test", p1, "t1").unwrap();
+        reg.release("test", p1, "t1").expect("serde deserialization should succeed");
         assert_eq!(reg.active_count("test"), Some(1));
 
-        reg.release("test", p2, "t2").unwrap();
+        reg.release("test", p2, "t2").expect("serde deserialization should succeed");
         assert_eq!(reg.active_count("test"), Some(0));
     }
 
@@ -681,14 +681,14 @@ mod tests {
                 pressure_threshold_pct: 80,
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
-        let _p1 = reg.acquire("test", "t1").unwrap();
-        let p2 = reg.acquire("test", "t2").unwrap(); // queued
+        let _p1 = reg.acquire("test", "t1").expect("serde deserialization should succeed");
+        let p2 = reg.acquire("test", "t2").expect("serde deserialization should succeed"); // queued
         assert_eq!(reg.queue_depth("test"), Some(1));
 
         // Release p2 from waiters.
-        reg.release("test", p2, "t2").unwrap();
+        reg.release("test", p2, "t2").expect("serde deserialization should succeed");
         assert_eq!(reg.queue_depth("test"), Some(0));
     }
 
@@ -703,10 +703,10 @@ mod tests {
                 pressure_threshold_pct: 80,
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
-        let _p1 = reg.acquire("test", "t1").unwrap();
-        let _p2 = reg.acquire("test", "t2").unwrap(); // queued
+        let _p1 = reg.acquire("test", "t1").expect("serde deserialization should succeed");
+        let _p2 = reg.acquire("test", "t2").expect("serde deserialization should succeed"); // queued
         assert!(matches!(
             reg.acquire("test", "t3"),
             Err(BulkheadError::BulkheadFull { .. })
@@ -733,7 +733,7 @@ mod tests {
                 pressure_threshold_pct: 80,
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert!(matches!(
             reg.release("test", PermitId(999), "t"),
             Err(BulkheadError::PermitNotFound { .. })
@@ -751,15 +751,15 @@ mod tests {
                 pressure_threshold_pct: 80,
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
-        let p1 = reg.acquire("test", "t1").unwrap();
-        let _p2 = reg.acquire("test", "t2").unwrap(); // queued
+        let p1 = reg.acquire("test", "t1").expect("serde deserialization should succeed");
+        let _p2 = reg.acquire("test", "t2").expect("serde deserialization should succeed"); // queued
         assert_eq!(reg.active_count("test"), Some(1));
         assert_eq!(reg.queue_depth("test"), Some(1));
 
         // Release p1 → p2 promoted to active.
-        reg.release("test", p1, "t1").unwrap();
+        reg.release("test", p1, "t1").expect("serde deserialization should succeed");
         assert_eq!(reg.active_count("test"), Some(1));
         assert_eq!(reg.queue_depth("test"), Some(0));
     }
@@ -777,16 +777,16 @@ mod tests {
                 pressure_threshold_pct: 80,
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         // Fill to 7 (below 80% of 10 = 8).
         for i in 0..7 {
-            reg.acquire("test", &format!("t{i}")).unwrap();
+            reg.acquire("test", &format!("t{i}")).expect("serde deserialization should succeed");
         }
         assert_eq!(reg.is_at_pressure("test"), Some(false));
 
         // Fill to 8 (at 80%).
-        reg.acquire("test", "t7").unwrap();
+        reg.acquire("test", "t7").expect("serde deserialization should succeed");
         assert_eq!(reg.is_at_pressure("test"), Some(true));
     }
 
@@ -801,12 +801,12 @@ mod tests {
                 pressure_threshold_pct: 50,
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         // At 50% threshold, 1 of 2 triggers pressure.
-        reg.acquire("test", "t1").unwrap();
+        reg.acquire("test", "t1").expect("serde deserialization should succeed");
         // Second acquire should trigger pressure.
-        reg.acquire("test", "t2").unwrap();
+        reg.acquire("test", "t2").expect("serde deserialization should succeed");
 
         let events = reg.drain_events();
         let pressure_events: Vec<_> = events
@@ -829,10 +829,10 @@ mod tests {
                 pressure_threshold_pct: 80,
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
-        let _p1 = reg.acquire("test", "t1").unwrap();
-        let _p2 = reg.acquire("test", "t2").unwrap();
+        let _p1 = reg.acquire("test", "t1").expect("serde deserialization should succeed");
+        let _p2 = reg.acquire("test", "t2").expect("serde deserialization should succeed");
 
         // Reduce limit to 1 — existing permits not dropped.
         reg.reconfigure(
@@ -843,7 +843,7 @@ mod tests {
                 pressure_threshold_pct: 80,
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         assert_eq!(reg.active_count("test"), Some(2));
     }
@@ -859,7 +859,7 @@ mod tests {
                 pressure_threshold_pct: 80,
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert!(matches!(
             reg.reconfigure(
                 "test",
@@ -886,10 +886,10 @@ mod tests {
                 pressure_threshold_pct: 80,
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
-        reg.acquire("test", "t1").unwrap();
-        reg.acquire("test", "t2").unwrap();
+        reg.acquire("test", "t1").expect("serde deserialization should succeed");
+        reg.acquire("test", "t2").expect("serde deserialization should succeed");
 
         let snap = reg.snapshot();
         let s = &snap["test"];
@@ -912,8 +912,8 @@ mod tests {
                 pressure_threshold_pct: 80,
             },
         )
-        .unwrap();
-        reg.acquire("test", "trace-1").unwrap();
+        .expect("serde deserialization should succeed");
+        reg.acquire("test", "trace-1").expect("serde deserialization should succeed");
 
         let events = reg.drain_events();
         assert_eq!(events.len(), 1);
@@ -932,10 +932,10 @@ mod tests {
                 pressure_threshold_pct: 80,
             },
         )
-        .unwrap();
-        let p = reg.acquire("test", "t1").unwrap();
+        .expect("serde deserialization should succeed");
+        let p = reg.acquire("test", "t1").expect("serde deserialization should succeed");
         reg.drain_events();
-        reg.release("test", p, "t1").unwrap();
+        reg.release("test", p, "t1").expect("serde deserialization should succeed");
 
         let events = reg.drain_events();
         assert_eq!(events.len(), 1);
@@ -953,8 +953,8 @@ mod tests {
                 pressure_threshold_pct: 80,
             },
         )
-        .unwrap();
-        reg.acquire("test", "t1").unwrap();
+        .expect("serde deserialization should succeed");
+        reg.acquire("test", "t1").expect("serde deserialization should succeed");
         reg.drain_events();
 
         let _ = reg.acquire("test", "t2");
@@ -974,11 +974,11 @@ mod tests {
                 pressure_threshold_pct: 80,
             },
         )
-        .unwrap();
-        let p1 = reg.acquire("test", "t1").unwrap();
-        let p2 = reg.acquire("test", "t2").unwrap();
-        reg.release("test", p1, "t1").unwrap();
-        reg.release("test", p2, "t2").unwrap();
+        .expect("serde deserialization should succeed");
+        let p1 = reg.acquire("test", "t1").expect("serde deserialization should succeed");
+        let p2 = reg.acquire("test", "t2").expect("serde deserialization should succeed");
+        reg.release("test", p1, "t1").expect("serde deserialization should succeed");
+        reg.release("test", p2, "t2").expect("serde deserialization should succeed");
 
         assert_eq!(reg.event_counts().get("acquire"), Some(&2));
         assert_eq!(reg.event_counts().get("release"), Some(&2));
@@ -995,8 +995,8 @@ mod tests {
             BulkheadClass::EvidenceFlush,
         ];
         for c in &classes {
-            let json = serde_json::to_string(c).unwrap();
-            let restored: BulkheadClass = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(c).expect("serde deserialization should succeed");
+            let restored: BulkheadClass = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*c, restored);
         }
     }
@@ -1008,8 +1008,8 @@ mod tests {
             max_queue_depth: 128,
             pressure_threshold_pct: 80,
         };
-        let json = serde_json::to_string(&config).unwrap();
-        let restored: BulkheadConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let restored: BulkheadConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, restored);
     }
 
@@ -1025,8 +1025,8 @@ mod tests {
             event: "permit_acquired".to_string(),
             permit_id: 42,
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let restored: BulkheadEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let restored: BulkheadEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, restored);
     }
 
@@ -1047,8 +1047,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap();
-            let restored: BulkheadError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let restored: BulkheadError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, restored);
         }
     }
@@ -1063,8 +1063,8 @@ mod tests {
             max_queue_depth: 20,
             at_pressure: false,
         };
-        let json = serde_json::to_string(&snap).unwrap();
-        let restored: BulkheadSnapshot = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&snap).expect("serde deserialization should succeed");
+        let restored: BulkheadSnapshot = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(snap, restored);
     }
 
@@ -1109,11 +1109,11 @@ mod tests {
                     pressure_threshold_pct: 80,
                 },
             )
-            .unwrap();
-            let p1 = reg.acquire("test", "t1").unwrap();
-            let p2 = reg.acquire("test", "t2").unwrap();
-            reg.release("test", p1, "t1").unwrap();
-            reg.release("test", p2, "t2").unwrap();
+            .expect("serde deserialization should succeed");
+            let p1 = reg.acquire("test", "t1").expect("serde deserialization should succeed");
+            let p2 = reg.acquire("test", "t2").expect("serde deserialization should succeed");
+            reg.release("test", p1, "t1").expect("serde deserialization should succeed");
+            reg.release("test", p2, "t2").expect("serde deserialization should succeed");
             reg.drain_events()
         };
 
@@ -1174,10 +1174,10 @@ mod tests {
         let mut reg = BulkheadRegistry::with_defaults();
 
         // Acquire from each bulkhead.
-        let p1 = reg.acquire("remote_in_flight", "t1").unwrap();
-        let p2 = reg.acquire("background_maintenance", "t2").unwrap();
-        let p3 = reg.acquire("saga_execution", "t3").unwrap();
-        let p4 = reg.acquire("evidence_flush", "t4").unwrap();
+        let p1 = reg.acquire("remote_in_flight", "t1").expect("serde deserialization should succeed");
+        let p2 = reg.acquire("background_maintenance", "t2").expect("serde deserialization should succeed");
+        let p3 = reg.acquire("saga_execution", "t3").expect("serde deserialization should succeed");
+        let p4 = reg.acquire("evidence_flush", "t4").expect("serde deserialization should succeed");
 
         assert_eq!(reg.active_count("remote_in_flight"), Some(1));
         assert_eq!(reg.active_count("background_maintenance"), Some(1));
@@ -1185,10 +1185,10 @@ mod tests {
         assert_eq!(reg.active_count("evidence_flush"), Some(1));
 
         // Release all.
-        reg.release("remote_in_flight", p1, "t1").unwrap();
-        reg.release("background_maintenance", p2, "t2").unwrap();
-        reg.release("saga_execution", p3, "t3").unwrap();
-        reg.release("evidence_flush", p4, "t4").unwrap();
+        reg.release("remote_in_flight", p1, "t1").expect("serde deserialization should succeed");
+        reg.release("background_maintenance", p2, "t2").expect("serde deserialization should succeed");
+        reg.release("saga_execution", p3, "t3").expect("serde deserialization should succeed");
+        reg.release("evidence_flush", p4, "t4").expect("serde deserialization should succeed");
 
         assert_eq!(reg.active_count("remote_in_flight"), Some(0));
         assert_eq!(reg.active_count("evidence_flush"), Some(0));
@@ -1253,9 +1253,9 @@ mod tests {
                 pressure_threshold_pct: 80,
             },
         )
-        .unwrap();
-        let p1 = reg.acquire("test", "t1").unwrap();
-        reg.release("test", p1, "t1").unwrap();
+        .expect("serde deserialization should succeed");
+        let p1 = reg.acquire("test", "t1").expect("serde deserialization should succeed");
+        reg.release("test", p1, "t1").expect("serde deserialization should succeed");
         assert!(matches!(
             reg.release("test", p1, "t1"),
             Err(BulkheadError::PermitNotFound { .. })
@@ -1313,9 +1313,9 @@ mod tests {
     #[test]
     fn snapshot_multiple_bulkheads() {
         let mut reg = BulkheadRegistry::with_defaults();
-        reg.acquire("remote_in_flight", "t1").unwrap();
-        reg.acquire("remote_in_flight", "t2").unwrap();
-        reg.acquire("saga_execution", "t3").unwrap();
+        reg.acquire("remote_in_flight", "t1").expect("serde deserialization should succeed");
+        reg.acquire("remote_in_flight", "t2").expect("serde deserialization should succeed");
+        reg.acquire("saga_execution", "t3").expect("serde deserialization should succeed");
 
         let snap = reg.snapshot();
         assert_eq!(snap.len(), 4);
@@ -1340,12 +1340,12 @@ mod tests {
                 pressure_threshold_pct: 100,
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
-        reg.acquire("test", "t1").unwrap();
+        reg.acquire("test", "t1").expect("serde deserialization should succeed");
         assert_eq!(reg.is_at_pressure("test"), Some(false));
 
-        reg.acquire("test", "t2").unwrap();
+        reg.acquire("test", "t2").expect("serde deserialization should succeed");
         assert_eq!(reg.is_at_pressure("test"), Some(true));
     }
 
@@ -1364,7 +1364,7 @@ mod tests {
                 pressure_threshold_pct: 0,
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         // 0% of 10 = 0, so any active count >= 0 triggers pressure.
         assert_eq!(reg.is_at_pressure("test"), Some(true));
@@ -1385,8 +1385,8 @@ mod tests {
                 pressure_threshold_pct: 80,
             },
         )
-        .unwrap();
-        reg.acquire("test", "t1").unwrap();
+        .expect("serde deserialization should succeed");
+        reg.acquire("test", "t1").expect("serde deserialization should succeed");
         assert_eq!(reg.active_count("test"), Some(1));
 
         // Re-register replaces (active permits are lost).
@@ -1398,7 +1398,7 @@ mod tests {
                 pressure_threshold_pct: 90,
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(reg.active_count("test"), Some(0));
         assert_eq!(reg.bulkhead_count(), 1);
     }
@@ -1444,14 +1444,14 @@ mod tests {
                 pressure_threshold_pct: 80,
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
-        let p1 = reg.acquire("test", "t1").unwrap(); // active
-        let _p2 = reg.acquire("test", "t2").unwrap(); // queued first
-        let _p3 = reg.acquire("test", "t3").unwrap(); // queued second
+        let p1 = reg.acquire("test", "t1").expect("serde deserialization should succeed"); // active
+        let _p2 = reg.acquire("test", "t2").expect("serde deserialization should succeed"); // queued first
+        let _p3 = reg.acquire("test", "t3").expect("serde deserialization should succeed"); // queued second
 
         // Release p1 → t2 promoted (FIFO).
-        reg.release("test", p1, "t1").unwrap();
+        reg.release("test", p1, "t1").expect("serde deserialization should succeed");
         assert_eq!(reg.active_count("test"), Some(1));
         assert_eq!(reg.queue_depth("test"), Some(1));
     }
@@ -1538,8 +1538,8 @@ mod tests {
     #[test]
     fn permit_id_serde_roundtrip() {
         let pid = PermitId(12345);
-        let json = serde_json::to_string(&pid).unwrap();
-        let restored: PermitId = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&pid).expect("serde deserialization should succeed");
+        let restored: PermitId = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(pid, restored);
     }
 
@@ -1555,7 +1555,7 @@ mod tests {
             event: "permit_acquired".into(),
             permit_id: 77,
         };
-        let json = serde_json::to_string(&ev).unwrap();
+        let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
         for field in [
             "bulkhead_id",
             "current_count",
@@ -1580,7 +1580,7 @@ mod tests {
             max_queue_depth: 10,
             at_pressure: false,
         };
-        let json = serde_json::to_string(&snap).unwrap();
+        let json = serde_json::to_string(&snap).expect("serde deserialization should succeed");
         for field in [
             "bulkhead_id",
             "active_count",
@@ -1618,8 +1618,8 @@ mod tests {
                 pressure_threshold_pct: 80,
             },
         )
-        .unwrap();
-        reg.acquire("test", "t1").unwrap();
+        .expect("serde deserialization should succeed");
+        reg.acquire("test", "t1").expect("serde deserialization should succeed");
         assert!(!reg.drain_events().is_empty());
         assert!(reg.drain_events().is_empty());
     }
@@ -1651,14 +1651,14 @@ mod tests {
                 pressure_threshold_pct: 80,
             },
         )
-        .unwrap();
-        let p1 = reg.acquire("test", "t1").unwrap();
+        .expect("serde deserialization should succeed");
+        let p1 = reg.acquire("test", "t1").expect("serde deserialization should succeed");
         // Full, no queue room — reject
         assert!(reg.acquire("test", "t2").is_err());
         // Release opens a slot
-        reg.release("test", p1, "t1").unwrap();
+        reg.release("test", p1, "t1").expect("serde deserialization should succeed");
         // Now acquire succeeds again
-        let _p3 = reg.acquire("test", "t3").unwrap();
+        let _p3 = reg.acquire("test", "t3").expect("serde deserialization should succeed");
         assert_eq!(reg.active_count("test"), Some(1));
     }
 
@@ -1673,8 +1673,8 @@ mod tests {
                 pressure_threshold_pct: 50,
             },
         )
-        .unwrap();
-        reg.acquire("test", "t1").unwrap();
+        .expect("serde deserialization should succeed");
+        reg.acquire("test", "t1").expect("serde deserialization should succeed");
         let snap = reg.snapshot();
         assert!(snap["test"].at_pressure);
     }
@@ -1690,8 +1690,8 @@ mod tests {
             max_queue_depth: 0,
             pressure_threshold_pct: 255,
         };
-        let json = serde_json::to_string(&cfg).unwrap();
-        let restored: BulkheadConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
+        let restored: BulkheadConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cfg, restored);
     }
 
@@ -1702,8 +1702,8 @@ mod tests {
             max_queue_depth: 0,
             pressure_threshold_pct: 0,
         };
-        let json = serde_json::to_string(&cfg).unwrap();
-        let restored: BulkheadConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
+        let restored: BulkheadConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cfg, restored);
     }
 
@@ -1719,8 +1719,8 @@ mod tests {
             event: String::new(),
             permit_id: 0,
         };
-        let json = serde_json::to_string(&ev).unwrap();
-        let restored: BulkheadEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
+        let restored: BulkheadEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ev, restored);
     }
 
@@ -1736,8 +1736,8 @@ mod tests {
             event: "permit_acquired".into(),
             permit_id: 1,
         };
-        let json = serde_json::to_string(&ev).unwrap();
-        let restored: BulkheadEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
+        let restored: BulkheadEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ev, restored);
     }
 
@@ -1747,8 +1747,8 @@ mod tests {
         let err = BulkheadError::InvalidConfig {
             reason: reason.clone(),
         };
-        let json = serde_json::to_string(&err).unwrap();
-        let restored: BulkheadError = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let restored: BulkheadError = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, restored);
         assert!(restored.to_string().contains(&reason));
     }
@@ -1763,8 +1763,8 @@ mod tests {
             max_queue_depth: 20,
             at_pressure: true,
         };
-        let json = serde_json::to_string(&snap).unwrap();
-        let restored: BulkheadSnapshot = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&snap).expect("serde deserialization should succeed");
+        let restored: BulkheadSnapshot = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(snap, restored);
         assert!(json.contains("true"));
     }
@@ -1772,16 +1772,16 @@ mod tests {
     #[test]
     fn permit_id_serde_zero_enrichment() {
         let pid = PermitId(0);
-        let json = serde_json::to_string(&pid).unwrap();
-        let restored: PermitId = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&pid).expect("serde deserialization should succeed");
+        let restored: PermitId = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(pid, restored);
     }
 
     #[test]
     fn permit_id_serde_max_enrichment() {
         let pid = PermitId(u64::MAX);
-        let json = serde_json::to_string(&pid).unwrap();
-        let restored: PermitId = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&pid).expect("serde deserialization should succeed");
+        let restored: PermitId = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(pid, restored);
     }
 
@@ -1989,17 +1989,17 @@ mod tests {
                 pressure_threshold_pct: 80,
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let mut permits = Vec::new();
         for i in 0..100 {
-            permits.push(reg.acquire("stress", &format!("t{i}")).unwrap());
+            permits.push(reg.acquire("stress", &format!("t{i}")).expect("serde deserialization should succeed"));
         }
         assert_eq!(reg.active_count("stress"), Some(100));
 
         // Release all
         for (i, p) in permits.into_iter().enumerate() {
-            reg.release("stress", p, &format!("t{i}")).unwrap();
+            reg.release("stress", p, &format!("t{i}")).expect("serde deserialization should succeed");
         }
         assert_eq!(reg.active_count("stress"), Some(0));
     }
@@ -2015,16 +2015,16 @@ mod tests {
                 pressure_threshold_pct: 80,
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         // Fill active slots
-        let _p1 = reg.acquire("stress", "t0").unwrap();
-        let _p2 = reg.acquire("stress", "t1").unwrap();
+        let _p1 = reg.acquire("stress", "t0").expect("serde deserialization should succeed");
+        let _p2 = reg.acquire("stress", "t1").expect("serde deserialization should succeed");
         assert_eq!(reg.active_count("stress"), Some(2));
 
         // Fill entire queue
         for i in 2..52 {
-            reg.acquire("stress", &format!("t{i}")).unwrap();
+            reg.acquire("stress", &format!("t{i}")).expect("serde deserialization should succeed");
         }
         assert_eq!(reg.queue_depth("stress"), Some(50));
 
@@ -2046,11 +2046,11 @@ mod tests {
                 pressure_threshold_pct: 80,
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         for i in 0..200 {
-            let p = reg.acquire("cycle", &format!("t{i}")).unwrap();
-            reg.release("cycle", p, &format!("t{i}")).unwrap();
+            let p = reg.acquire("cycle", &format!("t{i}")).expect("serde deserialization should succeed");
+            reg.release("cycle", p, &format!("t{i}")).expect("serde deserialization should succeed");
         }
         assert_eq!(reg.active_count("cycle"), Some(0));
         assert_eq!(reg.event_counts().get("acquire"), Some(&200));
@@ -2069,17 +2069,17 @@ mod tests {
                     pressure_threshold_pct: 80,
                 },
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         }
 
         let mut permits = Vec::new();
         for i in 0..9 {
             let bh = ["alpha", "beta", "gamma"][i % 3];
-            permits.push((bh, reg.acquire(bh, &format!("t{i}")).unwrap()));
+            permits.push((bh, reg.acquire(bh, &format!("t{i}")).expect("serde deserialization should succeed")));
         }
 
         for (bh, p) in &permits {
-            reg.release(bh, *p, "done").unwrap();
+            reg.release(bh, *p, "done").expect("serde deserialization should succeed");
         }
 
         assert_eq!(reg.active_count("alpha"), Some(0));
@@ -2103,12 +2103,12 @@ mod tests {
                     pressure_threshold_pct: 50,
                 },
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
-            let p1 = reg.acquire("det", "t1").unwrap();
-            let _p2 = reg.acquire("det", "t2").unwrap(); // queued
+            let p1 = reg.acquire("det", "t1").expect("serde deserialization should succeed");
+            let _p2 = reg.acquire("det", "t2").expect("serde deserialization should succeed"); // queued
             let _ = reg.acquire("det", "t3"); // rejected
-            reg.release("det", p1, "t1").unwrap(); // promotes p2
+            reg.release("det", p1, "t1").expect("serde deserialization should succeed"); // promotes p2
             reg.drain_events()
         };
 
@@ -2132,7 +2132,7 @@ mod tests {
                     pressure_threshold_pct: 80,
                 },
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
             for i in 0..4 {
                 let _ = reg.acquire("det", &format!("t{i}"));
@@ -2167,11 +2167,11 @@ mod tests {
                 pressure_threshold_pct: 80,
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
-        reg.acquire("test", "t1").unwrap(); // active
-        reg.acquire("test", "t2").unwrap(); // queued
-        reg.acquire("test", "t3").unwrap(); // queued
+        reg.acquire("test", "t1").expect("serde deserialization should succeed"); // active
+        reg.acquire("test", "t2").expect("serde deserialization should succeed"); // queued
+        reg.acquire("test", "t3").expect("serde deserialization should succeed"); // queued
 
         let snap = reg.snapshot();
         assert_eq!(snap["test"].active_count, 1);
@@ -2182,11 +2182,11 @@ mod tests {
     #[test]
     fn snapshot_serde_roundtrip_via_btreemap_enrichment() {
         let mut reg = BulkheadRegistry::with_defaults();
-        reg.acquire("remote_in_flight", "t1").unwrap();
+        reg.acquire("remote_in_flight", "t1").expect("serde deserialization should succeed");
 
         let snap = reg.snapshot();
-        let json = serde_json::to_string(&snap).unwrap();
-        let restored: BTreeMap<String, BulkheadSnapshot> = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&snap).expect("serde deserialization should succeed");
+        let restored: BTreeMap<String, BulkheadSnapshot> = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(snap, restored);
     }
 
@@ -2205,9 +2205,9 @@ mod tests {
                 pressure_threshold_pct: 80,
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
-        let _p1 = reg.acquire("test", "t1").unwrap();
+        let _p1 = reg.acquire("test", "t1").expect("serde deserialization should succeed");
         // Currently full, no queue room
         assert!(reg.acquire("test", "t2").is_err());
 
@@ -2220,10 +2220,10 @@ mod tests {
                 pressure_threshold_pct: 80,
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         // Now we can acquire more
-        let _p2 = reg.acquire("test", "t2").unwrap();
+        let _p2 = reg.acquire("test", "t2").expect("serde deserialization should succeed");
         assert_eq!(reg.active_count("test"), Some(2));
     }
 
@@ -2238,11 +2238,11 @@ mod tests {
                 pressure_threshold_pct: 80,
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         // Fill to 5 (50%), not at 80% threshold
         for i in 0..5 {
-            reg.acquire("test", &format!("t{i}")).unwrap();
+            reg.acquire("test", &format!("t{i}")).expect("serde deserialization should succeed");
         }
         assert_eq!(reg.is_at_pressure("test"), Some(false));
 
@@ -2255,7 +2255,7 @@ mod tests {
                 pressure_threshold_pct: 50,
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(reg.is_at_pressure("test"), Some(true));
     }
 
@@ -2274,12 +2274,12 @@ mod tests {
                 pressure_threshold_pct: 80,
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
-        let _p1 = reg.acquire("test", "t1").unwrap();
+        let _p1 = reg.acquire("test", "t1").expect("serde deserialization should succeed");
         reg.drain_events(); // clear acquire event
 
-        let _p2 = reg.acquire("test", "t2").unwrap(); // queued
+        let _p2 = reg.acquire("test", "t2").expect("serde deserialization should succeed"); // queued
         let events = reg.drain_events();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].action, "queued");
@@ -2298,14 +2298,14 @@ mod tests {
                 pressure_threshold_pct: 50,
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         // First acquire at 50% threshold triggers pressure
-        reg.acquire("bh-press", "trace-a").unwrap();
+        reg.acquire("bh-press", "trace-a").expect("serde deserialization should succeed");
         let events = reg.drain_events();
         let pressure = events.iter().find(|e| e.event == "bulkhead_pressure");
         assert!(pressure.is_some());
-        let pe = pressure.unwrap();
+        let pe = pressure.expect("serde deserialization should succeed");
         assert_eq!(pe.bulkhead_id, "bh-press");
         assert_eq!(pe.action, "pressure");
     }
@@ -2321,11 +2321,11 @@ mod tests {
                 pressure_threshold_pct: 80,
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
-        let p = reg.acquire("test", "trace-rel").unwrap();
+        let p = reg.acquire("test", "trace-rel").expect("serde deserialization should succeed");
         reg.drain_events();
-        reg.release("test", p, "trace-rel").unwrap();
+        reg.release("test", p, "trace-rel").expect("serde deserialization should succeed");
         let events = reg.drain_events();
         assert_eq!(events[0].permit_id, p.0);
         assert_eq!(events[0].trace_id, "trace-rel");
@@ -2359,19 +2359,19 @@ mod tests {
     #[test]
     fn bulkhead_class_serde_variant_names_enrichment() {
         assert_eq!(
-            serde_json::to_string(&BulkheadClass::RemoteInFlight).unwrap(),
+            serde_json::to_string(&BulkheadClass::RemoteInFlight).expect("serde deserialization should succeed"),
             "\"RemoteInFlight\""
         );
         assert_eq!(
-            serde_json::to_string(&BulkheadClass::BackgroundMaintenance).unwrap(),
+            serde_json::to_string(&BulkheadClass::BackgroundMaintenance).expect("serde deserialization should succeed"),
             "\"BackgroundMaintenance\""
         );
         assert_eq!(
-            serde_json::to_string(&BulkheadClass::SagaExecution).unwrap(),
+            serde_json::to_string(&BulkheadClass::SagaExecution).expect("serde deserialization should succeed"),
             "\"SagaExecution\""
         );
         assert_eq!(
-            serde_json::to_string(&BulkheadClass::EvidenceFlush).unwrap(),
+            serde_json::to_string(&BulkheadClass::EvidenceFlush).expect("serde deserialization should succeed"),
             "\"EvidenceFlush\""
         );
     }
@@ -2413,17 +2413,17 @@ mod tests {
                 pressure_threshold_pct: 80,
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
-        let _p1 = reg.acquire("test", "t1").unwrap(); // active
-        let _p2 = reg.acquire("test", "t2").unwrap(); // queued 1st
-        let p3 = reg.acquire("test", "t3").unwrap(); // queued 2nd
-        let _p4 = reg.acquire("test", "t4").unwrap(); // queued 3rd
+        let _p1 = reg.acquire("test", "t1").expect("serde deserialization should succeed"); // active
+        let _p2 = reg.acquire("test", "t2").expect("serde deserialization should succeed"); // queued 1st
+        let p3 = reg.acquire("test", "t3").expect("serde deserialization should succeed"); // queued 2nd
+        let _p4 = reg.acquire("test", "t4").expect("serde deserialization should succeed"); // queued 3rd
 
         assert_eq!(reg.queue_depth("test"), Some(3));
 
         // Release middle waiter p3
-        reg.release("test", p3, "t3").unwrap();
+        reg.release("test", p3, "t3").expect("serde deserialization should succeed");
         assert_eq!(reg.queue_depth("test"), Some(2));
         // Active count unchanged (p3 was a waiter)
         assert_eq!(reg.active_count("test"), Some(1));
@@ -2444,11 +2444,11 @@ mod tests {
                 pressure_threshold_pct: 80,
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let mut prev = PermitId(0);
         for i in 0..50 {
-            let p = reg.acquire("test", &format!("t{i}")).unwrap();
+            let p = reg.acquire("test", &format!("t{i}")).expect("serde deserialization should succeed");
             assert!(p > prev, "permit {p} should be > {prev}");
             prev = p;
         }
@@ -2469,10 +2469,10 @@ mod tests {
                 pressure_threshold_pct: 80,
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
-        let p = reg.acquire("test", "t1").unwrap();
-        reg.release("test", p, "t1").unwrap();
+        let p = reg.acquire("test", "t1").expect("serde deserialization should succeed");
+        reg.release("test", p, "t1").expect("serde deserialization should succeed");
 
         let counts_before = reg.event_counts().clone();
         let _ = reg.drain_events();
@@ -2522,22 +2522,22 @@ mod tests {
                 pressure_threshold_pct: 80,
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
-        let p1 = reg.acquire("chain", "t1").unwrap(); // active
+        let p1 = reg.acquire("chain", "t1").expect("serde deserialization should succeed"); // active
         let mut queued = Vec::new();
         for i in 2..=5 {
-            queued.push(reg.acquire("chain", &format!("t{i}")).unwrap());
+            queued.push(reg.acquire("chain", &format!("t{i}")).expect("serde deserialization should succeed"));
         }
         assert_eq!(reg.queue_depth("chain"), Some(4));
 
         // Release active => promotes first waiter
-        reg.release("chain", p1, "t1").unwrap();
+        reg.release("chain", p1, "t1").expect("serde deserialization should succeed");
         assert_eq!(reg.active_count("chain"), Some(1));
         assert_eq!(reg.queue_depth("chain"), Some(3));
 
         // Release promoted => promotes next waiter
-        reg.release("chain", queued[0], "t2").unwrap();
+        reg.release("chain", queued[0], "t2").expect("serde deserialization should succeed");
         assert_eq!(reg.active_count("chain"), Some(1));
         assert_eq!(reg.queue_depth("chain"), Some(2));
     }

@@ -588,7 +588,7 @@ mod tests {
     #[test]
     fn test_protocol_manager_initialization() {
         // SAFETY: FleetSimulator::new with valid count and test thresholds should succeed
-        let fleet = FleetSimulator::new(5, test_thresholds()).unwrap();
+        let fleet = FleetSimulator::new(5, test_thresholds()).expect("serde deserialization should succeed");
         let manager =
             QuarantineProtocolManager::new(fleet, test_security_epoch(), Duration::from_secs(30));
 
@@ -600,7 +600,7 @@ mod tests {
     #[test]
     fn test_issue_quarantine_decision() {
         // SAFETY: FleetSimulator::new with valid count and test thresholds should succeed
-        let fleet = FleetSimulator::new(3, test_thresholds()).unwrap();
+        let fleet = FleetSimulator::new(3, test_thresholds()).expect("serde deserialization should succeed");
         let mut manager =
             QuarantineProtocolManager::new(fleet, test_security_epoch(), Duration::from_secs(30));
 
@@ -614,7 +614,7 @@ mod tests {
                 "suspicious-extension".to_string(),
                 "Malware detected".to_string(),
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert_eq!(manager.stats.decisions_issued, 1);
         assert_eq!(manager.stats.messages_sent, 1);
@@ -627,7 +627,7 @@ mod tests {
 
     #[test]
     fn test_issued_quarantine_broadcast_runs_through_fleet_simulator() {
-        let fleet = FleetSimulator::new(3, test_thresholds()).unwrap();
+        let fleet = FleetSimulator::new(3, test_thresholds()).expect("serde deserialization should succeed");
         let mut manager =
             QuarantineProtocolManager::new(fleet, test_security_epoch(), Duration::from_secs(30));
 
@@ -639,7 +639,7 @@ mod tests {
                 "simulated-extension".to_string(),
                 "Simulation propagation".to_string(),
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         manager
             .run_protocol_steps(1)
@@ -648,7 +648,7 @@ mod tests {
 
     #[test]
     fn test_process_quarantine_decision() {
-        let fleet = FleetSimulator::new(2, test_thresholds()).unwrap();
+        let fleet = FleetSimulator::new(2, test_thresholds()).expect("serde deserialization should succeed");
         let mut manager =
             QuarantineProtocolManager::new(fleet, test_security_epoch(), Duration::from_secs(30));
 
@@ -665,7 +665,7 @@ mod tests {
 
         let is_new = manager
             .process_quarantine_decision(target, decision)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(is_new);
         assert_eq!(manager.stats.messages_sent, 1); // Acknowledgment sent
 
@@ -680,14 +680,14 @@ mod tests {
 
         let is_new_duplicate = manager
             .process_quarantine_decision(target, duplicate)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(!is_new_duplicate);
         assert_eq!(manager.stats.duplicates_ignored, 1);
     }
 
     #[test]
     fn test_get_quarantined_extensions() {
-        let fleet = FleetSimulator::new(2, test_thresholds()).unwrap();
+        let fleet = FleetSimulator::new(2, test_thresholds()).expect("serde deserialization should succeed");
         let mut manager =
             QuarantineProtocolManager::new(fleet, test_security_epoch(), Duration::from_secs(30));
 
@@ -703,7 +703,7 @@ mod tests {
         );
         manager
             .process_quarantine_decision(&instance_ids[0], decision1)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Add quarantine to second instance
         let decision2 = QuarantineDecision::new(
@@ -715,7 +715,7 @@ mod tests {
         );
         manager
             .process_quarantine_decision(&instance_ids[1], decision2)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let quarantined = manager.get_quarantined_extensions();
         assert_eq!(quarantined.len(), 2);
@@ -725,7 +725,7 @@ mod tests {
 
     #[test]
     fn test_convergence_detection() {
-        let fleet = FleetSimulator::new(3, test_thresholds()).unwrap();
+        let fleet = FleetSimulator::new(3, test_thresholds()).expect("serde deserialization should succeed");
         let mut manager =
             QuarantineProtocolManager::new(fleet, test_security_epoch(), Duration::from_secs(30));
         let instance_ids = manager.fleet_simulator.instance_ids();
@@ -747,7 +747,7 @@ mod tests {
         manager
             .instance_states
             .get_mut(&originator)
-            .unwrap()
+            .expect("serde deserialization should succeed")
             .add_decision(decision);
 
         // Should not be converged initially
@@ -757,22 +757,22 @@ mod tests {
         let ack1 = QuarantineAck::new(evidence_hash, acking_one.clone(), 2, true, None);
         let ack2 = QuarantineAck::new(evidence_hash, acking_two, 3, true, None);
 
-        manager.process_acknowledgment(ack1).unwrap();
+        manager.process_acknowledgment(ack1).expect("serde deserialization should succeed");
         assert!(!manager.is_decision_converged(&evidence_hash)); // Not yet converged
         assert!(
             manager.instance_states[&originator].acknowledgments[&evidence_hash]
                 .contains(&acking_one)
         );
         let duplicate_ack = QuarantineAck::new(evidence_hash, acking_one.clone(), 4, true, None);
-        assert!(!manager.process_acknowledgment(duplicate_ack).unwrap());
+        assert!(!manager.process_acknowledgment(duplicate_ack).expect("serde deserialization should succeed"));
         let originator_ack = QuarantineAck::new(evidence_hash, originator.clone(), 5, true, None);
-        assert!(!manager.process_acknowledgment(originator_ack).unwrap());
+        assert!(!manager.process_acknowledgment(originator_ack).expect("serde deserialization should succeed"));
         assert_eq!(
             manager.instance_states[&originator].acknowledgments[&evidence_hash].len(),
             1
         );
 
-        let converged = manager.process_acknowledgment(ack2).unwrap();
+        let converged = manager.process_acknowledgment(ack2).expect("serde deserialization should succeed");
         assert!(converged); // Should be converged now
         assert!(manager.is_decision_converged(&evidence_hash));
     }

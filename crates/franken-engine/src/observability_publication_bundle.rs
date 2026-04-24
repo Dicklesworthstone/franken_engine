@@ -1195,7 +1195,10 @@ fn required_artifact_hash_or_empty(
     artifact_hashes: &BTreeMap<String, String>,
     artifact_name: &str,
 ) -> String {
-    artifact_hashes.get(artifact_name).cloned().unwrap_or_default()
+    artifact_hashes
+        .get(artifact_name)
+        .cloned()
+        .unwrap_or_default()
 }
 
 fn build_support_bundle_attestation(
@@ -1456,15 +1459,15 @@ mod tests {
     #[test]
     fn workload_class_serde_roundtrip() {
         for class in ObservabilityWorkloadClass::ALL {
-            let json = serde_json::to_string(&class).unwrap();
-            let back: ObservabilityWorkloadClass = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&class).expect("serde deserialization should succeed");
+            let back: ObservabilityWorkloadClass = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(back, class);
         }
     }
 
     #[test]
     fn workload_class_serde_is_snake_case() {
-        let json = serde_json::to_string(&ObservabilityWorkloadClass::DispatchSensitive).unwrap();
+        let json = serde_json::to_string(&ObservabilityWorkloadClass::DispatchSensitive).expect("serde deserialization should succeed");
         assert_eq!(json, "\"dispatch_sensitive\"");
     }
 
@@ -1515,15 +1518,15 @@ mod tests {
     #[test]
     fn mode_serde_roundtrip() {
         for mode in ObservabilityMode::ALL {
-            let json = serde_json::to_string(&mode).unwrap();
-            let back: ObservabilityMode = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&mode).expect("serde deserialization should succeed");
+            let back: ObservabilityMode = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(back, mode);
         }
     }
 
     #[test]
     fn mode_serde_is_snake_case() {
-        let json = serde_json::to_string(&ObservabilityMode::ExactShadow).unwrap();
+        let json = serde_json::to_string(&ObservabilityMode::ExactShadow).expect("serde deserialization should succeed");
         assert_eq!(json, "\"exact_shadow\"");
     }
 
@@ -1746,7 +1749,7 @@ mod tests {
     fn unique_temp_path_includes_file_name() {
         let base = PathBuf::from("/tmp/artifacts/report.json");
         let temp = unique_temp_path(&base);
-        let name = temp.file_name().unwrap().to_string_lossy();
+        let name = temp.file_name().expect("serde deserialization should succeed").to_string_lossy();
         assert!(name.starts_with('.'));
         assert!(name.contains("report.json"));
         assert!(name.ends_with(".tmp"));
@@ -1756,7 +1759,7 @@ mod tests {
     fn unique_temp_path_lives_in_same_parent() {
         let base = PathBuf::from("/tmp/artifacts/report.json");
         let temp = unique_temp_path(&base);
-        assert_eq!(temp.parent().unwrap(), base.parent().unwrap());
+        assert_eq!(temp.parent().expect("serde deserialization should succeed"), base.parent().expect("serde deserialization should succeed"));
     }
 
     #[test]
@@ -1821,8 +1824,8 @@ mod tests {
             thinning_retention_millionths: Some(500_000),
             rejection_reasons: vec!["reason-a".to_string()],
         };
-        let json = serde_json::to_string(&summary).unwrap();
-        let back: HotPathPublicationSummary = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
+        let back: HotPathPublicationSummary = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.manifest_id, "test-manifest");
         assert_eq!(back.calibration_pass_count, 2);
         assert!(back.publishable);
@@ -1836,8 +1839,8 @@ mod tests {
             mode: ObservabilityMode::Off,
             reasons: vec!["observability_off".to_string()],
         };
-        let json = serde_json::to_string(&claim).unwrap();
-        let back: SuppressedClaim = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&claim).expect("serde deserialization should succeed");
+        let back: SuppressedClaim = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.workload_id, "dispatch_sensitive");
         assert_eq!(back.mode, ObservabilityMode::Off);
     }
@@ -1845,8 +1848,8 @@ mod tests {
     #[test]
     fn observability_claim_surface_serde_roundtrip() {
         let surface = make_surface(true, false);
-        let json = serde_json::to_string(&surface).unwrap();
-        let back: ObservabilityClaimSurface = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&surface).expect("serde deserialization should succeed");
+        let back: ObservabilityClaimSurface = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert!(back.claim_allowed);
         assert!(!back.exact_capture);
     }
@@ -1864,8 +1867,8 @@ mod tests {
             exact_capture_improved: true,
             claim_state_transition: "suppressed_to_allowed".to_string(),
         };
-        let json = serde_json::to_string(&delta).unwrap();
-        let back: ObservabilityClaimDelta = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&delta).expect("serde deserialization should succeed");
+        let back: ObservabilityClaimDelta = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.captured_delta, 10);
         assert!(back.exact_capture_improved);
     }
@@ -1908,15 +1911,15 @@ mod tests {
     #[test]
     fn canonical_json_bytes_produces_valid_json() {
         let surface = make_surface(true, true);
-        let bytes = canonical_json_bytes(&surface, Path::new("/tmp/test.json")).unwrap();
-        let _parsed: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let bytes = canonical_json_bytes(&surface, Path::new("/tmp/test.json")).expect("serde deserialization should succeed");
+        let _parsed: serde_json::Value = serde_json::from_slice(&bytes).expect("serde deserialization should succeed");
     }
 
     #[test]
     fn canonical_json_bytes_deterministic() {
         let surface = make_surface(false, false);
-        let a = canonical_json_bytes(&surface, Path::new("/tmp/a.json")).unwrap();
-        let b = canonical_json_bytes(&surface, Path::new("/tmp/b.json")).unwrap();
+        let a = canonical_json_bytes(&surface, Path::new("/tmp/a.json")).expect("serde deserialization should succeed");
+        let b = canonical_json_bytes(&surface, Path::new("/tmp/b.json")).expect("serde deserialization should succeed");
         assert_eq!(a, b);
     }
 

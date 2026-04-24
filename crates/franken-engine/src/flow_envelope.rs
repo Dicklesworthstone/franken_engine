@@ -922,7 +922,7 @@ mod tests {
         let mut bytes = [0u8; 32];
         bytes[0] = 0x42;
         bytes[31] = 0xFF;
-        SigningKey::from_bytes(bytes).unwrap()
+        SigningKey::from_bytes(bytes).expect("serde deserialization should succeed")
     }
 
     fn valid_input() -> EnvelopeInput {
@@ -1014,23 +1014,23 @@ mod tests {
 
     #[test]
     fn content_address_is_deterministic() {
-        let e1 = FlowEnvelope::build(valid_input()).unwrap();
-        let e2 = FlowEnvelope::build(valid_input()).unwrap();
+        let e1 = FlowEnvelope::build(valid_input()).expect("serde deserialization should succeed");
+        let e2 = FlowEnvelope::build(valid_input()).expect("serde deserialization should succeed");
         assert_eq!(e1.envelope_id, e2.envelope_id);
     }
 
     #[test]
     fn different_inputs_produce_different_ids() {
-        let e1 = FlowEnvelope::build(valid_input()).unwrap();
+        let e1 = FlowEnvelope::build(valid_input()).expect("serde deserialization should succeed");
         let mut input2 = valid_input();
         input2.extension_id = "ext-different".to_string();
-        let e2 = FlowEnvelope::build(input2).unwrap();
+        let e2 = FlowEnvelope::build(input2).expect("serde deserialization should succeed");
         assert_ne!(e1.envelope_id, e2.envelope_id);
     }
 
     #[test]
     fn verify_content_address_detects_tampering() {
-        let mut envelope = FlowEnvelope::build(valid_input()).unwrap();
+        let mut envelope = FlowEnvelope::build(valid_input()).expect("serde deserialization should succeed");
         assert!(envelope.verify_content_address());
         envelope.timestamp_ns = 999;
         assert!(!envelope.verify_content_address());
@@ -1042,7 +1042,7 @@ mod tests {
     fn sign_and_verify_roundtrip() {
         let key = test_signing_key();
         let vk = key.verification_key();
-        let mut envelope = FlowEnvelope::build(valid_input()).unwrap();
+        let mut envelope = FlowEnvelope::build(valid_input()).expect("serde deserialization should succeed");
         envelope.sign(&key).expect("sign");
         envelope.verify(&vk).expect("verify");
     }
@@ -1050,9 +1050,9 @@ mod tests {
     #[test]
     fn verify_fails_with_wrong_key() {
         let key = test_signing_key();
-        let mut envelope = FlowEnvelope::build(valid_input()).unwrap();
+        let mut envelope = FlowEnvelope::build(valid_input()).expect("serde deserialization should succeed");
         envelope.sign(&key).expect("sign");
-        let wrong = SigningKey::from_bytes([0xBB; 32]).unwrap();
+        let wrong = SigningKey::from_bytes([0xBB; 32]).expect("serde deserialization should succeed");
         assert!(envelope.verify(&wrong.verification_key()).is_err());
     }
 
@@ -1060,13 +1060,13 @@ mod tests {
 
     #[test]
     fn is_valid_at_correct_epoch() {
-        let envelope = FlowEnvelope::build(valid_input()).unwrap();
+        let envelope = FlowEnvelope::build(valid_input()).expect("serde deserialization should succeed");
         assert!(envelope.is_valid_at_epoch(SecurityEpoch::from_raw(1)));
     }
 
     #[test]
     fn is_invalid_at_different_epoch() {
-        let envelope = FlowEnvelope::build(valid_input()).unwrap();
+        let envelope = FlowEnvelope::build(valid_input()).expect("serde deserialization should succeed");
         assert!(!envelope.is_valid_at_epoch(SecurityEpoch::from_raw(2)));
     }
 
@@ -1074,28 +1074,28 @@ mod tests {
 
     #[test]
     fn allows_flow_for_required() {
-        let envelope = FlowEnvelope::build(valid_input()).unwrap();
+        let envelope = FlowEnvelope::build(valid_input()).expect("serde deserialization should succeed");
         let safe = rule(Label::Public, Label::Internal);
         assert!(envelope.allows_flow(&safe));
     }
 
     #[test]
     fn denies_flow_for_denied() {
-        let envelope = FlowEnvelope::build(valid_input()).unwrap();
+        let envelope = FlowEnvelope::build(valid_input()).expect("serde deserialization should succeed");
         let denied = rule(Label::Confidential, Label::Public);
         assert!(envelope.denies_flow(&denied));
     }
 
     #[test]
     fn is_out_of_envelope_for_unknown_flow() {
-        let envelope = FlowEnvelope::build(valid_input()).unwrap();
+        let envelope = FlowEnvelope::build(valid_input()).expect("serde deserialization should succeed");
         let unknown = rule(Label::Secret, Label::Secret);
         assert!(envelope.is_out_of_envelope(&unknown));
     }
 
     #[test]
     fn source_labels_extracted() {
-        let envelope = FlowEnvelope::build(valid_input()).unwrap();
+        let envelope = FlowEnvelope::build(valid_input()).expect("serde deserialization should succeed");
         let labels = envelope.source_labels();
         assert!(labels.contains(&Label::Public));
         assert!(labels.contains(&Label::Internal));
@@ -1103,7 +1103,7 @@ mod tests {
 
     #[test]
     fn sink_clearances_extracted() {
-        let envelope = FlowEnvelope::build(valid_input()).unwrap();
+        let envelope = FlowEnvelope::build(valid_input()).expect("serde deserialization should succeed");
         let clearances = envelope.sink_clearances();
         assert!(clearances.contains(&Label::Internal));
         assert!(clearances.contains(&Label::Confidential));
@@ -1111,7 +1111,7 @@ mod tests {
 
     #[test]
     fn unsatisfied_obligations_count() {
-        let envelope = FlowEnvelope::build(valid_input()).unwrap();
+        let envelope = FlowEnvelope::build(valid_input()).expect("serde deserialization should succeed");
         assert_eq!(envelope.unsatisfied_obligations(), 2); // All unsatisfied.
     }
 
@@ -1119,9 +1119,9 @@ mod tests {
 
     #[test]
     fn envelope_serde_roundtrip() {
-        let envelope = FlowEnvelope::build(valid_input()).unwrap();
-        let json = serde_json::to_string(&envelope).unwrap();
-        let deser: FlowEnvelope = serde_json::from_str(&json).unwrap();
+        let envelope = FlowEnvelope::build(valid_input()).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&envelope).expect("serde deserialization should succeed");
+        let deser: FlowEnvelope = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(envelope, deser);
     }
 
@@ -1133,8 +1133,8 @@ mod tests {
             source_location: Some("src/handler.rs:42".to_string()),
             sink_location: Some("src/output.rs:10".to_string()),
         };
-        let json = serde_json::to_string(&req).unwrap();
-        let deser: FlowRequirement = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&req).expect("serde deserialization should succeed");
+        let deser: FlowRequirement = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(req, deser);
     }
 
@@ -1146,8 +1146,8 @@ mod tests {
             FlowDiscoveryMethod::RuntimeObservation,
             FlowDiscoveryMethod::ManifestDeclaration,
         ] {
-            let json = serde_json::to_string(&m).unwrap();
-            let deser: FlowDiscoveryMethod = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
+            let deser: FlowDiscoveryMethod = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(m, deser);
         }
     }
@@ -1160,8 +1160,8 @@ mod tests {
             FlowProofMethod::Declassification,
             FlowProofMethod::OperatorAttestation,
         ] {
-            let json = serde_json::to_string(&m).unwrap();
-            let deser: FlowProofMethod = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
+            let deser: FlowProofMethod = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(m, deser);
         }
     }
@@ -1172,8 +1172,8 @@ mod tests {
             SynthesisPass::StaticFlowAnalysis,
             SynthesisPass::DynamicFlowAblation,
         ] {
-            let json = serde_json::to_string(&p).unwrap();
-            let deser: SynthesisPass = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
+            let deser: SynthesisPass = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(p, deser);
         }
     }
@@ -1184,8 +1184,8 @@ mod tests {
             FallbackQuality::StaticBound,
             FallbackQuality::PartialAblation,
         ] {
-            let json = serde_json::to_string(&q).unwrap();
-            let deser: FallbackQuality = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&q).expect("serde deserialization should succeed");
+            let deser: FallbackQuality = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(q, deser);
         }
     }
@@ -1206,8 +1206,8 @@ mod tests {
             },
         ];
         for err in errors {
-            let json = serde_json::to_string(&err).unwrap();
-            let deser: EnvelopeError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+            let deser: EnvelopeError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(err, deser);
         }
     }
@@ -1223,8 +1223,8 @@ mod tests {
             extension_id: Some("ext-001".to_string()),
             flow_count: Some(4),
         };
-        let json = serde_json::to_string(&ev).unwrap();
-        let deser: EnvelopeEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
+        let deser: EnvelopeEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ev, deser);
     }
 
@@ -1235,8 +1235,8 @@ mod tests {
             envelope_hash: ContentHash::compute(b"test"),
             envelope_epoch: SecurityEpoch::from_raw(1),
         };
-        let json = serde_json::to_string(&r).unwrap();
-        let deser: FlowEnvelopeRef = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let deser: FlowEnvelopeRef = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, deser);
     }
 
@@ -1248,8 +1248,8 @@ mod tests {
             n_trials: 100,
             n_essential: 80,
         };
-        let json = serde_json::to_string(&ci).unwrap();
-        let deser: FlowConfidenceInterval = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&ci).expect("serde deserialization should succeed");
+        let deser: FlowConfidenceInterval = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ci, deser);
     }
 
@@ -1416,7 +1416,7 @@ mod tests {
                 1_700_000_000_000_000_000,
                 "trace-3",
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert_eq!(envelope.extension_id, "ext-001");
         assert!(!envelope.is_fallback);
@@ -1440,7 +1440,7 @@ mod tests {
                 1_700_000_000_000_000_000,
                 "trace-4",
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // All 4 flows required, none denied.
         assert_eq!(envelope.required_flows.len(), 4);
@@ -1460,7 +1460,7 @@ mod tests {
                 FallbackQuality::StaticBound,
                 "trace-5",
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert!(envelope.is_fallback);
         assert_eq!(
@@ -1501,22 +1501,22 @@ mod tests {
         let oracle = |_: &FlowRule| false;
         synth
             .synthesize(&upper, &oracle, "p", 0, "trace-ev")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Should have events for: synthesis_start, static_pass_start,
         // static_pass_complete, dynamic_pass_start, dynamic_pass_complete,
         // synthesis_complete.
         assert!(synth.events.len() >= 5);
         assert_eq!(synth.events[0].event, "synthesis_start");
-        assert_eq!(synth.events.last().unwrap().event, "synthesis_complete");
+        assert_eq!(synth.events.last().expect("serde deserialization should succeed").event, "synthesis_complete");
     }
 
     // -- determinism --------------------------------------------------------
 
     #[test]
     fn unsigned_view_is_deterministic() {
-        let e1 = FlowEnvelope::build(valid_input()).unwrap();
-        let e2 = FlowEnvelope::build(valid_input()).unwrap();
+        let e1 = FlowEnvelope::build(valid_input()).expect("serde deserialization should succeed");
+        let e2 = FlowEnvelope::build(valid_input()).expect("serde deserialization should succeed");
         let v1 = deterministic_serde::encode_value(&e1.unsigned_view());
         let v2 = deterministic_serde::encode_value(&e2.unsigned_view());
         assert_eq!(v1, v2);
@@ -1524,14 +1524,14 @@ mod tests {
 
     #[test]
     fn preimage_bytes_are_deterministic() {
-        let e1 = FlowEnvelope::build(valid_input()).unwrap();
-        let e2 = FlowEnvelope::build(valid_input()).unwrap();
+        let e1 = FlowEnvelope::build(valid_input()).expect("serde deserialization should succeed");
+        let e2 = FlowEnvelope::build(valid_input()).expect("serde deserialization should succeed");
         assert_eq!(e1.preimage_bytes(), e2.preimage_bytes());
     }
 
     #[test]
     fn signature_domain_is_evidence_record() {
-        let e = FlowEnvelope::build(valid_input()).unwrap();
+        let e = FlowEnvelope::build(valid_input()).expect("serde deserialization should succeed");
         assert_eq!(e.signature_domain(), ObjectDomain::EvidenceRecord);
     }
 
@@ -1544,11 +1544,11 @@ mod tests {
 
         let mut s1 =
             FlowEnvelopeSynthesizer::new("ext-det", 30_000_000_000, SecurityEpoch::from_raw(1));
-        let e1 = s1.synthesize(&upper, &oracle, "p1", 100, "t1").unwrap();
+        let e1 = s1.synthesize(&upper, &oracle, "p1", 100, "t1").expect("serde deserialization should succeed");
 
         let mut s2 =
             FlowEnvelopeSynthesizer::new("ext-det", 30_000_000_000, SecurityEpoch::from_raw(1));
-        let e2 = s2.synthesize(&upper, &oracle, "p1", 100, "t2").unwrap();
+        let e2 = s2.synthesize(&upper, &oracle, "p1", 100, "t2").expect("serde deserialization should succeed");
 
         assert_eq!(e1.envelope_id, e2.envelope_id);
         assert_eq!(e1.required_flows, e2.required_flows);
@@ -1565,8 +1565,8 @@ mod tests {
             justification: "needs declass".to_string(),
             proof_artifact_hash: Some(ContentHash::compute(b"proof")),
         };
-        let json = serde_json::to_string(&obl).unwrap();
-        let deser: FlowProofObligation = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&obl).expect("serde deserialization should succeed");
+        let deser: FlowProofObligation = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(obl, deser);
     }
 
@@ -1585,8 +1585,8 @@ mod tests {
             time_consumed_ns: 42_000,
             completed: true,
         };
-        let json = serde_json::to_string(&result).unwrap();
-        let deser: SynthesisPassResult = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let deser: SynthesisPassResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, deser);
     }
 
@@ -1594,9 +1594,9 @@ mod tests {
 
     #[test]
     fn determinism_build_100_times() {
-        let first = FlowEnvelope::build(valid_input()).unwrap();
+        let first = FlowEnvelope::build(valid_input()).expect("serde deserialization should succeed");
         for _ in 0..100 {
-            let e = FlowEnvelope::build(valid_input()).unwrap();
+            let e = FlowEnvelope::build(valid_input()).expect("serde deserialization should succeed");
             assert_eq!(e.envelope_id, first.envelope_id);
             assert_eq!(e.required_flows, first.required_flows);
             assert_eq!(e.denied_flows, first.denied_flows);
@@ -1611,7 +1611,7 @@ mod tests {
             FlowEnvelopeSynthesizer::new("ext-det-100", 30_000_000_000, SecurityEpoch::from_raw(1));
         let first = first_synth
             .synthesize(&upper, &oracle, "p1", 100, "t1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         for _ in 0..100 {
             let mut synth = FlowEnvelopeSynthesizer::new(
@@ -1619,7 +1619,7 @@ mod tests {
                 30_000_000_000,
                 SecurityEpoch::from_raw(1),
             );
-            let e = synth.synthesize(&upper, &oracle, "p1", 100, "t2").unwrap();
+            let e = synth.synthesize(&upper, &oracle, "p1", 100, "t2").expect("serde deserialization should succeed");
             assert_eq!(e.envelope_id, first.envelope_id);
             assert_eq!(e.required_flows, first.required_flows);
         }
@@ -1627,7 +1627,7 @@ mod tests {
 
     #[test]
     fn envelope_blocks_exfiltration_flow() {
-        let envelope = FlowEnvelope::build(valid_input()).unwrap();
+        let envelope = FlowEnvelope::build(valid_input()).expect("serde deserialization should succeed");
         // Secret→Internal is in the denied set (requires declassification).
         let exfil_flow = rule(Label::Secret, Label::Internal);
         assert!(envelope.denies_flow(&exfil_flow));
@@ -1636,7 +1636,7 @@ mod tests {
 
     #[test]
     fn envelope_allows_safe_flow() {
-        let envelope = FlowEnvelope::build(valid_input()).unwrap();
+        let envelope = FlowEnvelope::build(valid_input()).expect("serde deserialization should succeed");
         // Public→Internal is safe (upward in lattice).
         let safe_flow = rule(Label::Public, Label::Internal);
         assert!(envelope.allows_flow(&safe_flow));
@@ -1645,7 +1645,7 @@ mod tests {
 
     #[test]
     fn out_of_envelope_flow_detected() {
-        let envelope = FlowEnvelope::build(valid_input()).unwrap();
+        let envelope = FlowEnvelope::build(valid_input()).expect("serde deserialization should succeed");
         // This flow was never in the upper bound at all.
         let unknown_flow = rule(Label::Secret, Label::Secret);
         assert!(envelope.is_out_of_envelope(&unknown_flow));
@@ -1653,7 +1653,7 @@ mod tests {
 
     #[test]
     fn source_and_sink_labels_complete() {
-        let envelope = FlowEnvelope::build(valid_input()).unwrap();
+        let envelope = FlowEnvelope::build(valid_input()).expect("serde deserialization should succeed");
         let sources = envelope.source_labels();
         let sinks = envelope.sink_clearances();
         // Required flows: Public→Internal, Internal→Confidential
@@ -1665,7 +1665,7 @@ mod tests {
 
     #[test]
     fn epoch_validity_check() {
-        let envelope = FlowEnvelope::build(valid_input()).unwrap();
+        let envelope = FlowEnvelope::build(valid_input()).expect("serde deserialization should succeed");
         assert!(envelope.is_valid_at_epoch(SecurityEpoch::from_raw(1)));
         assert!(!envelope.is_valid_at_epoch(SecurityEpoch::from_raw(2)));
     }
@@ -1675,13 +1675,13 @@ mod tests {
         let mut input = valid_input();
         input.is_fallback = true;
         input.fallback_quality = Some(FallbackQuality::StaticBound);
-        let envelope = FlowEnvelope::build(input).unwrap();
+        let envelope = FlowEnvelope::build(input).expect("serde deserialization should succeed");
         assert!(envelope.is_fallback);
         assert_eq!(
             envelope.fallback_quality,
             Some(FallbackQuality::StaticBound)
         );
-        let json = serde_json::to_string(&envelope).unwrap();
+        let json = serde_json::to_string(&envelope).expect("serde deserialization should succeed");
         assert!(json.contains("\"is_fallback\":true"));
     }
 
@@ -1693,7 +1693,7 @@ mod tests {
             FlowEnvelopeSynthesizer::new("ext-trace", 30_000_000_000, SecurityEpoch::from_raw(1));
         synth
             .synthesize(&upper, &oracle, "policy-1", 100, "my-trace-42")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         // All events should carry the trace ID.
         for event in &synth.events {
             assert_eq!(event.trace_id, "my-trace-42");
@@ -1702,10 +1702,10 @@ mod tests {
 
     #[test]
     fn content_address_stable_across_sign_unsign() {
-        let envelope = FlowEnvelope::build(valid_input()).unwrap();
+        let envelope = FlowEnvelope::build(valid_input()).expect("serde deserialization should succeed");
         let id_before = envelope.envelope_id.clone();
         let mut signed = envelope.clone();
-        signed.sign(&test_signing_key()).unwrap();
+        signed.sign(&test_signing_key()).expect("serde deserialization should succeed");
         // Signing changes the signature field but not the envelope_id.
         assert_eq!(signed.envelope_id, id_before);
         // Content address verification should still pass.
@@ -1746,7 +1746,7 @@ mod tests {
         let upper = test_upper_bound();
         let mut synth =
             FlowEnvelopeSynthesizer::new("ext-promo", 30_000_000_000, SecurityEpoch::from_raw(1));
-        let envelope = synth.synthesize(&upper, &oracle, "p1", 100, "t1").unwrap();
+        let envelope = synth.synthesize(&upper, &oracle, "p1", 100, "t1").expect("serde deserialization should succeed");
         // Secret→Internal was in removable after static pass, but oracle
         // said it's essential, so it should be in required now.
         let secret_flow = rule(Label::Secret, Label::Internal);
@@ -1895,7 +1895,7 @@ mod tests {
         ];
         let mut serialized: BTreeSet<String> = BTreeSet::new();
         for v in variants {
-            serialized.insert(serde_json::to_string(&v).unwrap());
+            serialized.insert(serde_json::to_string(&v).expect("serde deserialization should succeed"));
         }
         assert_eq!(serialized.len(), 4);
     }
@@ -1910,22 +1910,22 @@ mod tests {
         ];
         let mut serialized: BTreeSet<String> = BTreeSet::new();
         for v in variants {
-            serialized.insert(serde_json::to_string(&v).unwrap());
+            serialized.insert(serde_json::to_string(&v).expect("serde deserialization should succeed"));
         }
         assert_eq!(serialized.len(), 4);
     }
 
     #[test]
     fn synthesis_pass_serializes_distinctly() {
-        let a = serde_json::to_string(&SynthesisPass::StaticFlowAnalysis).unwrap();
-        let b = serde_json::to_string(&SynthesisPass::DynamicFlowAblation).unwrap();
+        let a = serde_json::to_string(&SynthesisPass::StaticFlowAnalysis).expect("serde deserialization should succeed");
+        let b = serde_json::to_string(&SynthesisPass::DynamicFlowAblation).expect("serde deserialization should succeed");
         assert_ne!(a, b);
     }
 
     #[test]
     fn fallback_quality_serializes_distinctly() {
-        let a = serde_json::to_string(&FallbackQuality::StaticBound).unwrap();
-        let b = serde_json::to_string(&FallbackQuality::PartialAblation).unwrap();
+        let a = serde_json::to_string(&FallbackQuality::StaticBound).expect("serde deserialization should succeed");
+        let b = serde_json::to_string(&FallbackQuality::PartialAblation).expect("serde deserialization should succeed");
         assert_ne!(a, b);
     }
 
@@ -1946,7 +1946,7 @@ mod tests {
         ];
         let mut serialized: BTreeSet<String> = BTreeSet::new();
         for e in &errors {
-            serialized.insert(serde_json::to_string(e).unwrap());
+            serialized.insert(serde_json::to_string(e).expect("serde deserialization should succeed"));
         }
         assert_eq!(serialized.len(), errors.len());
     }
@@ -1955,7 +1955,7 @@ mod tests {
 
     #[test]
     fn flow_envelope_clone_independence() {
-        let original = FlowEnvelope::build(valid_input()).unwrap();
+        let original = FlowEnvelope::build(valid_input()).expect("serde deserialization should succeed");
         let mut cloned = original.clone();
         cloned.extension_id = "mutated".to_string();
         assert_eq!(original.extension_id, "ext-test-001");
@@ -2016,7 +2016,7 @@ mod tests {
             n_trials: 50,
             n_essential: 40,
         };
-        let json = serde_json::to_string(&ci).unwrap();
+        let json = serde_json::to_string(&ci).expect("serde deserialization should succeed");
         assert!(json.contains("\"lower_millionths\""));
         assert!(json.contains("\"upper_millionths\""));
         assert!(json.contains("\"n_trials\""));
@@ -2031,7 +2031,7 @@ mod tests {
             justification: "j".to_string(),
             proof_artifact_hash: None,
         };
-        let json = serde_json::to_string(&obl).unwrap();
+        let json = serde_json::to_string(&obl).expect("serde deserialization should succeed");
         assert!(json.contains("\"rule\""));
         assert!(json.contains("\"required_method\""));
         assert!(json.contains("\"justification\""));
@@ -2049,7 +2049,7 @@ mod tests {
             extension_id: None,
             flow_count: None,
         };
-        let json = serde_json::to_string(&ev).unwrap();
+        let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
         assert!(json.contains("\"trace_id\""));
         assert!(json.contains("\"component\""));
         assert!(json.contains("\"event\""));
@@ -2066,7 +2066,7 @@ mod tests {
             envelope_hash: ContentHash::compute(b"x"),
             envelope_epoch: SecurityEpoch::from_raw(5),
         };
-        let json = serde_json::to_string(&r).unwrap();
+        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
         assert!(json.contains("\"envelope_id\""));
         assert!(json.contains("\"envelope_hash\""));
         assert!(json.contains("\"envelope_epoch\""));
@@ -2074,8 +2074,8 @@ mod tests {
 
     #[test]
     fn flow_envelope_json_field_names() {
-        let envelope = FlowEnvelope::build(valid_input()).unwrap();
-        let json = serde_json::to_string(&envelope).unwrap();
+        let envelope = FlowEnvelope::build(valid_input()).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&envelope).expect("serde deserialization should succeed");
         assert!(json.contains("\"envelope_id\""));
         assert!(json.contains("\"extension_id\""));
         assert!(json.contains("\"required_flows\""));
@@ -2158,8 +2158,8 @@ mod tests {
             n_trials: 0,
             n_essential: 0,
         };
-        let json = serde_json::to_string(&ci).unwrap();
-        let deser: FlowConfidenceInterval = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&ci).expect("serde deserialization should succeed");
+        let deser: FlowConfidenceInterval = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ci, deser);
     }
 
@@ -2171,8 +2171,8 @@ mod tests {
             n_trials: u32::MAX,
             n_essential: u32::MAX,
         };
-        let json = serde_json::to_string(&ci).unwrap();
-        let deser: FlowConfidenceInterval = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&ci).expect("serde deserialization should succeed");
+        let deser: FlowConfidenceInterval = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ci, deser);
     }
 
@@ -2184,8 +2184,8 @@ mod tests {
             n_trials: 20,
             n_essential: 8,
         };
-        let json = serde_json::to_string(&ci).unwrap();
-        let deser: FlowConfidenceInterval = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&ci).expect("serde deserialization should succeed");
+        let deser: FlowConfidenceInterval = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ci, deser);
     }
 
@@ -2200,8 +2200,8 @@ mod tests {
             extension_id: Some("ext-edge".to_string()),
             flow_count: Some(0),
         };
-        let json = serde_json::to_string(&ev).unwrap();
-        let deser: EnvelopeEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
+        let deser: EnvelopeEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ev, deser);
         assert!(json.contains("\"flow_count\":0"));
     }
@@ -2214,8 +2214,8 @@ mod tests {
             source_location: None,
             sink_location: None,
         };
-        let json = serde_json::to_string(&req).unwrap();
-        let deser: FlowRequirement = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&req).expect("serde deserialization should succeed");
+        let deser: FlowRequirement = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(req, deser);
         assert!(json.contains("null"));
     }
@@ -2228,8 +2228,8 @@ mod tests {
             justification: "proven safe".to_string(),
             proof_artifact_hash: Some(ContentHash::compute(b"proof-artifact-bytes")),
         };
-        let json = serde_json::to_string(&obl).unwrap();
-        let deser: FlowProofObligation = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&obl).expect("serde deserialization should succeed");
+        let deser: FlowProofObligation = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(obl, deser);
         assert!(obl.proof_artifact_hash.is_some());
     }
@@ -2243,8 +2243,8 @@ mod tests {
             time_consumed_ns: 0,
             completed: false,
         };
-        let json = serde_json::to_string(&result).unwrap();
-        let deser: SynthesisPassResult = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let deser: SynthesisPassResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, deser);
         assert!(!deser.completed);
     }
@@ -2312,8 +2312,8 @@ mod tests {
     fn synthesizer_serde_roundtrip() {
         let synth =
             FlowEnvelopeSynthesizer::new("ext-serde", 1_000_000_000, SecurityEpoch::from_raw(3));
-        let json = serde_json::to_string(&synth).unwrap();
-        let deser: FlowEnvelopeSynthesizer = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&synth).expect("serde deserialization should succeed");
+        let deser: FlowEnvelopeSynthesizer = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(synth.extension_id, deser.extension_id);
         assert_eq!(synth.time_budget_ns, deser.time_budget_ns);
         assert_eq!(synth.epoch, deser.epoch);
@@ -2333,7 +2333,7 @@ mod tests {
                 FallbackQuality::PartialAblation,
                 "trace-fb",
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(envelope.is_fallback);
         assert_eq!(
             envelope.fallback_quality,
@@ -2349,7 +2349,7 @@ mod tests {
             FlowEnvelopeSynthesizer::new("ext-fb3", 30_000_000_000, SecurityEpoch::from_raw(1));
         let envelope = synth
             .synthesize_fallback(&upper, "policy-fb", 0, FallbackQuality::StaticBound, "t")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         for obl in &envelope.proof_obligations {
             assert_eq!(obl.required_method, FlowProofMethod::RuntimeCheck);
         }
@@ -2388,7 +2388,7 @@ mod tests {
         just_one.insert(single_flow.clone());
         input.ablation_required = just_one;
         input.ablation_removable = BTreeSet::new();
-        let envelope = FlowEnvelope::build(input).unwrap();
+        let envelope = FlowEnvelope::build(input).expect("serde deserialization should succeed");
         assert_eq!(envelope.required_flows.len(), 1);
         assert!(envelope.allows_flow(&single_flow));
     }
@@ -2398,7 +2398,7 @@ mod tests {
         let mut input = valid_input();
         input.ablation_required = BTreeSet::new();
         input.ablation_removable = BTreeSet::new();
-        let envelope = FlowEnvelope::build(input).unwrap();
+        let envelope = FlowEnvelope::build(input).expect("serde deserialization should succeed");
         // Falls back to static_upper_bound (4 flows).
         assert_eq!(envelope.required_flows.len(), 4);
     }
@@ -2410,7 +2410,7 @@ mod tests {
         if let Some(first) = input.proof_obligations.first_mut() {
             first.proof_artifact_hash = Some(ContentHash::compute(b"satisfied"));
         }
-        let envelope = FlowEnvelope::build(input).unwrap();
+        let envelope = FlowEnvelope::build(input).expect("serde deserialization should succeed");
         // We have 2 obligations total, one satisfied → 1 unsatisfied.
         assert_eq!(envelope.unsatisfied_obligations(), 1);
     }
@@ -2421,7 +2421,7 @@ mod tests {
         for obl in &mut input.proof_obligations {
             obl.proof_artifact_hash = Some(ContentHash::compute(b"done"));
         }
-        let envelope = FlowEnvelope::build(input).unwrap();
+        let envelope = FlowEnvelope::build(input).expect("serde deserialization should succeed");
         assert_eq!(envelope.unsatisfied_obligations(), 0);
     }
 
@@ -2501,7 +2501,7 @@ mod tests {
         let upper = test_upper_bound();
         let mut synth =
             FlowEnvelopeSynthesizer::new("ext-conf", 30_000_000_000, SecurityEpoch::from_raw(1));
-        let envelope = synth.synthesize(&upper, &oracle, "p", 0, "t").unwrap();
+        let envelope = synth.synthesize(&upper, &oracle, "p", 0, "t").expect("serde deserialization should succeed");
 
         // 2 ablation trials (Confidential→Public, Secret→Internal), 1 essential
         assert_eq!(envelope.confidence.n_trials, 2);
@@ -2512,7 +2512,7 @@ mod tests {
 
     #[test]
     fn flow_envelope_debug_is_non_empty() {
-        let envelope = FlowEnvelope::build(valid_input()).unwrap();
+        let envelope = FlowEnvelope::build(valid_input()).expect("serde deserialization should succeed");
         let dbg = format!("{envelope:?}");
         assert!(!dbg.is_empty());
         assert!(dbg.contains("FlowEnvelope"));
@@ -2525,7 +2525,7 @@ mod tests {
             FlowEnvelopeSynthesizer::new("ext-evfb", 30_000_000_000, SecurityEpoch::from_raw(1));
         synth
             .synthesize_fallback(&upper, "p", 0, FallbackQuality::StaticBound, "fb-trace-99")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         for ev in &synth.events {
             assert_eq!(ev.trace_id, "fb-trace-99");
         }
@@ -2533,21 +2533,21 @@ mod tests {
 
     #[test]
     fn is_out_of_envelope_false_for_required_flow() {
-        let envelope = FlowEnvelope::build(valid_input()).unwrap();
+        let envelope = FlowEnvelope::build(valid_input()).expect("serde deserialization should succeed");
         let safe = rule(Label::Public, Label::Internal);
         assert!(!envelope.is_out_of_envelope(&safe));
     }
 
     #[test]
     fn is_out_of_envelope_false_for_denied_flow() {
-        let envelope = FlowEnvelope::build(valid_input()).unwrap();
+        let envelope = FlowEnvelope::build(valid_input()).expect("serde deserialization should succeed");
         let denied = rule(Label::Confidential, Label::Public);
         assert!(!envelope.is_out_of_envelope(&denied));
     }
 
     #[test]
     fn allows_and_denies_are_mutually_exclusive_for_any_known_flow() {
-        let envelope = FlowEnvelope::build(valid_input()).unwrap();
+        let envelope = FlowEnvelope::build(valid_input()).expect("serde deserialization should succeed");
         for r in &envelope.required_flows {
             assert!(envelope.allows_flow(r));
             assert!(!envelope.denies_flow(r));

@@ -535,7 +535,7 @@ impl TrustCardGenerator {
     /// Format a trust card in the specified format.
     pub fn format_card(card: &TrustCard, format: CardFormat) -> String {
         match format {
-            CardFormat::Json => serde_json::to_string_pretty(card).unwrap(),
+            CardFormat::Json => serde_json::to_string_pretty(card).expect("serde deserialization should succeed"),
             CardFormat::Text => card.to_string(),
             CardFormat::Compact => format!(
                 "{} v{} | {} | risk:{}/100 ({}) | {}",
@@ -1115,7 +1115,7 @@ mod tests {
         graph.register_publisher(test_publisher("pub-1"));
         graph
             .register_extension(test_extension("ext-1", "pub-1"))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         graph
     }
 
@@ -1131,7 +1131,7 @@ mod tests {
                 has_provenance_gap: false,
                 gap_descriptions: vec![],
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
         graph
     }
 
@@ -1151,8 +1151,8 @@ mod tests {
             RiskTrend::Stable,
             RiskTrend::Degrading,
         ] {
-            let json = serde_json::to_string(&trend).unwrap();
-            let restored: RiskTrend = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&trend).expect("serde deserialization should succeed");
+            let restored: RiskTrend = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(trend, restored);
         }
     }
@@ -1175,8 +1175,8 @@ mod tests {
             RecommendedAction::Restrict,
             RecommendedAction::Remove,
         ] {
-            let json = serde_json::to_string(&action).unwrap();
-            let restored: RecommendedAction = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&action).expect("serde deserialization should succeed");
+            let restored: RecommendedAction = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(action, restored);
         }
     }
@@ -1186,8 +1186,8 @@ mod tests {
     #[test]
     fn card_format_serde_roundtrip() {
         for fmt in [CardFormat::Json, CardFormat::Text, CardFormat::Compact] {
-            let json = serde_json::to_string(&fmt).unwrap();
-            let restored: CardFormat = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&fmt).expect("serde deserialization should succeed");
+            let restored: CardFormat = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(fmt, restored);
         }
     }
@@ -1228,8 +1228,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap();
-            let restored: TrustCardError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let restored: TrustCardError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, restored);
         }
     }
@@ -1242,7 +1242,7 @@ mod tests {
         let generator = TrustCardGenerator::new();
         let card = generator
             .generate(&graph, "ext-1", SecurityEpoch::from_raw(1), 10_000_000_000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert_eq!(card.extension_id, "ext-1");
         assert_eq!(card.package_name, "pkg-ext-1");
@@ -1266,12 +1266,12 @@ mod tests {
                 SecurityEpoch::from_raw(1),
                 5_000_000_000,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let generator = TrustCardGenerator::new();
         let card = generator
             .generate(&graph, "ext-1", SecurityEpoch::from_raw(1), 10_000_000_000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert_eq!(card.current_trust_level, TrustLevel::Trusted);
         assert_eq!(card.risk_score, 0, "trusted with full provenance = 0 risk");
@@ -1296,7 +1296,7 @@ mod tests {
         let generator = TrustCardGenerator::new();
         let card = generator
             .generate(&graph, "ext-1", SecurityEpoch::from_raw(1), 10_000_000_000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let descriptions: Vec<&str> = card
             .risk_drivers
@@ -1320,7 +1320,7 @@ mod tests {
         });
         let card = generator
             .generate(&graph, "ext-1", SecurityEpoch::from_raw(1), 10_000_000_000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert!(card.risk_drivers.len() <= 3);
     }
@@ -1331,7 +1331,7 @@ mod tests {
         let generator = TrustCardGenerator::new();
         let card = generator
             .generate(&graph, "ext-1", SecurityEpoch::from_raw(1), 10_000_000_000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         for pair in card.risk_drivers.windows(2) {
             assert!(
@@ -1349,7 +1349,7 @@ mod tests {
         graph.register_publisher(test_publisher("pub-1"));
         let mut ext = test_extension("ext-1", "pub-1");
         ext.current_trust_level = TrustLevel::Revoked;
-        graph.register_extension(ext).unwrap();
+        graph.register_extension(ext).expect("serde deserialization should succeed");
         // Add many negative evidence items.
         for i in 0..20 {
             graph
@@ -1357,7 +1357,7 @@ mod tests {
                     "ext-1",
                     test_evidence(&format!("ev-{i}"), EvidenceType::IncidentRecord),
                 )
-                .unwrap();
+                .expect("serde deserialization should succeed");
         }
 
         let generator = TrustCardGenerator::with_config(GeneratorConfig {
@@ -1366,7 +1366,7 @@ mod tests {
         });
         let card = generator
             .generate(&graph, "ext-1", SecurityEpoch::from_raw(1), 10_000_000_000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert!(card.risk_score <= 100);
     }
@@ -1385,12 +1385,12 @@ mod tests {
                 SecurityEpoch::from_raw(1),
                 5_000_000_000,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let generator = TrustCardGenerator::new();
         let card = generator
             .generate(&graph, "ext-1", SecurityEpoch::from_raw(1), 10_000_000_000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert_eq!(card.recommendation.action, RecommendedAction::Remove);
     }
@@ -1407,12 +1407,12 @@ mod tests {
                 SecurityEpoch::from_raw(1),
                 5_000_000_000,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let generator = TrustCardGenerator::new();
         let card = generator
             .generate(&graph, "ext-1", SecurityEpoch::from_raw(1), 10_000_000_000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert_eq!(card.recommendation.action, RecommendedAction::Remove);
     }
@@ -1429,12 +1429,12 @@ mod tests {
                 SecurityEpoch::from_raw(1),
                 5_000_000_000,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let generator = TrustCardGenerator::new();
         let card = generator
             .generate(&graph, "ext-1", SecurityEpoch::from_raw(1), 10_000_000_000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Could be Review or Restrict depending on risk score.
         assert!(
@@ -1449,7 +1449,7 @@ mod tests {
         let generator = TrustCardGenerator::new();
         let card = generator
             .generate(&graph, "ext-1", SecurityEpoch::from_raw(1), 10_000_000_000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert_eq!(card.recommendation.action, RecommendedAction::Review);
     }
@@ -1466,12 +1466,12 @@ mod tests {
                 SecurityEpoch::from_raw(1),
                 5_000_000_000,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let generator = TrustCardGenerator::new();
         let card = generator
             .generate(&graph, "ext-1", SecurityEpoch::from_raw(1), 10_000_000_000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert_eq!(card.recommendation.action, RecommendedAction::Monitor);
     }
@@ -1486,21 +1486,21 @@ mod tests {
                 "ext-1",
                 test_evidence("ev-1", EvidenceType::ProvenanceAttestation),
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         graph
             .add_evidence("ext-1", test_evidence("ev-2", EvidenceType::IncidentRecord))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         graph
             .add_evidence(
                 "ext-1",
                 test_evidence("ev-3", EvidenceType::BehavioralObservation),
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let generator = TrustCardGenerator::new();
         let card = generator
             .generate(&graph, "ext-1", SecurityEpoch::from_raw(1), 10_000_000_000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert_eq!(card.evidence.positive_count, 1);
         assert_eq!(card.evidence.negative_count, 1);
@@ -1515,7 +1515,7 @@ mod tests {
         let generator = TrustCardGenerator::new();
         let card = generator
             .generate(&graph, "ext-1", SecurityEpoch::from_raw(1), 10_000_000_000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert_eq!(card.evidence.positive_count, 0);
         assert_eq!(card.evidence.negative_count, 0);
@@ -1537,12 +1537,12 @@ mod tests {
                 SecurityEpoch::from_raw(1),
                 9_000_000_000,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let generator = TrustCardGenerator::new();
         let card = generator
             .generate(&graph, "ext-1", SecurityEpoch::from_raw(1), 10_000_000_000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert_eq!(card.risk_trend, RiskTrend::Degrading);
     }
@@ -1553,7 +1553,7 @@ mod tests {
         let generator = TrustCardGenerator::new();
         let card = generator
             .generate(&graph, "ext-1", SecurityEpoch::from_raw(1), 10_000_000_000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert_eq!(card.risk_trend, RiskTrend::Stable);
     }
@@ -1570,12 +1570,12 @@ mod tests {
                 SecurityEpoch::from_raw(1),
                 9_000_000_000,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let generator = TrustCardGenerator::new();
         let card = generator
             .generate(&graph, "ext-1", SecurityEpoch::from_raw(1), 10_000_000_000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert_eq!(card.risk_trend, RiskTrend::Improving);
     }
@@ -1594,7 +1594,7 @@ mod tests {
                 SecurityEpoch::from_raw(1),
                 2_000_000_000,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         graph
             .transition_trust(
                 "ext-1",
@@ -1604,12 +1604,12 @@ mod tests {
                 SecurityEpoch::from_raw(1),
                 3_000_000_000,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let generator = TrustCardGenerator::new();
         let card = generator
             .generate(&graph, "ext-1", SecurityEpoch::from_raw(1), 10_000_000_000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert_eq!(card.history.len(), 2);
         // Most recent first.
@@ -1630,7 +1630,7 @@ mod tests {
                 SecurityEpoch::from_raw(1),
                 2_000,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         graph
             .transition_trust(
                 "ext-1",
@@ -1640,7 +1640,7 @@ mod tests {
                 SecurityEpoch::from_raw(1),
                 3_000,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         graph
             .transition_trust(
                 "ext-1",
@@ -1650,7 +1650,7 @@ mod tests {
                 SecurityEpoch::from_raw(1),
                 4_000,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let generator = TrustCardGenerator::with_config(GeneratorConfig {
             max_history_entries: 2,
@@ -1658,7 +1658,7 @@ mod tests {
         });
         let card = generator
             .generate(&graph, "ext-1", SecurityEpoch::from_raw(1), 10_000_000_000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert_eq!(card.history.len(), 2);
     }
@@ -1671,10 +1671,10 @@ mod tests {
         let generator = TrustCardGenerator::new();
         let card = generator
             .generate(&graph, "ext-1", SecurityEpoch::from_raw(1), 10_000_000_000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let json_str = TrustCardGenerator::format_card(&card, CardFormat::Json);
-        let parsed: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json_str).expect("serde deserialization should succeed");
         assert!(parsed.is_object());
     }
 
@@ -1684,7 +1684,7 @@ mod tests {
         let generator = TrustCardGenerator::new();
         let card = generator
             .generate(&graph, "ext-1", SecurityEpoch::from_raw(1), 10_000_000_000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let text = TrustCardGenerator::format_card(&card, CardFormat::Text);
         assert!(text.contains("ext-1"));
@@ -1697,7 +1697,7 @@ mod tests {
         let generator = TrustCardGenerator::new();
         let card = generator
             .generate(&graph, "ext-1", SecurityEpoch::from_raw(1), 10_000_000_000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let compact = TrustCardGenerator::format_card(&card, CardFormat::Compact);
         assert!(
@@ -1715,10 +1715,10 @@ mod tests {
         let generator = TrustCardGenerator::new();
         let card = generator
             .generate(&graph, "ext-1", SecurityEpoch::from_raw(1), 10_000_000_000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
-        let json = serde_json::to_string(&card).unwrap();
-        let restored: TrustCard = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&card).expect("serde deserialization should succeed");
+        let restored: TrustCard = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(card, restored);
     }
 
@@ -1730,7 +1730,7 @@ mod tests {
         let generator = TrustCardGenerator::new();
         let card_before = generator
             .generate(&graph, "ext-1", SecurityEpoch::from_raw(1), 10_000_000_000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         graph
             .transition_trust(
@@ -1741,10 +1741,10 @@ mod tests {
                 SecurityEpoch::from_raw(1),
                 11_000_000_000,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let card_after = generator
             .generate(&graph, "ext-1", SecurityEpoch::from_raw(1), 12_000_000_000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let diff = TrustCardDiff::compute(&card_before, &card_after);
         assert_eq!(diff.old_trust_level, TrustLevel::Unknown);
@@ -1758,7 +1758,7 @@ mod tests {
         let generator = TrustCardGenerator::new();
         let card = generator
             .generate(&graph, "ext-1", SecurityEpoch::from_raw(1), 10_000_000_000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let diff = TrustCardDiff::compute(&card, &card);
         assert_eq!(diff.risk_score_delta, 0);
@@ -1776,8 +1776,8 @@ mod tests {
             new_recommendation: RecommendedAction::Review,
             change_summary: "trust degraded".into(),
         };
-        let json = serde_json::to_string(&diff).unwrap();
-        let restored: TrustCardDiff = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&diff).expect("serde deserialization should succeed");
+        let restored: TrustCardDiff = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(diff, restored);
     }
 
@@ -1808,8 +1808,8 @@ mod tests {
             triggering_evidence_summary: "ev-1".into(),
             timestamp_ns: 5_000_000_000,
         };
-        let json = serde_json::to_string(&notif).unwrap();
-        let restored: UpdateNotification = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&notif).expect("serde deserialization should succeed");
+        let restored: UpdateNotification = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(notif, restored);
     }
 
@@ -1909,7 +1909,7 @@ mod tests {
 
         cache
             .get_or_generate(&generator, &graph, "ext-1", epoch, now)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(cache.cached_count(), 1);
 
         // Should be a cache hit.
@@ -1927,7 +1927,7 @@ mod tests {
 
         cache
             .get_or_generate(&generator, &graph, "ext-1", epoch, now)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Change the graph.
         graph
@@ -1939,7 +1939,7 @@ mod tests {
                 epoch,
                 now + 1_000,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Cache should be invalid due to transition count change.
         assert!(cache.get("ext-1", &graph, now + 2_000).is_none());
@@ -1955,7 +1955,7 @@ mod tests {
 
         cache
             .get_or_generate(&generator, &graph, "ext-1", epoch, now)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // After staleness period.
         assert!(cache.get("ext-1", &graph, now + 2_000_000_000).is_none());
@@ -1970,7 +1970,7 @@ mod tests {
 
         cache
             .get_or_generate(&generator, &graph, "ext-1", epoch, 10_000_000_000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(cache.cached_count(), 1);
 
         cache.invalidate("ext-1");
@@ -1984,10 +1984,10 @@ mod tests {
         graph.register_publisher(test_publisher("pub-1"));
         graph
             .register_extension(test_extension("ext-1", "pub-1"))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         graph
             .register_extension(test_extension("ext-2", "pub-1"))
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let generator = TrustCardGenerator::new();
         let epoch = SecurityEpoch::from_raw(1);
@@ -1995,10 +1995,10 @@ mod tests {
 
         cache
             .get_or_generate(&generator, &graph, "ext-1", epoch, now)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         cache
             .get_or_generate(&generator, &graph, "ext-2", epoch, now)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(cache.cached_count(), 2);
 
         cache.invalidate_all();
@@ -2013,15 +2013,15 @@ mod tests {
         graph.register_publisher(test_publisher("pub-1"));
 
         let dep = test_extension("dep-1", "pub-1");
-        graph.register_extension(dep).unwrap();
+        graph.register_extension(dep).expect("serde deserialization should succeed");
 
         let ext = test_extension_with_deps("ext-1", "pub-1", &["dep-1"]);
-        graph.register_extension(ext).unwrap();
+        graph.register_extension(ext).expect("serde deserialization should succeed");
 
         let generator = TrustCardGenerator::new();
         let card = generator
             .generate(&graph, "ext-1", SecurityEpoch::from_raw(1), 10_000_000_000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // dep-1 is Unknown, so dependency_risk > 0.
         assert!(card.provenance.dependency_risk > 0);
@@ -2044,7 +2044,7 @@ mod tests {
         let generator = TrustCardGenerator::new();
         let card = generator
             .generate(&graph, "ext-1", SecurityEpoch::from_raw(1), 10_000_000_000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert_eq!(card.incident_count, 1);
     }
@@ -2057,12 +2057,12 @@ mod tests {
             let mut g = ReputationGraph::new();
             g.register_publisher(test_publisher("pub-1"));
             g.register_extension(test_extension("ext-1", "pub-1"))
-                .unwrap();
+                .expect("serde deserialization should succeed");
             g.add_evidence(
                 "ext-1",
                 test_evidence("ev-1", EvidenceType::BehavioralObservation),
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
             g.transition_trust(
                 "ext-1",
                 TrustLevel::Provisional,
@@ -2071,7 +2071,7 @@ mod tests {
                 SecurityEpoch::from_raw(1),
                 5_000,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
             g
         };
 
@@ -2083,7 +2083,7 @@ mod tests {
                 SecurityEpoch::from_raw(1),
                 10_000_000_000,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let card2 = generator
             .generate(
                 &build(),
@@ -2091,10 +2091,10 @@ mod tests {
                 SecurityEpoch::from_raw(1),
                 10_000_000_000,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
-        let json1 = serde_json::to_string(&card1).unwrap();
-        let json2 = serde_json::to_string(&card2).unwrap();
+        let json1 = serde_json::to_string(&card1).expect("serde deserialization should succeed");
+        let json2 = serde_json::to_string(&card2).expect("serde deserialization should succeed");
         assert_eq!(
             json1, json2,
             "identical inputs must produce identical cards"
@@ -2153,7 +2153,7 @@ mod tests {
         let generator = TrustCardGenerator::new();
         let card = generator
             .generate(&graph, "ext-1", SecurityEpoch::from_raw(1), 10_000_000_000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert!(!card.provenance.publisher_verified);
         assert!(!card.provenance.build_attested);
@@ -2166,7 +2166,7 @@ mod tests {
         let generator = TrustCardGenerator::new();
         let card = generator
             .generate(&graph, "ext-1", SecurityEpoch::from_raw(1), 10_000_000_000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert!(card.provenance.publisher_verified);
         assert!(card.provenance.build_attested);
@@ -2178,8 +2178,8 @@ mod tests {
     #[test]
     fn generator_config_serde_roundtrip() {
         let config = GeneratorConfig::default();
-        let json = serde_json::to_string(&config).unwrap();
-        let restored: GeneratorConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let restored: GeneratorConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, restored);
     }
 
@@ -2200,7 +2200,7 @@ mod tests {
         for i in 0..5 {
             graph
                 .register_extension(test_extension(&format!("ext-{i}"), "pub-1"))
-                .unwrap();
+                .expect("serde deserialization should succeed");
         }
 
         let generator = TrustCardGenerator::new();
@@ -2210,7 +2210,7 @@ mod tests {
             .map(|i| {
                 generator
                     .generate(&graph, &format!("ext-{i}"), epoch, 10_000_000_000)
-                    .unwrap()
+                    .expect("serde deserialization should succeed")
             })
             .collect();
 
@@ -2228,8 +2228,8 @@ mod tests {
             description: "unverified publisher identity".into(),
             contribution: 20,
         };
-        let json = serde_json::to_string(&driver).unwrap();
-        let back: RiskDriver = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&driver).expect("serde deserialization should succeed");
+        let back: RiskDriver = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(driver, back);
     }
 
@@ -2242,8 +2242,8 @@ mod tests {
             most_recent_ns: Some(9_000_000_000),
             most_recent_description: Some("behavioral observation".into()),
         };
-        let json = serde_json::to_string(&summary).unwrap();
-        let back: EvidenceSummary = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
+        let back: EvidenceSummary = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(summary, back);
     }
 
@@ -2256,8 +2256,8 @@ mod tests {
             most_recent_ns: None,
             most_recent_description: None,
         };
-        let json = serde_json::to_string(&summary).unwrap();
-        let back: EvidenceSummary = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
+        let back: EvidenceSummary = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(summary, back);
     }
 
@@ -2269,8 +2269,8 @@ mod tests {
             dependency_risk: 500_000,
             has_provenance_gap: false,
         };
-        let json = serde_json::to_string(&prov).unwrap();
-        let back: ProvenanceSummary = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&prov).expect("serde deserialization should succeed");
+        let back: ProvenanceSummary = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(prov, back);
     }
 
@@ -2283,8 +2283,8 @@ mod tests {
             timestamp_ns: 5_000_000_000,
             operator_override: false,
         };
-        let json = serde_json::to_string(&entry).unwrap();
-        let back: TrustHistoryEntry = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let back: TrustHistoryEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, back);
     }
 
@@ -2295,8 +2295,8 @@ mod tests {
             confidence: 700_000,
             rationale: "anomalous behavior detected".into(),
         };
-        let json = serde_json::to_string(&rec).unwrap();
-        let back: Recommendation = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&rec).expect("serde deserialization should succeed");
+        let back: Recommendation = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(rec, back);
     }
 
@@ -2367,7 +2367,7 @@ mod tests {
         let graph = test_graph_with_extension();
         let card = generator
             .generate(&graph, "ext-1", SecurityEpoch::from_raw(1), 10_000_000_000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(card.risk_drivers.len() <= 2);
     }
 
@@ -2480,7 +2480,7 @@ mod tests {
         let generator = TrustCardGenerator::new();
         let card = generator
             .generate(&graph, "ext-1", SecurityEpoch::from_raw(1), 10_000_000_000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let display = card.to_string();
         assert!(display.contains("ext-1"));
@@ -2506,18 +2506,18 @@ mod tests {
                 SecurityEpoch::from_raw(1),
                 5_000_000_000,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         graph
             .add_evidence(
                 "ext-1",
                 test_evidence("ev-neg", EvidenceType::IncidentRecord),
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let generator = TrustCardGenerator::new();
         let card = generator
             .generate(&graph, "ext-1", SecurityEpoch::from_raw(1), 10_000_000_000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert_eq!(card.recommendation.action, RecommendedAction::Review);
     }
@@ -2539,10 +2539,10 @@ mod tests {
                 SecurityEpoch::from_raw(1),
                 5_000_000_000,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let card_before = generator
             .generate(&graph, "ext-1", SecurityEpoch::from_raw(1), 10_000_000_000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(
             card_before.recommendation.action,
             RecommendedAction::Monitor
@@ -2558,10 +2558,10 @@ mod tests {
                 SecurityEpoch::from_raw(1),
                 11_000_000_000,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let card_after = generator
             .generate(&graph, "ext-1", SecurityEpoch::from_raw(1), 12_000_000_000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let diff = TrustCardDiff::compute(&card_before, &card_after);
         assert!(diff.change_summary.contains("recommendation:"));
@@ -2605,11 +2605,11 @@ mod tests {
 
         let card1 = cache
             .get_or_generate(&generator, &graph, "ext-1", epoch, now)
-            .unwrap()
+            .expect("serde deserialization should succeed")
             .clone();
         let card2 = cache
             .get_or_generate(&generator, &graph, "ext-1", epoch, now + 1_000)
-            .unwrap()
+            .expect("serde deserialization should succeed")
             .clone();
 
         // Should be the same card (cached), same generated_at_ns.

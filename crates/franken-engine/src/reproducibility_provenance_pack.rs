@@ -864,8 +864,8 @@ mod tests {
     #[test]
     fn toolchain_serde_roundtrip() {
         let tc = test_toolchain();
-        let json = serde_json::to_string(&tc).unwrap();
-        let back: ToolchainFingerprint = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&tc).expect("serde deserialization should succeed");
+        let back: ToolchainFingerprint = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(tc, back);
     }
 
@@ -888,8 +888,8 @@ mod tests {
     #[test]
     fn git_serde_roundtrip() {
         let git = test_git();
-        let json = serde_json::to_string(&git).unwrap();
-        let back: GitFingerprint = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&git).expect("serde deserialization should succeed");
+        let back: GitFingerprint = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(git, back);
     }
 
@@ -904,8 +904,8 @@ mod tests {
     #[test]
     fn env_serde_roundtrip() {
         let env = test_env();
-        let json = serde_json::to_string(&env).unwrap();
-        let back: BuildEnvironment = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&env).expect("serde deserialization should succeed");
+        let back: BuildEnvironment = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(env, back);
     }
 
@@ -941,8 +941,8 @@ mod tests {
             ArtifactKind::Documentation,
             ArtifactKind::Legal,
         ] {
-            let json = serde_json::to_string(&k).unwrap();
-            let back: ArtifactKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&k).expect("serde deserialization should succeed");
+            let back: ArtifactKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(k, back);
         }
     }
@@ -985,8 +985,8 @@ mod tests {
     fn manifest_serde_roundtrip() {
         let artifacts = vec![test_artifact("a.rs", ArtifactKind::Source)];
         let manifest = ArtifactManifest::from_artifacts("pack-4".to_string(), artifacts);
-        let json = serde_json::to_string(&manifest).unwrap();
-        let back: ArtifactManifest = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&manifest).expect("serde deserialization should succeed");
+        let back: ArtifactManifest = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(manifest, back);
     }
 
@@ -1047,8 +1047,8 @@ mod tests {
     fn dep_snapshot_serde_roundtrip() {
         let entries = vec![test_dep("serde", "1.0.200")];
         let snap = DependencySnapshot::from_entries(entries);
-        let json = serde_json::to_string(&snap).unwrap();
-        let back: DependencySnapshot = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&snap).expect("serde deserialization should succeed");
+        let back: DependencySnapshot = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(snap, back);
     }
 
@@ -1092,8 +1092,8 @@ mod tests {
             LicenseRisk::Medium,
             LicenseRisk::High,
         ] {
-            let json = serde_json::to_string(&r).unwrap();
-            let back: LicenseRisk = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+            let back: LicenseRisk = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(r, back);
         }
     }
@@ -1168,8 +1168,8 @@ mod tests {
             notes: "Dual licensed".to_string(),
         }];
         let assessment = LegalAssessment::from_findings(findings);
-        let json = serde_json::to_string(&assessment).unwrap();
-        let back: LegalAssessment = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&assessment).expect("serde deserialization should succeed");
+        let back: LegalAssessment = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(assessment, back);
     }
 
@@ -1186,7 +1186,7 @@ mod tests {
         let pack = PackBuilder::new("FRX-01".to_string(), test_epoch())
             .environment(test_env())
             .build()
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert!(pack.pack_id.starts_with("pack-"));
         assert_eq!(pack.claim_id, "FRX-01");
@@ -1206,7 +1206,7 @@ mod tests {
             .dependency(test_dep("serde", "1.0.200"))
             .dependency(test_dep("sha2", "0.10.9"))
             .build()
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert_eq!(pack.artifact_count(), 2);
         assert_eq!(pack.dependency_count(), 2);
@@ -1223,11 +1223,11 @@ mod tests {
                 notes: "strong copyleft".to_string(),
             })
             .build()
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert!(pack.requires_legal_review());
         assert!(pack.legal.is_some());
-        assert!(pack.legal.as_ref().unwrap().has_high_risk);
+        assert!(pack.legal.as_ref().expect("serde deserialization should succeed").has_high_risk);
     }
 
     // -- ReproducibilityPack tests --
@@ -1239,7 +1239,7 @@ mod tests {
             .artifact(test_artifact("a.rs", ArtifactKind::Source))
             .dependency(test_dep("serde", "1.0"))
             .build()
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let result = pack.verify_integrity();
         assert!(result.all_valid);
@@ -1255,11 +1255,11 @@ mod tests {
         let p1 = PackBuilder::new("FRX-05".to_string(), test_epoch())
             .environment(test_env())
             .build()
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let p2 = PackBuilder::new("FRX-05".to_string(), test_epoch())
             .environment(test_env())
             .build()
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(p1.pack_hash, p2.pack_hash);
         assert_eq!(p1.pack_id, p2.pack_id);
     }
@@ -1269,11 +1269,11 @@ mod tests {
         let p1 = PackBuilder::new("FRX-05".to_string(), test_epoch())
             .environment(test_env())
             .build()
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let p2 = PackBuilder::new("FRX-06".to_string(), test_epoch())
             .environment(test_env())
             .build()
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_ne!(p1.pack_hash, p2.pack_hash);
     }
 
@@ -1290,10 +1290,10 @@ mod tests {
                 notes: String::new(),
             })
             .build()
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
-        let json = serde_json::to_string(&pack).unwrap();
-        let back: ReproducibilityPack = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&pack).expect("serde deserialization should succeed");
+        let back: ReproducibilityPack = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(pack, back);
     }
 
@@ -1305,7 +1305,7 @@ mod tests {
             .environment(test_env())
             .artifact(test_artifact("a.rs", ArtifactKind::Source))
             .build()
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let report = generate_report(&pack);
         assert_eq!(report.schema_version, SCHEMA_VERSION);
@@ -1322,7 +1322,7 @@ mod tests {
         let pack = PackBuilder::new("FRX-09".to_string(), test_epoch())
             .environment(test_env())
             .build()
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let r1 = generate_report(&pack);
         let r2 = generate_report(&pack);
@@ -1340,7 +1340,7 @@ mod tests {
                 notes: "strong copyleft".to_string(),
             })
             .build()
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let report = generate_report(&pack);
         assert!(report.legal_review_required);
@@ -1352,11 +1352,11 @@ mod tests {
         let pack = PackBuilder::new("FRX-11".to_string(), test_epoch())
             .environment(test_env())
             .build()
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let report = generate_report(&pack);
-        let json = serde_json::to_string(&report).unwrap();
-        let back: ReproducibilityReport = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let back: ReproducibilityReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report, back);
     }
 
@@ -1367,7 +1367,7 @@ mod tests {
         let pack = PackBuilder::new("FRX-12".to_string(), test_epoch())
             .environment(env)
             .build()
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let report = generate_report(&pack);
         assert!(report.git_dirty);
@@ -1385,8 +1385,8 @@ mod tests {
             dependencies_sorted: true,
             all_valid: true,
         };
-        let json = serde_json::to_string(&result).unwrap();
-        let back: PackIntegrityResult = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let back: PackIntegrityResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, back);
     }
 
@@ -1437,16 +1437,16 @@ mod tests {
     #[test]
     fn toolchain_fingerprint_serde_roundtrip() {
         let fp = test_env().toolchain;
-        let json = serde_json::to_string(&fp).unwrap();
-        let back: ToolchainFingerprint = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&fp).expect("serde deserialization should succeed");
+        let back: ToolchainFingerprint = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(fp, back);
     }
 
     #[test]
     fn build_environment_serde_roundtrip() {
         let env = test_env();
-        let json = serde_json::to_string(&env).unwrap();
-        let back: BuildEnvironment = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&env).expect("serde deserialization should succeed");
+        let back: BuildEnvironment = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(env, back);
     }
 
@@ -1459,7 +1459,7 @@ mod tests {
             .artifact(test_artifact("c.bin", ArtifactKind::Binary))
             .dependency(test_dep("serde", "1.0"))
             .build()
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(pack.artifact_count(), 3);
         assert_eq!(pack.dependency_count(), 1);
     }
@@ -1469,7 +1469,7 @@ mod tests {
         let pack = PackBuilder::new("FRX-nolegal".to_string(), test_epoch())
             .environment(test_env())
             .build()
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(!pack.requires_legal_review());
         assert!(pack.legal.is_none());
     }
@@ -1485,8 +1485,8 @@ mod tests {
                 notes: "permissive".to_string(),
             })
             .build()
-            .unwrap();
-        let legal = pack.legal.as_ref().unwrap();
+            .expect("serde deserialization should succeed");
+        let legal = pack.legal.as_ref().expect("serde deserialization should succeed");
         assert!(!legal.has_high_risk);
         assert_eq!(legal.max_risk, LicenseRisk::Low);
     }
@@ -1513,24 +1513,24 @@ mod tests {
             risk: LicenseRisk::None,
             notes: "dual".to_string(),
         };
-        let json = serde_json::to_string(&finding).unwrap();
-        let back: LicenseFinding = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&finding).expect("serde deserialization should succeed");
+        let back: LicenseFinding = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(finding, back);
     }
 
     #[test]
     fn artifact_entry_serde_roundtrip() {
         let entry = test_artifact("main.rs", ArtifactKind::Source);
-        let json = serde_json::to_string(&entry).unwrap();
-        let back: ArtifactEntry = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let back: ArtifactEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, back);
     }
 
     #[test]
     fn dependency_entry_serde_roundtrip() {
         let dep = test_dep("serde", "1.0.200");
-        let json = serde_json::to_string(&dep).unwrap();
-        let back: DependencyEntry = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&dep).expect("serde deserialization should succeed");
+        let back: DependencyEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(dep, back);
     }
 
@@ -1547,8 +1547,8 @@ mod tests {
             ArtifactKind::Legal,
         ];
         for k in &kinds {
-            let json = serde_json::to_string(k).unwrap();
-            let back: ArtifactKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(k).expect("serde deserialization should succeed");
+            let back: ArtifactKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*k, back);
         }
     }
@@ -1561,8 +1561,8 @@ mod tests {
     #[test]
     fn git_fingerprint_serde_roundtrip() {
         let git = test_env().git;
-        let json = serde_json::to_string(&git).unwrap();
-        let back: GitFingerprint = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&git).expect("serde deserialization should succeed");
+        let back: GitFingerprint = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(git, back);
     }
 
@@ -1571,8 +1571,8 @@ mod tests {
         let pack = PackBuilder::new("FRX-json".to_string(), test_epoch())
             .environment(test_env())
             .build()
-            .unwrap();
-        let json = serde_json::to_string(&pack).unwrap();
+            .expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&pack).expect("serde deserialization should succeed");
         for field in &[
             "pack_id",
             "claim_id",
@@ -1591,9 +1591,9 @@ mod tests {
         let pack = PackBuilder::new("FRX-rpt".to_string(), test_epoch())
             .environment(test_env())
             .build()
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let report = generate_report(&pack);
-        let json = serde_json::to_string(&report).unwrap();
+        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
         for field in &[
             "schema_version",
             "claim_id",
@@ -1652,7 +1652,7 @@ mod tests {
         let pack = PackBuilder::new("FRX-clone".to_string(), test_epoch())
             .environment(test_env())
             .build()
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let report = generate_report(&pack);
         assert_eq!(report, report.clone());
     }
@@ -1930,11 +1930,11 @@ mod tests {
         let p1 = PackBuilder::new("FRX-ep".to_string(), SecurityEpoch::from_raw(1))
             .environment(test_env())
             .build()
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let p2 = PackBuilder::new("FRX-ep".to_string(), SecurityEpoch::from_raw(2))
             .environment(test_env())
             .build()
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_ne!(p1.pack_hash, p2.pack_hash);
         assert_ne!(p1.pack_id, p2.pack_id);
     }
@@ -1945,7 +1945,7 @@ mod tests {
             .environment(test_env())
             .artifact(test_artifact("a.rs", ArtifactKind::Source))
             .build()
-            .unwrap();
+            .expect("serde deserialization should succeed");
         pack.pack_hash = "deadbeefdeadbeef".to_string();
         let result = pack.verify_integrity();
         assert!(!result.pack_hash_valid);
@@ -1958,7 +1958,7 @@ mod tests {
             .environment(test_env())
             .artifact(test_artifact("a.rs", ArtifactKind::Source))
             .build()
-            .unwrap();
+            .expect("serde deserialization should succeed");
         pack.manifest.total_count = 999;
         let result = pack.verify_integrity();
         assert!(!result.manifest_count_valid);
@@ -1971,7 +1971,7 @@ mod tests {
             .environment(test_env())
             .artifact(test_artifact("a.rs", ArtifactKind::Source))
             .build()
-            .unwrap();
+            .expect("serde deserialization should succeed");
         pack.manifest.total_size_bytes = 0;
         let result = pack.verify_integrity();
         assert!(!result.manifest_size_valid);
@@ -1984,7 +1984,7 @@ mod tests {
             .environment(test_env())
             .artifact(test_artifact("a.rs", ArtifactKind::Source))
             .build()
-            .unwrap();
+            .expect("serde deserialization should succeed");
         pack.manifest.artifacts[0].content_hash = "tampered-artifact".to_string();
         let result = pack.verify_integrity();
         assert!(!result.pack_hash_valid);
@@ -1997,7 +1997,7 @@ mod tests {
             .environment(test_env())
             .dependency(test_dep("serde", "1.0.200"))
             .build()
-            .unwrap();
+            .expect("serde deserialization should succeed");
         pack.dependencies.dependencies[0].version = "9.9.9".to_string();
         let result = pack.verify_integrity();
         assert!(!result.pack_hash_valid);
@@ -2010,7 +2010,7 @@ mod tests {
             .environment(test_env())
             .dependency(test_dep("serde", "1.0.200"))
             .build()
-            .unwrap();
+            .expect("serde deserialization should succeed");
         pack.dependencies.total_count = 99;
         let result = pack.verify_integrity();
         assert!(!result.all_valid);
@@ -2022,7 +2022,7 @@ mod tests {
             .environment(test_env())
             .artifact(test_artifact("a.rs", ArtifactKind::Source))
             .build()
-            .unwrap();
+            .expect("serde deserialization should succeed");
         pack.pack_id = "pack-tampered".to_string();
         pack.manifest.pack_id = pack.pack_id.clone();
         pack.manifest.manifest_hash =
@@ -2045,7 +2045,7 @@ mod tests {
         let pack = PackBuilder::new("FRX-norisk".to_string(), test_epoch())
             .environment(test_env())
             .build()
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let report = generate_report(&pack);
         assert!(report.max_license_risk.is_none());
         assert!(!report.legal_review_required);
@@ -2056,11 +2056,11 @@ mod tests {
         let p1 = PackBuilder::new("FRX-r1".to_string(), test_epoch())
             .environment(test_env())
             .build()
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let p2 = PackBuilder::new("FRX-r2".to_string(), test_epoch())
             .environment(test_env())
             .build()
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let r1 = generate_report(&p1);
         let r2 = generate_report(&p2);
         assert_ne!(r1.report_hash, r2.report_hash);
@@ -2075,8 +2075,8 @@ mod tests {
             size_bytes: 512,
             redacted: true,
         };
-        let json = serde_json::to_string(&entry).unwrap();
-        let back: ArtifactEntry = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let back: ArtifactEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert!(back.redacted);
     }
 
@@ -2088,8 +2088,8 @@ mod tests {
             source: "path".to_string(),
             checksum: None,
         };
-        let json = serde_json::to_string(&dep).unwrap();
-        let back: DependencyEntry = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&dep).expect("serde deserialization should succeed");
+        let back: DependencyEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert!(back.checksum.is_none());
     }
 
@@ -2110,8 +2110,8 @@ mod tests {
                 notes: String::new(),
             })
             .build()
-            .unwrap();
-        let legal = pack.legal.as_ref().unwrap();
+            .expect("serde deserialization should succeed");
+        let legal = pack.legal.as_ref().expect("serde deserialization should succeed");
         assert_eq!(legal.findings[0].dependency, "a-dep");
         assert_eq!(legal.findings[1].dependency, "z-dep");
     }
@@ -2120,8 +2120,8 @@ mod tests {
     fn env_with_container_digest_serde_roundtrip() {
         let mut env = test_env();
         env.container_digest = Some("sha256:abc123".to_string());
-        let json = serde_json::to_string(&env).unwrap();
-        let back: BuildEnvironment = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&env).expect("serde deserialization should succeed");
+        let back: BuildEnvironment = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.container_digest, Some("sha256:abc123".to_string()));
     }
 
@@ -2134,8 +2134,8 @@ mod tests {
             dirty: true,
             tags: vec![],
         };
-        let json = serde_json::to_string(&git).unwrap();
-        let back: GitFingerprint = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&git).expect("serde deserialization should succeed");
+        let back: GitFingerprint = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(git, back);
         assert!(back.branch.is_none());
         assert!(back.tags.is_empty());
@@ -2146,7 +2146,7 @@ mod tests {
         let pack = PackBuilder::new("FRX-prefix".to_string(), test_epoch())
             .environment(test_env())
             .build()
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(
             pack.pack_id.starts_with("pack-"),
             "pack_id must start with 'pack-'"
@@ -2162,7 +2162,7 @@ mod tests {
         let pack = PackBuilder::new("FRX-sv".to_string(), test_epoch())
             .environment(test_env())
             .build()
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(pack.schema_version, SCHEMA_VERSION);
     }
 }

@@ -620,8 +620,8 @@ mod tests {
             LifecycleEvent::Terminate,
             LifecycleEvent::Revocation,
         ] {
-            let json = serde_json::to_string(&event).unwrap();
-            let restored: LifecycleEvent = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+            let restored: LifecycleEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(event, restored);
         }
     }
@@ -691,8 +691,8 @@ mod tests {
     #[test]
     fn cancellation_mode_serde_roundtrip() {
         let mode = CancellationMode::for_event(LifecycleEvent::Quarantine);
-        let json = serde_json::to_string(&mode).unwrap();
-        let restored: CancellationMode = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&mode).expect("serde deserialization should succeed");
+        let restored: CancellationMode = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(mode, restored);
     }
 
@@ -730,8 +730,8 @@ mod tests {
             cell_id: "c1".to_string(),
             event: LifecycleEvent::Terminate,
         };
-        let json = serde_json::to_string(&err).unwrap();
-        let restored: CancellationError = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let restored: CancellationError = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, restored);
     }
 
@@ -761,8 +761,8 @@ mod tests {
             obligations_pending: 2,
             budget_consumed_ms: 3,
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let restored: CancellationEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let restored: CancellationEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, restored);
     }
 
@@ -1065,7 +1065,7 @@ mod tests {
         assert_eq!(results.len(), 3);
         for r in &results {
             assert!(r.is_ok());
-            assert!(r.as_ref().unwrap().success);
+            assert!(r.as_ref().expect("serde deserialization should succeed").success);
         }
         assert_eq!(cancel_mgr.outcome_count(), 3);
     }
@@ -1213,10 +1213,10 @@ mod tests {
             let mut mgr = CancellationManager::new();
 
             cell.register_obligation("ob-1", "flush");
-            cell.commit_obligation("ob-1").unwrap();
+            cell.commit_obligation("ob-1").expect("serde deserialization should succeed");
 
             mgr.cancel_cell(&mut cell, &mut cx, LifecycleEvent::Unload)
-                .unwrap();
+                .expect("serde deserialization should succeed");
             mgr.drain_events()
         };
 
@@ -1246,8 +1246,8 @@ mod tests {
             children_cancelled: 0,
             was_idempotent: false,
         };
-        let json = serde_json::to_string(&outcome).unwrap();
-        let restored: CancellationOutcome = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&outcome).expect("serde deserialization should succeed");
+        let restored: CancellationOutcome = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(outcome, restored);
     }
 
@@ -1371,8 +1371,8 @@ mod tests {
             LifecycleEvent::Terminate,
             LifecycleEvent::Revocation,
         ] {
-            let json = serde_json::to_string(&event).unwrap();
-            let back: LifecycleEvent = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+            let back: LifecycleEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(event, back);
         }
     }
@@ -1413,8 +1413,8 @@ mod tests {
     #[test]
     fn cancellation_mode_serde_roundtrip_all_events() {
         let mode = CancellationMode::for_event(LifecycleEvent::Quarantine);
-        let json = serde_json::to_string(&mode).unwrap();
-        let back: CancellationMode = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&mode).expect("serde deserialization should succeed");
+        let back: CancellationMode = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(mode, back);
     }
 
@@ -1458,8 +1458,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap();
-            let back: CancellationError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let back: CancellationError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, back);
         }
     }
@@ -1477,8 +1477,8 @@ mod tests {
             obligations_pending: 0,
             budget_consumed_ms: 0,
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let back: CancellationEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let back: CancellationEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
     }
 
@@ -1591,7 +1591,7 @@ mod tests {
             children_cancelled: 0,
             was_idempotent: false,
         };
-        let json = serde_json::to_string(&outcome).unwrap();
+        let json = serde_json::to_string(&outcome).expect("serde deserialization should succeed");
         for field in [
             "cell_id",
             "event",
@@ -1618,7 +1618,7 @@ mod tests {
             obligations_pending: 3,
             budget_consumed_ms: 100,
         };
-        let json = serde_json::to_string(&ev).unwrap();
+        let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
         for field in [
             "trace_id",
             "cell_id",
@@ -1692,7 +1692,7 @@ mod tests {
     #[test]
     fn cancellation_mode_json_field_presence() {
         let mode = CancellationMode::for_event(LifecycleEvent::Unload);
-        let json = serde_json::to_string(&mode).unwrap();
+        let json = serde_json::to_string(&mode).expect("serde deserialization should succeed");
         for field in [
             "drain_budget_ticks",
             "force_abort_on_timeout",
@@ -1711,9 +1711,9 @@ mod tests {
         let mut mgr = CancellationManager::new();
 
         mgr.cancel_cell(&mut cell1, &mut cx, LifecycleEvent::Unload)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         mgr.cancel_cell(&mut cell2, &mut cx, LifecycleEvent::Quarantine)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let outcomes = mgr.outcomes();
         assert_eq!(outcomes.len(), 2);
@@ -1796,7 +1796,7 @@ mod tests {
         let mut mgr = CancellationManager::new();
 
         mgr.cancel_cell(&mut cell, &mut cx, LifecycleEvent::Unload)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let first = mgr.drain_events();
         assert!(!first.is_empty());
@@ -1814,7 +1814,7 @@ mod tests {
 
         cancel_mgr
             .cancel_managed_cell(&mut cell_mgr, "ext-1", &mut cx, LifecycleEvent::Unload)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // ext-1 should be archived (no longer gettable as active)
         assert!(cell_mgr.get("ext-1").is_none());
@@ -1927,12 +1927,12 @@ mod tests {
         let mut mgr = CancellationManager::new();
 
         mgr.cancel_cell(&mut cell1, &mut cx, LifecycleEvent::Unload)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(mgr.is_cancelled("ext-1"));
         assert!(!mgr.is_cancelled("ext-2"));
 
         mgr.cancel_cell(&mut cell2, &mut cx, LifecycleEvent::Quarantine)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(mgr.is_cancelled("ext-1"));
         assert!(mgr.is_cancelled("ext-2"));
     }
@@ -1944,12 +1944,12 @@ mod tests {
         let mut mgr = CancellationManager::new();
 
         mgr.cancel_cell(&mut cell, &mut cx, LifecycleEvent::Unload)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let events_after_first = mgr.events().len();
 
         // Second (idempotent) cancel should not add more events
         mgr.cancel_cell(&mut cell, &mut cx, LifecycleEvent::Unload)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(
             mgr.events().len(),
             events_after_first,
@@ -1985,13 +1985,13 @@ mod tests {
         cell.register_obligation("ob-1", "flush");
         cell.register_obligation("ob-2", "cleanup");
         cell.register_obligation("ob-3", "notify");
-        cell.commit_obligation("ob-1").unwrap();
-        cell.commit_obligation("ob-2").unwrap();
-        cell.commit_obligation("ob-3").unwrap();
+        cell.commit_obligation("ob-1").expect("serde deserialization should succeed");
+        cell.commit_obligation("ob-2").expect("serde deserialization should succeed");
+        cell.commit_obligation("ob-3").expect("serde deserialization should succeed");
 
         let outcome = mgr
             .cancel_cell(&mut cell, &mut cx, LifecycleEvent::Unload)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert!(outcome.success);
         assert!(!outcome.timeout_escalated);
@@ -2007,12 +2007,12 @@ mod tests {
 
         cell.register_obligation("ob-1", "committed");
         cell.register_obligation("ob-2", "will timeout");
-        cell.commit_obligation("ob-1").unwrap();
+        cell.commit_obligation("ob-1").expect("serde deserialization should succeed");
         // ob-2 remains pending
 
         let outcome = mgr
             .cancel_cell(&mut cell, &mut cx, LifecycleEvent::Quarantine)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // ob-2 should timeout and be aborted
         assert!(outcome.timeout_escalated);
@@ -2035,7 +2035,7 @@ mod tests {
         // All should succeed
         let cell_ids: Vec<String> = results
             .iter()
-            .map(|r| r.as_ref().unwrap().cell_id.clone())
+            .map(|r| r.as_ref().expect("serde deserialization should succeed").cell_id.clone())
             .collect();
         // All three cells should be present (order may vary based on BTreeMap)
         assert!(cell_ids.contains(&"a-ext".to_string()));
@@ -2060,8 +2060,8 @@ mod tests {
             children_cancelled: 0,
             was_idempotent: false,
         };
-        let json = serde_json::to_string(&outcome).unwrap();
-        let back: CancellationOutcome = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&outcome).expect("serde deserialization should succeed");
+        let back: CancellationOutcome = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(outcome, back);
         assert!(json.contains("obligations_aborted"));
         assert!(json.contains("drain_timeout_escalated"));

@@ -371,7 +371,7 @@ mod tests {
     fn create_mask_succeeds_for_allowed_operation() {
         let mut ctx = test_context();
         // SAFETY: Test uses valid justification; create_mask succeeds in controlled test environment.
-        let mask_id = ctx.create_mask(&checkpoint_justification()).unwrap();
+        let mask_id = ctx.create_mask(&checkpoint_justification()).expect("serde deserialization should succeed");
         assert_eq!(mask_id, 1);
         assert!(ctx.is_masked());
     }
@@ -397,7 +397,7 @@ mod tests {
     fn nesting_denied() {
         let mut ctx = test_context();
         // SAFETY: Test uses valid justification; create_mask succeeds in controlled test environment.
-        ctx.create_mask(&checkpoint_justification()).unwrap();
+        ctx.create_mask(&checkpoint_justification()).expect("serde deserialization should succeed");
         let err = ctx.create_mask(&checkpoint_justification()).unwrap_err();
         assert_eq!(err, MaskError::NestingDenied);
     }
@@ -408,14 +408,14 @@ mod tests {
     fn clean_release_within_bounds() {
         let mut ctx = test_context();
         // SAFETY: Test uses valid justification; create_mask succeeds in controlled test environment.
-        ctx.create_mask(&checkpoint_justification()).unwrap();
+        ctx.create_mask(&checkpoint_justification()).expect("serde deserialization should succeed");
 
         for _ in 0..10 {
             assert!(ctx.tick());
         }
 
         // SAFETY: Test has valid mask; release_mask succeeds in controlled test environment.
-        let outcome = ctx.release_mask(false).unwrap();
+        let outcome = ctx.release_mask(false).expect("serde deserialization should succeed");
         assert_eq!(outcome, MaskOutcome::CleanRelease);
         assert!(!ctx.is_masked());
     }
@@ -424,7 +424,7 @@ mod tests {
     fn bound_exceeded_auto_unmasks() {
         let mut ctx = test_context();
         // SAFETY: Test uses valid justification; create_mask succeeds in controlled test environment.
-        ctx.create_mask(&checkpoint_justification()).unwrap();
+        ctx.create_mask(&checkpoint_justification()).expect("serde deserialization should succeed");
 
         // checkpoint_write has max_ops = 32
         for _ in 0..31 {
@@ -439,14 +439,14 @@ mod tests {
     fn release_after_bound_exceeded_reports_exceeded() {
         let mut ctx = test_context();
         // SAFETY: Test uses valid justification; create_mask succeeds in controlled test environment.
-        ctx.create_mask(&checkpoint_justification()).unwrap();
+        ctx.create_mask(&checkpoint_justification()).expect("serde deserialization should succeed");
 
         for _ in 0..32 {
             ctx.tick();
         }
 
         // SAFETY: Test has valid mask; release_mask succeeds in controlled test environment.
-        let outcome = ctx.release_mask(false).unwrap();
+        let outcome = ctx.release_mask(false).expect("serde deserialization should succeed");
         assert_eq!(outcome, MaskOutcome::BoundExceeded);
     }
 
@@ -454,10 +454,10 @@ mod tests {
     fn cancel_deferred_on_release() {
         let mut ctx = test_context();
         // SAFETY: Test uses valid justification; create_mask succeeds in controlled test environment.
-        ctx.create_mask(&checkpoint_justification()).unwrap();
+        ctx.create_mask(&checkpoint_justification()).expect("serde deserialization should succeed");
         ctx.tick();
 
-        let outcome = ctx.release_mask(true).unwrap();
+        let outcome = ctx.release_mask(true).expect("serde deserialization should succeed");
         assert_eq!(outcome, MaskOutcome::CancelDeferred);
     }
 
@@ -473,9 +473,9 @@ mod tests {
     #[test]
     fn clean_release_emits_event() {
         let mut ctx = test_context();
-        ctx.create_mask(&checkpoint_justification()).unwrap();
+        ctx.create_mask(&checkpoint_justification()).expect("serde deserialization should succeed");
         ctx.tick();
-        ctx.release_mask(false).unwrap();
+        ctx.release_mask(false).expect("serde deserialization should succeed");
 
         let events = ctx.drain_events();
         assert_eq!(events.len(), 1);
@@ -487,7 +487,7 @@ mod tests {
     #[test]
     fn bound_exceeded_emits_event() {
         let mut ctx = test_context();
-        ctx.create_mask(&checkpoint_justification()).unwrap();
+        ctx.create_mask(&checkpoint_justification()).expect("serde deserialization should succeed");
         for _ in 0..32 {
             ctx.tick();
         }
@@ -501,9 +501,9 @@ mod tests {
     #[test]
     fn event_carries_correct_fields() {
         let mut ctx = test_context();
-        ctx.create_mask(&checkpoint_justification()).unwrap();
+        ctx.create_mask(&checkpoint_justification()).expect("serde deserialization should succeed");
         ctx.tick();
-        ctx.release_mask(false).unwrap();
+        ctx.release_mask(false).expect("serde deserialization should succeed");
 
         let events = ctx.drain_events();
         let event = &events[0];
@@ -518,12 +518,12 @@ mod tests {
     fn sequential_masks_get_unique_ids() {
         let mut ctx = test_context();
 
-        ctx.create_mask(&checkpoint_justification()).unwrap();
-        ctx.release_mask(false).unwrap();
+        ctx.create_mask(&checkpoint_justification()).expect("serde deserialization should succeed");
+        ctx.release_mask(false).expect("serde deserialization should succeed");
 
-        let mask_id = ctx.create_mask(&checkpoint_justification()).unwrap();
+        let mask_id = ctx.create_mask(&checkpoint_justification()).expect("serde deserialization should succeed");
         assert_eq!(mask_id, 2);
-        ctx.release_mask(false).unwrap();
+        ctx.release_mask(false).expect("serde deserialization should succeed");
     }
 
     // -- Deterministic replay --
@@ -532,22 +532,22 @@ mod tests {
     fn deterministic_event_sequence() {
         let run = || -> Vec<MaskEvent> {
             let mut ctx = test_context();
-            ctx.create_mask(&checkpoint_justification()).unwrap();
+            ctx.create_mask(&checkpoint_justification()).expect("serde deserialization should succeed");
             for _ in 0..5 {
                 ctx.tick();
             }
-            ctx.release_mask(false).unwrap();
+            ctx.release_mask(false).expect("serde deserialization should succeed");
 
             ctx.create_mask(&MaskJustification {
                 operation_name: "evidence_append".to_string(),
                 expected_ops_hint: 3,
                 atomicity_reason: "atomic append".to_string(),
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
             for _ in 0..16 {
                 ctx.tick();
             }
-            ctx.release_mask(true).unwrap();
+            ctx.release_mask(true).expect("serde deserialization should succeed");
             ctx.drain_events()
         };
 
@@ -589,16 +589,16 @@ mod tests {
     #[test]
     fn mask_justification_serialization_round_trip() {
         let just = checkpoint_justification();
-        let json = serde_json::to_string(&just).unwrap();
-        let restored: MaskJustification = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&just).expect("serde deserialization should succeed");
+        let restored: MaskJustification = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(just, restored);
     }
 
     #[test]
     fn mask_policy_serialization_round_trip() {
         let policy = MaskPolicy::standard();
-        let json = serde_json::to_string(&policy).unwrap();
-        let restored: MaskPolicy = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
+        let restored: MaskPolicy = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(policy, restored);
     }
 
@@ -612,8 +612,8 @@ mod tests {
             ops_executed: 10,
             outcome: MaskOutcome::CleanRelease,
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let restored: MaskEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let restored: MaskEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, restored);
     }
 
@@ -635,7 +635,7 @@ mod tests {
             expected_ops_hint: 4,
             atomicity_reason: "hash chain append".to_string(),
         })
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         // max_ops = 8
         for _ in 0..7 {
@@ -656,8 +656,8 @@ mod tests {
             MaskOutcome::CancelDeferred,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let restored: MaskOutcome = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let restored: MaskOutcome = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, restored);
         }
     }
@@ -672,8 +672,8 @@ mod tests {
             MaskError::AlreadyReleased,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let restored: MaskError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let restored: MaskError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, restored);
         }
     }
@@ -681,8 +681,8 @@ mod tests {
     #[test]
     fn mask_bounds_serde_roundtrip() {
         let bounds = MaskBounds { max_ops: 42 };
-        let json = serde_json::to_string(&bounds).unwrap();
-        let restored: MaskBounds = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&bounds).expect("serde deserialization should succeed");
+        let restored: MaskBounds = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(bounds, restored);
     }
 
@@ -723,23 +723,23 @@ mod tests {
     #[test]
     fn event_count_tracks_events() {
         let mut ctx = test_context();
-        ctx.create_mask(&checkpoint_justification()).unwrap();
+        ctx.create_mask(&checkpoint_justification()).expect("serde deserialization should succeed");
         ctx.tick();
-        ctx.release_mask(false).unwrap();
+        ctx.release_mask(false).expect("serde deserialization should succeed");
         assert_eq!(ctx.event_count(), 1);
 
-        ctx.create_mask(&checkpoint_justification()).unwrap();
+        ctx.create_mask(&checkpoint_justification()).expect("serde deserialization should succeed");
         ctx.tick();
-        ctx.release_mask(true).unwrap();
+        ctx.release_mask(true).expect("serde deserialization should succeed");
         assert_eq!(ctx.event_count(), 2);
     }
 
     #[test]
     fn drain_events_clears_list() {
         let mut ctx = test_context();
-        ctx.create_mask(&checkpoint_justification()).unwrap();
+        ctx.create_mask(&checkpoint_justification()).expect("serde deserialization should succeed");
         ctx.tick();
-        ctx.release_mask(false).unwrap();
+        ctx.release_mask(false).expect("serde deserialization should succeed");
         assert_eq!(ctx.event_count(), 1);
 
         let drained = ctx.drain_events();
@@ -754,7 +754,7 @@ mod tests {
     #[test]
     fn tick_after_bound_exceeded_stays_false() {
         let mut ctx = test_context();
-        ctx.create_mask(&checkpoint_justification()).unwrap();
+        ctx.create_mask(&checkpoint_justification()).expect("serde deserialization should succeed");
         // Exhaust bound (32 ops).
         for _ in 0..32 {
             ctx.tick();
@@ -771,12 +771,12 @@ mod tests {
     #[test]
     fn release_after_bound_exceeded_ignores_cancel_pending() {
         let mut ctx = test_context();
-        ctx.create_mask(&checkpoint_justification()).unwrap();
+        ctx.create_mask(&checkpoint_justification()).expect("serde deserialization should succeed");
         for _ in 0..32 {
             ctx.tick();
         }
         // Even with cancel_pending=true, outcome is BoundExceeded.
-        let outcome = ctx.release_mask(true).unwrap();
+        let outcome = ctx.release_mask(true).expect("serde deserialization should succeed");
         assert_eq!(outcome, MaskOutcome::BoundExceeded);
     }
 
@@ -787,14 +787,14 @@ mod tests {
     #[test]
     fn new_mask_after_bound_exceeded_release() {
         let mut ctx = test_context();
-        ctx.create_mask(&checkpoint_justification()).unwrap();
+        ctx.create_mask(&checkpoint_justification()).expect("serde deserialization should succeed");
         for _ in 0..32 {
             ctx.tick();
         }
-        ctx.release_mask(false).unwrap();
+        ctx.release_mask(false).expect("serde deserialization should succeed");
 
         // Should be able to create a new mask.
-        let id = ctx.create_mask(&checkpoint_justification()).unwrap();
+        let id = ctx.create_mask(&checkpoint_justification()).expect("serde deserialization should succeed");
         assert_eq!(id, 2);
         assert!(ctx.is_masked());
     }
@@ -811,7 +811,7 @@ mod tests {
             expected_ops_hint: 5,
             atomicity_reason: "atomic".to_string(),
         })
-        .unwrap();
+        .expect("serde deserialization should succeed");
         // max_ops = 16
         for _ in 0..15 {
             assert!(ctx.tick());
@@ -822,7 +822,7 @@ mod tests {
     #[test]
     fn two_phase_commit_bounds() {
         let policy = MaskPolicy::standard();
-        let bounds = policy.bounds_for("two_phase_commit").unwrap();
+        let bounds = policy.bounds_for("two_phase_commit").expect("serde deserialization should succeed");
         assert_eq!(bounds.max_ops, 64);
     }
 
@@ -847,9 +847,9 @@ mod tests {
     #[test]
     fn not_masked_after_release() {
         let mut ctx = test_context();
-        ctx.create_mask(&checkpoint_justification()).unwrap();
+        ctx.create_mask(&checkpoint_justification()).expect("serde deserialization should succeed");
         assert!(ctx.is_masked());
-        ctx.release_mask(false).unwrap();
+        ctx.release_mask(false).expect("serde deserialization should succeed");
         assert!(!ctx.is_masked());
     }
 
@@ -884,13 +884,13 @@ mod tests {
     #[test]
     fn bound_exceeded_release_no_duplicate_event() {
         let mut ctx = test_context();
-        ctx.create_mask(&checkpoint_justification()).unwrap();
+        ctx.create_mask(&checkpoint_justification()).expect("serde deserialization should succeed");
         for _ in 0..32 {
             ctx.tick();
         }
         // 1 event from tick's bound exceeded
         assert_eq!(ctx.event_count(), 1);
-        ctx.release_mask(false).unwrap();
+        ctx.release_mask(false).expect("serde deserialization should succeed");
         // Still just 1 event — no duplicate
         assert_eq!(ctx.event_count(), 1);
     }
@@ -939,9 +939,9 @@ mod tests {
     fn three_sequential_masks_increment_ids() {
         let mut ctx = test_context();
         for expected_id in 1..=3 {
-            let id = ctx.create_mask(&checkpoint_justification()).unwrap();
+            let id = ctx.create_mask(&checkpoint_justification()).expect("serde deserialization should succeed");
             assert_eq!(id, expected_id);
-            ctx.release_mask(false).unwrap();
+            ctx.release_mask(false).expect("serde deserialization should succeed");
         }
         assert_eq!(ctx.event_count(), 3);
     }
@@ -961,11 +961,11 @@ mod tests {
     #[test]
     fn mask_event_fields_for_cancel_deferred() {
         let mut ctx = test_context();
-        ctx.create_mask(&checkpoint_justification()).unwrap();
+        ctx.create_mask(&checkpoint_justification()).expect("serde deserialization should succeed");
         for _ in 0..5 {
             ctx.tick();
         }
-        ctx.release_mask(true).unwrap();
+        ctx.release_mask(true).expect("serde deserialization should succeed");
 
         let events = ctx.drain_events();
         assert_eq!(events.len(), 1);
@@ -990,9 +990,9 @@ mod tests {
     #[test]
     fn zero_tick_clean_release() {
         let mut ctx = test_context();
-        ctx.create_mask(&checkpoint_justification()).unwrap();
+        ctx.create_mask(&checkpoint_justification()).expect("serde deserialization should succeed");
         // Release immediately without any ticks
-        let outcome = ctx.release_mask(false).unwrap();
+        let outcome = ctx.release_mask(false).expect("serde deserialization should succeed");
         assert_eq!(outcome, MaskOutcome::CleanRelease);
         let events = ctx.drain_events();
         assert_eq!(events.len(), 1);
@@ -1003,8 +1003,8 @@ mod tests {
     fn lab_mode_policy_serde_roundtrip() {
         let mut policy = MaskPolicy::standard();
         policy.lab_mode = true;
-        let json = serde_json::to_string(&policy).unwrap();
-        let restored: MaskPolicy = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
+        let restored: MaskPolicy = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(policy, restored);
         assert!(restored.lab_mode);
     }
@@ -1070,7 +1070,7 @@ mod tests {
     #[test]
     fn json_field_presence_mask_justification() {
         let just = checkpoint_justification();
-        let json = serde_json::to_string(&just).unwrap();
+        let json = serde_json::to_string(&just).expect("serde deserialization should succeed");
         assert!(json.contains("\"operation_name\""));
         assert!(json.contains("\"expected_ops_hint\""));
         assert!(json.contains("\"atomicity_reason\""));
@@ -1086,7 +1086,7 @@ mod tests {
             ops_executed: 3,
             outcome: MaskOutcome::CleanRelease,
         };
-        let json = serde_json::to_string(&event).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
         assert!(json.contains("\"trace_id\""));
         assert!(json.contains("\"region_id\""));
         assert!(json.contains("\"mask_id\""));
@@ -1098,7 +1098,7 @@ mod tests {
     #[test]
     fn json_field_presence_mask_policy() {
         let policy = MaskPolicy::standard();
-        let json = serde_json::to_string(&policy).unwrap();
+        let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
         assert!(json.contains("\"default_bounds\""));
         assert!(json.contains("\"operation_bounds\""));
         assert!(json.contains("\"lab_mode\""));
@@ -1131,7 +1131,7 @@ mod tests {
             expected_ops_hint: 1,
             atomicity_reason: "single-tick atomic".to_string(),
         })
-        .unwrap();
+        .expect("serde deserialization should succeed");
         // First tick should exceed bound (ops_executed becomes 1 == max_ops)
         assert!(!ctx.tick());
         assert!(!ctx.is_masked());
@@ -1146,8 +1146,8 @@ mod tests {
         ];
         for v in &variants {
             let display_before = v.to_string();
-            let json = serde_json::to_string(v).unwrap();
-            let restored: MaskOutcome = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let restored: MaskOutcome = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(display_before, restored.to_string());
         }
     }
@@ -1351,8 +1351,8 @@ mod tests {
             operation_bounds: BTreeMap::new(),
             lab_mode: false,
         };
-        let json = serde_json::to_string(&policy).unwrap();
-        let restored: MaskPolicy = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
+        let restored: MaskPolicy = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(policy, restored);
         assert!(restored.operation_bounds.is_empty());
     }
@@ -1369,7 +1369,7 @@ mod tests {
             expected_ops_hint: 0,
             atomicity_reason: "zero".to_string(),
         })
-        .unwrap();
+        .expect("serde deserialization should succeed");
         // With max_ops=0, immediately masked; first tick sets ops_executed=1 >= 0
         // Actually ops_executed starts at 0 and bound is 0, so first tick: 0+1=1 >= 0 => exceeded
         assert!(!ctx.tick());
@@ -1380,10 +1380,10 @@ mod tests {
     fn stress_many_sequential_masks() {
         let mut ctx = test_context();
         for i in 1..=100u64 {
-            let id = ctx.create_mask(&checkpoint_justification()).unwrap();
+            let id = ctx.create_mask(&checkpoint_justification()).expect("serde deserialization should succeed");
             assert_eq!(id, i);
             ctx.tick();
-            ctx.release_mask(false).unwrap();
+            ctx.release_mask(false).expect("serde deserialization should succeed");
         }
         assert_eq!(ctx.event_count(), 100);
         let events = ctx.drain_events();
@@ -1403,7 +1403,7 @@ mod tests {
             expected_ops_hint: 64,
             atomicity_reason: "two-phase".to_string(),
         })
-        .unwrap();
+        .expect("serde deserialization should succeed");
         // Tick exactly 63 times — should all succeed.
         for _ in 0..63 {
             assert!(ctx.tick());
@@ -1430,10 +1430,10 @@ mod tests {
                     expected_ops_hint: 1,
                     atomicity_reason: "stress test".to_string(),
                 })
-                .unwrap();
+                .expect("serde deserialization should succeed");
             assert_eq!(id, (i + 1) as u64);
             ctx.tick();
-            ctx.release_mask(false).unwrap();
+            ctx.release_mask(false).expect("serde deserialization should succeed");
         }
         assert_eq!(ctx.event_count(), 4);
     }
@@ -1443,11 +1443,11 @@ mod tests {
         let run = || -> Vec<MaskEvent> {
             let mut ctx = test_context();
             // Mask 1: clean release
-            ctx.create_mask(&checkpoint_justification()).unwrap();
+            ctx.create_mask(&checkpoint_justification()).expect("serde deserialization should succeed");
             for _ in 0..5 {
                 ctx.tick();
             }
-            ctx.release_mask(false).unwrap();
+            ctx.release_mask(false).expect("serde deserialization should succeed");
 
             // Mask 2: bound exceeded
             ctx.create_mask(&MaskJustification {
@@ -1455,11 +1455,11 @@ mod tests {
                 expected_ops_hint: 4,
                 atomicity_reason: "hash".to_string(),
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
             for _ in 0..8 {
                 ctx.tick();
             }
-            ctx.release_mask(false).unwrap();
+            ctx.release_mask(false).expect("serde deserialization should succeed");
 
             // Mask 3: cancel deferred
             ctx.create_mask(&MaskJustification {
@@ -1467,10 +1467,10 @@ mod tests {
                 expected_ops_hint: 2,
                 atomicity_reason: "evidence".to_string(),
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
             ctx.tick();
             ctx.tick();
-            ctx.release_mask(true).unwrap();
+            ctx.release_mask(true).expect("serde deserialization should succeed");
 
             ctx.drain_events()
         };
@@ -1487,8 +1487,8 @@ mod tests {
     #[test]
     fn double_release_returns_already_released() {
         let mut ctx = test_context();
-        ctx.create_mask(&checkpoint_justification()).unwrap();
-        ctx.release_mask(false).unwrap();
+        ctx.create_mask(&checkpoint_justification()).expect("serde deserialization should succeed");
+        ctx.release_mask(false).expect("serde deserialization should succeed");
         let err = ctx.release_mask(false).unwrap_err();
         assert_eq!(err, MaskError::AlreadyReleased);
     }
@@ -1496,7 +1496,7 @@ mod tests {
     #[test]
     fn nesting_denied_with_different_operations() {
         let mut ctx = test_context();
-        ctx.create_mask(&checkpoint_justification()).unwrap();
+        ctx.create_mask(&checkpoint_justification()).expect("serde deserialization should succeed");
         let err = ctx
             .create_mask(&MaskJustification {
                 operation_name: "evidence_append".to_string(),
@@ -1523,8 +1523,8 @@ mod tests {
                 ops_executed: 10,
                 outcome: *outcome,
             };
-            let json = serde_json::to_string(&event).unwrap();
-            let restored: MaskEvent = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+            let restored: MaskEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(event, restored);
         }
     }
@@ -1536,8 +1536,8 @@ mod tests {
             expected_ops_hint: 0,
             atomicity_reason: String::new(),
         };
-        let json = serde_json::to_string(&just).unwrap();
-        let restored: MaskJustification = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&just).expect("serde deserialization should succeed");
+        let restored: MaskJustification = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(just, restored);
         assert!(restored.operation_name.is_empty());
         assert!(restored.atomicity_reason.is_empty());
@@ -1550,16 +1550,16 @@ mod tests {
             expected_ops_hint: 1,
             atomicity_reason: "\u{00E9}\u{00E8}\u{00EA}".to_string(),
         };
-        let json = serde_json::to_string(&just).unwrap();
-        let restored: MaskJustification = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&just).expect("serde deserialization should succeed");
+        let restored: MaskJustification = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(just, restored);
     }
 
     #[test]
     fn mask_bounds_large_max_ops_serde() {
         let bounds = MaskBounds { max_ops: u64::MAX };
-        let json = serde_json::to_string(&bounds).unwrap();
-        let restored: MaskBounds = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&bounds).expect("serde deserialization should succeed");
+        let restored: MaskBounds = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(bounds, restored);
     }
 
@@ -1571,8 +1571,8 @@ mod tests {
                 .operation_bounds
                 .insert(format!("op_{i}"), MaskBounds { max_ops: i + 1 });
         }
-        let json = serde_json::to_string(&policy).unwrap();
-        let restored: MaskPolicy = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
+        let restored: MaskPolicy = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(policy, restored);
         assert_eq!(restored.operation_bounds.len(), 54); // 4 standard + 50
     }
@@ -1595,7 +1595,7 @@ mod tests {
             expected_ops_hint: 4,
             atomicity_reason: "hash".to_string(),
         })
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert!(ctx.is_masked());
         // Exhaust (max_ops = 8).
         for _ in 0..8 {
@@ -1614,9 +1614,9 @@ mod tests {
             "trace-custom-42",
             "region-custom-99",
         );
-        ctx.create_mask(&checkpoint_justification()).unwrap();
+        ctx.create_mask(&checkpoint_justification()).expect("serde deserialization should succeed");
         ctx.tick();
-        ctx.release_mask(false).unwrap();
+        ctx.release_mask(false).expect("serde deserialization should succeed");
         let events = ctx.drain_events();
         assert_eq!(events[0].trace_id, "trace-custom-42");
         assert_eq!(events[0].region_id, "region-custom-99");
@@ -1625,9 +1625,9 @@ mod tests {
     #[test]
     fn context_with_empty_trace_and_region() {
         let mut ctx = CancelMaskContext::new(MaskPolicy::standard(), "", "");
-        ctx.create_mask(&checkpoint_justification()).unwrap();
+        ctx.create_mask(&checkpoint_justification()).expect("serde deserialization should succeed");
         ctx.tick();
-        ctx.release_mask(false).unwrap();
+        ctx.release_mask(false).expect("serde deserialization should succeed");
         let events = ctx.drain_events();
         assert_eq!(events[0].trace_id, "");
         assert_eq!(events[0].region_id, "");
@@ -1636,16 +1636,16 @@ mod tests {
     #[test]
     fn mask_after_nesting_denied_still_works() {
         let mut ctx = test_context();
-        ctx.create_mask(&checkpoint_justification()).unwrap();
+        ctx.create_mask(&checkpoint_justification()).expect("serde deserialization should succeed");
         // Attempt nested mask — fails.
         let _ = ctx.create_mask(&checkpoint_justification());
         // Original mask still active.
         assert!(ctx.is_masked());
         assert!(ctx.tick());
-        ctx.release_mask(false).unwrap();
+        ctx.release_mask(false).expect("serde deserialization should succeed");
         assert!(!ctx.is_masked());
         // Can create a new mask now.
-        let id = ctx.create_mask(&checkpoint_justification()).unwrap();
+        let id = ctx.create_mask(&checkpoint_justification()).expect("serde deserialization should succeed");
         assert_eq!(id, 2);
     }
 
@@ -1662,7 +1662,7 @@ mod tests {
         assert!(matches!(err, MaskError::OperationNotAllowed { .. }));
         // Context should still be usable — no mask active.
         assert!(!ctx.is_masked());
-        let id = ctx.create_mask(&checkpoint_justification()).unwrap();
+        let id = ctx.create_mask(&checkpoint_justification()).expect("serde deserialization should succeed");
         assert_eq!(id, 1);
     }
 
@@ -1718,11 +1718,11 @@ mod tests {
     fn stress_drain_after_each_mask() {
         let mut ctx = test_context();
         for i in 1..=20u64 {
-            ctx.create_mask(&checkpoint_justification()).unwrap();
+            ctx.create_mask(&checkpoint_justification()).expect("serde deserialization should succeed");
             for _ in 0..3 {
                 ctx.tick();
             }
-            ctx.release_mask(false).unwrap();
+            ctx.release_mask(false).expect("serde deserialization should succeed");
             let events = ctx.drain_events();
             assert_eq!(events.len(), 1);
             assert_eq!(events[0].mask_id, i);

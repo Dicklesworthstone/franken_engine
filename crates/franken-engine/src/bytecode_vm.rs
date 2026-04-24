@@ -1226,7 +1226,7 @@ mod tests {
             ],
         };
         let mut vm = BytecodeVm::new("trace-add", 8, 64);
-        let report = vm.execute(&program).unwrap();
+        let report = vm.execute(&program).expect("serde deserialization should succeed");
         assert_eq!(report.result, Value::Int(300));
     }
 
@@ -1253,7 +1253,7 @@ mod tests {
             ],
         };
         let mut vm = BytecodeVm::new("trace-sub", 8, 64);
-        let report = vm.execute(&program).unwrap();
+        let report = vm.execute(&program).expect("serde deserialization should succeed");
         assert_eq!(report.result, Value::Int(20));
     }
 
@@ -1280,7 +1280,7 @@ mod tests {
             ],
         };
         let mut vm = BytecodeVm::new("trace-div", 8, 64);
-        let report = vm.execute(&program).unwrap();
+        let report = vm.execute(&program).expect("serde deserialization should succeed");
         assert_eq!(report.result, Value::Int(20));
     }
 
@@ -1304,7 +1304,7 @@ mod tests {
             ],
         };
         let mut vm = BytecodeVm::new("trace-move", 8, 64);
-        let report = vm.execute(&program).unwrap();
+        let report = vm.execute(&program).expect("serde deserialization should succeed");
         assert_eq!(report.result, Value::Int(42));
     }
 
@@ -1336,7 +1336,7 @@ mod tests {
             ],
         };
         let mut vm = BytecodeVm::new("trace-jif-false", 8, 64);
-        let report = vm.execute(&program).unwrap();
+        let report = vm.execute(&program).expect("serde deserialization should succeed");
         assert_eq!(report.result, Value::Int(2));
     }
 
@@ -1366,7 +1366,7 @@ mod tests {
             ],
         };
         let mut vm = BytecodeVm::new("trace-jif-true", 8, 64);
-        let report = vm.execute(&program).unwrap();
+        let report = vm.execute(&program).expect("serde deserialization should succeed");
         assert_eq!(report.result, Value::Int(2)); // both const loads run
     }
 
@@ -1397,7 +1397,7 @@ mod tests {
             ],
         };
         let mut vm = BytecodeVm::new("trace-prop", 8, 64);
-        let report = vm.execute(&program).unwrap();
+        let report = vm.execute(&program).expect("serde deserialization should succeed");
         assert_eq!(report.result, Value::Int(99));
         assert_eq!(report.cache_stats.misses, 1);
     }
@@ -1428,9 +1428,9 @@ mod tests {
         };
 
         let mut vm1 = BytecodeVm::new("trace-det", 8, 64);
-        let r1 = vm1.execute(&program).unwrap();
+        let r1 = vm1.execute(&program).expect("serde deserialization should succeed");
         let mut vm2 = BytecodeVm::new("trace-det", 8, 64);
-        let r2 = vm2.execute(&program).unwrap();
+        let r2 = vm2.execute(&program).expect("serde deserialization should succeed");
 
         assert_eq!(r1.result, r2.result);
         assert_eq!(r1.state_hash, r2.state_hash);
@@ -1452,8 +1452,8 @@ mod tests {
                 Instruction::Return { src: r(0) },
             ],
         };
-        let json = serde_json::to_string(&program).unwrap();
-        let restored: Program = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&program).expect("serde deserialization should succeed");
+        let restored: Program = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(program, restored);
     }
 
@@ -1472,10 +1472,10 @@ mod tests {
             },
         ];
         for error in &errors {
-            let json = serde_json::to_string(error).unwrap();
+            let json = serde_json::to_string(error).expect("serde deserialization should succeed");
             assert!(!json.is_empty());
             // Verify JSON parses as valid
-            let _: serde_json::Value = serde_json::from_str(&json).unwrap();
+            let _: serde_json::Value = serde_json::from_str(&json).expect("serde deserialization should succeed");
         }
     }
 
@@ -1488,8 +1488,8 @@ mod tests {
             Value::Object(ObjectId(7)),
         ];
         for val in &values {
-            let json = serde_json::to_string(val).unwrap();
-            let restored: Value = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(val).expect("serde deserialization should succeed");
+            let restored: Value = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*val, restored);
         }
     }
@@ -1566,7 +1566,7 @@ mod tests {
             ],
         };
         let mut vm = BytecodeVm::new("trace-events", 4, 64);
-        let report = vm.execute(&program).unwrap();
+        let report = vm.execute(&program).expect("serde deserialization should succeed");
         assert!(!report.events.is_empty());
         assert!(report.events.iter().all(|e| e.trace_id == "trace-events"));
         assert!(report.events.iter().all(|e| e.component == "bytecode_vm"));
@@ -1828,7 +1828,7 @@ mod tests {
             ],
         };
         let mut vm = BytecodeVm::new("trace-negative", 8, 64);
-        let report = vm.execute(&program).unwrap();
+        let report = vm.execute(&program).expect("serde deserialization should succeed");
         assert_eq!(report.result, Value::Int(-30));
     }
 
@@ -1855,7 +1855,7 @@ mod tests {
             ],
         };
         let mut vm = BytecodeVm::new("trace-sub-negative", 8, 64);
-        let report = vm.execute(&program).unwrap();
+        let report = vm.execute(&program).expect("serde deserialization should succeed");
         assert_eq!(report.result, Value::Int(-95));
     }
 
@@ -1882,7 +1882,7 @@ mod tests {
             ],
         };
         let mut vm = BytecodeVm::new("trace-neg-div", 8, 64);
-        let report = vm.execute(&program).unwrap();
+        let report = vm.execute(&program).expect("serde deserialization should succeed");
         assert_eq!(report.result, Value::Int(-3)); // -7 / 2 = -3 (truncated)
     }
 
@@ -1933,7 +1933,7 @@ mod tests {
             ],
         };
         let mut vm = BytecodeVm::new("trace-multi-obj", 12, 128);
-        let report = vm.execute(&program).unwrap();
+        let report = vm.execute(&program).expect("serde deserialization should succeed");
         assert_eq!(report.result, Value::Int(30));
     }
 
@@ -1955,7 +1955,7 @@ mod tests {
             ],
         };
         let mut vm = BytecodeVm::new("trace-missing-prop", 8, 64);
-        let report = vm.execute(&program).unwrap();
+        let report = vm.execute(&program).expect("serde deserialization should succeed");
         assert_eq!(report.result, Value::Undefined);
     }
 
@@ -1995,7 +1995,7 @@ mod tests {
             ],
         };
         let mut vm = BytecodeVm::new("trace-overwrite", 8, 64);
-        let report = vm.execute(&program).unwrap();
+        let report = vm.execute(&program).expect("serde deserialization should succeed");
         assert_eq!(report.result, Value::Int(2));
     }
 
@@ -2016,7 +2016,7 @@ mod tests {
             ],
         };
         let mut vm = BytecodeVm::new("trace-jump-boundary", 4, 64);
-        let report = vm.execute(&program).unwrap();
+        let report = vm.execute(&program).expect("serde deserialization should succeed");
         assert_eq!(report.result, Value::Int(42));
     }
 
@@ -2042,7 +2042,7 @@ mod tests {
             ],
         };
         let mut vm = BytecodeVm::new("trace-jif-boundary", 4, 64);
-        let report = vm.execute(&program).unwrap();
+        let report = vm.execute(&program).expect("serde deserialization should succeed");
         assert_eq!(report.result, Value::Int(99));
     }
 
@@ -2116,9 +2116,9 @@ mod tests {
         };
 
         let mut vm_a = BytecodeVm::new("trace-hash-a", 8, 64);
-        let report_a = vm_a.execute(&program_a).unwrap();
+        let report_a = vm_a.execute(&program_a).expect("serde deserialization should succeed");
         let mut vm_b = BytecodeVm::new("trace-hash-b", 8, 64);
-        let report_b = vm_b.execute(&program_b).unwrap();
+        let report_b = vm_b.execute(&program_b).expect("serde deserialization should succeed");
 
         assert_ne!(report_a.result, report_b.result);
         assert_ne!(report_a.state_hash, report_b.state_hash);
@@ -2172,7 +2172,7 @@ mod tests {
             ],
         };
         let mut vm = BytecodeVm::new("trace-countdown", 8, 256);
-        let report = vm.execute(&program).unwrap();
+        let report = vm.execute(&program).expect("serde deserialization should succeed");
         // 5 + 4 + 3 + 2 + 1 = 15
         assert_eq!(report.result, Value::Int(15));
         // 3 init + 5 * (jif + add + sub + jump) + 1 final_jif + 1 return = 3 + 20 + 1 + 1 = 25
@@ -2207,10 +2207,10 @@ mod tests {
         };
 
         let mut vm = BytecodeVm::new("trace-reuse", 4, 64);
-        let report_a = vm.execute(&program_a).unwrap();
+        let report_a = vm.execute(&program_a).expect("serde deserialization should succeed");
         assert_eq!(report_a.result, Value::Int(100));
 
-        let report_b = vm.execute(&program_b).unwrap();
+        let report_b = vm.execute(&program_b).expect("serde deserialization should succeed");
         assert_eq!(report_b.result, Value::Int(200));
         // Events should only contain entries from the second run
         assert!(report_b.events.iter().all(|e| e.step <= 2));
@@ -2232,7 +2232,7 @@ mod tests {
             ],
         };
         let mut vm = BytecodeVm::new("trace-bool", 4, 64);
-        let report = vm.execute(&program).unwrap();
+        let report = vm.execute(&program).expect("serde deserialization should succeed");
         assert_eq!(report.result, Value::Bool(true));
     }
 
@@ -2246,7 +2246,7 @@ mod tests {
             instructions: vec![Instruction::Return { src: r(0) }],
         };
         let mut vm = BytecodeVm::new("trace-default-reg", 4, 64);
-        let report = vm.execute(&program).unwrap();
+        let report = vm.execute(&program).expect("serde deserialization should succeed");
         assert_eq!(report.result, Value::Undefined);
     }
 
@@ -2277,7 +2277,7 @@ mod tests {
         };
         // Budget of exactly 2 steps (load + return)
         let mut vm = BytecodeVm::new("trace-budget-exact", 4, 2);
-        let report = vm.execute(&program).unwrap();
+        let report = vm.execute(&program).expect("serde deserialization should succeed");
         assert_eq!(report.result, Value::Int(42));
         assert_eq!(report.steps, 2);
     }
@@ -2332,7 +2332,7 @@ mod tests {
             ],
         };
         let mut vm = BytecodeVm::new("trace-event-count", 8, 64);
-        let report = vm.execute(&program).unwrap();
+        let report = vm.execute(&program).expect("serde deserialization should succeed");
         assert_eq!(report.events.len() as u64, report.steps);
     }
 
@@ -2383,7 +2383,7 @@ mod tests {
             ],
         };
         let mut vm = BytecodeVm::new("trace-multi-cache", 12, 128);
-        let report = vm.execute(&program).unwrap();
+        let report = vm.execute(&program).expect("serde deserialization should succeed");
         assert_eq!(report.result, Value::Int(30));
         assert_eq!(report.cache_stats.entries, 2);
         assert_eq!(report.cache_stats.misses, 2);
@@ -2469,8 +2469,8 @@ mod tests {
             Instruction::Return { src: r(0) },
         ];
         for instr in &instructions {
-            let json = serde_json::to_string(instr).unwrap();
-            let back: Instruction = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(instr).expect("serde deserialization should succeed");
+            let back: Instruction = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*instr, back);
         }
     }
@@ -2555,8 +2555,8 @@ mod tests {
         ];
 
         for (err, variant) in errors.iter().zip(variants) {
-            let json = serde_json::to_string(err).unwrap();
-            let payload: serde_json::Value = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let payload: serde_json::Value = serde_json::from_str(&json).expect("serde deserialization should succeed");
             if let Some(object) = payload.as_object() {
                 assert!(
                     object.contains_key(variant),
@@ -2587,9 +2587,9 @@ mod tests {
             ],
         };
         let mut vm = BytecodeVm::new("serde-rt", 4, 64);
-        let report = vm.execute(&program).unwrap();
-        let json = serde_json::to_string(&report).unwrap();
-        let back: ExecutionReport = serde_json::from_str(&json).unwrap();
+        let report = vm.execute(&program).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let back: ExecutionReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report, back);
     }
 
@@ -2640,7 +2640,7 @@ mod tests {
             ],
         };
         let mut vm = BytecodeVm::new("mul-zero", 4, 64);
-        let report = vm.execute(&program).unwrap();
+        let report = vm.execute(&program).expect("serde deserialization should succeed");
         assert_eq!(report.result, Value::Int(0));
     }
 
@@ -2667,7 +2667,7 @@ mod tests {
             ],
         };
         let mut vm = BytecodeVm::new("add-neg", 4, 64);
-        let report = vm.execute(&program).unwrap();
+        let report = vm.execute(&program).expect("serde deserialization should succeed");
         assert_eq!(report.result, Value::Int(-30));
     }
 
@@ -2733,7 +2733,7 @@ mod tests {
             ],
         };
         let mut vm = BytecodeVm::new("new-obj", 4, 64);
-        let report = vm.execute(&program).unwrap();
+        let report = vm.execute(&program).expect("serde deserialization should succeed");
         assert!(matches!(report.result, Value::Object(_)));
     }
 
@@ -2751,7 +2751,7 @@ mod tests {
             ],
         };
         let mut vm = BytecodeVm::new("my-trace-id", 4, 64);
-        let report = vm.execute(&program).unwrap();
+        let report = vm.execute(&program).expect("serde deserialization should succeed");
         for event in &report.events {
             assert_eq!(event.trace_id, "my-trace-id");
             assert_eq!(event.component, "bytecode_vm");
@@ -2781,7 +2781,7 @@ mod tests {
             ],
         };
         let mut vm = BytecodeVm::new("steps", 4, 64);
-        let report = vm.execute(&program).unwrap();
+        let report = vm.execute(&program).expect("serde deserialization should succeed");
         for window in report.events.windows(2) {
             assert!(window[1].step > window[0].step);
         }
@@ -2801,7 +2801,7 @@ mod tests {
             ],
         };
         let mut vm = BytecodeVm::new("bool-ret", 4, 64);
-        let report = vm.execute(&program).unwrap();
+        let report = vm.execute(&program).expect("serde deserialization should succeed");
         assert_eq!(report.result, Value::Bool(true));
     }
 
@@ -2820,8 +2820,8 @@ mod tests {
         };
         let mut vm1 = BytecodeVm::new("hash-det", 4, 64);
         let mut vm2 = BytecodeVm::new("hash-det", 4, 64);
-        let r1 = vm1.execute(&program).unwrap();
-        let r2 = vm2.execute(&program).unwrap();
+        let r1 = vm1.execute(&program).expect("serde deserialization should succeed");
+        let r2 = vm2.execute(&program).expect("serde deserialization should succeed");
         assert_eq!(r1.state_hash, r2.state_hash);
     }
 
@@ -2832,8 +2832,8 @@ mod tests {
             hits: 10,
             misses: 2,
         };
-        let json = serde_json::to_string(&stats).unwrap();
-        let back: InlineCacheStats = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&stats).expect("serde deserialization should succeed");
+        let back: InlineCacheStats = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(stats, back);
     }
 
@@ -2846,8 +2846,8 @@ mod tests {
             hits: 100,
             misses: 3,
         };
-        let json = serde_json::to_string(&entry).unwrap();
-        let back: InlineCacheEntry = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let back: InlineCacheEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, back);
     }
 
@@ -2864,8 +2864,8 @@ mod tests {
             error_code: None,
             cache_hit: Some(true),
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let back: VmEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let back: VmEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
     }
 
@@ -2887,7 +2887,7 @@ mod tests {
             ],
         };
         let mut vm = BytecodeVm::new("move-bool", 4, 64);
-        let report = vm.execute(&program).unwrap();
+        let report = vm.execute(&program).expect("serde deserialization should succeed");
         assert_eq!(report.result, Value::Bool(false));
     }
 }

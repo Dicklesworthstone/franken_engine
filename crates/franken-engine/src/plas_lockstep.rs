@@ -534,8 +534,8 @@ mod tests {
             LockstepRuntime::Node,
             LockstepRuntime::Bun,
         ] {
-            let json = serde_json::to_string(&variant).unwrap();
-            let back: LockstepRuntime = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&variant).expect("serde deserialization should succeed");
+            let back: LockstepRuntime = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(variant, back);
         }
     }
@@ -622,8 +622,8 @@ mod tests {
     #[test]
     fn observation_serde_roundtrip() {
         let o = obs(LockstepRuntime::Bun);
-        let json = serde_json::to_string(&o).unwrap();
-        let back: RuntimeObservation = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&o).expect("serde deserialization should succeed");
+        let back: RuntimeObservation = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(o, back);
     }
 
@@ -662,8 +662,8 @@ mod tests {
             allow_state_digest_mismatch: true,
             allowed_error_codes: ["err1"].iter().map(|s| s.to_string()).collect(),
         };
-        let json = serde_json::to_string(&t).unwrap();
-        let back: RuntimeTolerance = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&t).expect("serde deserialization should succeed");
+        let back: RuntimeTolerance = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(t, back);
     }
 
@@ -703,8 +703,8 @@ mod tests {
             LockstepFailureClass::CapabilityGap,
             LockstepFailureClass::PlatformDivergence,
         ] {
-            let json = serde_json::to_string(&variant).unwrap();
-            let back: LockstepFailureClass = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&variant).expect("serde deserialization should succeed");
+            let back: LockstepFailureClass = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(variant, back);
         }
     }
@@ -724,8 +724,8 @@ mod tests {
         let err = PlasLockstepError::InvalidCase {
             detail: "test".to_string(),
         };
-        let json = serde_json::to_string(&err).unwrap();
-        let back: PlasLockstepError = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let back: PlasLockstepError = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, back);
     }
 
@@ -849,7 +849,7 @@ mod tests {
         c.policy_id = "  p1  ".to_string();
         c.extension_id = "  e1  ".to_string();
         c.scenario_id = "  s1  ".to_string();
-        let eval = evaluate_plas_lockstep_case(c).unwrap();
+        let eval = evaluate_plas_lockstep_case(c).expect("serde deserialization should succeed");
         assert_eq!(eval.trace_id, "t1");
         assert_eq!(eval.decision_id, "d1");
         assert_eq!(eval.policy_id, "p1");
@@ -1068,7 +1068,7 @@ mod tests {
     #[test]
     fn evaluate_pass_case() {
         let c = make_case();
-        let eval = evaluate_plas_lockstep_case(c).unwrap();
+        let eval = evaluate_plas_lockstep_case(c).expect("serde deserialization should succeed");
         assert!(eval.pass);
         assert!(eval.failure_class.is_none());
         assert!(eval.failure_detail.is_none());
@@ -1082,7 +1082,7 @@ mod tests {
     #[test]
     fn evaluate_pass_ids_propagated() {
         let c = make_case();
-        let eval = evaluate_plas_lockstep_case(c).unwrap();
+        let eval = evaluate_plas_lockstep_case(c).expect("serde deserialization should succeed");
         assert_eq!(eval.trace_id, "t1");
         assert_eq!(eval.decision_id, "d1");
         assert_eq!(eval.policy_id, "p1");
@@ -1094,7 +1094,7 @@ mod tests {
     fn evaluate_pass_with_both_references() {
         let mut c = make_case();
         c.bun_reference = Some(obs(LockstepRuntime::Bun));
-        let eval = evaluate_plas_lockstep_case(c).unwrap();
+        let eval = evaluate_plas_lockstep_case(c).expect("serde deserialization should succeed");
         assert!(eval.pass);
         assert_eq!(eval.comparisons.len(), 3); // minimal + node + bun
     }
@@ -1104,7 +1104,7 @@ mod tests {
         let mut c = make_case();
         c.node_reference = None;
         c.bun_reference = Some(obs(LockstepRuntime::Bun));
-        let eval = evaluate_plas_lockstep_case(c).unwrap();
+        let eval = evaluate_plas_lockstep_case(c).expect("serde deserialization should succeed");
         assert!(eval.pass);
         assert_eq!(eval.comparisons.len(), 2); // minimal + bun
     }
@@ -1115,7 +1115,7 @@ mod tests {
     fn evaluate_correctness_regression_output_mismatch() {
         let mut c = make_case();
         c.minimal_policy.output_digest = "diverged".to_string();
-        let eval = evaluate_plas_lockstep_case(c).unwrap();
+        let eval = evaluate_plas_lockstep_case(c).expect("serde deserialization should succeed");
         assert!(!eval.pass);
         assert_eq!(
             eval.failure_class,
@@ -1124,7 +1124,7 @@ mod tests {
         assert!(
             eval.failure_detail
                 .as_ref()
-                .unwrap()
+                .expect("serde deserialization should succeed")
                 .contains("output_digest")
         );
         assert_eq!(eval.log.outcome, "fail");
@@ -1141,7 +1141,7 @@ mod tests {
         let mut c = make_case();
         c.minimal_policy.output_digest = "different".to_string();
         c.minimal_policy.capability_denials = vec!["net.connect".to_string()];
-        let eval = evaluate_plas_lockstep_case(c).unwrap();
+        let eval = evaluate_plas_lockstep_case(c).expect("serde deserialization should succeed");
         assert!(!eval.pass);
         assert_eq!(
             eval.failure_class,
@@ -1150,7 +1150,7 @@ mod tests {
         assert!(
             eval.failure_detail
                 .as_ref()
-                .unwrap()
+                .expect("serde deserialization should succeed")
                 .contains("net.connect")
         );
     }
@@ -1163,7 +1163,7 @@ mod tests {
         c.full_manifest.elapsed_ns = 1_000_000;
         c.minimal_policy.elapsed_ns = 1_200_000; // 20% slower = 200_000 millionths
         c.max_performance_degradation_millionths = 100_000; // 10% threshold
-        let eval = evaluate_plas_lockstep_case(c).unwrap();
+        let eval = evaluate_plas_lockstep_case(c).expect("serde deserialization should succeed");
         assert!(!eval.pass);
         assert_eq!(
             eval.failure_class,
@@ -1172,7 +1172,7 @@ mod tests {
         assert!(
             eval.failure_detail
                 .as_ref()
-                .unwrap()
+                .expect("serde deserialization should succeed")
                 .contains("performance")
         );
         assert_eq!(eval.performance_degradation_millionths, 200_000);
@@ -1184,7 +1184,7 @@ mod tests {
         c.full_manifest.elapsed_ns = 1_000_000;
         c.minimal_policy.elapsed_ns = 1_100_000; // 10% slower = 100_000 millionths
         c.max_performance_degradation_millionths = 150_000; // 15% threshold
-        let eval = evaluate_plas_lockstep_case(c).unwrap();
+        let eval = evaluate_plas_lockstep_case(c).expect("serde deserialization should succeed");
         assert!(eval.pass);
         assert_eq!(eval.performance_degradation_millionths, 100_000);
     }
@@ -1197,13 +1197,13 @@ mod tests {
         let mut node = obs(LockstepRuntime::Node);
         node.output_digest = "node_different".to_string();
         c.node_reference = Some(node);
-        let eval = evaluate_plas_lockstep_case(c).unwrap();
+        let eval = evaluate_plas_lockstep_case(c).expect("serde deserialization should succeed");
         assert!(!eval.pass);
         assert_eq!(
             eval.failure_class,
             Some(LockstepFailureClass::PlatformDivergence)
         );
-        assert!(eval.failure_detail.as_ref().unwrap().contains("node"));
+        assert!(eval.failure_detail.as_ref().expect("serde deserialization should succeed").contains("node"));
     }
 
     #[test]
@@ -1214,13 +1214,13 @@ mod tests {
             b.state_digest = "bun_different".to_string();
             b
         });
-        let eval = evaluate_plas_lockstep_case(c).unwrap();
+        let eval = evaluate_plas_lockstep_case(c).expect("serde deserialization should succeed");
         assert!(!eval.pass);
         assert_eq!(
             eval.failure_class,
             Some(LockstepFailureClass::PlatformDivergence)
         );
-        assert!(eval.failure_detail.as_ref().unwrap().contains("bun"));
+        assert!(eval.failure_detail.as_ref().expect("serde deserialization should succeed").contains("bun"));
     }
 
     #[test]
@@ -1236,7 +1236,7 @@ mod tests {
                 ..Default::default()
             },
         );
-        let eval = evaluate_plas_lockstep_case(c).unwrap();
+        let eval = evaluate_plas_lockstep_case(c).expect("serde deserialization should succeed");
         assert!(eval.pass);
     }
 
@@ -1251,7 +1251,7 @@ mod tests {
         let mut node = obs(LockstepRuntime::Node);
         node.output_digest = "node_diff".to_string();
         c.node_reference = Some(node);
-        let eval = evaluate_plas_lockstep_case(c).unwrap();
+        let eval = evaluate_plas_lockstep_case(c).expect("serde deserialization should succeed");
         assert!(!eval.pass);
         // Correctness regression should be the failure class, not platform divergence
         assert_eq!(
@@ -1269,8 +1269,8 @@ mod tests {
             semantic_match: false,
             mismatch_fields: vec!["output_digest".to_string()],
         };
-        let json = serde_json::to_string(&cmp).unwrap();
-        let back: RuntimeComparison = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&cmp).expect("serde deserialization should succeed");
+        let back: RuntimeComparison = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cmp, back);
     }
 
@@ -1287,8 +1287,8 @@ mod tests {
             outcome: "pass".to_string(),
             error_code: None,
         };
-        let json = serde_json::to_string(&le).unwrap();
-        let back: PlasLockstepLogEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&le).expect("serde deserialization should succeed");
+        let back: PlasLockstepLogEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(le, back);
     }
 
@@ -1297,9 +1297,9 @@ mod tests {
     #[test]
     fn evaluation_serde_roundtrip() {
         let c = make_case();
-        let eval = evaluate_plas_lockstep_case(c).unwrap();
-        let json = serde_json::to_string(&eval).unwrap();
-        let back: PlasLockstepEvaluation = serde_json::from_str(&json).unwrap();
+        let eval = evaluate_plas_lockstep_case(c).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&eval).expect("serde deserialization should succeed");
+        let back: PlasLockstepEvaluation = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(eval, back);
     }
 
@@ -1308,8 +1308,8 @@ mod tests {
     #[test]
     fn case_serde_roundtrip() {
         let c = make_case();
-        let json = serde_json::to_string(&c).unwrap();
-        let back: PlasLockstepCase = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let back: PlasLockstepCase = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c, back);
     }
 
@@ -1323,8 +1323,8 @@ mod tests {
                 ..Default::default()
             },
         );
-        let json = serde_json::to_string(&c).unwrap();
-        let back: PlasLockstepCase = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let back: PlasLockstepCase = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c, back);
     }
 }

@@ -937,8 +937,8 @@ mod tests {
     #[test]
     fn defect_class_serde() {
         let dc = DefectClass::WrongOutput;
-        let json = serde_json::to_string(&dc).unwrap();
-        let back: DefectClass = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&dc).expect("serde deserialization should succeed");
+        let back: DefectClass = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(dc, back);
     }
 
@@ -947,8 +947,8 @@ mod tests {
         let dc = DefectClass::Custom {
             tag: "custom-test".into(),
         };
-        let json = serde_json::to_string(&dc).unwrap();
-        let back: DefectClass = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&dc).expect("serde deserialization should succeed");
+        let back: DefectClass = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(dc, back);
     }
 
@@ -978,8 +978,8 @@ mod tests {
     #[test]
     fn reduction_level_serde() {
         let level = ReductionLevel::Statement;
-        let json = serde_json::to_string(&level).unwrap();
-        let back: ReductionLevel = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&level).expect("serde deserialization should succeed");
+        let back: ReductionLevel = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(level, back);
     }
 
@@ -1002,8 +1002,8 @@ mod tests {
     #[test]
     fn reduction_strategy_serde() {
         let s = ReductionStrategy::HierarchicalDelta;
-        let json = serde_json::to_string(&s).unwrap();
-        let back: ReductionStrategy = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+        let back: ReductionStrategy = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(s, back);
     }
 
@@ -1048,8 +1048,8 @@ mod tests {
     #[test]
     fn config_serde() {
         let c = ReductionConfig::default();
-        let json = serde_json::to_string(&c).unwrap();
-        let back: ReductionConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let back: ReductionConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c, back);
     }
 
@@ -1108,8 +1108,8 @@ mod tests {
     #[test]
     fn fragment_serde() {
         let frag = ProgramFragment::new(ReductionLevel::Statement, "let x = 1;", 0, 11);
-        let json = serde_json::to_string(&frag).unwrap();
-        let back: ProgramFragment = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&frag).expect("serde deserialization should succeed");
+        let back: ProgramFragment = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(frag, back);
     }
 
@@ -1132,8 +1132,8 @@ mod tests {
     #[test]
     fn step_outcome_serde() {
         let o = StepOutcome::DefectPreserved;
-        let json = serde_json::to_string(&o).unwrap();
-        let back: StepOutcome = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&o).expect("serde deserialization should succeed");
+        let back: StepOutcome = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(o, back);
     }
 
@@ -1183,8 +1183,8 @@ mod tests {
             program_size_after: 100,
             progress: true,
         };
-        let json = serde_json::to_string(&step).unwrap();
-        let back: ReductionStep = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&step).expect("serde deserialization should succeed");
+        let back: ReductionStep = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(step, back);
     }
 
@@ -1364,8 +1364,8 @@ mod tests {
             test_epoch(),
         );
         let repro = debugger.reduce(|_| StepOutcome::DefectPreserved);
-        let json = serde_json::to_string(&repro).unwrap();
-        let back: MinimalRepro = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&repro).expect("serde deserialization should succeed");
+        let back: MinimalRepro = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(repro, back);
     }
 
@@ -1428,8 +1428,8 @@ mod tests {
     #[test]
     fn evidence_inventory_serde() {
         let inv = ReductionEvidenceInventory::from_repros(&[]);
-        let json = serde_json::to_string(&inv).unwrap();
-        let back: ReductionEvidenceInventory = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&inv).expect("serde deserialization should succeed");
+        let back: ReductionEvidenceInventory = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(inv, back);
     }
 
@@ -1464,8 +1464,8 @@ mod tests {
     #[test]
     fn specimen_family_serde() {
         let f = DeltaDebugSpecimenFamily::ReactComponent;
-        let json = serde_json::to_string(&f).unwrap();
-        let back: DeltaDebugSpecimenFamily = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&f).expect("serde deserialization should succeed");
+        let back: DeltaDebugSpecimenFamily = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(f, back);
     }
 
@@ -1499,8 +1499,8 @@ mod tests {
             strategies_used: vec![ReductionStrategy::DeltaDebugging],
             stable: true,
         };
-        let json = serde_json::to_string(&summary).unwrap();
-        let back: ReductionSummary = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
+        let back: ReductionSummary = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(summary, back);
     }
 }

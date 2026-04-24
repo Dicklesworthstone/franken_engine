@@ -964,16 +964,16 @@ mod tests {
     #[test]
     fn gate_serde_roundtrip() {
         let gate = CausalRegretEvidenceGate::new();
-        let json = serde_json::to_string(&gate).unwrap();
-        let restored: CausalRegretEvidenceGate = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&gate).expect("serde deserialization should succeed");
+        let restored: CausalRegretEvidenceGate = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(gate, restored);
     }
 
     #[test]
     fn config_serde_roundtrip() {
         let config = CausalRegretGateConfig::default();
-        let json = serde_json::to_string(&config).unwrap();
-        let restored: CausalRegretGateConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let restored: CausalRegretGateConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, restored);
     }
 
@@ -981,9 +981,9 @@ mod tests {
     fn gate_output_serde_roundtrip() {
         let mut gate = CausalRegretEvidenceGate::new();
         let input = basic_input(MoonshotStage::Shadow);
-        let output = gate.evaluate(&input).unwrap();
-        let json = serde_json::to_string(&output).unwrap();
-        let restored: GateOutput = serde_json::from_str(&json).unwrap();
+        let output = gate.evaluate(&input).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&output).expect("serde deserialization should succeed");
+        let restored: GateOutput = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(output, restored);
     }
 
@@ -1102,7 +1102,7 @@ mod tests {
     fn shadow_promotion_approved() {
         let mut gate = CausalRegretEvidenceGate::new();
         let input = basic_input(MoonshotStage::Shadow);
-        let output = gate.evaluate(&input).unwrap();
+        let output = gate.evaluate(&input).expect("serde deserialization should succeed");
         assert_eq!(output.verdict, GateVerdict::Approved);
         assert!(output.blocking_reasons.is_empty());
         assert_eq!(output.target_stage, MoonshotStage::Shadow);
@@ -1115,7 +1115,7 @@ mod tests {
     fn canary_promotion_approved() {
         let mut gate = CausalRegretEvidenceGate::new();
         let input = basic_input(MoonshotStage::Canary);
-        let output = gate.evaluate(&input).unwrap();
+        let output = gate.evaluate(&input).expect("serde deserialization should succeed");
         assert_eq!(output.verdict, GateVerdict::Approved);
         assert!(output.blocking_reasons.is_empty());
     }
@@ -1124,7 +1124,7 @@ mod tests {
     fn production_promotion_approved() {
         let mut gate = CausalRegretEvidenceGate::new();
         let input = basic_input(MoonshotStage::Production);
-        let output = gate.evaluate(&input).unwrap();
+        let output = gate.evaluate(&input).expect("serde deserialization should succeed");
         assert_eq!(output.verdict, GateVerdict::Approved);
         assert!(output.blocking_reasons.is_empty());
     }
@@ -1133,7 +1133,7 @@ mod tests {
     fn approved_output_has_summaries() {
         let mut gate = CausalRegretEvidenceGate::new();
         let input = basic_input(MoonshotStage::Shadow);
-        let output = gate.evaluate(&input).unwrap();
+        let output = gate.evaluate(&input).expect("serde deserialization should succeed");
         assert_eq!(output.evaluation_summaries.len(), 1);
         assert_eq!(
             output.evaluation_summaries[0].policy_id,
@@ -1155,7 +1155,7 @@ mod tests {
             -50_000,
             2_000,
         )];
-        let output = gate.evaluate(&input).unwrap();
+        let output = gate.evaluate(&input).expect("serde deserialization should succeed");
         assert_eq!(output.verdict, GateVerdict::Denied);
         assert!(
             output
@@ -1177,7 +1177,7 @@ mod tests {
             250_000,
             2_000,
         )];
-        let output = gate.evaluate(&input).unwrap();
+        let output = gate.evaluate(&input).expect("serde deserialization should succeed");
         // Shadow doesn't require safe envelope by default.
         assert_eq!(output.verdict, GateVerdict::Approved);
     }
@@ -1193,7 +1193,7 @@ mod tests {
             250_000,
             2_000,
         )];
-        let output = gate.evaluate(&input).unwrap();
+        let output = gate.evaluate(&input).expect("serde deserialization should succeed");
         assert_eq!(output.verdict, GateVerdict::Denied);
         assert!(
             output
@@ -1209,7 +1209,7 @@ mod tests {
             block_on_inconclusive: true,
             ..Default::default()
         };
-        let mut gate = CausalRegretEvidenceGate::with_config(config).unwrap();
+        let mut gate = CausalRegretEvidenceGate::with_config(config).expect("serde deserialization should succeed");
         let mut input = basic_input(MoonshotStage::Shadow);
         input.evaluations = vec![make_eval(
             "policy-1",
@@ -1218,7 +1218,7 @@ mod tests {
             250_000,
             2_000,
         )];
-        let output = gate.evaluate(&input).unwrap();
+        let output = gate.evaluate(&input).expect("serde deserialization should succeed");
         assert_eq!(output.verdict, GateVerdict::Denied);
     }
 
@@ -1236,7 +1236,7 @@ mod tests {
             50_000,
             2_000,
         )];
-        let output = gate.evaluate(&input).unwrap();
+        let output = gate.evaluate(&input).expect("serde deserialization should succeed");
         assert_eq!(output.verdict, GateVerdict::Denied);
         assert!(
             output
@@ -1258,7 +1258,7 @@ mod tests {
             100_000,
             2_000,
         )];
-        let output = gate.evaluate(&input).unwrap();
+        let output = gate.evaluate(&input).expect("serde deserialization should succeed");
         assert!(
             !output
                 .blocking_reasons
@@ -1281,7 +1281,7 @@ mod tests {
             250_000,
             500,
         )];
-        let output = gate.evaluate(&input).unwrap();
+        let output = gate.evaluate(&input).expect("serde deserialization should succeed");
         assert_eq!(output.verdict, GateVerdict::Denied);
         assert!(
             output
@@ -1305,7 +1305,7 @@ mod tests {
             250_000,
             2_000,
         )];
-        let output = gate.evaluate(&input).unwrap();
+        let output = gate.evaluate(&input).expect("serde deserialization should succeed");
         assert_eq!(output.verdict, GateVerdict::Denied);
         assert!(
             output
@@ -1326,7 +1326,7 @@ mod tests {
             250_000,
             2_000,
         )];
-        let output = gate.evaluate(&input).unwrap();
+        let output = gate.evaluate(&input).expect("serde deserialization should succeed");
         assert!(
             !output
                 .blocking_reasons
@@ -1343,7 +1343,7 @@ mod tests {
         let mut input = basic_input(MoonshotStage::Shadow);
         // Shadow allows up to 500_000 regret.
         input.regret_certificate = Some(make_regret_cert(600_000, 700_000, true, 600));
-        let output = gate.evaluate(&input).unwrap();
+        let output = gate.evaluate(&input).expect("serde deserialization should succeed");
         assert_eq!(output.verdict, GateVerdict::Denied);
         assert!(
             output
@@ -1358,7 +1358,7 @@ mod tests {
         let mut gate = CausalRegretEvidenceGate::new();
         let mut input = basic_input(MoonshotStage::Canary);
         input.regret_certificate = Some(make_regret_cert(100_000, 200_000, false, 100));
-        let output = gate.evaluate(&input).unwrap();
+        let output = gate.evaluate(&input).expect("serde deserialization should succeed");
         assert_eq!(output.verdict, GateVerdict::Denied);
         assert!(
             output
@@ -1373,7 +1373,7 @@ mod tests {
         let mut gate = CausalRegretEvidenceGate::new();
         let mut input = basic_input(MoonshotStage::Shadow);
         input.regret_certificate = Some(make_regret_cert(100_000, 200_000, false, 100));
-        let output = gate.evaluate(&input).unwrap();
+        let output = gate.evaluate(&input).expect("serde deserialization should succeed");
         // Shadow doesn't require within_bound.
         assert!(
             !output
@@ -1389,7 +1389,7 @@ mod tests {
         let mut input = basic_input(MoonshotStage::Shadow);
         // Config default: max per-round = 50_000.
         input.regret_certificate = Some(make_regret_cert(100_000, 200_000, true, 60_000));
-        let output = gate.evaluate(&input).unwrap();
+        let output = gate.evaluate(&input).expect("serde deserialization should succeed");
         assert_eq!(output.verdict, GateVerdict::Denied);
         assert!(
             output
@@ -1404,7 +1404,7 @@ mod tests {
         let mut gate = CausalRegretEvidenceGate::new();
         let mut input = basic_input(MoonshotStage::Shadow);
         input.regret_certificate = None;
-        let output = gate.evaluate(&input).unwrap();
+        let output = gate.evaluate(&input).expect("serde deserialization should succeed");
         assert_eq!(output.verdict, GateVerdict::Denied);
         assert!(
             output
@@ -1420,10 +1420,10 @@ mod tests {
             require_regret_certificate: false,
             ..Default::default()
         };
-        let mut gate = CausalRegretEvidenceGate::with_config(config).unwrap();
+        let mut gate = CausalRegretEvidenceGate::with_config(config).expect("serde deserialization should succeed");
         let mut input = basic_input(MoonshotStage::Shadow);
         input.regret_certificate = None;
-        let output = gate.evaluate(&input).unwrap();
+        let output = gate.evaluate(&input).expect("serde deserialization should succeed");
         assert!(
             !output
                 .blocking_reasons
@@ -1439,7 +1439,7 @@ mod tests {
         let mut gate = CausalRegretEvidenceGate::new();
         let mut input = basic_input(MoonshotStage::Shadow);
         input.evaluations.clear();
-        let output = gate.evaluate(&input).unwrap();
+        let output = gate.evaluate(&input).expect("serde deserialization should succeed");
         assert_eq!(output.verdict, GateVerdict::Denied);
         assert!(
             output
@@ -1455,10 +1455,10 @@ mod tests {
             require_evaluation: false,
             ..Default::default()
         };
-        let mut gate = CausalRegretEvidenceGate::with_config(config).unwrap();
+        let mut gate = CausalRegretEvidenceGate::with_config(config).expect("serde deserialization should succeed");
         let mut input = basic_input(MoonshotStage::Shadow);
         input.evaluations.clear();
-        let output = gate.evaluate(&input).unwrap();
+        let output = gate.evaluate(&input).expect("serde deserialization should succeed");
         assert!(
             !output
                 .blocking_reasons
@@ -1475,7 +1475,7 @@ mod tests {
         let mut input = basic_input(MoonshotStage::Canary);
         // Canary allows 0 critical demotions.
         input.demotion_history = vec![make_demotion(8, DemotionSeverity::Critical)];
-        let output = gate.evaluate(&input).unwrap();
+        let output = gate.evaluate(&input).expect("serde deserialization should succeed");
         assert_eq!(output.verdict, GateVerdict::Denied);
         assert!(
             output
@@ -1495,7 +1495,7 @@ mod tests {
             make_demotion(8, DemotionSeverity::Advisory),
             make_demotion(9, DemotionSeverity::Advisory),
         ];
-        let output = gate.evaluate(&input).unwrap();
+        let output = gate.evaluate(&input).expect("serde deserialization should succeed");
         assert_eq!(output.verdict, GateVerdict::Approved);
         assert_eq!(output.demotions_considered, 2);
     }
@@ -1506,7 +1506,7 @@ mod tests {
         let mut input = basic_input(MoonshotStage::Production);
         // Production allows 0 recent demotions.
         input.demotion_history = vec![make_demotion(8, DemotionSeverity::Advisory)];
-        let output = gate.evaluate(&input).unwrap();
+        let output = gate.evaluate(&input).expect("serde deserialization should succeed");
         assert_eq!(output.verdict, GateVerdict::Denied);
         assert!(
             output
@@ -1522,7 +1522,7 @@ mod tests {
         let mut input = basic_input(MoonshotStage::Production);
         // Epoch=10, lookback=5, so epoch < 5 is outside lookback.
         input.demotion_history = vec![make_demotion(3, DemotionSeverity::Critical)];
-        let output = gate.evaluate(&input).unwrap();
+        let output = gate.evaluate(&input).expect("serde deserialization should succeed");
         // Old demotion is outside lookback so not counted.
         assert_eq!(output.demotions_considered, 0);
         assert_eq!(output.critical_demotions_count, 0);
@@ -1535,7 +1535,7 @@ mod tests {
         let mut gate = CausalRegretEvidenceGate::new();
         let mut input = basic_input(MoonshotStage::Shadow);
         input.current_stage = MoonshotStage::Production; // backwards
-        let output = gate.evaluate(&input).unwrap();
+        let output = gate.evaluate(&input).expect("serde deserialization should succeed");
         assert_eq!(output.verdict, GateVerdict::Denied);
         assert!(
             output
@@ -1550,7 +1550,7 @@ mod tests {
         let mut gate = CausalRegretEvidenceGate::new();
         let mut input = basic_input(MoonshotStage::Canary);
         input.current_stage = MoonshotStage::Research; // skipping Shadow
-        let output = gate.evaluate(&input).unwrap();
+        let output = gate.evaluate(&input).expect("serde deserialization should succeed");
         assert_eq!(output.verdict, GateVerdict::Denied);
         assert!(
             output
@@ -1566,7 +1566,7 @@ mod tests {
     fn risk_level_low_when_approved() {
         let mut gate = CausalRegretEvidenceGate::new();
         let input = basic_input(MoonshotStage::Shadow);
-        let output = gate.evaluate(&input).unwrap();
+        let output = gate.evaluate(&input).expect("serde deserialization should succeed");
         assert_eq!(output.risk_level, RiskLevel::Low);
     }
 
@@ -1581,7 +1581,7 @@ mod tests {
             -50_000,
             2_000,
         )];
-        let output = gate.evaluate(&input).unwrap();
+        let output = gate.evaluate(&input).expect("serde deserialization should succeed");
         assert_eq!(output.risk_level, RiskLevel::Critical);
     }
 
@@ -1597,7 +1597,7 @@ mod tests {
             250_000,
             2_000,
         )];
-        let output = gate.evaluate(&input).unwrap();
+        let output = gate.evaluate(&input).expect("serde deserialization should succeed");
         assert_eq!(output.risk_level, RiskLevel::High);
     }
 
@@ -1606,7 +1606,7 @@ mod tests {
         let mut gate = CausalRegretEvidenceGate::new();
         let mut input = basic_input(MoonshotStage::Shadow);
         input.regret_certificate = Some(make_regret_cert(600_000, 700_000, true, 600));
-        let output = gate.evaluate(&input).unwrap();
+        let output = gate.evaluate(&input).expect("serde deserialization should succeed");
         assert_eq!(output.risk_level, RiskLevel::High);
     }
 
@@ -1617,7 +1617,7 @@ mod tests {
             require_regret_certificate: true,
             ..Default::default()
         };
-        let mut gate = CausalRegretEvidenceGate::with_config(config).unwrap();
+        let mut gate = CausalRegretEvidenceGate::with_config(config).expect("serde deserialization should succeed");
         let mut input = basic_input(MoonshotStage::Shadow);
         // Shadow requires 100 samples. Give 50 — but envelope still safe.
         // This will block on insufficient samples.
@@ -1628,7 +1628,7 @@ mod tests {
             250_000,
             50,
         )];
-        let output = gate.evaluate(&input).unwrap();
+        let output = gate.evaluate(&input).expect("serde deserialization should succeed");
         assert_eq!(output.risk_level, RiskLevel::Medium);
     }
 
@@ -1654,7 +1654,7 @@ mod tests {
                 1_000,
             ),
         ];
-        let output = gate.evaluate(&input).unwrap();
+        let output = gate.evaluate(&input).expect("serde deserialization should succeed");
         assert_eq!(output.verdict, GateVerdict::Approved);
         assert_eq!(output.evaluation_summaries.len(), 2);
     }
@@ -1679,7 +1679,7 @@ mod tests {
                 1_000,
             ),
         ];
-        let output = gate.evaluate(&input).unwrap();
+        let output = gate.evaluate(&input).expect("serde deserialization should succeed");
         assert_eq!(output.verdict, GateVerdict::Denied);
     }
 
@@ -1691,14 +1691,14 @@ mod tests {
 
         // Approved
         let input = basic_input(MoonshotStage::Shadow);
-        gate.evaluate(&input).unwrap();
+        gate.evaluate(&input).expect("serde deserialization should succeed");
         assert_eq!(gate.evaluations_run(), 1);
         assert_eq!(gate.promotions_approved(), 1);
 
         // Denied
         let mut input2 = basic_input(MoonshotStage::Shadow);
         input2.evaluations.clear();
-        gate.evaluate(&input2).unwrap();
+        gate.evaluate(&input2).expect("serde deserialization should succeed");
         assert_eq!(gate.evaluations_run(), 2);
         assert_eq!(gate.promotions_denied(), 1);
     }
@@ -1707,7 +1707,7 @@ mod tests {
     fn reset_counters() {
         let mut gate = CausalRegretEvidenceGate::new();
         let input = basic_input(MoonshotStage::Shadow);
-        gate.evaluate(&input).unwrap();
+        gate.evaluate(&input).expect("serde deserialization should succeed");
         gate.reset_counters();
         assert_eq!(gate.evaluations_run(), 0);
         assert_eq!(gate.promotions_approved(), 0);
@@ -1721,8 +1721,8 @@ mod tests {
         let mut gate1 = CausalRegretEvidenceGate::new();
         let mut gate2 = CausalRegretEvidenceGate::new();
         let input = basic_input(MoonshotStage::Shadow);
-        let o1 = gate1.evaluate(&input).unwrap();
-        let o2 = gate2.evaluate(&input).unwrap();
+        let o1 = gate1.evaluate(&input).expect("serde deserialization should succeed");
+        let o2 = gate2.evaluate(&input).expect("serde deserialization should succeed");
         assert_eq!(o1.artifact_hash, o2.artifact_hash);
     }
 
@@ -1730,11 +1730,11 @@ mod tests {
     fn artifact_hash_changes_with_verdict() {
         let mut gate = CausalRegretEvidenceGate::new();
         let input_ok = basic_input(MoonshotStage::Shadow);
-        let o1 = gate.evaluate(&input_ok).unwrap();
+        let o1 = gate.evaluate(&input_ok).expect("serde deserialization should succeed");
 
         let mut input_bad = basic_input(MoonshotStage::Shadow);
         input_bad.evaluations.clear();
-        let o2 = gate.evaluate(&input_bad).unwrap();
+        let o2 = gate.evaluate(&input_bad).expect("serde deserialization should succeed");
 
         assert_ne!(o1.artifact_hash, o2.artifact_hash);
     }
@@ -1744,11 +1744,11 @@ mod tests {
         let mut gate = CausalRegretEvidenceGate::new();
         let mut input1 = basic_input(MoonshotStage::Shadow);
         input1.timestamp_ns = 1_000;
-        let o1 = gate.evaluate(&input1).unwrap();
+        let o1 = gate.evaluate(&input1).expect("serde deserialization should succeed");
 
         let mut input2 = basic_input(MoonshotStage::Shadow);
         input2.timestamp_ns = 2_000;
-        let o2 = gate.evaluate(&input2).unwrap();
+        let o2 = gate.evaluate(&input2).expect("serde deserialization should succeed");
 
         assert_ne!(o1.artifact_hash, o2.artifact_hash);
     }
@@ -1866,7 +1866,7 @@ mod tests {
     fn output_has_correct_schema() {
         let mut gate = CausalRegretEvidenceGate::new();
         let input = basic_input(MoonshotStage::Shadow);
-        let output = gate.evaluate(&input).unwrap();
+        let output = gate.evaluate(&input).expect("serde deserialization should succeed");
         assert_eq!(output.schema_version, CAUSAL_REGRET_GATE_SCHEMA_VERSION);
         assert_eq!(output.component, CAUSAL_REGRET_GATE_COMPONENT);
     }
@@ -1875,7 +1875,7 @@ mod tests {
     fn output_carries_moonshot_id() {
         let mut gate = CausalRegretEvidenceGate::new();
         let input = basic_input(MoonshotStage::Shadow);
-        let output = gate.evaluate(&input).unwrap();
+        let output = gate.evaluate(&input).expect("serde deserialization should succeed");
         assert_eq!(output.moonshot_id, Some("moonshot-1".into()));
     }
 
@@ -1883,7 +1883,7 @@ mod tests {
     fn output_carries_regime() {
         let mut gate = CausalRegretEvidenceGate::new();
         let input = basic_input(MoonshotStage::Shadow);
-        let output = gate.evaluate(&input).unwrap();
+        let output = gate.evaluate(&input).expect("serde deserialization should succeed");
         assert_eq!(output.regime, RegimeKind::Stochastic);
     }
 
@@ -1903,7 +1903,7 @@ mod tests {
         )];
         input.regret_certificate = None; // missing
         input.demotion_history = vec![make_demotion(9, DemotionSeverity::Critical)];
-        let output = gate.evaluate(&input).unwrap();
+        let output = gate.evaluate(&input).expect("serde deserialization should succeed");
         assert_eq!(output.verdict, GateVerdict::Denied);
         // Should have many blocking reasons.
         assert!(output.blocking_reasons.len() >= 5);
@@ -1917,14 +1917,14 @@ mod tests {
             demotion_lookback_epochs: 0,
             ..Default::default()
         };
-        let mut gate = CausalRegretEvidenceGate::with_config(config).unwrap();
+        let mut gate = CausalRegretEvidenceGate::with_config(config).expect("serde deserialization should succeed");
         let mut input = basic_input(MoonshotStage::Production);
         // Only epoch==10 (same as current) should be in lookback.
         input.demotion_history = vec![
             make_demotion(10, DemotionSeverity::Advisory),
             make_demotion(9, DemotionSeverity::Advisory),
         ];
-        let output = gate.evaluate(&input).unwrap();
+        let output = gate.evaluate(&input).expect("serde deserialization should succeed");
         assert_eq!(output.demotions_considered, 1);
     }
 
@@ -1936,14 +1936,14 @@ mod tests {
             demotion_lookback_epochs: 100,
             ..Default::default()
         };
-        let mut gate = CausalRegretEvidenceGate::with_config(config).unwrap();
+        let mut gate = CausalRegretEvidenceGate::with_config(config).expect("serde deserialization should succeed");
         let mut input = basic_input(MoonshotStage::Shadow);
         input.demotion_history = vec![
             make_demotion(1, DemotionSeverity::Advisory),
             make_demotion(5, DemotionSeverity::Advisory),
             make_demotion(10, DemotionSeverity::Advisory),
         ];
-        let output = gate.evaluate(&input).unwrap();
+        let output = gate.evaluate(&input).expect("serde deserialization should succeed");
         assert_eq!(output.demotions_considered, 3);
     }
 
@@ -1953,8 +1953,8 @@ mod tests {
     fn stage_thresholds_serde_roundtrip() {
         for stage in MoonshotStage::all() {
             let t = StageThresholds::for_stage(*stage);
-            let json = serde_json::to_string(&t).unwrap();
-            let restored: StageThresholds = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&t).expect("serde deserialization should succeed");
+            let restored: StageThresholds = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(t, restored);
         }
     }
@@ -1971,8 +1971,8 @@ mod tests {
             effective_samples: 500,
             artifact_hash: ContentHash::compute(b"test"),
         };
-        let json = serde_json::to_string(&summary).unwrap();
-        let restored: EvaluationSummary = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
+        let restored: EvaluationSummary = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(summary, restored);
     }
 
@@ -1987,8 +1987,8 @@ mod tests {
             within_bound: true,
             per_round_regret_millionths: 50,
         };
-        let json = serde_json::to_string(&summary).unwrap();
-        let restored: RegretSummary = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
+        let restored: RegretSummary = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(summary, restored);
     }
 
@@ -1997,8 +1997,8 @@ mod tests {
     #[test]
     fn demotion_history_item_serde_roundtrip() {
         let item = make_demotion(5, DemotionSeverity::Warning);
-        let json = serde_json::to_string(&item).unwrap();
-        let restored: DemotionHistoryItem = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&item).expect("serde deserialization should succeed");
+        let restored: DemotionHistoryItem = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(item, restored);
     }
 
@@ -2017,8 +2017,8 @@ mod tests {
     #[test]
     fn gate_input_serde_roundtrip() {
         let input = basic_input(MoonshotStage::Shadow);
-        let json = serde_json::to_string(&input).unwrap();
-        let restored: GateInput = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
+        let restored: GateInput = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(input, restored);
     }
 
@@ -2029,7 +2029,7 @@ mod tests {
         let mut gate = CausalRegretEvidenceGate::new();
         let mut input = basic_input(MoonshotStage::Shadow);
         input.regime = RegimeKind::Adversarial;
-        let output = gate.evaluate(&input).unwrap();
+        let output = gate.evaluate(&input).expect("serde deserialization should succeed");
         assert_eq!(output.regime, RegimeKind::Adversarial);
     }
 
@@ -2039,7 +2039,7 @@ mod tests {
     fn empty_demotion_history_ok() {
         let mut gate = CausalRegretEvidenceGate::new();
         let input = basic_input(MoonshotStage::Production);
-        let output = gate.evaluate(&input).unwrap();
+        let output = gate.evaluate(&input).expect("serde deserialization should succeed");
         assert_eq!(output.demotions_considered, 0);
         assert_eq!(output.critical_demotions_count, 0);
     }
@@ -2052,7 +2052,7 @@ mod tests {
         let mut input = basic_input(MoonshotStage::Shadow);
         // Shadow max = 500_000. Exactly 500_000 should pass.
         input.regret_certificate = Some(make_regret_cert(500_000, 600_000, true, 50));
-        let output = gate.evaluate(&input).unwrap();
+        let output = gate.evaluate(&input).expect("serde deserialization should succeed");
         assert!(
             !output
                 .blocking_reasons
@@ -2066,7 +2066,7 @@ mod tests {
         let mut gate = CausalRegretEvidenceGate::new();
         let mut input = basic_input(MoonshotStage::Shadow);
         input.regret_certificate = Some(make_regret_cert(500_001, 600_000, true, 50));
-        let output = gate.evaluate(&input).unwrap();
+        let output = gate.evaluate(&input).expect("serde deserialization should succeed");
         assert!(
             output
                 .blocking_reasons
@@ -2083,7 +2083,7 @@ mod tests {
         let mut input = basic_input(MoonshotStage::Shadow);
         // Config default per-round max = 50_000.
         input.regret_certificate = Some(make_regret_cert(100_000, 200_000, true, 50_000));
-        let output = gate.evaluate(&input).unwrap();
+        let output = gate.evaluate(&input).expect("serde deserialization should succeed");
         assert!(
             !output
                 .blocking_reasons
@@ -2097,8 +2097,8 @@ mod tests {
     #[test]
     fn demotion_history_item_enrichment_serde_roundtrip() {
         let item = make_demotion(5, DemotionSeverity::Critical);
-        let json = serde_json::to_string(&item).unwrap();
-        let back: DemotionHistoryItem = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&item).expect("serde deserialization should succeed");
+        let back: DemotionHistoryItem = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(item, back);
     }
 
@@ -2143,8 +2143,8 @@ mod tests {
             },
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: BlockingReason = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: BlockingReason = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -2165,8 +2165,8 @@ mod tests {
             },
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: CausalRegretGateError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: CausalRegretGateError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -2175,8 +2175,8 @@ mod tests {
     fn gate_input_serde_roundtrip_empty_evaluations() {
         let mut input = basic_input(MoonshotStage::Shadow);
         input.evaluations = Vec::new();
-        let json = serde_json::to_string(&input).unwrap();
-        let back: GateInput = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
+        let back: GateInput = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(input, back);
     }
 }

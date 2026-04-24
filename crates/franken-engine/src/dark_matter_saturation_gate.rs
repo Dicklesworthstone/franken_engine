@@ -1541,8 +1541,8 @@ mod tests {
     #[test]
     fn region_kind_serde_round_trip() {
         for &kind in DarkMatterRegionKind::ALL {
-            let json = serde_json::to_string(&kind).unwrap();
-            let back: DarkMatterRegionKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
+            let back: DarkMatterRegionKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(back, kind);
         }
     }
@@ -1628,8 +1628,8 @@ mod tests {
     #[test]
     fn region_serde_round_trip() {
         let r = make_test_region("r1", DarkMatterRegionKind::UntestedCodePath, 100_000, false);
-        let json = serde_json::to_string(&r).unwrap();
-        let back: DarkMatterRegion = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let back: DarkMatterRegion = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, r);
     }
 
@@ -1815,8 +1815,8 @@ mod tests {
             100_000,
             false,
         ));
-        let json = serde_json::to_string(&e).unwrap();
-        let back: DarkMatterEstimate = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
+        let back: DarkMatterEstimate = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, e);
     }
 
@@ -1868,8 +1868,8 @@ mod tests {
             cumulative_discovered_millionths: 100_000,
             cumulative_retired_millionths: 50_000,
         };
-        let json = serde_json::to_string(&obs).unwrap();
-        let back: BurndownObservation = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&obs).expect("serde deserialization should succeed");
+        let back: BurndownObservation = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, obs);
     }
 
@@ -2054,8 +2054,8 @@ mod tests {
             cumulative_discovered_millionths: 0,
             cumulative_retired_millionths: 0,
         });
-        let json = serde_json::to_string(&t).unwrap();
-        let back: BurndownTracker = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&t).expect("serde deserialization should succeed");
+        let back: BurndownTracker = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, t);
     }
 
@@ -2098,8 +2098,8 @@ mod tests {
     #[test]
     fn board_state_serde_round_trip() {
         for &state in BoardState::ALL {
-            let json = serde_json::to_string(&state).unwrap();
-            let back: BoardState = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&state).expect("serde deserialization should succeed");
+            let back: BoardState = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(back, state);
         }
     }
@@ -2181,8 +2181,8 @@ mod tests {
     #[test]
     fn config_serde_round_trip() {
         let config = SaturationConfig::default();
-        let json = serde_json::to_string(&config).unwrap();
-        let back: SaturationConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let back: SaturationConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, config);
     }
 
@@ -2384,8 +2384,8 @@ mod tests {
         let obs = make_test_observations(5, 1000, 100, 100_000, 5_000, 15_000);
         let eval = make_test_evaluator(100_000, MILLION, obs, config);
         let v = eval.evaluate_freshness(1500);
-        let json = serde_json::to_string(&v).unwrap();
-        let back: FreshnessVerdict = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let back: FreshnessVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, v);
     }
 
@@ -2495,8 +2495,8 @@ mod tests {
         let obs = make_test_observations(5, 1000, 100, 100_000, 5_000, 15_000);
         let eval = make_test_evaluator(100_000, MILLION, obs, config);
         let v = eval.evaluate_ratchet_widening(1500);
-        let json = serde_json::to_string(&v).unwrap();
-        let back: RatchetWideningVerdict = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let back: RatchetWideningVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, v);
     }
 
@@ -2595,8 +2595,8 @@ mod tests {
         let obs = make_test_observations(5, 1000, 100, 100_000, 5_000, 15_000);
         let eval = make_test_evaluator(100_000, MILLION, obs, config);
         let receipt = eval.evaluate(1500);
-        let json = serde_json::to_string(&receipt).unwrap();
-        let back: DecisionReceipt = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
+        let back: DecisionReceipt = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.composite_state, receipt.composite_state);
         assert_eq!(back.receipt_hash, receipt.receipt_hash);
     }
@@ -2683,8 +2683,8 @@ mod tests {
         let obs = make_test_observations(5, 1000, 100, 100_000, 5_000, 15_000);
         let eval = make_test_evaluator(100_000, MILLION, obs, config);
         let evidence = eval.emit_evidence(1500);
-        let json = serde_json::to_string(&evidence).unwrap();
-        let back: DarkMatterEvidence = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&evidence).expect("serde deserialization should succeed");
+        let back: DarkMatterEvidence = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.board_state, evidence.board_state);
     }
 
@@ -2755,8 +2755,8 @@ mod tests {
         let obs = make_test_observations(5, 1000, 100, 100_000, 5_000, 15_000);
         let eval = make_test_evaluator(100_000, MILLION, obs, config);
         let v = eval.evaluate_saturation(1500);
-        let json = serde_json::to_string(&v).unwrap();
-        let back: BoardSaturationVerdict = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let back: BoardSaturationVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.state, v.state);
     }
 
@@ -2834,8 +2834,8 @@ mod tests {
         };
         let obs = make_test_observations(5, 1000, 100, 100_000, 5_000, 15_000);
         let eval = make_test_evaluator(100_000, MILLION, obs, config);
-        let json = serde_json::to_string(&eval).unwrap();
-        let back: SaturationGateEvaluator = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&eval).expect("serde deserialization should succeed");
+        let back: SaturationGateEvaluator = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.config, eval.config);
         assert_eq!(back.estimate, eval.estimate);
         assert_eq!(back.tracker, eval.tracker);
@@ -2847,8 +2847,8 @@ mod tests {
             field: "test_field".to_string(),
             message: "test message".to_string(),
         };
-        let json = serde_json::to_string(&v).unwrap();
-        let back: ConfigViolation = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let back: ConfigViolation = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, v);
     }
 

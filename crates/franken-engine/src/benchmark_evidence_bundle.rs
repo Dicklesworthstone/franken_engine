@@ -587,7 +587,7 @@ impl EvidenceBundle {
         }
         // SAFETY: BundleStatus derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        hasher.update(serde_json::to_string(&self.status).unwrap().as_bytes());
+        hasher.update(serde_json::to_string(&self.status).expect("serde deserialization should succeed").as_bytes());
         if let Some(ref env) = self.reference_environment {
             hasher.update(env.snapshot_hash.as_bytes());
         }
@@ -1145,17 +1145,17 @@ mod tests {
         // SAFETY: Test helper with valid provenance data should succeed
         bundle
             .add_provenance(test_prov("wk-1", WorkloadCategory::Micro))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         for i in 0..6 {
             // SAFETY: Test helper with valid run data should succeed
             bundle
                 .add_run(test_run(&format!("r-{i}"), "wk-1", 1000 + i * 10, i as u32))
-                .unwrap();
+                .expect("serde deserialization should succeed");
         }
         // SAFETY: Test helper with valid parity verdict should succeed
         bundle
             .add_parity_verdict(test_parity("wk-1", ParityTarget::NodeJs, 1_050_000))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         bundle
     }
 
@@ -1209,10 +1209,10 @@ mod tests {
         for &cat in WorkloadCategory::ALL {
             // SAFETY: WorkloadCategory derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json = serde_json::to_string(&cat).unwrap();
+            let json = serde_json::to_string(&cat).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by to_string of a valid WorkloadCategory,
             // so from_str back to WorkloadCategory cannot fail (valid format + matching schema).
-            let back: WorkloadCategory = serde_json::from_str(&json).unwrap();
+            let back: WorkloadCategory = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(cat, back);
         }
     }
@@ -1304,7 +1304,7 @@ mod tests {
         // SAFETY: Test helper with valid provenance data should succeed
         bundle
             .add_provenance(test_prov("w1", WorkloadCategory::Micro))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let result = bundle.add_provenance(test_prov("w1", WorkloadCategory::Application));
         assert!(matches!(result, Err(BundleError::DuplicateWorkload { .. })));
     }
@@ -1322,7 +1322,7 @@ mod tests {
         // SAFETY: Test helper with valid provenance data should succeed
         bundle
             .add_provenance(test_prov("w1", WorkloadCategory::Micro))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let result = bundle.add_run(test_run("r1", "w1", 100, 0));
         assert!(result.is_ok());
         assert_eq!(bundle.runs.len(), 1);
@@ -1332,7 +1332,7 @@ mod tests {
     fn seal_and_no_further_adds() {
         let mut bundle = populated_bundle();
         // SAFETY: populated_bundle creates a valid bundle that should seal successfully
-        bundle.seal().unwrap();
+        bundle.seal().expect("serde deserialization should succeed");
         assert_eq!(bundle.status, BundleStatus::Sealed);
         let result = bundle.add_provenance(test_prov("w2", WorkloadCategory::Application));
         assert!(matches!(result, Err(BundleError::BundleSealed { .. })));
@@ -1344,7 +1344,7 @@ mod tests {
         let result = bundle.publish();
         assert!(matches!(result, Err(BundleError::InvalidTransition { .. })));
         // SAFETY: populated_bundle creates a valid bundle that should seal successfully
-        bundle.seal().unwrap();
+        bundle.seal().expect("serde deserialization should succeed");
         assert!(bundle.publish().is_ok());
         assert_eq!(bundle.status, BundleStatus::Published);
     }
@@ -1353,7 +1353,7 @@ mod tests {
     fn reject_requires_sealed() {
         let mut bundle = populated_bundle();
         // SAFETY: populated_bundle creates a valid bundle that should seal successfully
-        bundle.seal().unwrap();
+        bundle.seal().expect("serde deserialization should succeed");
         assert!(bundle.reject().is_ok());
         assert_eq!(bundle.status, BundleStatus::Rejected);
     }
@@ -1366,13 +1366,13 @@ mod tests {
         // SAFETY: Test helper with valid provenance data should succeed
         bundle
             .add_provenance(test_prov("w1", WorkloadCategory::Micro))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let mut warmup = test_run("r0", "w1", 2000, 0);
         warmup.is_warmup = true;
         // SAFETY: Test helper with valid run data should succeed
-        bundle.add_run(warmup).unwrap();
+        bundle.add_run(warmup).expect("serde deserialization should succeed");
         // SAFETY: Test helper with valid run data should succeed
-        bundle.add_run(test_run("r1", "w1", 1000, 1)).unwrap();
+        bundle.add_run(test_run("r1", "w1", 1000, 1)).expect("serde deserialization should succeed");
         assert_eq!(bundle.effective_runs().len(), 1);
         assert_eq!(bundle.runs.len(), 2);
     }
@@ -1492,9 +1492,9 @@ mod tests {
         // SAFETY: Test helper with valid provenance data should succeed
         bundle
             .add_provenance(test_prov("w1", WorkloadCategory::Micro))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         // SAFETY: Test helper with valid run data should succeed
-        bundle.add_run(test_run("r1", "w1", 100, 0)).unwrap();
+        bundle.add_run(test_run("r1", "w1", 100, 0)).expect("serde deserialization should succeed");
         let config = default_config();
         let verdict = evaluate_bundle(&bundle, &config);
         assert!(matches!(verdict, BundleVerdict::Fail { .. }));
@@ -1550,7 +1550,7 @@ mod tests {
             evidence_hash: ContentHash::compute(b"bad"),
         };
         // SAFETY: Test helper with valid parity verdict data should succeed
-        bundle.add_parity_verdict(bad_parity).unwrap();
+        bundle.add_parity_verdict(bad_parity).expect("serde deserialization should succeed");
         let config = default_config();
         let verdict = evaluate_bundle(&bundle, &config);
         assert!(matches!(verdict, BundleVerdict::Fail { .. }));
@@ -1562,7 +1562,7 @@ mod tests {
         // SAFETY: Test helper with valid provenance data should succeed
         bundle
             .add_provenance(test_prov("w1", WorkloadCategory::Micro))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         // Add runs with different environments to cause drift.
         for i in 0..6 {
             let mut run = test_run(&format!("r-{i}"), "w1", 1000, i as u32);
@@ -1578,7 +1578,7 @@ mod tests {
                 );
             }
             // SAFETY: Test helper with valid run data should succeed
-            bundle.add_run(run).unwrap();
+            bundle.add_run(run).expect("serde deserialization should succeed");
         }
         let config = default_config();
         let verdict = evaluate_bundle(&bundle, &config);
@@ -1650,9 +1650,9 @@ mod tests {
     fn bundle_serde_roundtrip() {
         let bundle = populated_bundle();
         // SAFETY: EvidenceBundle derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&bundle).unwrap();
+        let json = serde_json::to_string(&bundle).expect("serde deserialization should succeed");
         // SAFETY: JSON was just generated from EvidenceBundle, deserialization guaranteed to succeed
-        let back: EvidenceBundle = serde_json::from_str(&json).unwrap();
+        let back: EvidenceBundle = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(bundle.bundle_id, back.bundle_id);
         assert_eq!(bundle.runs.len(), back.runs.len());
     }
@@ -1661,9 +1661,9 @@ mod tests {
     fn config_serde_roundtrip() {
         let config = default_config();
         // SAFETY: BundleConfig derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&config).unwrap();
+        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
         // SAFETY: JSON was just generated from BundleConfig, deserialization guaranteed to succeed
-        let back: BundleConfig = serde_json::from_str(&json).unwrap();
+        let back: BundleConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, back);
     }
 
@@ -1673,9 +1673,9 @@ mod tests {
         let config = default_config();
         let report = generate_report(&bundle, &config);
         // SAFETY: BundleReport derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&report).unwrap();
+        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
         // SAFETY: JSON was just generated from BundleReport, deserialization guaranteed to succeed
-        let back: BundleReport = serde_json::from_str(&json).unwrap();
+        let back: BundleReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report.bundle_id, back.bundle_id);
     }
 
@@ -1687,9 +1687,9 @@ mod tests {
             categories: BTreeSet::new(),
         };
         // SAFETY: BundleVerdict derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&verdict).unwrap();
+        let json = serde_json::to_string(&verdict).expect("serde deserialization should succeed");
         // SAFETY: JSON was just generated from BundleVerdict, deserialization guaranteed to succeed
-        let back: BundleVerdict = serde_json::from_str(&json).unwrap();
+        let back: BundleVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(verdict, back);
     }
 
@@ -1702,7 +1702,7 @@ mod tests {
         // SAFETY: Test helper with valid provenance data should succeed
         bundle
             .add_provenance(test_prov("w1", WorkloadCategory::Micro))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_ne!(h1, bundle.bundle_hash);
     }
 
@@ -1712,10 +1712,10 @@ mod tests {
         // SAFETY: Test helper with valid provenance data should succeed
         bundle
             .add_provenance(test_prov("w1", WorkloadCategory::Micro))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let h1 = bundle.bundle_hash;
         // SAFETY: Test helper with valid run data should succeed
-        bundle.add_run(test_run("r1", "w1", 100, 0)).unwrap();
+        bundle.add_run(test_run("r1", "w1", 100, 0)).expect("serde deserialization should succeed");
         assert_ne!(h1, bundle.bundle_hash);
     }
 
@@ -1766,20 +1766,20 @@ mod tests {
         // SAFETY: Test helper with valid provenance data should succeed
         bundle
             .add_provenance(test_prov("w1", WorkloadCategory::Micro))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         // SAFETY: Test helper with valid provenance data should succeed
         bundle
             .add_provenance(test_prov("w2", WorkloadCategory::Application))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         for i in 0..6 {
             // SAFETY: Test helper with valid run data should succeed
             bundle
                 .add_run(test_run(&format!("r1-{i}"), "w1", 100, i as u32))
-                .unwrap();
+                .expect("serde deserialization should succeed");
             // SAFETY: Test helper with valid run data should succeed
             bundle
                 .add_run(test_run(&format!("r2-{i}"), "w2", 200, i as u32))
-                .unwrap();
+                .expect("serde deserialization should succeed");
         }
         assert_eq!(bundle.workload_ids().len(), 2);
         assert_eq!(bundle.categories().len(), 2);
@@ -1791,7 +1791,7 @@ mod tests {
         // SAFETY: Test helper with valid parity verdict data should succeed
         bundle
             .add_parity_verdict(test_parity("wk-1", ParityTarget::Bun, 980_000))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(bundle.parity_for_workload("wk-1").len(), 2);
         assert_eq!(bundle.parity_for_workload("wk-nonexist").len(), 0);
     }
@@ -1802,9 +1802,9 @@ mod tests {
     fn export_bundle_json_roundtrip() {
         let bundle = populated_bundle();
         // SAFETY: export_bundle_json with valid bundle should succeed
-        let json = export_bundle_json(&bundle).unwrap();
+        let json = export_bundle_json(&bundle).expect("serde deserialization should succeed");
         // SAFETY: JSON was just generated by export_bundle_json, deserialization guaranteed to succeed
-        let parsed: EvidenceBundle = serde_json::from_str(&json).unwrap();
+        let parsed: EvidenceBundle = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(bundle.bundle_id, parsed.bundle_id);
         assert_eq!(bundle.runs.len(), parsed.runs.len());
         assert_eq!(bundle.provenances.len(), parsed.provenances.len());
@@ -1813,8 +1813,8 @@ mod tests {
     #[test]
     fn export_bundle_toml_roundtrip() {
         let bundle = populated_bundle();
-        let toml_str = export_bundle_toml(&bundle).unwrap();
-        let parsed: EvidenceBundle = toml::from_str(&toml_str).unwrap();
+        let toml_str = export_bundle_toml(&bundle).expect("serde deserialization should succeed");
+        let parsed: EvidenceBundle = toml::from_str(&toml_str).expect("serde deserialization should succeed");
         assert_eq!(bundle.bundle_id, parsed.bundle_id);
         assert_eq!(bundle.runs.len(), parsed.runs.len());
         assert_eq!(bundle.provenances.len(), parsed.provenances.len());
@@ -1825,8 +1825,8 @@ mod tests {
         let bundle = populated_bundle();
         let config = default_config();
         let report = generate_report(&bundle, &config);
-        let json = export_report_json(&report).unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let json = export_report_json(&report).expect("serde deserialization should succeed");
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("serde deserialization should succeed");
 
         assert!(parsed.get("bundle_id").is_some());
         assert!(parsed.get("total_workloads").is_some());
@@ -1839,8 +1839,8 @@ mod tests {
         let bundle = populated_bundle();
         let config = default_config();
         let report = generate_report(&bundle, &config);
-        let toml_str = export_report_toml(&report).unwrap();
-        let parsed: toml::Value = toml::from_str(&toml_str).unwrap();
+        let toml_str = export_report_toml(&report).expect("serde deserialization should succeed");
+        let parsed: toml::Value = toml::from_str(&toml_str).expect("serde deserialization should succeed");
 
         assert!(parsed.get("bundle_id").is_some());
         assert!(parsed.get("total_workloads").is_some());

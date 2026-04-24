@@ -778,7 +778,7 @@ mod tests {
         let mut cx = real_cx(1000);
 
         // SAFETY: Test setup ensures load_extension succeeds with valid extension name and context
-        mgr.load_extension("ext-a", &mut cx).unwrap();
+        mgr.load_extension("ext-a", &mut cx).expect("serde deserialization should succeed");
         assert!(mgr.is_extension_running("ext-a"));
         assert_eq!(mgr.loaded_extension_count(), 1);
         assert_eq!(mgr.cell_manager().active_count(), 1);
@@ -790,7 +790,7 @@ mod tests {
         let mut cx = real_cx(1000);
 
         // SAFETY: Test setup ensures first load_extension succeeds with valid extension name and context
-        mgr.load_extension("ext-a", &mut cx).unwrap();
+        mgr.load_extension("ext-a", &mut cx).expect("serde deserialization should succeed");
         let err = mgr.load_extension("ext-a", &mut cx).unwrap_err();
         assert_eq!(err.error_code(), "host_extension_already_loaded");
     }
@@ -801,9 +801,9 @@ mod tests {
         let mut cx = real_cx(1000);
 
         // SAFETY: Test setup ensures load_extension succeeds with valid extension name and context
-        mgr.load_extension("ext-a", &mut cx).unwrap();
+        mgr.load_extension("ext-a", &mut cx).expect("serde deserialization should succeed");
         // SAFETY: Extension was just loaded successfully, so unload_extension will succeed
-        let outcome = mgr.unload_extension("ext-a", &mut cx).unwrap();
+        let outcome = mgr.unload_extension("ext-a", &mut cx).expect("serde deserialization should succeed");
         assert!(outcome.success);
         assert!(!mgr.is_extension_running("ext-a"));
         assert_eq!(mgr.loaded_extension_count(), 0);
@@ -824,9 +824,9 @@ mod tests {
         let mut cx = real_cx(1000);
 
         // SAFETY: Test setup ensures load_extension succeeds with valid extension name and context
-        mgr.load_extension("ext-a", &mut cx).unwrap();
+        mgr.load_extension("ext-a", &mut cx).expect("serde deserialization should succeed");
         // SAFETY: Extension was just loaded successfully, so unload_extension will succeed
-        mgr.unload_extension("ext-a", &mut cx).unwrap();
+        mgr.unload_extension("ext-a", &mut cx).expect("serde deserialization should succeed");
         let err = mgr.unload_extension("ext-a", &mut cx).unwrap_err();
         assert_eq!(err.error_code(), "host_extension_not_running");
     }
@@ -841,14 +841,14 @@ mod tests {
         let mut cx = real_cx(5000);
 
         // SAFETY: Test setup ensures load_extension succeeds with valid extension names and context
-        mgr.load_extension("ext-a", &mut cx).unwrap();
-        mgr.load_extension("ext-b", &mut cx).unwrap();
-        mgr.load_extension("ext-c", &mut cx).unwrap();
+        mgr.load_extension("ext-a", &mut cx).expect("serde deserialization should succeed");
+        mgr.load_extension("ext-b", &mut cx).expect("serde deserialization should succeed");
+        mgr.load_extension("ext-c", &mut cx).expect("serde deserialization should succeed");
         assert_eq!(mgr.loaded_extension_count(), 3);
 
         // Unload one; others unaffected.
         // SAFETY: Extension ext-b was just loaded successfully, so unload_extension will succeed
-        mgr.unload_extension("ext-b", &mut cx).unwrap();
+        mgr.unload_extension("ext-b", &mut cx).expect("serde deserialization should succeed");
         assert!(mgr.is_extension_running("ext-a"));
         assert!(!mgr.is_extension_running("ext-b"));
         assert!(mgr.is_extension_running("ext-c"));
@@ -860,11 +860,11 @@ mod tests {
         let mut mgr = ExtensionHostLifecycleManager::new();
         let mut cx = real_cx(5000);
 
-        mgr.load_extension("ext-a", &mut cx).unwrap();
-        mgr.load_extension("ext-b", &mut cx).unwrap();
+        mgr.load_extension("ext-a", &mut cx).expect("serde deserialization should succeed");
+        mgr.load_extension("ext-b", &mut cx).expect("serde deserialization should succeed");
 
         mgr.cancel_extension("ext-a", &mut cx, LifecycleEvent::Terminate)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert!(!mgr.is_extension_running("ext-a"));
         assert!(mgr.is_extension_running("ext-b"));
@@ -879,8 +879,8 @@ mod tests {
         let mut mgr = ExtensionHostLifecycleManager::new();
         let mut cx = real_cx(5000);
 
-        mgr.load_extension("ext-a", &mut cx).unwrap();
-        mgr.create_session("ext-a", "sess-1", &mut cx).unwrap();
+        mgr.load_extension("ext-a", &mut cx).expect("serde deserialization should succeed");
+        mgr.create_session("ext-a", "sess-1", &mut cx).expect("serde deserialization should succeed");
         assert_eq!(mgr.session_count("ext-a"), 1);
     }
 
@@ -889,8 +889,8 @@ mod tests {
         let mut mgr = ExtensionHostLifecycleManager::new();
         let mut cx = real_cx(5000);
 
-        mgr.load_extension("ext-a", &mut cx).unwrap();
-        mgr.create_session("ext-a", "sess-1", &mut cx).unwrap();
+        mgr.load_extension("ext-a", &mut cx).expect("serde deserialization should succeed");
+        mgr.create_session("ext-a", "sess-1", &mut cx).expect("serde deserialization should succeed");
         let err = mgr.create_session("ext-a", "sess-1", &mut cx).unwrap_err();
         assert_eq!(err.error_code(), "host_session_already_exists");
     }
@@ -900,8 +900,8 @@ mod tests {
         let mut mgr = ExtensionHostLifecycleManager::new();
         let mut cx = real_cx(5000);
 
-        mgr.load_extension("ext-a", &mut cx).unwrap();
-        mgr.unload_extension("ext-a", &mut cx).unwrap();
+        mgr.load_extension("ext-a", &mut cx).expect("serde deserialization should succeed");
+        mgr.unload_extension("ext-a", &mut cx).expect("serde deserialization should succeed");
         let err = mgr.create_session("ext-a", "sess-1", &mut cx).unwrap_err();
         assert_eq!(err.error_code(), "host_extension_not_running");
     }
@@ -923,13 +923,13 @@ mod tests {
         let mut cx = real_cx(5000);
 
         // SAFETY: Test scenario with valid extension ID and sufficient budget; load operation should succeed
-        mgr.load_extension("ext-a", &mut cx).unwrap();
+        mgr.load_extension("ext-a", &mut cx).expect("serde deserialization should succeed");
         // SAFETY: Test scenario with loaded extension and valid session ID; session creation should succeed
-        mgr.create_session("ext-a", "sess-1", &mut cx).unwrap();
+        mgr.create_session("ext-a", "sess-1", &mut cx).expect("serde deserialization should succeed");
         assert_eq!(mgr.session_count("ext-a"), 1);
 
         // SAFETY: Test scenario with active session; session close should succeed
-        let outcome = mgr.close_session("ext-a", "sess-1", &mut cx).unwrap();
+        let outcome = mgr.close_session("ext-a", "sess-1", &mut cx).expect("serde deserialization should succeed");
         assert!(outcome.success);
         assert_eq!(mgr.session_count("ext-a"), 0);
     }
@@ -939,7 +939,7 @@ mod tests {
         let mut mgr = ExtensionHostLifecycleManager::new();
         let mut cx = real_cx(5000);
 
-        mgr.load_extension("ext-a", &mut cx).unwrap();
+        mgr.load_extension("ext-a", &mut cx).expect("serde deserialization should succeed");
         let err = mgr
             .close_session("ext-a", "sess-gone", &mut cx)
             .unwrap_err();
@@ -951,13 +951,13 @@ mod tests {
         let mut mgr = ExtensionHostLifecycleManager::new();
         let mut cx = real_cx(5000);
 
-        mgr.load_extension("ext-a", &mut cx).unwrap();
-        mgr.create_session("ext-a", "s1", &mut cx).unwrap();
-        mgr.create_session("ext-a", "s2", &mut cx).unwrap();
-        mgr.create_session("ext-a", "s3", &mut cx).unwrap();
+        mgr.load_extension("ext-a", &mut cx).expect("serde deserialization should succeed");
+        mgr.create_session("ext-a", "s1", &mut cx).expect("serde deserialization should succeed");
+        mgr.create_session("ext-a", "s2", &mut cx).expect("serde deserialization should succeed");
+        mgr.create_session("ext-a", "s3", &mut cx).expect("serde deserialization should succeed");
         assert_eq!(mgr.session_count("ext-a"), 3);
 
-        mgr.close_session("ext-a", "s2", &mut cx).unwrap();
+        mgr.close_session("ext-a", "s2", &mut cx).expect("serde deserialization should succeed");
         assert_eq!(mgr.session_count("ext-a"), 2);
     }
 
@@ -970,11 +970,11 @@ mod tests {
         let mut mgr = ExtensionHostLifecycleManager::new();
         let mut cx = real_cx(10000);
 
-        mgr.load_extension("ext-a", &mut cx).unwrap();
-        mgr.create_session("ext-a", "s1", &mut cx).unwrap();
-        mgr.create_session("ext-a", "s2", &mut cx).unwrap();
+        mgr.load_extension("ext-a", &mut cx).expect("serde deserialization should succeed");
+        mgr.create_session("ext-a", "s1", &mut cx).expect("serde deserialization should succeed");
+        mgr.create_session("ext-a", "s2", &mut cx).expect("serde deserialization should succeed");
 
-        let outcome = mgr.unload_extension("ext-a", &mut cx).unwrap();
+        let outcome = mgr.unload_extension("ext-a", &mut cx).expect("serde deserialization should succeed");
         assert!(outcome.success);
         assert!(!mgr.is_extension_running("ext-a"));
         // Sessions should be gone from the record (extension is unloaded).
@@ -985,8 +985,8 @@ mod tests {
         let mut mgr = ExtensionHostLifecycleManager::new();
         let mut cx = real_cx(10000);
 
-        mgr.load_extension("ext-a", &mut cx).unwrap();
-        mgr.create_session("ext-a", "s1", &mut cx).unwrap();
+        mgr.load_extension("ext-a", &mut cx).expect("serde deserialization should succeed");
+        mgr.create_session("ext-a", "s1", &mut cx).expect("serde deserialization should succeed");
 
         let session_cell_id = mgr.session_cell_id("ext-a", "s1");
         mgr.cell_manager.archive_cell(
@@ -1022,10 +1022,10 @@ mod tests {
         let mut mgr = ExtensionHostLifecycleManager::new();
         let mut cx = real_cx(5000);
 
-        mgr.load_extension("ext-a", &mut cx).unwrap();
+        mgr.load_extension("ext-a", &mut cx).expect("serde deserialization should succeed");
         let outcome = mgr
             .cancel_extension("ext-a", &mut cx, LifecycleEvent::Quarantine)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(outcome.success);
         assert!(!mgr.is_extension_running("ext-a"));
     }
@@ -1035,12 +1035,12 @@ mod tests {
         let mut mgr = ExtensionHostLifecycleManager::new();
         let mut cx = real_cx(10000);
 
-        mgr.load_extension("ext-a", &mut cx).unwrap();
-        mgr.create_session("ext-a", "s1", &mut cx).unwrap();
+        mgr.load_extension("ext-a", &mut cx).expect("serde deserialization should succeed");
+        mgr.create_session("ext-a", "s1", &mut cx).expect("serde deserialization should succeed");
 
         let outcome = mgr
             .cancel_extension("ext-a", &mut cx, LifecycleEvent::Terminate)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(outcome.success);
         assert!(!mgr.is_extension_running("ext-a"));
     }
@@ -1050,8 +1050,8 @@ mod tests {
         let mut mgr = ExtensionHostLifecycleManager::new();
         let mut setup_cx = real_cx(10000);
 
-        mgr.load_extension("ext-a", &mut setup_cx).unwrap();
-        mgr.create_session("ext-a", "s1", &mut setup_cx).unwrap();
+        mgr.load_extension("ext-a", &mut setup_cx).expect("serde deserialization should succeed");
+        mgr.create_session("ext-a", "s1", &mut setup_cx).expect("serde deserialization should succeed");
 
         let session_cell_id = mgr.session_cell_id("ext-a", "s1");
         let mut cancel_cx = real_cx(0);
@@ -1088,11 +1088,11 @@ mod tests {
         let mut cx = real_cx(20000);
 
         // SAFETY: Test scenario with valid extension ID and sufficient budget; load operation should succeed
-        mgr.load_extension("ext-a", &mut cx).unwrap();
+        mgr.load_extension("ext-a", &mut cx).expect("serde deserialization should succeed");
         // SAFETY: Test scenario with valid extension ID and sufficient budget; load operation should succeed
-        mgr.load_extension("ext-b", &mut cx).unwrap();
+        mgr.load_extension("ext-b", &mut cx).expect("serde deserialization should succeed");
         // SAFETY: Test scenario with loaded extension and valid session ID; session creation should succeed
-        mgr.create_session("ext-a", "s1", &mut cx).unwrap();
+        mgr.create_session("ext-a", "s1", &mut cx).expect("serde deserialization should succeed");
 
         let results = mgr.shutdown(&mut cx);
         assert_eq!(results.len(), 2);
@@ -1109,7 +1109,7 @@ mod tests {
         let mut cx = real_cx(5000);
 
         // SAFETY: Test scenario with valid extension ID and sufficient budget; load operation should succeed
-        mgr.load_extension("ext-a", &mut cx).unwrap();
+        mgr.load_extension("ext-a", &mut cx).expect("serde deserialization should succeed");
         mgr.shutdown(&mut cx);
 
         let err = mgr.load_extension("ext-b", &mut cx).unwrap_err();
@@ -1129,13 +1129,13 @@ mod tests {
         let mut cx = real_cx(10000);
 
         // SAFETY: Test scenario with valid extension ID and sufficient budget; load operation should succeed
-        mgr.load_extension("ext-a", &mut cx).unwrap();
+        mgr.load_extension("ext-a", &mut cx).expect("serde deserialization should succeed");
         // SAFETY: Test scenario with loaded extension and valid session ID; session creation should succeed
-        mgr.create_session("ext-a", "s1", &mut cx).unwrap();
+        mgr.create_session("ext-a", "s1", &mut cx).expect("serde deserialization should succeed");
         // SAFETY: Test scenario with active session; session close should succeed
-        mgr.close_session("ext-a", "s1", &mut cx).unwrap();
+        mgr.close_session("ext-a", "s1", &mut cx).expect("serde deserialization should succeed");
         // SAFETY: Test scenario with loaded extension and no active sessions; unload should succeed
-        mgr.unload_extension("ext-a", &mut cx).unwrap();
+        mgr.unload_extension("ext-a", &mut cx).expect("serde deserialization should succeed");
 
         let events = mgr.events();
         assert!(events.len() >= 4); // load, session create, session close, unload
@@ -1153,7 +1153,7 @@ mod tests {
         let mut cx = real_cx(5000);
 
         // SAFETY: Test scenario with valid extension ID and sufficient budget; load operation should succeed
-        mgr.load_extension("ext-a", &mut cx).unwrap();
+        mgr.load_extension("ext-a", &mut cx).expect("serde deserialization should succeed");
         let events = mgr.events();
         assert_eq!(events.len(), 1);
         assert!(!events[0].trace_id.is_empty());
@@ -1166,7 +1166,7 @@ mod tests {
         let mut cx = real_cx(5000);
 
         // SAFETY: Test scenario with valid extension ID and sufficient budget; load operation should succeed
-        mgr.load_extension("ext-a", &mut cx).unwrap();
+        mgr.load_extension("ext-a", &mut cx).expect("serde deserialization should succeed");
         assert_eq!(mgr.events().len(), 1);
 
         let drained = mgr.drain_events();
@@ -1179,8 +1179,8 @@ mod tests {
         let mut mgr = ExtensionHostLifecycleManager::new();
         let mut cx = real_cx(5000);
 
-        mgr.load_extension("ext-a", &mut cx).unwrap();
-        mgr.unload_extension("ext-a", &mut cx).unwrap();
+        mgr.load_extension("ext-a", &mut cx).expect("serde deserialization should succeed");
+        mgr.unload_extension("ext-a", &mut cx).expect("serde deserialization should succeed");
 
         let cancel_events = mgr.drain_cancellation_events();
         // Cancellation manager emits events for each phase.
@@ -1196,9 +1196,9 @@ mod tests {
         let mut mgr = ExtensionHostLifecycleManager::new();
         let mut cx = real_cx(5000);
 
-        mgr.load_extension("ext-a", &mut cx).unwrap();
-        mgr.load_extension("ext-b", &mut cx).unwrap();
-        mgr.unload_extension("ext-a", &mut cx).unwrap();
+        mgr.load_extension("ext-a", &mut cx).expect("serde deserialization should succeed");
+        mgr.load_extension("ext-b", &mut cx).expect("serde deserialization should succeed");
+        mgr.unload_extension("ext-a", &mut cx).expect("serde deserialization should succeed");
 
         // All IDs (including unloaded).
         assert_eq!(mgr.extension_ids().len(), 2);
@@ -1212,8 +1212,8 @@ mod tests {
         let mut mgr = ExtensionHostLifecycleManager::new();
         let mut cx = real_cx(5000);
 
-        mgr.load_extension("ext-a", &mut cx).unwrap();
-        let record = mgr.extension_record("ext-a").unwrap();
+        mgr.load_extension("ext-a", &mut cx).expect("serde deserialization should succeed");
+        let record = mgr.extension_record("ext-a").expect("serde deserialization should succeed");
         assert_eq!(record.cell_id, "ext-a");
         assert!(!record.unloaded);
         assert!(record.sessions.is_empty());
@@ -1270,10 +1270,10 @@ mod tests {
         };
         // SAFETY: HostLifecycleError derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&err).unwrap();
+        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid HostLifecycleError,
         // so from_str back to HostLifecycleError cannot fail (valid format + matching schema).
-        let back: HostLifecycleError = serde_json::from_str(&json).unwrap();
+        let back: HostLifecycleError = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, back);
     }
 
@@ -1290,10 +1290,10 @@ mod tests {
         };
         // SAFETY: HostLifecycleEvent derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&event).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid HostLifecycleEvent,
         // so from_str back to HostLifecycleEvent cannot fail (valid format + matching schema).
-        let back: HostLifecycleEvent = serde_json::from_str(&json).unwrap();
+        let back: HostLifecycleEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
     }
 
@@ -1307,10 +1307,10 @@ mod tests {
         };
         // SAFETY: ExtensionRecord derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&record).unwrap();
+        let json = serde_json::to_string(&record).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid ExtensionRecord,
         // so from_str back to ExtensionRecord cannot fail (valid format + matching schema).
-        let back: ExtensionRecord = serde_json::from_str(&json).unwrap();
+        let back: ExtensionRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(record, back);
     }
 
@@ -1336,22 +1336,22 @@ mod tests {
         let mut cx = real_cx(20000);
 
         // Load two extensions.
-        mgr.load_extension("ext-a", &mut cx).unwrap();
-        mgr.load_extension("ext-b", &mut cx).unwrap();
+        mgr.load_extension("ext-a", &mut cx).expect("serde deserialization should succeed");
+        mgr.load_extension("ext-b", &mut cx).expect("serde deserialization should succeed");
         assert_eq!(mgr.loaded_extension_count(), 2);
 
         // Create sessions under ext-a.
-        mgr.create_session("ext-a", "s1", &mut cx).unwrap();
-        mgr.create_session("ext-a", "s2", &mut cx).unwrap();
+        mgr.create_session("ext-a", "s1", &mut cx).expect("serde deserialization should succeed");
+        mgr.create_session("ext-a", "s2", &mut cx).expect("serde deserialization should succeed");
         assert_eq!(mgr.session_count("ext-a"), 2);
 
         // Close one session.
-        let outcome = mgr.close_session("ext-a", "s1", &mut cx).unwrap();
+        let outcome = mgr.close_session("ext-a", "s1", &mut cx).expect("serde deserialization should succeed");
         assert!(outcome.success);
         assert_eq!(mgr.session_count("ext-a"), 1);
 
         // Unload ext-a (session s2 should be closed automatically).
-        let outcome = mgr.unload_extension("ext-a", &mut cx).unwrap();
+        let outcome = mgr.unload_extension("ext-a", &mut cx).expect("serde deserialization should succeed");
         assert!(outcome.success);
         assert!(!mgr.is_extension_running("ext-a"));
 
@@ -1359,7 +1359,7 @@ mod tests {
         assert!(mgr.is_extension_running("ext-b"));
 
         // Unload ext-b.
-        let outcome = mgr.unload_extension("ext-b", &mut cx).unwrap();
+        let outcome = mgr.unload_extension("ext-b", &mut cx).expect("serde deserialization should succeed");
         assert!(outcome.success);
         assert_eq!(mgr.loaded_extension_count(), 0);
 
@@ -1375,18 +1375,18 @@ mod tests {
 
         // Load multiple extensions.
         for i in 0..5 {
-            mgr.load_extension(&format!("ext-{i}"), &mut cx).unwrap();
+            mgr.load_extension(&format!("ext-{i}"), &mut cx).expect("serde deserialization should succeed");
         }
         assert_eq!(mgr.loaded_extension_count(), 5);
 
         // Create sessions in different extensions.
-        mgr.create_session("ext-0", "s0", &mut cx).unwrap();
-        mgr.create_session("ext-2", "s2a", &mut cx).unwrap();
-        mgr.create_session("ext-2", "s2b", &mut cx).unwrap();
+        mgr.create_session("ext-0", "s0", &mut cx).expect("serde deserialization should succeed");
+        mgr.create_session("ext-2", "s2a", &mut cx).expect("serde deserialization should succeed");
+        mgr.create_session("ext-2", "s2b", &mut cx).expect("serde deserialization should succeed");
 
         // Terminate ext-2 (with sessions).
         mgr.cancel_extension("ext-2", &mut cx, LifecycleEvent::Terminate)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // ext-0 should still have its session.
         assert_eq!(mgr.session_count("ext-0"), 1);
@@ -1485,8 +1485,8 @@ mod tests {
             HostLifecycleError::HostShuttingDown,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: HostLifecycleError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: HostLifecycleError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -1510,7 +1510,7 @@ mod tests {
         let mut mgr = ExtensionHostLifecycleManager::new();
         let mut cx = real_cx(5000);
 
-        mgr.load_extension("ext-a", &mut cx).unwrap();
+        mgr.load_extension("ext-a", &mut cx).expect("serde deserialization should succeed");
         mgr.shutdown(&mut cx);
 
         // Extensions were torn down by shutdown, so operations on them fail
@@ -1558,9 +1558,9 @@ mod tests {
         let mut mgr = ExtensionHostLifecycleManager::new();
         let mut cx = real_cx(10000);
 
-        mgr.load_extension("ext-c", &mut cx).unwrap();
-        mgr.load_extension("ext-a", &mut cx).unwrap();
-        mgr.load_extension("ext-b", &mut cx).unwrap();
+        mgr.load_extension("ext-c", &mut cx).expect("serde deserialization should succeed");
+        mgr.load_extension("ext-a", &mut cx).expect("serde deserialization should succeed");
+        mgr.load_extension("ext-b", &mut cx).expect("serde deserialization should succeed");
 
         let ids = mgr.active_extension_ids();
         let mut sorted = ids.clone();
@@ -1578,7 +1578,7 @@ mod tests {
         let mut cx = real_cx(5000);
 
         // Trigger an error: load duplicate
-        mgr.load_extension("ext-a", &mut cx).unwrap();
+        mgr.load_extension("ext-a", &mut cx).expect("serde deserialization should succeed");
         let _err = mgr.load_extension("ext-a", &mut cx).unwrap_err();
 
         // The successful load emitted one event
@@ -1607,10 +1607,10 @@ mod tests {
         let mut mgr = ExtensionHostLifecycleManager::new();
         let mut cx = real_cx(5000);
 
-        mgr.load_extension("ext-a", &mut cx).unwrap();
-        mgr.unload_extension("ext-a", &mut cx).unwrap();
+        mgr.load_extension("ext-a", &mut cx).expect("serde deserialization should succeed");
+        mgr.unload_extension("ext-a", &mut cx).expect("serde deserialization should succeed");
 
-        let record = mgr.extension_record("ext-a").unwrap();
+        let record = mgr.extension_record("ext-a").expect("serde deserialization should succeed");
         assert!(record.unloaded);
     }
 
@@ -1620,7 +1620,7 @@ mod tests {
     fn is_extension_running_true_when_loaded() {
         let mut mgr = ExtensionHostLifecycleManager::new();
         let mut cx = real_cx(5000);
-        mgr.load_extension("ext-a", &mut cx).unwrap();
+        mgr.load_extension("ext-a", &mut cx).expect("serde deserialization should succeed");
         assert!(mgr.is_extension_running("ext-a"));
     }
 
@@ -1628,8 +1628,8 @@ mod tests {
     fn is_extension_running_false_when_unloaded() {
         let mut mgr = ExtensionHostLifecycleManager::new();
         let mut cx = real_cx(5000);
-        mgr.load_extension("ext-a", &mut cx).unwrap();
-        mgr.unload_extension("ext-a", &mut cx).unwrap();
+        mgr.load_extension("ext-a", &mut cx).expect("serde deserialization should succeed");
+        mgr.unload_extension("ext-a", &mut cx).expect("serde deserialization should succeed");
         assert!(!mgr.is_extension_running("ext-a"));
     }
 
@@ -1645,13 +1645,13 @@ mod tests {
         let mut cx = real_cx(5000);
         assert_eq!(mgr.loaded_extension_count(), 0);
 
-        mgr.load_extension("ext-a", &mut cx).unwrap();
+        mgr.load_extension("ext-a", &mut cx).expect("serde deserialization should succeed");
         assert_eq!(mgr.loaded_extension_count(), 1);
 
-        mgr.load_extension("ext-b", &mut cx).unwrap();
+        mgr.load_extension("ext-b", &mut cx).expect("serde deserialization should succeed");
         assert_eq!(mgr.loaded_extension_count(), 2);
 
-        mgr.unload_extension("ext-a", &mut cx).unwrap();
+        mgr.unload_extension("ext-a", &mut cx).expect("serde deserialization should succeed");
         assert_eq!(mgr.loaded_extension_count(), 1);
     }
 
@@ -1659,14 +1659,14 @@ mod tests {
     fn session_count_tracks_create_close() {
         let mut mgr = ExtensionHostLifecycleManager::new();
         let mut cx = real_cx(5000);
-        mgr.load_extension("ext-a", &mut cx).unwrap();
+        mgr.load_extension("ext-a", &mut cx).expect("serde deserialization should succeed");
 
         assert_eq!(mgr.session_count("ext-a"), 0);
-        mgr.create_session("ext-a", "s1", &mut cx).unwrap();
+        mgr.create_session("ext-a", "s1", &mut cx).expect("serde deserialization should succeed");
         assert_eq!(mgr.session_count("ext-a"), 1);
-        mgr.create_session("ext-a", "s2", &mut cx).unwrap();
+        mgr.create_session("ext-a", "s2", &mut cx).expect("serde deserialization should succeed");
         assert_eq!(mgr.session_count("ext-a"), 2);
-        mgr.close_session("ext-a", "s1", &mut cx).unwrap();
+        mgr.close_session("ext-a", "s1", &mut cx).expect("serde deserialization should succeed");
         assert_eq!(mgr.session_count("ext-a"), 1);
     }
 
@@ -1674,14 +1674,14 @@ mod tests {
     fn unload_extension_clears_session_record() {
         let mut mgr = ExtensionHostLifecycleManager::new();
         let mut cx = real_cx(5000);
-        mgr.load_extension("ext-a", &mut cx).unwrap();
-        mgr.create_session("ext-a", "s1", &mut cx).unwrap();
-        mgr.create_session("ext-a", "s2", &mut cx).unwrap();
+        mgr.load_extension("ext-a", &mut cx).expect("serde deserialization should succeed");
+        mgr.create_session("ext-a", "s1", &mut cx).expect("serde deserialization should succeed");
+        mgr.create_session("ext-a", "s2", &mut cx).expect("serde deserialization should succeed");
         assert_eq!(mgr.session_count("ext-a"), 2);
 
-        mgr.unload_extension("ext-a", &mut cx).unwrap();
+        mgr.unload_extension("ext-a", &mut cx).expect("serde deserialization should succeed");
 
-        let record = mgr.extension_record("ext-a").unwrap();
+        let record = mgr.extension_record("ext-a").expect("serde deserialization should succeed");
         assert!(record.unloaded);
         assert!(record.sessions.is_empty());
         assert_eq!(mgr.session_count("ext-a"), 0);
@@ -1705,7 +1705,7 @@ mod tests {
     fn events_accessor_returns_without_drain() {
         let mut mgr = ExtensionHostLifecycleManager::new();
         let mut cx = real_cx(5000);
-        mgr.load_extension("ext-a", &mut cx).unwrap();
+        mgr.load_extension("ext-a", &mut cx).expect("serde deserialization should succeed");
         // events() should return without clearing
         assert!(!mgr.events().is_empty());
         assert!(!mgr.events().is_empty()); // still there
@@ -1715,7 +1715,7 @@ mod tests {
     fn cell_manager_accessible() {
         let mut mgr = ExtensionHostLifecycleManager::new();
         let mut cx = real_cx(5000);
-        mgr.load_extension("ext-a", &mut cx).unwrap();
+        mgr.load_extension("ext-a", &mut cx).expect("serde deserialization should succeed");
         // cell_manager() should expose the inner manager
         assert!(mgr.cell_manager().get("ext-a").is_some());
     }
@@ -1724,8 +1724,8 @@ mod tests {
     fn extension_record_cell_id_matches_extension_id() {
         let mut mgr = ExtensionHostLifecycleManager::new();
         let mut cx = real_cx(5000);
-        mgr.load_extension("ext-abc", &mut cx).unwrap();
-        let record = mgr.extension_record("ext-abc").unwrap();
+        mgr.load_extension("ext-abc", &mut cx).expect("serde deserialization should succeed");
+        let record = mgr.extension_record("ext-abc").expect("serde deserialization should succeed");
         assert_eq!(record.cell_id, "ext-abc");
         assert!(!record.unloaded);
         assert!(record.sessions.is_empty());
@@ -1735,8 +1735,8 @@ mod tests {
     fn extension_record_has_load_trace_id() {
         let mut mgr = ExtensionHostLifecycleManager::new();
         let mut cx = real_cx(5000);
-        mgr.load_extension("ext-a", &mut cx).unwrap();
-        let record = mgr.extension_record("ext-a").unwrap();
+        mgr.load_extension("ext-a", &mut cx).expect("serde deserialization should succeed");
+        let record = mgr.extension_record("ext-a").expect("serde deserialization should succeed");
         assert!(!record.load_trace_id.is_empty());
     }
 
@@ -1802,8 +1802,8 @@ mod tests {
             outcome: "ok".to_string(),
             error_code: None,
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let restored: HostLifecycleEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let restored: HostLifecycleEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, restored);
     }
 
@@ -1818,8 +1818,8 @@ mod tests {
             outcome: "error".to_string(),
             error_code: Some("host_extension_not_found".to_string()),
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let restored: HostLifecycleEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let restored: HostLifecycleEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, restored);
     }
 
@@ -1831,8 +1831,8 @@ mod tests {
             load_trace_id: "t-1".to_string(),
             unloaded: false,
         };
-        let json = serde_json::to_string(&record).unwrap();
-        let restored: ExtensionRecord = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&record).expect("serde deserialization should succeed");
+        let restored: ExtensionRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(record, restored);
         assert_eq!(restored.sessions.len(), 2);
     }
@@ -1882,9 +1882,9 @@ mod tests {
     fn active_extension_ids_excludes_unloaded() {
         let mut mgr = ExtensionHostLifecycleManager::new();
         let mut cx = real_cx(5000);
-        mgr.load_extension("ext-a", &mut cx).unwrap();
-        mgr.load_extension("ext-b", &mut cx).unwrap();
-        mgr.unload_extension("ext-a", &mut cx).unwrap();
+        mgr.load_extension("ext-a", &mut cx).expect("serde deserialization should succeed");
+        mgr.load_extension("ext-b", &mut cx).expect("serde deserialization should succeed");
+        mgr.unload_extension("ext-a", &mut cx).expect("serde deserialization should succeed");
 
         let active = mgr.active_extension_ids();
         assert_eq!(active.len(), 1);
@@ -1897,8 +1897,8 @@ mod tests {
     fn drain_cancellation_events_returns_events() {
         let mut mgr = ExtensionHostLifecycleManager::new();
         let mut cx = real_cx(5000);
-        mgr.load_extension("ext-a", &mut cx).unwrap();
-        mgr.unload_extension("ext-a", &mut cx).unwrap();
+        mgr.load_extension("ext-a", &mut cx).expect("serde deserialization should succeed");
+        mgr.unload_extension("ext-a", &mut cx).expect("serde deserialization should succeed");
         // cancellation events should be produced
         let cancel_events = mgr.drain_cancellation_events();
         assert!(!cancel_events.is_empty());
@@ -1916,8 +1916,8 @@ mod tests {
     fn load_after_unload_reloads_fresh() {
         let mut mgr = ExtensionHostLifecycleManager::new();
         let mut cx = real_cx(5000);
-        mgr.load_extension("ext-a", &mut cx).unwrap();
-        mgr.unload_extension("ext-a", &mut cx).unwrap();
+        mgr.load_extension("ext-a", &mut cx).expect("serde deserialization should succeed");
+        mgr.unload_extension("ext-a", &mut cx).expect("serde deserialization should succeed");
         // Cannot reload because the ID is still in extensions map
         let err = mgr.load_extension("ext-a", &mut cx).unwrap_err();
         assert!(matches!(

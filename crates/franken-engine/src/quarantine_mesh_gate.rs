@@ -617,7 +617,7 @@ mod tests {
             .scenarios
             .iter()
             .find(|s| s.scenario_id == "partition-ext-a")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(partition.passed);
         assert_eq!(partition.fault_type, FaultType::NetworkPartition);
         assert!(partition.isolation_verified);
@@ -633,7 +633,7 @@ mod tests {
             .scenarios
             .iter()
             .find(|s| s.scenario_id == "byzantine-ext-b")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(byzantine.passed);
         assert_eq!(byzantine.fault_type, FaultType::ByzantineBehavior);
     }
@@ -648,7 +648,7 @@ mod tests {
             .scenarios
             .iter()
             .find(|s| s.scenario_id == "cascade-ext-c")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(cascade.passed);
         assert_eq!(cascade.fault_type, FaultType::CascadingFailure);
     }
@@ -663,7 +663,7 @@ mod tests {
             .scenarios
             .iter()
             .find(|s| s.scenario_id == "exhaustion-ext-d")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(exhaustion.passed);
         assert_eq!(exhaustion.fault_type, FaultType::ResourceExhaustion);
     }
@@ -678,7 +678,7 @@ mod tests {
             .scenarios
             .iter()
             .find(|s| s.scenario_id == "skew-ext-e")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(skew.passed);
         assert_eq!(skew.fault_type, FaultType::ClockSkew);
     }
@@ -697,7 +697,7 @@ mod tests {
             .scenarios
             .iter()
             .find(|s| s.scenario_id == "degraded-coordinator")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(degraded.passed);
         assert!(degraded.detection_latency_ns <= DETECTION_SLA_NS);
     }
@@ -716,7 +716,7 @@ mod tests {
             .scenarios
             .iter()
             .find(|s| s.scenario_id == "benign-no-quarantine")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(benign.passed);
         assert_eq!(benign.final_state, Some(ContainmentState::Running));
         assert_eq!(benign.receipts_emitted, 0);
@@ -853,7 +853,7 @@ mod tests {
 
         // SAFETY: Test runner always generates at least one event (gate_validation_complete).
         // The events vector is guaranteed to be non-empty for valid test results.
-        let final_event = result.events.last().unwrap();
+        let final_event = result.events.last().expect("serde deserialization should succeed");
         assert_eq!(final_event.event, "gate_validation_complete");
         assert_eq!(final_event.outcome, "pass");
     }
@@ -891,10 +891,10 @@ mod tests {
 
         // SAFETY: GateValidationResult derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&result).unwrap();
+        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid GateValidationResult,
         // so from_str back to GateValidationResult cannot fail (valid format + matching schema).
-        let back: GateValidationResult = serde_json::from_str(&json).unwrap();
+        let back: GateValidationResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, back);
     }
 
@@ -910,10 +910,10 @@ mod tests {
         };
         // SAFETY: FaultScenario derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&scenario).unwrap();
+        let json = serde_json::to_string(&scenario).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid FaultScenario,
         // so from_str back to FaultScenario cannot fail (valid format + matching schema).
-        let back: FaultScenario = serde_json::from_str(&json).unwrap();
+        let back: FaultScenario = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(scenario, back);
     }
 
@@ -936,10 +936,10 @@ mod tests {
         };
         // SAFETY: FaultScenarioResult derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&result).unwrap();
+        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid FaultScenarioResult,
         // so from_str back to FaultScenarioResult cannot fail (valid format + matching schema).
-        let back: FaultScenarioResult = serde_json::from_str(&json).unwrap();
+        let back: FaultScenarioResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, back);
     }
 
@@ -960,8 +960,8 @@ mod tests {
             isolation_verified: Some(true),
             receipt_hash: None,
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let back: GateValidationEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let back: GateValidationEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
     }
 
@@ -972,8 +972,8 @@ mod tests {
             passed: false,
             detail: "failed reason".to_string(),
         };
-        let json = serde_json::to_string(&cr).unwrap();
-        let back: CriterionResult = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&cr).expect("serde deserialization should succeed");
+        let back: CriterionResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cr, back);
     }
 
@@ -1075,8 +1075,8 @@ mod tests {
             FaultType::ClockSkew,
         ];
         for ft in &variants {
-            let json = serde_json::to_string(ft).unwrap();
-            let back: FaultType = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(ft).expect("serde deserialization should succeed");
+            let back: FaultType = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*ft, back);
         }
     }
@@ -1162,7 +1162,7 @@ mod tests {
             .scenarios
             .iter()
             .find(|s| s.scenario_id == "benign-no-quarantine")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(benign.detection_latency_ns, 0);
     }
 
@@ -1288,8 +1288,8 @@ mod tests {
             isolation_verified: Some(true),
             receipt_hash: Some("abc123".to_string()),
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let back: GateValidationEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let back: GateValidationEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
     }
 
@@ -1310,8 +1310,8 @@ mod tests {
             isolation_verified: None,
             receipt_hash: None,
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let back: GateValidationEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let back: GateValidationEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
     }
 
@@ -1329,8 +1329,8 @@ mod tests {
             expect_quarantine: false,
             seed: 0,
         };
-        let json = serde_json::to_string(&scenario).unwrap();
-        let back: FaultScenario = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&scenario).expect("serde deserialization should succeed");
+        let back: FaultScenario = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(scenario, back);
     }
 
@@ -1351,8 +1351,8 @@ mod tests {
             isolation_verified: false,
             recovery_verified: false,
         };
-        let json = serde_json::to_string(&result).unwrap();
-        let back: FaultScenarioResult = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let back: FaultScenarioResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, back);
     }
 
@@ -1378,7 +1378,7 @@ mod tests {
         let mut runner = QuarantineMeshGateRunner::new(42);
         let result = runner.run_all();
         assert!(result.passed);
-        let final_ev = result.events.last().unwrap();
+        let final_ev = result.events.last().expect("serde deserialization should succeed");
         assert!(final_ev.error_code.is_none());
     }
 
@@ -1474,7 +1474,7 @@ mod tests {
             expect_quarantine: true,
             seed: 12345,
         };
-        let json = serde_json::to_string(&scenario).unwrap();
+        let json = serde_json::to_string(&scenario).expect("serde deserialization should succeed");
         assert!(
             json.contains("\"scenario_id\""),
             "missing scenario_id field"
@@ -1499,7 +1499,7 @@ mod tests {
     fn enrichment_json_field_presence_gate_validation_result() {
         let mut runner = QuarantineMeshGateRunner::new(42);
         let result = runner.run_all();
-        let json = serde_json::to_string(&result).unwrap();
+        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
         assert!(json.contains("\"seed\""), "missing seed field");
         assert!(json.contains("\"scenarios\""), "missing scenarios field");
         assert!(json.contains("\"passed\""), "missing passed field");
@@ -1525,7 +1525,7 @@ mod tests {
             passed: true,
             detail: "all good".to_string(),
         };
-        let json = serde_json::to_string(&cr).unwrap();
+        let json = serde_json::to_string(&cr).expect("serde deserialization should succeed");
         assert!(json.contains("\"name\""), "missing name field");
         assert!(json.contains("\"passed\""), "missing passed field");
         assert!(json.contains("\"detail\""), "missing detail field");
@@ -1539,8 +1539,8 @@ mod tests {
     fn enrichment_serde_roundtrip_gate_validation_result_max_seed() {
         let mut runner = QuarantineMeshGateRunner::new(u64::MAX);
         let result = runner.run_all();
-        let json = serde_json::to_string(&result).unwrap();
-        let back: GateValidationResult = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let back: GateValidationResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, back);
     }
 

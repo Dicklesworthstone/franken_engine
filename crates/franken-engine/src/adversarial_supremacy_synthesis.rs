@@ -1104,10 +1104,10 @@ mod tests {
         for s in SynthesisStrategy::ALL {
             // SAFETY: SynthesisStrategy derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json = serde_json::to_string(s).unwrap();
+            let json = serde_json::to_string(s).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by to_string of a valid SynthesisStrategy,
             // so from_str back to SynthesisStrategy cannot fail (valid format + matching schema).
-            let back: SynthesisStrategy = serde_json::from_str(&json).unwrap();
+            let back: SynthesisStrategy = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*s, back);
         }
     }
@@ -1148,10 +1148,10 @@ mod tests {
         for s in CounterexampleSeverity::ALL {
             // SAFETY: CounterexampleSeverity derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json = serde_json::to_string(s).unwrap();
+            let json = serde_json::to_string(s).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by to_string of a valid CounterexampleSeverity,
             // so from_str back to CounterexampleSeverity cannot fail (valid format + matching schema).
-            let back: CounterexampleSeverity = serde_json::from_str(&json).unwrap();
+            let back: CounterexampleSeverity = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*s, back);
         }
     }
@@ -1191,10 +1191,10 @@ mod tests {
         for v in FalsificationVerdict::ALL {
             // SAFETY: FalsificationVerdict derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json = serde_json::to_string(v).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by to_string of a valid FalsificationVerdict,
             // so from_str back to FalsificationVerdict cannot fail (valid format + matching schema).
-            let back: FalsificationVerdict = serde_json::from_str(&json).unwrap();
+            let back: FalsificationVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -1233,10 +1233,10 @@ mod tests {
         for a in WorkloadArchetype::ALL {
             // SAFETY: WorkloadArchetype derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json = serde_json::to_string(a).unwrap();
+            let json = serde_json::to_string(a).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by to_string of a valid WorkloadArchetype,
             // so from_str back to WorkloadArchetype cannot fail (valid format + matching schema).
-            let back: WorkloadArchetype = serde_json::from_str(&json).unwrap();
+            let back: WorkloadArchetype = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*a, back);
         }
     }
@@ -1412,7 +1412,7 @@ mod tests {
     fn evaluate_counterexample_minor_gap() {
         let w = default_workload();
         // 10% gap => 100_000 millionths gap fraction => Minor.
-        let ce = evaluate_counterexample(&w, "claim-1", 1_000_000, 900_000).unwrap();
+        let ce = evaluate_counterexample(&w, "claim-1", 1_000_000, 900_000).expect("serde deserialization should succeed");
         assert_eq!(ce.severity, CounterexampleSeverity::Minor);
         assert_eq!(ce.claim_id, "claim-1");
         assert_eq!(ce.expected_millionths, 1_000_000);
@@ -1424,7 +1424,7 @@ mod tests {
     fn evaluate_counterexample_critical_gap() {
         let w = default_workload();
         // 60% gap => 600_000 millionths gap fraction => Critical.
-        let ce = evaluate_counterexample(&w, "claim-1", 1_000_000, 400_000).unwrap();
+        let ce = evaluate_counterexample(&w, "claim-1", 1_000_000, 400_000).expect("serde deserialization should succeed");
         assert_eq!(ce.severity, CounterexampleSeverity::Critical);
         assert_eq!(ce.gap_fraction, 600_000);
     }
@@ -1439,7 +1439,7 @@ mod tests {
     #[test]
     fn counterexample_exceeds_threshold() {
         let w = default_workload();
-        let ce = evaluate_counterexample(&w, "claim-1", 1_000_000, 700_000).unwrap();
+        let ce = evaluate_counterexample(&w, "claim-1", 1_000_000, 700_000).expect("serde deserialization should succeed");
         assert!(ce.exceeds_threshold(CounterexampleSeverity::Minor));
         assert!(ce.exceeds_threshold(CounterexampleSeverity::Major));
         assert!(!ce.exceeds_threshold(CounterexampleSeverity::Critical));
@@ -1448,7 +1448,7 @@ mod tests {
     #[test]
     fn counterexample_display() {
         let w = default_workload();
-        let ce = evaluate_counterexample(&w, "claim-1", 1_000_000, 700_000).unwrap();
+        let ce = evaluate_counterexample(&w, "claim-1", 1_000_000, 700_000).expect("serde deserialization should succeed");
         let s = ce.to_string();
         assert!(s.contains("counterexample["));
         assert!(s.contains("claim="));
@@ -1814,8 +1814,8 @@ mod tests {
             epoch(),
         );
         let receipt = DecisionReceipt::from_result(&result);
-        let json = serde_json::to_string(&receipt).unwrap();
-        let back: DecisionReceipt = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
+        let back: DecisionReceipt = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(receipt, back);
     }
 
@@ -1826,10 +1826,10 @@ mod tests {
         let w = default_workload();
         // SAFETY: SyntheticWorkload derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&w).unwrap();
+        let json = serde_json::to_string(&w).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid SyntheticWorkload,
         // so from_str back to SyntheticWorkload cannot fail (valid format + matching schema).
-        let back: SyntheticWorkload = serde_json::from_str(&json).unwrap();
+        let back: SyntheticWorkload = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(w, back);
     }
 
@@ -1838,9 +1838,9 @@ mod tests {
     #[test]
     fn counterexample_serde_roundtrip() {
         let w = default_workload();
-        let ce = evaluate_counterexample(&w, "claim-1", 1_000_000, 700_000).unwrap();
-        let json = serde_json::to_string(&ce).unwrap();
-        let back: Counterexample = serde_json::from_str(&json).unwrap();
+        let ce = evaluate_counterexample(&w, "claim-1", 1_000_000, 700_000).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ce).expect("serde deserialization should succeed");
+        let back: Counterexample = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ce, back);
     }
 
@@ -1856,8 +1856,8 @@ mod tests {
             &config,
             epoch(),
         );
-        let json = serde_json::to_string(&result).unwrap();
-        let back: FalsificationResult = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let back: FalsificationResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, back);
     }
 }

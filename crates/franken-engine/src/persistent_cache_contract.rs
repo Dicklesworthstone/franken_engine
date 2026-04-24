@@ -958,7 +958,7 @@ fn required_artifact_names() -> Vec<String> {
 }
 
 fn digest_json<T: Serialize>(value: &T) -> String {
-    let bytes = serde_json::to_vec(value).unwrap();
+    let bytes = serde_json::to_vec(value).expect("serde deserialization should succeed");
     format!("sha256:{}", sha256_hex(&bytes))
 }
 
@@ -980,7 +980,7 @@ fn check_field(
 
 impl FileArtifact {
     fn json(path: &str, value: &impl Serialize) -> Self {
-        let contents = serde_json::to_vec_pretty(value).unwrap();
+        let contents = serde_json::to_vec_pretty(value).expect("serde deserialization should succeed");
         Self {
             path: path.to_string(),
             contents,
@@ -990,7 +990,7 @@ impl FileArtifact {
     fn jsonl(path: &str, rows: &[impl Serialize]) -> Self {
         let mut contents = Vec::new();
         for row in rows {
-            contents.extend(serde_json::to_vec(row).unwrap());
+            contents.extend(serde_json::to_vec(row).expect("serde deserialization should succeed"));
             contents.push(b'\n');
         }
         Self {
@@ -1428,8 +1428,8 @@ mod tests {
             consumers: vec!["product".to_string()],
             rollback_target_receipt_id: None,
         };
-        let json = serde_json::to_string(&receipt).unwrap();
-        let back: PersistentCacheReceipt = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
+        let back: PersistentCacheReceipt = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(receipt, back);
     }
 
@@ -1443,8 +1443,8 @@ mod tests {
             criteria: vec!["test criterion".to_string()],
             fail_closed: true,
         };
-        let json = serde_json::to_string(&plan).unwrap();
-        let back: CacheRollbackPlan = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&plan).expect("serde deserialization should succeed");
+        let back: CacheRollbackPlan = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(plan, back);
     }
 
@@ -1514,8 +1514,8 @@ mod tests {
             runtime_mode: "safe".into(),
             engine_version_marker: "0.1.0".into(),
         };
-        let json = serde_json::to_string(&km).unwrap();
-        let back: PersistentCacheKeyMaterial = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&km).expect("serde deserialization should succeed");
+        let back: PersistentCacheKeyMaterial = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(km, back);
         assert_eq!(km.cache_key_id(), back.cache_key_id());
     }
@@ -1571,8 +1571,8 @@ mod tests {
             error_code: None,
             receipt_id: Some("r-1".into()),
         };
-        let json = serde_json::to_string(&result).unwrap();
-        let back: ContractScenarioResult = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let back: ContractScenarioResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, back);
     }
 
@@ -1585,8 +1585,8 @@ mod tests {
             error_code: Some("FE-PCACHE-0001".into()),
             receipt_id: None,
         };
-        let json = serde_json::to_string(&result).unwrap();
-        let back: ContractScenarioResult = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let back: ContractScenarioResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, back);
         assert!(back.receipt_id.is_none());
     }
@@ -1861,7 +1861,7 @@ mod tests {
             criteria: vec!["receipt verification fails".to_string()],
             fail_closed: true,
         };
-        let found = apply_rollback_plan(&plan, &[other, target_receipt.clone()]).unwrap();
+        let found = apply_rollback_plan(&plan, &[other, target_receipt.clone()]).expect("serde deserialization should succeed");
         assert_eq!(found.receipt_id, "target-r1");
         assert_eq!(found, target_receipt);
     }
@@ -1898,7 +1898,7 @@ mod tests {
             criteria: vec!["dup scenario".to_string()],
             fail_closed: false,
         };
-        let result = apply_rollback_plan(&plan, &[receipt_a.clone(), receipt_b]).unwrap();
+        let result = apply_rollback_plan(&plan, &[receipt_a.clone(), receipt_b]).expect("serde deserialization should succeed");
         assert_eq!(result.cache_key_id, receipt_a.cache_key_id);
     }
 
@@ -2064,8 +2064,8 @@ mod tests {
             decision_id: "decision-1".into(),
             policy_id: "policy-1".into(),
         };
-        let json = serde_json::to_string(&artifact).unwrap();
-        let back: TraceIdsArtifact = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&artifact).expect("serde deserialization should succeed");
+        let back: TraceIdsArtifact = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(artifact, back);
     }
 
@@ -2083,8 +2083,8 @@ mod tests {
             receipt_id: Some("r-1".into()),
             detail: "test detail".into(),
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let back: StructuredLogEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let back: StructuredLogEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
     }
 
@@ -2095,8 +2095,8 @@ mod tests {
             trigger: "source hash changes".into(),
             fail_closed_behavior: "reject old receipt".into(),
         };
-        let json = serde_json::to_string(&rule).unwrap();
-        let back: InvalidationRule = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&rule).expect("serde deserialization should succeed");
+        let back: InvalidationRule = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(rule, back);
     }
 
@@ -2107,8 +2107,8 @@ mod tests {
             required_fields: vec!["module_id".into(), "artifact_hash".into()],
             usage: "compile pipeline".into(),
         };
-        let json = serde_json::to_string(&route).unwrap();
-        let back: CacheConsumerRoute = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&route).expect("serde deserialization should succeed");
+        let back: CacheConsumerRoute = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(route, back);
     }
 
@@ -2245,7 +2245,7 @@ mod tests {
         assert!(receipt_v1.rollback_target_receipt_id.is_none());
         assert!(receipt_v2.rollback_target_receipt_id.is_some());
         assert_eq!(
-            receipt_v2.rollback_target_receipt_id.as_ref().unwrap(),
+            receipt_v2.rollback_target_receipt_id.as_ref().expect("serde deserialization should succeed"),
             &receipt_v1.receipt_id
         );
     }

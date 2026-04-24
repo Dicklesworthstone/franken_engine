@@ -1399,11 +1399,11 @@ mod tests {
         for action in &ContainmentAction::ALL {
             // SAFETY: ContainmentAction derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json = serde_json::to_string(action).unwrap();
+            let json = serde_json::to_string(action).expect("serde deserialization should succeed");
 
             // SAFETY: JSON was just produced by to_string of a valid ContainmentAction,
             // so from_str back to ContainmentAction cannot fail (valid format + matching schema).
-            let restored: ContainmentAction = serde_json::from_str(&json).unwrap();
+            let restored: ContainmentAction = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*action, restored);
         }
     }
@@ -1449,10 +1449,10 @@ mod tests {
         let m = LossMatrix::balanced();
         // SAFETY: LossMatrix derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&m).unwrap();
+        let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid LossMatrix,
         // so from_str back to LossMatrix cannot fail (valid format + matching schema).
-        let restored: LossMatrix = serde_json::from_str(&json).unwrap();
+        let restored: LossMatrix = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(m, restored);
     }
 
@@ -1698,10 +1698,10 @@ mod tests {
         let decision = selector.select(&uncertain_posterior());
         // SAFETY: ActionDecision derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&decision).unwrap();
+        let json = serde_json::to_string(&decision).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid ActionDecision,
         // so from_str back to ActionDecision cannot fail (valid format + matching schema).
-        let restored: ActionDecision = serde_json::from_str(&json).unwrap();
+        let restored: ActionDecision = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(decision, restored);
     }
 
@@ -1711,10 +1711,10 @@ mod tests {
         selector.select(&uncertain_posterior());
         // SAFETY: ExpectedLossSelector derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&selector).unwrap();
+        let json = serde_json::to_string(&selector).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid ExpectedLossSelector,
         // so from_str back to ExpectedLossSelector cannot fail (valid format + matching schema).
-        let restored: ExpectedLossSelector = serde_json::from_str(&json).unwrap();
+        let restored: ExpectedLossSelector = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(selector.decisions_made(), restored.decisions_made());
     }
 
@@ -1724,10 +1724,10 @@ mod tests {
         let decision = selector.select(&uncertain_posterior());
         // SAFETY: DecisionExplanation derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&decision.explanation).unwrap();
+        let json = serde_json::to_string(&decision.explanation).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid DecisionExplanation,
         // so from_str back to DecisionExplanation cannot fail (valid format + matching schema).
-        let restored: DecisionExplanation = serde_json::from_str(&json).unwrap();
+        let restored: DecisionExplanation = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(decision.explanation, restored);
     }
 
@@ -2026,10 +2026,10 @@ mod tests {
         let entry = le(ContainmentAction::Allow, RiskState::Benign, 0);
         // SAFETY: LossEntry derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&entry).unwrap();
+        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid LossEntry,
         // so from_str back to LossEntry cannot fail (valid format + matching schema).
-        let restored: LossEntry = serde_json::from_str(&json).unwrap();
+        let restored: LossEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, restored);
     }
 
@@ -2271,10 +2271,10 @@ mod tests {
             .expect("scoring should succeed");
         // SAFETY: RuntimeDecisionScore derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&score).unwrap();
+        let json = serde_json::to_string(&score).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid RuntimeDecisionScore,
         // so from_str back to RuntimeDecisionScore cannot fail (valid format + matching schema).
-        let restored: RuntimeDecisionScore = serde_json::from_str(&json).unwrap();
+        let restored: RuntimeDecisionScore = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(score, restored);
         // Verify new fields survive roundtrip.
         assert_eq!(score.borderline_decision, restored.borderline_decision);
@@ -2340,10 +2340,10 @@ mod tests {
         ] {
             // SAFETY: AlienRiskAlertLevel derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json = serde_json::to_string(&level).unwrap();
+            let json = serde_json::to_string(&level).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by to_string of a valid AlienRiskAlertLevel,
             // so from_str back to AlienRiskAlertLevel cannot fail (valid format + matching schema).
-            let back: AlienRiskAlertLevel = serde_json::from_str(&json).unwrap();
+            let back: AlienRiskAlertLevel = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(level, back);
         }
     }
@@ -2375,10 +2375,10 @@ mod tests {
         for err in &errors {
             // SAFETY: RuntimeDecisionScoringError derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json = serde_json::to_string(err).unwrap();
+            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by to_string of a valid RuntimeDecisionScoringError,
             // so from_str back to RuntimeDecisionScoringError cannot fail (valid format + matching schema).
-            let back: RuntimeDecisionScoringError = serde_json::from_str(&json).unwrap();
+            let back: RuntimeDecisionScoringError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, back);
         }
     }
@@ -2415,10 +2415,10 @@ mod tests {
         };
         // SAFETY: DecisionConfidenceInterval derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&ci).unwrap();
+        let json = serde_json::to_string(&ci).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid DecisionConfidenceInterval,
         // so from_str back to DecisionConfidenceInterval cannot fail (valid format + matching schema).
-        let back: DecisionConfidenceInterval = serde_json::from_str(&json).unwrap();
+        let back: DecisionConfidenceInterval = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ci, back);
     }
 
@@ -2437,10 +2437,10 @@ mod tests {
         };
         // SAFETY: CandidateActionScore derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&score).unwrap();
+        let json = serde_json::to_string(&score).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid CandidateActionScore,
         // so from_str back to CandidateActionScore cannot fail (valid format + matching schema).
-        let back: CandidateActionScore = serde_json::from_str(&json).unwrap();
+        let back: CandidateActionScore = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(score, back);
     }
 
@@ -2459,10 +2459,10 @@ mod tests {
         };
         // SAFETY: RuntimeDecisionScoreEvent derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&event).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid RuntimeDecisionScoreEvent,
         // so from_str back to RuntimeDecisionScoreEvent cannot fail (valid format + matching schema).
-        let back: RuntimeDecisionScoreEvent = serde_json::from_str(&json).unwrap();
+        let back: RuntimeDecisionScoreEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
     }
 
@@ -2483,10 +2483,10 @@ mod tests {
         };
         // SAFETY: AlienRiskEnvelope derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&envelope).unwrap();
+        let json = serde_json::to_string(&envelope).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid AlienRiskEnvelope,
         // so from_str back to AlienRiskEnvelope cannot fail (valid format + matching schema).
-        let back: AlienRiskEnvelope = serde_json::from_str(&json).unwrap();
+        let back: AlienRiskEnvelope = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(envelope, back);
     }
 
@@ -2535,10 +2535,10 @@ mod tests {
         };
         // SAFETY: DecisionExplanation derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&explanation).unwrap();
+        let json = serde_json::to_string(&explanation).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid DecisionExplanation,
         // so from_str back to DecisionExplanation cannot fail (valid format + matching schema).
-        let back: DecisionExplanation = serde_json::from_str(&json).unwrap();
+        let back: DecisionExplanation = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(explanation, back);
     }
 
@@ -2570,10 +2570,10 @@ mod tests {
         };
         // SAFETY: LossEntry derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&entry).unwrap();
+        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid LossEntry,
         // so from_str back to LossEntry cannot fail (valid format + matching schema).
-        let back: LossEntry = serde_json::from_str(&json).unwrap();
+        let back: LossEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, back);
     }
 
@@ -2761,7 +2761,7 @@ mod tests {
         input.extension_roi_history_millionths.clear();
         // SAFETY: Test provides valid input with required fields set; score_runtime_decision only
         // fails on missing/invalid fields, which are controlled by the test setup.
-        let score = selector.score_runtime_decision(&input).unwrap();
+        let score = selector.score_runtime_decision(&input).expect("serde deserialization should succeed");
         assert!((1..=MILLION).contains(&score.alien_risk_envelope.conformal_p_value_millionths));
         assert!(score.alien_risk_envelope.e_value_millionths >= MILLION);
         assert_eq!(score.alien_risk_envelope.regime_shift_score_millionths, 0);
@@ -2774,11 +2774,11 @@ mod tests {
         // Set history to match computed ROI exactly → regime shift should be 0
         // SAFETY: Test sets up valid cost model with non-zero budget; expected_roi only
         // fails on zero budget or invalid model state, which is controlled by test setup.
-        let roi = input.attacker_cost_model.expected_roi().unwrap();
+        let roi = input.attacker_cost_model.expected_roi().expect("serde deserialization should succeed");
         input.extension_roi_history_millionths = vec![roi; 50];
         // SAFETY: Test provides valid input with required fields set; score_runtime_decision only
         // fails on missing/invalid fields, which are controlled by the test setup.
-        let score = selector.score_runtime_decision(&input).unwrap();
+        let score = selector.score_runtime_decision(&input).expect("serde deserialization should succeed");
         assert_eq!(
             score.alien_risk_envelope.regime_shift_score_millionths, 0,
             "stable history matching current ROI should have zero regime shift"
@@ -2803,7 +2803,7 @@ mod tests {
             let input = sample_runtime_input(posterior);
             // SAFETY: Test provides valid input with required fields set; score_runtime_decision only
             // fails on missing/invalid fields, which are controlled by the test setup.
-            let score = selector.score_runtime_decision(&input).unwrap();
+            let score = selector.score_runtime_decision(&input).expect("serde deserialization should succeed");
             assert!(
                 score.confidence_interval.lower_millionths
                     <= score.selected_expected_loss_millionths,
@@ -2828,7 +2828,7 @@ mod tests {
         let input = sample_runtime_input(uncertain_posterior());
         // SAFETY: Test provides valid input with required fields set; score_runtime_decision only
         // fails on missing/invalid fields, which are controlled by the test setup.
-        let score = selector.score_runtime_decision(&input).unwrap();
+        let score = selector.score_runtime_decision(&input).expect("serde deserialization should succeed");
         for candidate in &score.candidate_actions {
             let sum: i64 = candidate.state_contributions_millionths.values().sum();
             assert_eq!(
@@ -2844,10 +2844,10 @@ mod tests {
         let input = sample_runtime_input(uncertain_posterior());
         // SAFETY: RuntimeDecisionScoringInput derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&input).unwrap();
+        let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid RuntimeDecisionScoringInput,
         // so from_str back to RuntimeDecisionScoringInput cannot fail (valid format + matching schema).
-        let back: RuntimeDecisionScoringInput = serde_json::from_str(&json).unwrap();
+        let back: RuntimeDecisionScoringInput = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(input, back);
     }
 
@@ -2857,13 +2857,13 @@ mod tests {
         let input = sample_runtime_input(uncertain_posterior());
         // SAFETY: Test provides valid input with required fields set; score_runtime_decision only
         // fails on missing/invalid fields, which are controlled by the test setup.
-        let score = selector.score_runtime_decision(&input).unwrap();
+        let score = selector.score_runtime_decision(&input).expect("serde deserialization should succeed");
         // SAFETY: RuntimeDecisionScore derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&score).unwrap();
+        let json = serde_json::to_string(&score).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid RuntimeDecisionScore,
         // so from_str back to RuntimeDecisionScore cannot fail (valid format + matching schema).
-        let back: RuntimeDecisionScore = serde_json::from_str(&json).unwrap();
+        let back: RuntimeDecisionScore = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(score, back);
     }
 
@@ -2874,7 +2874,7 @@ mod tests {
         input.extension_roi_history_millionths = vec![100_000; 30];
         // SAFETY: Test provides valid input with required fields set; score_runtime_decision only
         // fails on missing/invalid fields, which are controlled by the test setup.
-        let score = selector.score_runtime_decision(&input).unwrap();
+        let score = selector.score_runtime_decision(&input).expect("serde deserialization should succeed");
         // Malicious posterior → severe action; if alien recommends Suspend,
         // Quarantine or Terminate already meet/exceed that.
         if score.selected_action.severity()
@@ -2899,7 +2899,7 @@ mod tests {
         input.attacker_cost_model.expected_gain = 10_000_000;
         // SAFETY: Test provides valid input with required fields set; score_runtime_decision only
         // fails on missing/invalid fields, which are controlled by the test setup.
-        let score = selector.score_runtime_decision(&input).unwrap();
+        let score = selector.score_runtime_decision(&input).expect("serde deserialization should succeed");
         assert!(
             score.alien_risk_envelope.alert_level != AlienRiskAlertLevel::Nominal
                 || score.alien_risk_envelope.regime_shift_score_millionths > 0,
@@ -2924,11 +2924,11 @@ mod tests {
         let input = sample_runtime_input(uncertain_posterior());
         // SAFETY: Test provides valid input with required fields set; score_runtime_decision only
         // fails on missing/invalid fields, which are controlled by the test setup.
-        selector.score_runtime_decision(&input).unwrap();
+        selector.score_runtime_decision(&input).expect("serde deserialization should succeed");
         assert_eq!(selector.decisions_made(), 1);
         // SAFETY: Test provides valid input with required fields set; score_runtime_decision only
         // fails on missing/invalid fields, which are controlled by the test setup.
-        selector.score_runtime_decision(&input).unwrap();
+        selector.score_runtime_decision(&input).expect("serde deserialization should succeed");
         assert_eq!(selector.decisions_made(), 2);
     }
 
@@ -2939,7 +2939,7 @@ mod tests {
         let input = sample_runtime_input(uncertain_posterior());
         // SAFETY: Test provides valid input with required fields set; score_runtime_decision only
         // fails on missing/invalid fields, which are controlled by the test setup.
-        let score = selector.score_runtime_decision(&input).unwrap();
+        let score = selector.score_runtime_decision(&input).expect("serde deserialization should succeed");
         assert_eq!(score.epoch, SecurityEpoch::from_raw(99));
     }
 
@@ -2990,10 +2990,10 @@ mod tests {
         let input = sample_runtime_input(uncertain_posterior());
         // SAFETY: Test provides valid input with required fields set; score_runtime_decision only
         // fails on missing/invalid fields, which are controlled by the test setup.
-        let score1 = s1.score_runtime_decision(&input).unwrap();
+        let score1 = s1.score_runtime_decision(&input).expect("serde deserialization should succeed");
         // SAFETY: Test provides valid input with required fields set; score_runtime_decision only
         // fails on missing/invalid fields, which are controlled by the test setup.
-        let score2 = s2.score_runtime_decision(&input).unwrap();
+        let score2 = s2.score_runtime_decision(&input).expect("serde deserialization should succeed");
         assert_eq!(score1.receipt_preimage_hash, score2.receipt_preimage_hash);
     }
 
@@ -3005,10 +3005,10 @@ mod tests {
         input2.trace_id = "different-trace-id".to_string();
         // SAFETY: Test provides valid input with required fields set; score_runtime_decision only
         // fails on missing/invalid fields, which are controlled by the test setup.
-        let score1 = selector.score_runtime_decision(&input1).unwrap();
+        let score1 = selector.score_runtime_decision(&input1).expect("serde deserialization should succeed");
         // SAFETY: Test provides valid input with required fields set; score_runtime_decision only
         // fails on missing/invalid fields, which are controlled by the test setup.
-        let score2 = selector.score_runtime_decision(&input2).unwrap();
+        let score2 = selector.score_runtime_decision(&input2).expect("serde deserialization should succeed");
         assert_ne!(score1.receipt_preimage_hash, score2.receipt_preimage_hash);
     }
 
@@ -3062,7 +3062,7 @@ mod tests {
             .insert("ext-b".to_string(), 200_000);
         // SAFETY: Test provides valid input with required fields set; score_runtime_decision only
         // fails on missing/invalid fields, which are controlled by the test setup.
-        let score = selector.score_runtime_decision(&input).unwrap();
+        let score = selector.score_runtime_decision(&input).expect("serde deserialization should succeed");
         // 3 fleet entries (ext-a, ext-b, ext-other) + current extension = 4
         assert_eq!(
             score.fleet_roi_summary.extension_count, 4,
@@ -3076,14 +3076,14 @@ mod tests {
         let input_unblocked = sample_runtime_input(certain_benign());
         // SAFETY: Test provides valid input with required fields set; score_runtime_decision only
         // fails on missing/invalid fields, which are controlled by the test setup.
-        let score_unblocked = selector.score_runtime_decision(&input_unblocked).unwrap();
+        let score_unblocked = selector.score_runtime_decision(&input_unblocked).expect("serde deserialization should succeed");
         let optimal = score_unblocked.selected_action;
 
         let mut input_blocked = sample_runtime_input(certain_benign());
         input_blocked.blocked_actions.insert(optimal);
         // SAFETY: Test provides valid input with required fields set; score_runtime_decision only
         // fails on missing/invalid fields, which are controlled by the test setup.
-        let score_blocked = selector.score_runtime_decision(&input_blocked).unwrap();
+        let score_blocked = selector.score_runtime_decision(&input_blocked).expect("serde deserialization should succeed");
         assert_ne!(score_blocked.selected_action, optimal);
         assert!(
             score_blocked.selected_expected_loss_millionths
@@ -3100,7 +3100,7 @@ mod tests {
         input.blocked_actions.insert(ContainmentAction::Quarantine);
         // SAFETY: Test provides valid input with required fields set; score_runtime_decision only
         // fails on missing/invalid fields, which are controlled by the test setup.
-        let score = selector.score_runtime_decision(&input).unwrap();
+        let score = selector.score_runtime_decision(&input).expect("serde deserialization should succeed");
         for candidate in &score.candidate_actions {
             if input.blocked_actions.contains(&candidate.action) {
                 assert!(
@@ -3140,7 +3140,7 @@ mod tests {
         let input = sample_runtime_input(certain_benign());
         // SAFETY: Test provides valid input with required fields set; score_runtime_decision only
         // fails on missing/invalid fields, which are controlled by the test setup.
-        let score = selector.score_runtime_decision(&input).unwrap();
+        let score = selector.score_runtime_decision(&input).expect("serde deserialization should succeed");
         assert!(
             score
                 .selection_rationale
@@ -3158,7 +3158,7 @@ mod tests {
         input.extension_roi_history_millionths = vec![roi, roi, roi, roi, roi];
         // SAFETY: Test provides valid input with required fields set; score_runtime_decision only
         // fails on missing/invalid fields, which are controlled by the test setup.
-        let score = selector.score_runtime_decision(&input).unwrap();
+        let score = selector.score_runtime_decision(&input).expect("serde deserialization should succeed");
         if score.alien_risk_envelope.alert_level == AlienRiskAlertLevel::Nominal {
             assert!(
                 score.alien_risk_envelope.recommended_floor_action.is_none(),

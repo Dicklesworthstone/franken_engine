@@ -1412,7 +1412,7 @@ mod tests {
             b"bbb",
             100,
         );
-        let mm = classify_mismatch(&a, &b, DEFAULT_MAX_SIZE_DIVERGENCE).unwrap();
+        let mm = classify_mismatch(&a, &b, DEFAULT_MAX_SIZE_DIVERGENCE).expect("serde deserialization should succeed");
         assert_eq!(mm.class, MismatchClass::ContentDivergence);
         assert_eq!(mm.severity, MismatchSeverity::Major);
     }
@@ -1436,7 +1436,7 @@ mod tests {
             b"bbb",
             90,
         );
-        let mm = classify_mismatch(&a, &b, DEFAULT_MAX_SIZE_DIVERGENCE).unwrap();
+        let mm = classify_mismatch(&a, &b, DEFAULT_MAX_SIZE_DIVERGENCE).expect("serde deserialization should succeed");
         assert_eq!(mm.class, MismatchClass::SizeDivergence);
         assert_eq!(mm.severity, MismatchSeverity::Minor);
     }
@@ -1460,7 +1460,7 @@ mod tests {
             b"bbb",
             170,
         );
-        let mm = classify_mismatch(&a, &b, DEFAULT_MAX_SIZE_DIVERGENCE).unwrap();
+        let mm = classify_mismatch(&a, &b, DEFAULT_MAX_SIZE_DIVERGENCE).expect("serde deserialization should succeed");
         assert_eq!(mm.class, MismatchClass::SizeDivergence);
         assert_eq!(mm.severity, MismatchSeverity::Major);
     }
@@ -1484,7 +1484,7 @@ mod tests {
             b"bbb",
             50,
         );
-        let mm = classify_mismatch(&a, &b, DEFAULT_MAX_SIZE_DIVERGENCE).unwrap();
+        let mm = classify_mismatch(&a, &b, DEFAULT_MAX_SIZE_DIVERGENCE).expect("serde deserialization should succeed");
         assert_eq!(mm.class, MismatchClass::SizeDivergence);
         assert_eq!(mm.severity, MismatchSeverity::Critical);
     }
@@ -2167,8 +2167,8 @@ mod tests {
     #[test]
     fn test_serde_round_trip_workflow_kind() {
         for wk in WorkflowKind::all() {
-            let json = serde_json::to_string(wk).unwrap();
-            let back: WorkflowKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(wk).expect("serde deserialization should succeed");
+            let back: WorkflowKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*wk, back);
         }
     }
@@ -2176,8 +2176,8 @@ mod tests {
     #[test]
     fn test_serde_round_trip_surface() {
         for s in Surface::all() {
-            let json = serde_json::to_string(s).unwrap();
-            let back: Surface = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(s).expect("serde deserialization should succeed");
+            let back: Surface = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*s, back);
         }
     }
@@ -2189,8 +2189,8 @@ mod tests {
             CellVerdict::Fail,
             CellVerdict::Inconclusive,
         ] {
-            let json = serde_json::to_string(v).unwrap();
-            let back: CellVerdict = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: CellVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -2198,8 +2198,8 @@ mod tests {
     #[test]
     fn test_serde_round_trip_matrix_config() {
         let config = MatrixConfig::default();
-        let json = serde_json::to_string(&config).unwrap();
-        let back: MatrixConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let back: MatrixConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, back);
     }
 
@@ -2300,7 +2300,7 @@ mod tests {
             .surface_coverage
             .iter()
             .find(|(s, _)| *s == Surface::Library)
-            .unwrap()
+            .expect("serde deserialization should succeed")
             .1;
         assert_eq!(lib_cov, MILLIONTHS);
         let compile_cov = report
@@ -2308,7 +2308,7 @@ mod tests {
             .surface_coverage
             .iter()
             .find(|(s, _)| *s == Surface::FrankenctlCompile)
-            .unwrap()
+            .expect("serde deserialization should succeed")
             .1;
         assert_eq!(compile_cov, 0);
     }

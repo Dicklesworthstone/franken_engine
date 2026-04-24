@@ -2359,7 +2359,7 @@ mod tests {
         let artifact =
             artifact_with_required_declassification("trace-allow", "obl-allow", "decision-allow");
         // SAFETY: from_bytes cannot fail on correctly sized byte array
-        let signing_key = SigningKey::from_bytes([17u8; 32]).unwrap();
+        let signing_key = SigningKey::from_bytes([17u8; 32]).expect("serde deserialization should succeed");
         let receipt = signed_receipt("trace-allow", "decision-allow", &signing_key);
 
         orch.trust_declassification_authorizer_for_contract(
@@ -2384,7 +2384,7 @@ mod tests {
         let artifact =
             artifact_with_required_declassification("trace-block", "obl-block", "decision-block");
         // SAFETY: from_bytes cannot fail on correctly sized byte array
-        let signing_key = SigningKey::from_bytes([18u8; 32]).unwrap();
+        let signing_key = SigningKey::from_bytes([18u8; 32]).expect("serde deserialization should succeed");
         let receipt = signed_receipt("trace-other", "decision-block", &signing_key);
         let staged_key = ("trace-block".to_string(), "obl-block".to_string());
 
@@ -2428,7 +2428,8 @@ mod tests {
     #[test]
     fn execute_blocks_unresolved_ifc_runtime_checkpoint_before_interpreter() {
         let mut orch = ExecutionOrchestrator::with_defaults();
-        let pkg = package_with_source("let secret_token = \"secret_token\"; sink(secret_token);");
+        let pkg =
+            package_with_source("let secret_token = \"secret_token\"; hostcall(secret_token);");
 
         let err = orch
             .execute(&pkg)
@@ -2461,7 +2462,7 @@ mod tests {
             },
         );
         // SAFETY: from_bytes cannot fail on correctly sized byte array
-        let signing_key = SigningKey::from_bytes([19u8; 32]).unwrap();
+        let signing_key = SigningKey::from_bytes([19u8; 32]).expect("serde deserialization should succeed");
         let receipt = signed_receipt("trace-partial", "decision-partial", &signing_key);
         let staged_key = ("trace-partial".to_string(), "obl-partial".to_string());
 
@@ -2685,9 +2686,9 @@ mod tests {
             LossMatrixPreset::Permissive,
         ] {
             // SAFETY: to_string cannot fail on derived Serialize enum
-            let json = serde_json::to_string(preset).unwrap();
+            let json = serde_json::to_string(preset).expect("serde deserialization should succeed");
             // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-            let back: LossMatrixPreset = serde_json::from_str(&json).unwrap();
+            let back: LossMatrixPreset = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*preset, back);
         }
     }
@@ -2707,13 +2708,13 @@ mod tests {
             },
         };
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&pkg).unwrap();
+        let json = serde_json::to_string(&pkg).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let back: ExtensionPackage = serde_json::from_str(&json).unwrap();
+        let back: ExtensionPackage = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.extension_id, "ext-serde");
         assert_eq!(back.capabilities.len(), 2);
         // SAFETY: get cannot fail for key we just inserted in test
-        assert_eq!(back.metadata.get("author").unwrap(), "test");
+        assert_eq!(back.metadata.get("author").expect("serde deserialization should succeed"), "test");
     }
 
     // -- OrchestratorConfig defaults ------------------------------------------
@@ -2876,7 +2877,7 @@ mod tests {
     #[test]
     fn trace_id_contains_prefix_and_counter() {
         let mut orch = ExecutionOrchestrator::with_defaults();
-        let result = orch.execute(&simple_package()).unwrap();
+        let result = orch.execute(&simple_package()).expect("serde deserialization should succeed");
         assert!(result.trace_id.starts_with("orch:"));
         assert!(result.trace_id.contains('0'));
     }
@@ -2884,15 +2885,15 @@ mod tests {
     #[test]
     fn decision_id_contains_prefix() {
         let mut orch = ExecutionOrchestrator::with_defaults();
-        let result = orch.execute(&simple_package()).unwrap();
+        let result = orch.execute(&simple_package()).expect("serde deserialization should succeed");
         assert!(result.decision_id.starts_with("orch:decision:"));
     }
 
     #[test]
     fn trace_id_increments_across_executions() {
         let mut orch = ExecutionOrchestrator::with_defaults();
-        let r0 = orch.execute(&simple_package()).unwrap();
-        let r1 = orch.execute(&simple_package()).unwrap();
+        let r0 = orch.execute(&simple_package()).expect("serde deserialization should succeed");
+        let r1 = orch.execute(&simple_package()).expect("serde deserialization should succeed");
         assert_ne!(r0.trace_id, r1.trace_id);
         assert_ne!(r0.decision_id, r1.decision_id);
     }
@@ -2969,7 +2970,7 @@ mod tests {
             ..OrchestratorConfig::default()
         };
         let mut orch = ExecutionOrchestrator::new(cfg);
-        let result = orch.execute(&simple_package()).unwrap();
+        let result = orch.execute(&simple_package()).expect("serde deserialization should succeed");
         assert!(result.posterior.is_valid());
     }
 
@@ -2980,7 +2981,7 @@ mod tests {
             ..OrchestratorConfig::default()
         };
         let mut orch = ExecutionOrchestrator::new(cfg);
-        let result = orch.execute(&simple_package()).unwrap();
+        let result = orch.execute(&simple_package()).expect("serde deserialization should succeed");
         assert!(result.posterior.is_valid());
     }
 
@@ -2989,14 +2990,14 @@ mod tests {
     #[test]
     fn result_source_label_contains_extension_id() {
         let mut orch = ExecutionOrchestrator::with_defaults();
-        let result = orch.execute(&simple_package()).unwrap();
+        let result = orch.execute(&simple_package()).expect("serde deserialization should succeed");
         assert!(result.source_label.contains("test-ext-1"));
     }
 
     #[test]
     fn result_lowering_witnesses_populated() {
         let mut orch = ExecutionOrchestrator::with_defaults();
-        let result = orch.execute(&simple_package()).unwrap();
+        let result = orch.execute(&simple_package()).expect("serde deserialization should succeed");
         assert!(!result.lowering_witnesses.is_empty());
     }
 
@@ -3052,14 +3053,14 @@ mod tests {
             ..OrchestratorConfig::default()
         };
         let mut orch = ExecutionOrchestrator::new(cfg);
-        let result = orch.execute(&simple_package()).unwrap();
+        let result = orch.execute(&simple_package()).expect("serde deserialization should succeed");
         assert_eq!(result.epoch, SecurityEpoch::from_raw(42));
     }
 
     #[test]
     fn result_cell_events_populated() {
         let mut orch = ExecutionOrchestrator::with_defaults();
-        let result = orch.execute(&simple_package()).unwrap();
+        let result = orch.execute(&simple_package()).expect("serde deserialization should succeed");
         // Cell close should produce at least one event.
         assert!(!result.cell_events.is_empty());
     }
@@ -3073,7 +3074,7 @@ mod tests {
             ..OrchestratorConfig::default()
         };
         let mut orch = ExecutionOrchestrator::new(cfg);
-        let result = orch.execute(&simple_package()).unwrap();
+        let result = orch.execute(&simple_package()).expect("serde deserialization should succeed");
         assert!(result.trace_id.starts_with("myprefix:"));
         assert!(result.decision_id.starts_with("myprefix:decision:"));
     }
@@ -3100,11 +3101,11 @@ mod tests {
             },
         };
         let mut orch = ExecutionOrchestrator::with_defaults();
-        let result = orch.execute(&pkg).unwrap();
+        let result = orch.execute(&pkg).expect("serde deserialization should succeed");
         assert_eq!(result.extension_id, "ext-cap");
         // Evidence metadata should contain capabilities count.
         let entry = &result.evidence_entries[0];
-        let cap_count = entry.metadata.get("capabilities_count").unwrap();
+        let cap_count = entry.metadata.get("capabilities_count").expect("serde deserialization should succeed");
         assert_eq!(cap_count, "4");
     }
 
@@ -3136,8 +3137,8 @@ mod tests {
     #[test]
     fn extension_package_empty_metadata_serde() {
         let pkg = simple_package();
-        let json = serde_json::to_string(&pkg).unwrap();
-        let restored: ExtensionPackage = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&pkg).expect("serde deserialization should succeed");
+        let restored: ExtensionPackage = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(pkg.extension_id, restored.extension_id);
         assert!(restored.metadata.is_empty());
     }
@@ -3156,8 +3157,8 @@ mod tests {
             version: "3.0.0".to_string(),
             metadata: BTreeMap::new(),
         };
-        let json = serde_json::to_string(&pkg).unwrap();
-        let restored: ExtensionPackage = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&pkg).expect("serde deserialization should succeed");
+        let restored: ExtensionPackage = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(restored.capabilities.len(), 3);
     }
 
@@ -3182,11 +3183,11 @@ mod tests {
 
     #[test]
     fn loss_matrix_preset_serde_format() {
-        let json = serde_json::to_string(&LossMatrixPreset::Balanced).unwrap();
+        let json = serde_json::to_string(&LossMatrixPreset::Balanced).expect("serde deserialization should succeed");
         assert!(json.contains("alanced"));
-        let json = serde_json::to_string(&LossMatrixPreset::Conservative).unwrap();
+        let json = serde_json::to_string(&LossMatrixPreset::Conservative).expect("serde deserialization should succeed");
         assert!(json.contains("onservative"));
-        let json = serde_json::to_string(&LossMatrixPreset::Permissive).unwrap();
+        let json = serde_json::to_string(&LossMatrixPreset::Permissive).expect("serde deserialization should succeed");
         assert!(json.contains("ermissive"));
     }
 
@@ -3251,8 +3252,8 @@ mod tests {
     #[test]
     fn extension_package_serde_deterministic() {
         let pkg = simple_package();
-        let json1 = serde_json::to_string(&pkg).unwrap();
-        let json2 = serde_json::to_string(&pkg).unwrap();
+        let json1 = serde_json::to_string(&pkg).expect("serde deserialization should succeed");
+        let json2 = serde_json::to_string(&pkg).expect("serde deserialization should succeed");
         assert_eq!(json1, json2);
     }
 
@@ -3288,9 +3289,9 @@ mod tests {
     fn execution_counter_increments_correctly() {
         let mut orch = ExecutionOrchestrator::with_defaults();
         assert_eq!(orch.execution_count(), 0);
-        orch.execute(&simple_package()).unwrap();
+        orch.execute(&simple_package()).expect("serde deserialization should succeed");
         assert_eq!(orch.execution_count(), 1);
-        orch.execute(&simple_package()).unwrap();
+        orch.execute(&simple_package()).expect("serde deserialization should succeed");
         assert_eq!(orch.execution_count(), 2);
     }
 
@@ -3319,7 +3320,7 @@ mod tests {
     #[test]
     fn result_finalize_result_present() {
         let mut orch = ExecutionOrchestrator::with_defaults();
-        let result = orch.execute(&simple_package()).unwrap();
+        let result = orch.execute(&simple_package()).expect("serde deserialization should succeed");
         assert!(
             result.finalize_result.is_some(),
             "finalize_result should be populated"
@@ -3356,7 +3357,7 @@ mod tests {
     #[test]
     fn evidence_entries_have_consistent_trace_id() {
         let mut orch = ExecutionOrchestrator::with_defaults();
-        let result = orch.execute(&simple_package()).unwrap();
+        let result = orch.execute(&simple_package()).expect("serde deserialization should succeed");
         for entry in &result.evidence_entries {
             assert_eq!(entry.trace_id, result.trace_id);
         }
@@ -3367,8 +3368,8 @@ mod tests {
     #[test]
     fn different_extension_ids_produce_different_trace_ids() {
         let mut orch = ExecutionOrchestrator::with_defaults();
-        let r1 = orch.execute(&package_with_id("ext-alpha")).unwrap();
-        let r2 = orch.execute(&package_with_id("ext-beta")).unwrap();
+        let r1 = orch.execute(&package_with_id("ext-alpha")).expect("serde deserialization should succeed");
+        let r2 = orch.execute(&package_with_id("ext-beta")).expect("serde deserialization should succeed");
         assert_ne!(r1.trace_id, r2.trace_id);
         assert_ne!(r1.decision_id, r2.decision_id);
         assert_ne!(r1.extension_id, r2.extension_id);
@@ -3779,7 +3780,7 @@ mod tests {
             ..OrchestratorConfig::default()
         };
         let mut orch = ExecutionOrchestrator::new(cfg);
-        let r = orch.execute(&simple_package()).unwrap();
+        let r = orch.execute(&simple_package()).expect("serde deserialization should succeed");
         assert!(r.trace_id.starts_with("custom:"));
         assert!(r.decision_id.starts_with("custom:decision:"));
     }
@@ -3793,7 +3794,7 @@ mod tests {
             ..OrchestratorConfig::default()
         };
         let mut orch = ExecutionOrchestrator::new(cfg);
-        let r = orch.execute(&simple_package()).unwrap();
+        let r = orch.execute(&simple_package()).expect("serde deserialization should succeed");
         assert_eq!(r.epoch, SecurityEpoch::from_raw(999));
     }
 
@@ -3835,7 +3836,7 @@ mod tests {
                 m
             },
         };
-        let json = serde_json::to_string(&pkg).unwrap();
+        let json = serde_json::to_string(&pkg).expect("serde deserialization should succeed");
         assert!(
             json.contains("\"extension_id\""),
             "missing extension_id field"
@@ -3885,11 +3886,11 @@ mod tests {
             version: "1.0.0".to_string(),
             metadata,
         };
-        let json = serde_json::to_string(&pkg).unwrap();
-        let restored: ExtensionPackage = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&pkg).expect("serde deserialization should succeed");
+        let restored: ExtensionPackage = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(restored.metadata.len(), 50);
-        assert_eq!(restored.metadata.get("key_0").unwrap(), "value_0");
-        assert_eq!(restored.metadata.get("key_49").unwrap(), "value_49");
+        assert_eq!(restored.metadata.get("key_0").expect("serde deserialization should succeed"), "value_0");
+        assert_eq!(restored.metadata.get("key_49").expect("serde deserialization should succeed"), "value_49");
     }
 
     #[test]
@@ -3986,7 +3987,7 @@ mod tests {
             ..OrchestratorConfig::default()
         };
         let mut orch = ExecutionOrchestrator::new(cfg);
-        let result = orch.execute(&simple_package()).unwrap();
+        let result = orch.execute(&simple_package()).expect("serde deserialization should succeed");
         assert_eq!(result.lane, LaneChoice::QuickJs);
     }
 
@@ -3997,7 +3998,7 @@ mod tests {
             ..OrchestratorConfig::default()
         };
         let mut orch = ExecutionOrchestrator::new(cfg);
-        let result = orch.execute(&simple_package()).unwrap();
+        let result = orch.execute(&simple_package()).expect("serde deserialization should succeed");
         assert_eq!(result.lane, LaneChoice::V8);
     }
 
@@ -4012,10 +4013,10 @@ mod tests {
             metadata: BTreeMap::new(),
         };
         let mut orch = ExecutionOrchestrator::with_defaults();
-        let result = orch.execute(&pkg).unwrap();
+        let result = orch.execute(&pkg).expect("serde deserialization should succeed");
         let entry = &result.evidence_entries[0];
         assert_eq!(
-            entry.metadata.get("extension_version").unwrap(),
+            entry.metadata.get("extension_version").expect("serde deserialization should succeed"),
             "7.3.1",
             "evidence must record exact extension version"
         );
@@ -4059,15 +4060,15 @@ mod tests {
             version: "1.0.0".to_string(),
             metadata: BTreeMap::new(),
         };
-        let json = serde_json::to_string(&pkg).unwrap();
-        let restored: ExtensionPackage = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&pkg).expect("serde deserialization should succeed");
+        let restored: ExtensionPackage = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(restored.extension_id, pkg.extension_id);
     }
 
     #[test]
     fn enrichment_evidence_compression_certificate_fields() {
         let mut orch = ExecutionOrchestrator::with_defaults();
-        let result = orch.execute(&simple_package()).unwrap();
+        let result = orch.execute(&simple_package()).expect("serde deserialization should succeed");
         let cert = result
             .evidence_compression_certificate
             .as_ref()
@@ -4101,7 +4102,7 @@ mod tests {
     #[test]
     fn enrichment_result_lane_field_populated() {
         let mut orch = ExecutionOrchestrator::with_defaults();
-        let result = orch.execute(&simple_package()).unwrap();
+        let result = orch.execute(&simple_package()).expect("serde deserialization should succeed");
         // Lane should be one of the valid choices.
         assert!(
             result.lane == LaneChoice::QuickJs || result.lane == LaneChoice::V8,
@@ -4115,14 +4116,14 @@ mod tests {
         let mut orch = ExecutionOrchestrator::with_defaults();
         assert!(orch.stopping_policies.is_empty());
 
-        orch.execute(&package_with_id("ext-stop-a")).unwrap();
+        orch.execute(&package_with_id("ext-stop-a")).expect("serde deserialization should succeed");
         assert_eq!(orch.stopping_policies.len(), 1);
 
-        orch.execute(&package_with_id("ext-stop-b")).unwrap();
+        orch.execute(&package_with_id("ext-stop-b")).expect("serde deserialization should succeed");
         assert_eq!(orch.stopping_policies.len(), 2);
 
         // Re-executing same extension should NOT add a new policy.
-        orch.execute(&package_with_id("ext-stop-a")).unwrap();
+        orch.execute(&package_with_id("ext-stop-a")).expect("serde deserialization should succeed");
         assert_eq!(orch.stopping_policies.len(), 2);
     }
 
@@ -4132,7 +4133,7 @@ mod tests {
         let mut prev_len = 0usize;
         for i in 0..5 {
             orch.execute(&package_with_id(&format!("ext-mono-{i}")))
-                .unwrap();
+                .expect("serde deserialization should succeed");
             let cur_len = orch.ledger().len();
             assert!(
                 cur_len > prev_len,

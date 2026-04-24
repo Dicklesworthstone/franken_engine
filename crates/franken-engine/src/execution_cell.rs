@@ -1133,8 +1133,8 @@ mod tests {
     #[test]
     fn cell_kind_serde_roundtrip() {
         for kind in [CellKind::Extension, CellKind::Session, CellKind::Delegate] {
-            let json = serde_json::to_string(&kind).unwrap();
-            let restored: CellKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
+            let restored: CellKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(kind, restored);
         }
     }
@@ -1189,8 +1189,8 @@ mod tests {
             current: RegionState::Running,
             attempted: "finalize".to_string(),
         };
-        let json = serde_json::to_string(&err).unwrap();
-        let restored: CellError = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let restored: CellError = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, restored);
     }
 
@@ -1233,13 +1233,13 @@ mod tests {
 
         let s1 = cell
             .execute_effect(&mut cx, EffectCategory::Hostcall, "op1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let s2 = cell
             .execute_effect(&mut cx, EffectCategory::PolicyCheck, "op2")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let s3 = cell
             .execute_effect(&mut cx, EffectCategory::TelemetryEmit, "op3")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert_eq!(s1, 1);
         assert_eq!(s2, 2);
@@ -1252,7 +1252,7 @@ mod tests {
         let mut cx = mock_cx(100);
 
         cell.execute_effect(&mut cx, EffectCategory::Hostcall, "read_data")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert_eq!(cell.events().len(), 1);
         assert_eq!(cell.events()[0].event, "read_data");
@@ -1274,7 +1274,7 @@ mod tests {
             CancelReason::OperatorShutdown,
             DrainDeadline::default(),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let err = cell
             .execute_effect(&mut cx, EffectCategory::Hostcall, "op")
@@ -1305,10 +1305,10 @@ mod tests {
 
         assert_eq!(cell.pending_obligations(), 2);
 
-        cell.commit_obligation("ob-1").unwrap();
+        cell.commit_obligation("ob-1").expect("serde deserialization should succeed");
         assert_eq!(cell.pending_obligations(), 1);
 
-        cell.abort_obligation("ob-2").unwrap();
+        cell.abort_obligation("ob-2").expect("serde deserialization should succeed");
         assert_eq!(cell.pending_obligations(), 0);
     }
 
@@ -1334,7 +1334,7 @@ mod tests {
                 CancelReason::OperatorShutdown,
                 DrainDeadline::default(),
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert!(result.success);
         assert_eq!(cell.state(), RegionState::Closed);
@@ -1347,7 +1347,7 @@ mod tests {
         let mut cx = mock_cx(100);
 
         cell.register_obligation("ob-1", "flush");
-        cell.commit_obligation("ob-1").unwrap();
+        cell.commit_obligation("ob-1").expect("serde deserialization should succeed");
 
         let result = cell
             .close(
@@ -1355,7 +1355,7 @@ mod tests {
                 CancelReason::OperatorShutdown,
                 DrainDeadline::default(),
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert!(result.success);
         assert_eq!(result.obligations_committed, 1);
@@ -1374,7 +1374,7 @@ mod tests {
                 CancelReason::BudgetExhausted,
                 DrainDeadline { max_ticks: 5 },
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Obligation was force-aborted by timeout escalation
         assert!(result.drain_timeout_escalated);
@@ -1392,14 +1392,14 @@ mod tests {
             CancelReason::Quarantine,
             DrainDeadline { max_ticks: 10 },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         assert_eq!(cell.state(), RegionState::Draining);
 
         // Resolve obligation during drain
-        cell.commit_obligation("ob-1").unwrap();
+        cell.commit_obligation("ob-1").expect("serde deserialization should succeed");
 
-        let result = cell.finalize().unwrap();
+        let result = cell.finalize().expect("serde deserialization should succeed");
         assert!(result.success);
         assert_eq!(result.obligations_committed, 1);
     }
@@ -1426,7 +1426,7 @@ mod tests {
     #[test]
     fn create_session_in_running_cell() {
         let mut cell = ExecutionCell::new("ext-1", CellKind::Extension, "t");
-        let session = cell.create_session("sess-1", "t-sess").unwrap();
+        let session = cell.create_session("sess-1", "t-sess").expect("serde deserialization should succeed");
 
         assert_eq!(session.cell_id(), "sess-1");
         assert_eq!(session.kind(), CellKind::Session);
@@ -1444,7 +1444,7 @@ mod tests {
             CancelReason::OperatorShutdown,
             DrainDeadline::default(),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let err = cell.create_session("sess-1", "t").unwrap_err();
         assert_eq!(err.error_code(), "cell_session_rejected");
@@ -1464,7 +1464,7 @@ mod tests {
             CancelReason::OperatorShutdown,
             DrainDeadline::default(),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let events = cell.events();
         // cancel, drain, finalize
@@ -1484,7 +1484,7 @@ mod tests {
             CancelReason::OperatorShutdown,
             DrainDeadline::default(),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let region_events = cell.drain_region_events();
         assert!(!region_events.is_empty());
@@ -1499,7 +1499,7 @@ mod tests {
         let mut mgr = CellManager::new();
         let _ = mgr.create_extension_cell("ext-1", "t1");
         let _ = mgr.create_extension_cell("ext-2", "t2");
-        let _ = mgr.create_delegate_cell("del-1", "trace-del").unwrap();
+        let _ = mgr.create_delegate_cell("del-1", "trace-del").expect("serde deserialization should succeed");
 
         assert_eq!(mgr.active_count(), 3);
         assert_eq!(mgr.closed_count(), 0);
@@ -1533,7 +1533,7 @@ mod tests {
                 CancelReason::OperatorShutdown,
                 DrainDeadline::default(),
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert!(result.success);
         assert_eq!(mgr.active_count(), 0);
@@ -1591,9 +1591,9 @@ mod tests {
 
         // Execute effect in ext-1
         mgr.get_mut("ext-1")
-            .unwrap()
+            .expect("serde deserialization should succeed")
             .execute_effect(&mut cx, EffectCategory::Hostcall, "op1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Close ext-1
         mgr.close_cell(
@@ -1602,18 +1602,18 @@ mod tests {
             CancelReason::Quarantine,
             DrainDeadline::default(),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         // ext-2 is still running and unaffected
-        let cell2 = mgr.get("ext-2").unwrap();
+        let cell2 = mgr.get("ext-2").expect("serde deserialization should succeed");
         assert_eq!(cell2.state(), RegionState::Running);
         assert_eq!(cell2.total_budget_consumed_ms(), 0);
 
         // Can still execute effects in ext-2
         mgr.get_mut("ext-2")
-            .unwrap()
+            .expect("serde deserialization should succeed")
             .execute_effect(&mut cx, EffectCategory::Hostcall, "op2")
-            .unwrap();
+            .expect("serde deserialization should succeed");
     }
 
     // -----------------------------------------------------------------------
@@ -1627,17 +1627,17 @@ mod tests {
             let mut cx = mock_cx(200);
 
             cell.execute_effect(&mut cx, EffectCategory::Hostcall, "read")
-                .unwrap();
+                .expect("serde deserialization should succeed");
             cell.execute_effect(&mut cx, EffectCategory::PolicyCheck, "check")
-                .unwrap();
+                .expect("serde deserialization should succeed");
             cell.register_obligation("ob-1", "flush");
-            cell.commit_obligation("ob-1").unwrap();
+            cell.commit_obligation("ob-1").expect("serde deserialization should succeed");
             cell.close(
                 &mut cx,
                 CancelReason::OperatorShutdown,
                 DrainDeadline::default(),
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
             cell.drain_events()
         };
 
@@ -1665,8 +1665,8 @@ mod tests {
             region_state: RegionState::Running,
             budget_consumed_ms: 1,
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let restored: CellEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let restored: CellEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, restored);
     }
 
@@ -1685,8 +1685,8 @@ mod tests {
             region_state: RegionState::Running,
             budget_consumed_ms: 0,
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let restored: CellEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let restored: CellEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, restored);
         assert_eq!(restored.error_code.as_deref(), Some("budget_exhausted"));
     }
@@ -1722,8 +1722,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap();
-            let restored: CellError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let restored: CellError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, restored);
         }
     }
@@ -1739,7 +1739,7 @@ mod tests {
 
         for _ in 0..10 {
             cell.execute_effect(&mut cx, EffectCategory::Hostcall, "op")
-                .unwrap();
+                .expect("serde deserialization should succeed");
         }
 
         assert_eq!(cell.total_budget_consumed_ms(), 10); // 10 * 1ms
@@ -1764,7 +1764,7 @@ mod tests {
             CancelReason::OperatorShutdown,
             DrainDeadline::default(),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let results = mgr.closed_results();
         assert_eq!(results.len(), 1);
@@ -1803,7 +1803,7 @@ mod tests {
         let mut cx = mock_cx(100);
 
         cell.execute_effect(&mut cx, EffectCategory::Hostcall, "read_data")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let ev = &cell.events()[0];
         assert_eq!(ev.decision_id, "decision-42");
@@ -1821,7 +1821,7 @@ mod tests {
             "decision-42",
             "policy-v3",
         );
-        let session = cell.create_session("sess-1", "t-sess-1").unwrap();
+        let session = cell.create_session("sess-1", "t-sess-1").expect("serde deserialization should succeed");
         assert_eq!(session.decision_id(), "decision-42");
         assert_eq!(session.policy_id(), "policy-v3");
     }
@@ -1841,7 +1841,7 @@ mod tests {
             CancelReason::OperatorShutdown,
             DrainDeadline::default(),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         for ev in cell.events() {
             assert_eq!(ev.trace_id, "t-1");
@@ -1867,7 +1867,7 @@ mod tests {
             CancelReason::OperatorShutdown,
             DrainDeadline::default(),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let err = cell
             .close(
@@ -1894,7 +1894,7 @@ mod tests {
             CancelReason::Quarantine,
             DrainDeadline { max_ticks: 10 },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(cell.state(), RegionState::Draining);
 
         let err = cell.create_session("sess-late", "t-late").unwrap_err();
@@ -1915,7 +1915,7 @@ mod tests {
             CancelReason::OperatorShutdown,
             DrainDeadline::default(),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let err = cell
             .execute_effect(&mut cx, EffectCategory::Hostcall, "late_op")
@@ -1935,16 +1935,16 @@ mod tests {
 
         // ext-1: has committed obligation
         mgr.get_mut("ext-1")
-            .unwrap()
+            .expect("serde deserialization should succeed")
             .register_obligation("ob-1", "flush");
         mgr.get_mut("ext-1")
-            .unwrap()
+            .expect("serde deserialization should succeed")
             .commit_obligation("ob-1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // ext-2: has pending obligation (will timeout)
         mgr.get_mut("ext-2")
-            .unwrap()
+            .expect("serde deserialization should succeed")
             .register_obligation("ob-2", "never-done");
 
         let mut cx = mock_cx(200);
@@ -1960,11 +1960,11 @@ mod tests {
             assert!(r.is_ok());
         }
 
-        let r1 = &results[0].as_ref().unwrap();
+        let r1 = &results[0].as_ref().expect("serde deserialization should succeed");
         assert!(r1.success);
         assert_eq!(r1.obligations_committed, 1);
 
-        let r2 = &results[1].as_ref().unwrap();
+        let r2 = &results[1].as_ref().expect("serde deserialization should succeed");
         assert!(r2.drain_timeout_escalated);
         assert_eq!(r2.obligations_aborted, 1);
     }
@@ -1990,8 +1990,8 @@ mod tests {
             budget_consumed_ms: 2,
             metadata: BTreeMap::new(),
         };
-        let json = serde_json::to_string(&entry).unwrap();
-        let restored: LifecycleEvidenceEntry = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let restored: LifecycleEvidenceEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, restored);
     }
 
@@ -2012,8 +2012,8 @@ mod tests {
             budget_consumed_ms: 2,
             evidence_entries_emitted: 1,
         };
-        let json = serde_json::to_string(&report).unwrap();
-        let restored: CellCloseReport = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let restored: CellCloseReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report, restored);
     }
 
@@ -2028,13 +2028,13 @@ mod tests {
 
         let ext_id = binding
             .load_extension("ext-1", &mut cx, "d-1", "p-1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(ext_id, "ext-1");
         assert_eq!(binding.active_extension_count(), 1);
 
         let report = binding
             .unload_extension("ext-1", &mut cx, CancelReason::OperatorShutdown)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(report.success);
         assert_eq!(report.cell_kind, CellKind::Extension);
         assert_eq!(binding.active_extension_count(), 0);
@@ -2047,7 +2047,7 @@ mod tests {
 
         binding
             .load_extension("ext-1", &mut cx, "d-1", "p-1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let evidence = binding.evidence_log();
         assert_eq!(evidence.len(), 1);
@@ -2066,10 +2066,10 @@ mod tests {
 
         binding
             .load_extension("ext-1", &mut cx, "d-1", "p-1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         binding
             .unload_extension("ext-1", &mut cx, CancelReason::OperatorShutdown)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let unload_evidence = binding.evidence_for_event("extension_unload");
         assert_eq!(unload_evidence.len(), 1);
@@ -2088,11 +2088,11 @@ mod tests {
 
         binding
             .load_extension("ext-1", &mut cx, "d-1", "p-1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let sess_id = binding
             .start_session("ext-1", "sess-1", "t-sess-1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(
             sess_id,
             ExtensionHostBinding::session_cell_id("ext-1", "sess-1")
@@ -2142,24 +2142,24 @@ mod tests {
         // Load extension
         binding
             .load_extension("ext-1", &mut cx, "d-1", "p-1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Start sessions
-        let sess_1 = binding.start_session("ext-1", "sess-1", "t-s1").unwrap();
-        let sess_2 = binding.start_session("ext-1", "sess-2", "t-s2").unwrap();
+        let sess_1 = binding.start_session("ext-1", "sess-1", "t-s1").expect("serde deserialization should succeed");
+        let sess_2 = binding.start_session("ext-1", "sess-2", "t-s2").expect("serde deserialization should succeed");
 
         // Execute effects in the extension cell
         binding
             .manager_mut()
             .get_mut("ext-1")
-            .unwrap()
+            .expect("serde deserialization should succeed")
             .execute_effect(&mut cx, EffectCategory::Hostcall, "read")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Unload extension (quiescent close)
         let report = binding
             .unload_extension("ext-1", &mut cx, CancelReason::OperatorShutdown)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(report.success);
         assert_eq!(binding.active_extension_count(), 0);
         assert!(binding.manager().get(&sess_1).is_none());
@@ -2190,8 +2190,8 @@ mod tests {
 
         binding
             .load_extension("ext-1", &mut cx, "d-1", "p-1")
-            .unwrap();
-        let _ = binding.start_session("ext-1", "sess-1", "t-s1").unwrap();
+            .expect("serde deserialization should succeed");
+        let _ = binding.start_session("ext-1", "sess-1", "t-s1").expect("serde deserialization should succeed");
 
         assert_eq!(binding.manager().active_count(), 2);
         assert_eq!(binding.active_extension_count(), 1);
@@ -2204,14 +2204,14 @@ mod tests {
 
         binding
             .load_extension("ext-1", &mut cx, "d-1", "p-1")
-            .unwrap();
-        let sess_1 = binding.start_session("ext-1", "sess-1", "t-s1").unwrap();
-        let sess_2 = binding.start_session("ext-1", "sess-2", "t-s2").unwrap();
+            .expect("serde deserialization should succeed");
+        let sess_1 = binding.start_session("ext-1", "sess-1", "t-s1").expect("serde deserialization should succeed");
+        let sess_2 = binding.start_session("ext-1", "sess-2", "t-s2").expect("serde deserialization should succeed");
         assert_eq!(binding.manager().active_count(), 3);
 
         let report = binding
             .unload_extension("ext-1", &mut cx, CancelReason::OperatorShutdown)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert!(report.success);
         assert_eq!(binding.manager().active_count(), 0);
@@ -2238,31 +2238,31 @@ mod tests {
 
         binding
             .load_extension("ext-1", &mut cx, "d-1", "p-1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         binding
             .load_extension("ext-2", &mut cx, "d-2", "p-2")
-            .unwrap();
-        let sess_1 = binding.start_session("ext-1", "sess-1", "t-s1").unwrap();
-        let sess_2 = binding.start_session("ext-2", "sess-2", "t-s2").unwrap();
+            .expect("serde deserialization should succeed");
+        let sess_1 = binding.start_session("ext-1", "sess-1", "t-s1").expect("serde deserialization should succeed");
+        let sess_2 = binding.start_session("ext-2", "sess-2", "t-s2").expect("serde deserialization should succeed");
 
         // Execute effects in ext-1
         binding
             .manager_mut()
             .get_mut("ext-1")
-            .unwrap()
+            .expect("serde deserialization should succeed")
             .execute_effect(&mut cx, EffectCategory::Hostcall, "op1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Quarantine ext-1
         let report = binding
             .unload_extension("ext-1", &mut cx, CancelReason::Quarantine)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(report.success);
 
         // ext-2 is still running, unaffected
         assert!(binding.manager().get(&sess_1).is_none());
         assert!(binding.manager().get(&sess_2).is_some());
-        let cell2 = binding.manager().get("ext-2").unwrap();
+        let cell2 = binding.manager().get("ext-2").expect("serde deserialization should succeed");
         assert_eq!(cell2.state(), RegionState::Running);
         assert_eq!(cell2.total_budget_consumed_ms(), 0);
 
@@ -2270,9 +2270,9 @@ mod tests {
         binding
             .manager_mut()
             .get_mut("ext-2")
-            .unwrap()
+            .expect("serde deserialization should succeed")
             .execute_effect(&mut cx, EffectCategory::Hostcall, "op2")
-            .unwrap();
+            .expect("serde deserialization should succeed");
     }
 
     // -----------------------------------------------------------------------
@@ -2286,18 +2286,18 @@ mod tests {
 
         binding
             .load_extension("ext-1", &mut cx, "d-1", "p-1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Register obligation that will never resolve
         binding
             .manager_mut()
             .get_mut("ext-1")
-            .unwrap()
+            .expect("serde deserialization should succeed")
             .register_obligation("ob-stuck", "never completes");
 
         let report = binding
             .unload_extension("ext-1", &mut cx, CancelReason::BudgetExhausted)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(report.drain_timeout_escalated);
         assert_eq!(report.obligations_aborted, 1);
 
@@ -2320,18 +2320,18 @@ mod tests {
 
         binding
             .load_extension("ext-1", &mut cx, "d-1", "p-1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         binding
             .load_extension("ext-2", &mut cx, "d-2", "p-2")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         binding
             .load_extension("ext-3", &mut cx, "d-3", "p-3")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let reports = binding.unload_all(&mut cx, CancelReason::OperatorShutdown);
         assert_eq!(reports.len(), 3);
         for r in &reports {
-            assert!(r.as_ref().unwrap().success);
+            assert!(r.as_ref().expect("serde deserialization should succeed").success);
         }
         assert_eq!(binding.active_extension_count(), 0);
     }
@@ -2378,11 +2378,11 @@ mod tests {
 
             binding
                 .load_extension("ext-1", &mut cx, "d-1", "p-1")
-                .unwrap();
-            binding.start_session("ext-1", "sess-1", "t-s1").unwrap();
+                .expect("serde deserialization should succeed");
+            binding.start_session("ext-1", "sess-1", "t-s1").expect("serde deserialization should succeed");
             binding
                 .unload_extension("ext-1", &mut cx, CancelReason::OperatorShutdown)
-                .unwrap();
+                .expect("serde deserialization should succeed");
             binding.evidence_log().to_vec()
         };
 
@@ -2402,11 +2402,11 @@ mod tests {
 
         binding
             .load_extension("ext-1", &mut cx, "d-1", "p-1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         binding
             .load_extension("ext-2", &mut cx, "d-2", "p-2")
-            .unwrap();
-        binding.start_session("ext-1", "sess-1", "t-s1").unwrap();
+            .expect("serde deserialization should succeed");
+        binding.start_session("ext-1", "sess-1", "t-s1").expect("serde deserialization should succeed");
 
         let loads = binding.evidence_for_event("extension_load");
         assert_eq!(loads.len(), 2);
@@ -2429,11 +2429,11 @@ mod tests {
 
         binding
             .load_extension("ext-1", &mut cx, "d-1", "p-1")
-            .unwrap();
-        binding.start_session("ext-1", "sess-1", "t-s1").unwrap();
+            .expect("serde deserialization should succeed");
+        binding.start_session("ext-1", "sess-1", "t-s1").expect("serde deserialization should succeed");
         binding
             .load_extension("ext-2", &mut cx, "d-2", "p-2")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let seqs: Vec<u64> = binding.evidence_log().iter().map(|e| e.sequence).collect();
         assert_eq!(seqs, vec![0, 1, 2]);
@@ -2460,10 +2460,10 @@ mod tests {
             let ext_id = format!("ext-{i}");
             binding
                 .load_extension(&ext_id, &mut cx, "d-1", "p-1")
-                .unwrap();
+                .expect("serde deserialization should succeed");
             let report = binding
                 .unload_extension(&ext_id, &mut cx, reason.clone())
-                .unwrap();
+                .expect("serde deserialization should succeed");
             assert!(report.success);
             assert!(
                 !report.close_reason.is_empty(),
@@ -2483,10 +2483,10 @@ mod tests {
 
         binding
             .load_extension("ext-1", &mut cx, "d-1", "p-1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         binding
             .unload_extension("ext-1", &mut cx, CancelReason::OperatorShutdown)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let err = binding.start_session("ext-1", "sess-1", "t").unwrap_err();
         assert_eq!(err.error_code(), "cell_not_found");
@@ -2548,15 +2548,15 @@ mod tests {
 
         binding
             .load_extension("ext-1", &mut cx, "d-1", "p-1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         for i in 0..5 {
             binding
                 .start_session("ext-1", format!("sess-{i}"), format!("t-s{i}"))
-                .unwrap();
+                .expect("serde deserialization should succeed");
         }
 
-        let cell = binding.manager().get("ext-1").unwrap();
+        let cell = binding.manager().get("ext-1").expect("serde deserialization should succeed");
         assert_eq!(cell.session_count(), 5);
     }
 
@@ -2680,7 +2680,7 @@ mod tests {
         let _ = mgr.insert_cell("custom-1", cell);
 
         assert_eq!(mgr.active_count(), 1);
-        let retrieved = mgr.get("custom-1").unwrap();
+        let retrieved = mgr.get("custom-1").expect("serde deserialization should succeed");
         assert_eq!(retrieved.kind(), CellKind::Delegate);
         assert_eq!(retrieved.decision_id(), "d");
     }
@@ -2690,8 +2690,8 @@ mod tests {
     #[test]
     fn manager_delegate_cell_has_delegate_kind() {
         let mut mgr = CellManager::new();
-        let _ = mgr.create_delegate_cell("del-1", "trace-del").unwrap();
-        let cell = mgr.get("del-1").unwrap();
+        let _ = mgr.create_delegate_cell("del-1", "trace-del").expect("serde deserialization should succeed");
+        let cell = mgr.get("del-1").expect("serde deserialization should succeed");
         assert_eq!(cell.kind(), CellKind::Delegate);
         assert_eq!(cell.state(), RegionState::Running);
     }
@@ -2717,7 +2717,7 @@ mod tests {
         let mut cx = mock_cx(100);
 
         cell.execute_effect(&mut cx, EffectCategory::Hostcall, "op1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(cell.events().len(), 1);
 
         let drained = cell.drain_events();
@@ -2731,12 +2731,12 @@ mod tests {
     fn session_cell_executes_effects_independently() {
         let mut parent =
             ExecutionCell::with_context("ext-1", CellKind::Extension, "t-parent", "d-1", "p-1");
-        let mut session = parent.create_session("sess-1", "t-sess").unwrap();
+        let mut session = parent.create_session("sess-1", "t-sess").expect("serde deserialization should succeed");
         let mut cx = mock_cx(100);
 
         let seq = session
             .execute_effect(&mut cx, EffectCategory::Hostcall, "sess_op")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(seq, 1);
         assert_eq!(session.total_budget_consumed_ms(), 1);
         assert_eq!(session.effect_log().len(), 1);
@@ -2765,8 +2765,8 @@ mod tests {
             budget_consumed_ms: 2,
             metadata: BTreeMap::new(),
         };
-        let json = serde_json::to_string(&entry).unwrap();
-        let restored: LifecycleEvidenceEntry = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let restored: LifecycleEvidenceEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, restored);
         assert_eq!(
             restored.error_code.as_deref(),
@@ -2797,8 +2797,8 @@ mod tests {
             budget_consumed_ms: 2,
             metadata,
         };
-        let json = serde_json::to_string(&entry).unwrap();
-        let restored: LifecycleEvidenceEntry = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let restored: LifecycleEvidenceEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, restored);
         assert_eq!(restored.metadata.len(), 2);
         assert_eq!(restored.metadata["publisher"], "acme-corp");
@@ -2816,14 +2816,14 @@ mod tests {
 
         binding
             .load_extension("ext-1", &mut cx, "d-1", "p-1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(binding.evidence_count(), 1);
         assert_eq!(
             binding.evidence_log().len() as u64,
             binding.evidence_count()
         );
 
-        binding.start_session("ext-1", "sess-1", "t-s1").unwrap();
+        binding.start_session("ext-1", "sess-1", "t-s1").expect("serde deserialization should succeed");
         assert_eq!(binding.evidence_count(), 2);
         assert_eq!(
             binding.evidence_log().len() as u64,
@@ -2862,8 +2862,8 @@ mod tests {
         assert_eq!(report.budget_consumed_ms, 42);
 
         // Serde preserves all fields
-        let json = serde_json::to_string(&report).unwrap();
-        let restored: CellCloseReport = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let restored: CellCloseReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert!(restored.drain_timeout_escalated);
         assert_eq!(restored.close_reason, "BudgetExhausted");
     }
@@ -2877,14 +2877,14 @@ mod tests {
 
         binding
             .load_extension("ext-1", &mut cx, "d-1", "p-1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         // Duplicate load with same ID now returns CellAlreadyExists
         let err = binding
             .load_extension("ext-1", &mut cx, "d-2", "p-2")
             .unwrap_err();
         assert!(matches!(err, CellError::CellAlreadyExists { .. }));
         // Original cell is preserved
-        let cell = binding.manager().get("ext-1").unwrap();
+        let cell = binding.manager().get("ext-1").expect("serde deserialization should succeed");
         assert_eq!(cell.decision_id(), "d-1");
         assert_eq!(cell.policy_id(), "p-1");
     }
@@ -2894,7 +2894,7 @@ mod tests {
     #[test]
     fn delegate_cell_trace_id_propagated() {
         let mut mgr = CellManager::new();
-        let cell = mgr.create_delegate_cell("del-1", "trace-del").unwrap();
+        let cell = mgr.create_delegate_cell("del-1", "trace-del").expect("serde deserialization should succeed");
         assert_eq!(cell.trace_id(), "trace-del");
         assert_eq!(cell.kind(), CellKind::Delegate);
         assert_eq!(cell.cell_id(), "del-1");
@@ -2912,7 +2912,7 @@ mod tests {
                 CancelReason::OperatorShutdown,
                 DrainDeadline::default(),
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(result.success);
 
         let closed = mgr.closed_results();
@@ -2944,11 +2944,11 @@ mod tests {
         let mut cx = mock_cx(500);
 
         cell.execute_effect(&mut cx, EffectCategory::Hostcall, "op-hc")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         cell.execute_effect(&mut cx, EffectCategory::PolicyCheck, "op-pc")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         cell.execute_effect(&mut cx, EffectCategory::TelemetryEmit, "op-te")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let log = cell.effect_log();
         assert_eq!(log.len(), 3);
@@ -2970,7 +2970,7 @@ mod tests {
         let mut cell = ExecutionCell::with_context("ev-cell", CellKind::Extension, "t", "d", "p");
         let mut cx = mock_cx(200);
         cell.execute_effect(&mut cx, EffectCategory::Hostcall, "some-op")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let events = cell.events();
         assert_eq!(events.len(), 1);
@@ -2987,7 +2987,7 @@ mod tests {
         let mut cx = mock_cx(500);
         binding
             .load_extension("ext-kind", &mut cx, "d", "p")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let evidence = binding.evidence_log();
         assert!(!evidence.is_empty());
@@ -2999,7 +2999,7 @@ mod tests {
     fn create_session_inherits_parent_context() {
         let mut parent =
             ExecutionCell::with_context("ext-p", CellKind::Extension, "t-p", "d-p", "p-p");
-        let session = parent.create_session("sess-1", "t-sess").unwrap();
+        let session = parent.create_session("sess-1", "t-sess").expect("serde deserialization should succeed");
         assert_eq!(session.kind(), CellKind::Session);
         assert_eq!(session.decision_id(), "d-p");
         assert_eq!(session.policy_id(), "p-p");

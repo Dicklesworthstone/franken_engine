@@ -648,7 +648,7 @@ mod tests {
     use crate::ifc_artifacts::DeclassificationRoute;
 
     fn test_key() -> SigningKey {
-        SigningKey::from_bytes([42u8; 32]).unwrap()
+        SigningKey::from_bytes([42u8; 32]).expect("serde deserialization should succeed")
     }
 
     fn make_policy() -> FlowPolicy {
@@ -739,13 +739,13 @@ mod tests {
 
         let receipt = pipeline
             .process(&request, &policy, &low_loss(), &key)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(receipt.decision, DeclassificationDecision::Allow);
         assert_eq!(receipt.source_label, Label::Secret);
         assert_eq!(receipt.sink_clearance, Label::Internal);
         assert_eq!(receipt.decision_contract_id, request.decision_contract_id);
         assert!(!receipt.signature.is_sentinel());
-        receipt.verify(&key.verification_key()).unwrap();
+        receipt.verify(&key.verification_key()).expect("serde deserialization should succeed");
     }
 
     #[test]
@@ -756,7 +756,7 @@ mod tests {
 
         pipeline
             .process(&request, &policy, &low_loss(), &test_key())
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let events = pipeline.events();
         assert!(events.len() >= 5);
@@ -778,7 +778,7 @@ mod tests {
 
         pipeline
             .process(&request, &policy, &low_loss(), &test_key())
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(pipeline.receipts().len(), 1);
     }
 
@@ -818,7 +818,7 @@ mod tests {
 
         let result = pipeline.process(&request, &policy, &high_loss(), &test_key());
         // High loss should produce a deny receipt (not an error)
-        let receipt = result.unwrap();
+        let receipt = result.expect("serde deserialization should succeed");
         assert_eq!(receipt.decision, DeclassificationDecision::Deny);
     }
 
@@ -833,7 +833,7 @@ mod tests {
 
         let receipt = pipeline
             .process(&request, &policy, &low_loss(), &test_key())
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(receipt.decision, DeclassificationDecision::Allow);
         assert_eq!(receipt.declassification_route_ref, "emergency");
         assert_eq!(receipt.decision_contract_id, request.decision_contract_id);
@@ -852,7 +852,7 @@ mod tests {
 
         pipeline
             .process(&request, &policy, &low_loss(), &test_key())
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let grant = pipeline
             .check_emergency_grant(
@@ -862,7 +862,7 @@ mod tests {
                 &request.decision_contract_id,
                 request.timestamp_ms,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(!grant.review_completed);
         assert!(!grant.is_expired(request.timestamp_ms));
         assert_eq!(grant.extension_id, request.extension_id);
@@ -878,7 +878,7 @@ mod tests {
 
         pipeline
             .process(&request, &policy, &low_loss(), &test_key())
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Check after expiry
         let far_future = request.timestamp_ms + 1_000_000;
@@ -904,7 +904,7 @@ mod tests {
 
         pipeline
             .process(&request, &policy, &low_loss(), &test_key())
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let grant_id = format!("emg-{}", request.request_id);
         assert!(pipeline.complete_emergency_review(&grant_id));
@@ -921,14 +921,14 @@ mod tests {
 
         // Allow
         let req1 = make_request("declass-secret-internal", Label::Secret, Label::Internal);
-        pipeline.process(&req1, &policy, &low_loss(), &key).unwrap();
+        pipeline.process(&req1, &policy, &low_loss(), &key).expect("serde deserialization should succeed");
 
         // Deny (high loss)
         let mut req2 = make_request("declass-conf-public", Label::Confidential, Label::Public);
         req2.request_id = "req-2".to_string();
         pipeline
             .process(&req2, &policy, &high_loss(), &key)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let stats = pipeline.stats();
         assert_eq!(stats.decision_count, 2);
@@ -948,7 +948,7 @@ mod tests {
         let mut receipts = Vec::new();
         for _ in 0..100 {
             let mut pipeline = DeclassificationPipeline::default();
-            let receipt = pipeline.process(&request, &policy, &loss, &key).unwrap();
+            let receipt = pipeline.process(&request, &policy, &loss, &key).expect("serde deserialization should succeed");
             receipts.push(receipt);
         }
 
@@ -970,8 +970,8 @@ mod tests {
     #[test]
     fn request_serde_roundtrip() {
         let req = make_request("route-1", Label::Secret, Label::Internal);
-        let json = serde_json::to_string(&req).unwrap();
-        let parsed: DeclassificationRequest = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&req).expect("serde deserialization should succeed");
+        let parsed: DeclassificationRequest = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(req, parsed);
     }
 
@@ -992,8 +992,8 @@ mod tests {
             },
         ];
         for r in results {
-            let json = serde_json::to_string(&r).unwrap();
-            let parsed: PolicyEvalResult = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+            let parsed: PolicyEvalResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(r, parsed);
         }
     }
@@ -1001,8 +1001,8 @@ mod tests {
     #[test]
     fn loss_assessment_serde_roundtrip() {
         let loss = low_loss();
-        let json = serde_json::to_string(&loss).unwrap();
-        let parsed: LossAssessment = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&loss).expect("serde deserialization should succeed");
+        let parsed: LossAssessment = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(loss, parsed);
     }
 
@@ -1016,8 +1016,8 @@ mod tests {
             component: "declassification_pipeline".to_string(),
             error_code: None,
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let parsed: PipelineEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let parsed: PipelineEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, parsed);
     }
 
@@ -1059,8 +1059,8 @@ mod tests {
             },
         ];
         for err in errors {
-            let json = serde_json::to_string(&err).unwrap();
-            let parsed: PipelineError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+            let parsed: PipelineError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(err, parsed);
         }
     }
@@ -1068,8 +1068,8 @@ mod tests {
     #[test]
     fn pipeline_config_serde_roundtrip() {
         let config = PipelineConfig::default();
-        let json = serde_json::to_string(&config).unwrap();
-        let parsed: PipelineConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let parsed: PipelineConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, parsed);
     }
 
@@ -1085,8 +1085,8 @@ mod tests {
             expiry_ms: 1_700_000_300_000,
             review_completed: false,
         };
-        let json = serde_json::to_string(&grant).unwrap();
-        let parsed: EmergencyGrant = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&grant).expect("serde deserialization should succeed");
+        let parsed: EmergencyGrant = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(grant, parsed);
     }
 
@@ -1098,8 +1098,8 @@ mod tests {
             deny_count: 3,
             emergency_grants_active: 1,
         };
-        let json = serde_json::to_string(&stats).unwrap();
-        let parsed: PipelineStats = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&stats).expect("serde deserialization should succeed");
+        let parsed: PipelineStats = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(stats, parsed);
     }
 
@@ -1126,7 +1126,7 @@ mod tests {
         let request = make_request("declass-secret-internal", Label::Secret, Label::Internal);
         pipeline
             .process(&request, &policy, &low_loss(), &test_key())
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         for event in pipeline.events() {
             assert_eq!(event.component, "declassification_pipeline");
@@ -1142,7 +1142,7 @@ mod tests {
         let request = make_request("declass-secret-internal", Label::Secret, Label::Internal);
         pipeline
             .process(&request, &policy, &low_loss(), &test_key())
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(!pipeline.events().is_empty());
 
         let drained = pipeline.drain_events();
@@ -1161,8 +1161,8 @@ mod tests {
         let r1 = make_request("declass-secret-internal", Label::Secret, Label::Internal);
         let r2 = make_request("declass-conf-public", Label::Confidential, Label::Public);
 
-        let receipt1 = pipeline.process(&r1, &policy, &low_loss(), &key).unwrap();
-        let receipt2 = pipeline.process(&r2, &policy, &low_loss(), &key).unwrap();
+        let receipt1 = pipeline.process(&r1, &policy, &low_loss(), &key).expect("serde deserialization should succeed");
+        let receipt2 = pipeline.process(&r2, &policy, &low_loss(), &key).expect("serde deserialization should succeed");
 
         assert_eq!(
             receipt1.declassification_route_ref,
@@ -1186,7 +1186,7 @@ mod tests {
 
         pipeline
             .process(&request, &policy, &low_loss(), &test_key())
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(pipeline.events().is_empty());
     }
 
@@ -1359,7 +1359,7 @@ mod tests {
 
         pipeline
             .process(&request, &policy, &low_loss(), &test_key())
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let grant_id = format!("emg-{}", request.request_id);
         assert!(
@@ -1448,7 +1448,7 @@ mod tests {
         ];
         let set: BTreeSet<String> = variants
             .iter()
-            .map(|v| serde_json::to_string(v).unwrap())
+            .map(|v| serde_json::to_string(v).expect("serde deserialization should succeed"))
             .collect();
         assert_eq!(
             set.len(),
@@ -1464,7 +1464,7 @@ mod tests {
         let request = make_request("declass-secret-internal", Label::Secret, Label::Internal);
         let receipt = pipeline
             .process(&request, &policy, &low_loss(), &test_key())
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let sentinel = Signature::from_bytes(SIGNATURE_SENTINEL);
         assert_ne!(receipt.signature, sentinel, "receipt must be signed");
     }
@@ -1476,7 +1476,7 @@ mod tests {
         let request = make_request("declass-secret-internal", Label::Secret, Label::Internal);
         let receipt = pipeline
             .process(&request, &policy, &low_loss(), &test_key())
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(!receipt.replay_linkage.is_empty());
     }
 
@@ -1484,8 +1484,8 @@ mod tests {
     fn request_serde_preserves_emergency_flag() {
         let mut req = make_request("route-1", Label::Secret, Label::Internal);
         req.is_emergency = true;
-        let json = serde_json::to_string(&req).unwrap();
-        let parsed: DeclassificationRequest = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&req).expect("serde deserialization should succeed");
+        let parsed: DeclassificationRequest = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert!(parsed.is_emergency);
     }
 
@@ -1498,7 +1498,7 @@ mod tests {
 
         pipeline
             .process(&request, &policy, &low_loss(), &test_key())
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let stats = pipeline.stats();
         assert_eq!(stats.emergency_grants_active, 1);
@@ -1524,7 +1524,7 @@ mod tests {
         for i in 0..5 {
             let mut req = make_request("declass-secret-internal", Label::Secret, Label::Internal);
             req.request_id = format!("req-{i}");
-            pipeline.process(&req, &policy, &low_loss(), &key).unwrap();
+            pipeline.process(&req, &policy, &low_loss(), &key).expect("serde deserialization should succeed");
         }
         assert_eq!(pipeline.receipts().len(), 5);
     }
@@ -1538,7 +1538,7 @@ mod tests {
         let request = make_request("declass-secret-internal", Label::Secret, Label::Internal);
         let receipt = pipeline
             .process(&request, &policy, &low_loss(), &test_key())
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let cloned = receipt.clone();
         assert_eq!(receipt, cloned);
     }
@@ -1550,17 +1550,17 @@ mod tests {
         let request = make_request("declass-secret-internal", Label::Secret, Label::Internal);
         let receipt = pipeline
             .process(&request, &policy, &low_loss(), &test_key())
-            .unwrap();
-        let json = serde_json::to_string(&receipt).unwrap();
-        let back: DeclassificationReceipt = serde_json::from_str(&json).unwrap();
+            .expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
+        let back: DeclassificationReceipt = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(receipt, back);
     }
 
     #[test]
     fn request_serde_roundtrip_enrichment() {
         let request = make_request("route-1", Label::Secret, Label::Internal);
-        let json = serde_json::to_string(&request).unwrap();
-        let back: DeclassificationRequest = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&request).expect("serde deserialization should succeed");
+        let back: DeclassificationRequest = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(request, back);
     }
 
@@ -1588,7 +1588,7 @@ mod tests {
         let request = make_request("declass-secret-internal", Label::Secret, Label::Internal);
         pipeline
             .process(&request, &policy, &low_loss(), &key)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let stats = pipeline.stats();
         assert_eq!(stats.decision_count, 1);
         assert_eq!(stats.allow_count, 1);
@@ -1621,8 +1621,8 @@ mod tests {
             },
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: PipelineError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: PipelineError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -1636,8 +1636,8 @@ mod tests {
             Label::TopSecret,
         ];
         for l in &labels {
-            let json = serde_json::to_string(l).unwrap();
-            let back: Label = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(l).expect("serde deserialization should succeed");
+            let back: Label = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*l, back);
         }
     }
@@ -1651,7 +1651,7 @@ mod tests {
             let request = make_request("declass-secret-internal", Label::Secret, Label::Internal);
             pipeline
                 .process(&request, &policy, &low_loss(), &key)
-                .unwrap()
+                .expect("serde deserialization should succeed")
         };
         let r1 = run();
         let r2 = run();
@@ -1667,8 +1667,8 @@ mod tests {
         let request = make_request("declass-secret-internal", Label::Secret, Label::Internal);
         let receipt = pipeline
             .process(&request, &policy, &low_loss(), &test_key())
-            .unwrap();
-        let json = serde_json::to_string(&receipt).unwrap();
+            .expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
         assert!(json.contains("\"receipt_id\""));
         assert!(json.contains("\"source_label\""));
         assert!(json.contains("\"sink_clearance\""));
@@ -1683,10 +1683,10 @@ mod tests {
         let request = make_request("declass-secret-internal", Label::Secret, Label::Internal);
         pipeline
             .process(&request, &policy, &low_loss(), &key)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let stats = pipeline.stats();
-        let json = serde_json::to_string(&stats).unwrap();
-        let back: PipelineStats = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&stats).expect("serde deserialization should succeed");
+        let back: PipelineStats = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(stats, back);
     }
 
@@ -1809,7 +1809,7 @@ mod tests {
         ];
         let set: BTreeSet<String> = variants
             .iter()
-            .map(|v| serde_json::to_string(v).unwrap())
+            .map(|v| serde_json::to_string(v).expect("serde deserialization should succeed"))
             .collect();
         assert_eq!(set.len(), variants.len());
     }
@@ -1822,7 +1822,7 @@ mod tests {
             DeclassificationDecision::Deny,
         ]
         .iter()
-        .map(|v| serde_json::to_string(v).unwrap())
+        .map(|v| serde_json::to_string(v).expect("serde deserialization should succeed"))
         .collect();
         assert_eq!(set.len(), 2);
     }
@@ -1924,8 +1924,8 @@ mod tests {
         let cloned = original.clone();
         assert_eq!(original, cloned);
         // The Clone should produce an equal but independent value
-        let json_orig = serde_json::to_string(&original).unwrap();
-        let json_clone = serde_json::to_string(&cloned).unwrap();
+        let json_orig = serde_json::to_string(&original).expect("serde deserialization should succeed");
+        let json_clone = serde_json::to_string(&cloned).expect("serde deserialization should succeed");
         assert_eq!(json_orig, json_clone);
     }
 
@@ -1934,7 +1934,7 @@ mod tests {
     #[test]
     fn request_json_field_names_stable() {
         let req = make_request("r1", Label::Secret, Label::Internal);
-        let json = serde_json::to_string(&req).unwrap();
+        let json = serde_json::to_string(&req).expect("serde deserialization should succeed");
         for field in &[
             "request_id",
             "source_label",
@@ -1954,7 +1954,7 @@ mod tests {
     #[test]
     fn loss_assessment_json_field_names_stable() {
         let loss = low_loss();
-        let json = serde_json::to_string(&loss).unwrap();
+        let json = serde_json::to_string(&loss).expect("serde deserialization should succeed");
         for field in &[
             "expected_loss_milli",
             "data_sensitivity_bps",
@@ -1976,7 +1976,7 @@ mod tests {
             component: "c".into(),
             error_code: Some("e".into()),
         };
-        let json = serde_json::to_string(&event).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
         for field in &[
             "request_id",
             "trace_id",
@@ -1992,7 +1992,7 @@ mod tests {
     #[test]
     fn pipeline_config_json_field_names_stable() {
         let cfg = PipelineConfig::default();
-        let json = serde_json::to_string(&cfg).unwrap();
+        let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
         for field in &[
             "loss_threshold_milli",
             "emergency_max_duration_ms",
@@ -2014,7 +2014,7 @@ mod tests {
             expiry_ms: 100,
             review_completed: false,
         };
-        let json = serde_json::to_string(&grant).unwrap();
+        let json = serde_json::to_string(&grant).expect("serde deserialization should succeed");
         for field in &[
             "grant_id",
             "request_id",
@@ -2037,7 +2037,7 @@ mod tests {
             deny_count: 3,
             emergency_grants_active: 4,
         };
-        let json = serde_json::to_string(&stats).unwrap();
+        let json = serde_json::to_string(&stats).expect("serde deserialization should succeed");
         for field in &[
             "decision_count",
             "allow_count",
@@ -2198,8 +2198,8 @@ mod tests {
             summary: "extreme".to_string(),
         };
         assert!(!loss.below_threshold(u64::MAX)); // u64::MAX < u64::MAX is false
-        let json = serde_json::to_string(&loss).unwrap();
-        let back: LossAssessment = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&loss).expect("serde deserialization should succeed");
+        let back: LossAssessment = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(loss, back);
     }
 
@@ -2250,8 +2250,8 @@ mod tests {
             is_emergency: false,
             timestamp_ms: 0,
         };
-        let json = serde_json::to_string(&req).unwrap();
-        let back: DeclassificationRequest = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&req).expect("serde deserialization should succeed");
+        let back: DeclassificationRequest = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(req, back);
     }
 
@@ -2269,8 +2269,8 @@ mod tests {
             is_emergency: false,
             timestamp_ms: u64::MAX,
         };
-        let json = serde_json::to_string(&req).unwrap();
-        let back: DeclassificationRequest = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&req).expect("serde deserialization should succeed");
+        let back: DeclassificationRequest = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(req, back);
     }
 
@@ -2284,8 +2284,8 @@ mod tests {
             component: "c".into(),
             error_code: None,
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let back: PipelineEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let back: PipelineEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
         assert!(back.error_code.is_none());
     }
@@ -2300,8 +2300,8 @@ mod tests {
             component: "c".into(),
             error_code: Some("ERR_99".into()),
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let back: PipelineEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let back: PipelineEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event.error_code, back.error_code);
     }
 
@@ -2312,8 +2312,8 @@ mod tests {
             emergency_max_duration_ms: 0,
             emit_stage_events: false,
         };
-        let json = serde_json::to_string(&cfg).unwrap();
-        let back: PipelineConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
+        let back: PipelineConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cfg, back);
     }
 
@@ -2324,8 +2324,8 @@ mod tests {
             emergency_max_duration_ms: u64::MAX,
             emit_stage_events: true,
         };
-        let json = serde_json::to_string(&cfg).unwrap();
-        let back: PipelineConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
+        let back: PipelineConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cfg, back);
     }
 
@@ -2337,8 +2337,8 @@ mod tests {
             deny_count: 0,
             emergency_grants_active: 0,
         };
-        let json = serde_json::to_string(&stats).unwrap();
-        let back: PipelineStats = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&stats).expect("serde deserialization should succeed");
+        let back: PipelineStats = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(stats, back);
     }
 
@@ -2350,8 +2350,8 @@ mod tests {
             deny_count: u64::MAX,
             emergency_grants_active: u64::MAX,
         };
-        let json = serde_json::to_string(&stats).unwrap();
-        let back: PipelineStats = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&stats).expect("serde deserialization should succeed");
+        let back: PipelineStats = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(stats, back);
     }
 
@@ -2372,8 +2372,8 @@ mod tests {
             is_emergency: false,
             timestamp_ms: 100,
         };
-        let json = serde_json::to_string(&req).unwrap();
-        let back: DeclassificationRequest = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&req).expect("serde deserialization should succeed");
+        let back: DeclassificationRequest = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(req, back);
     }
 
@@ -2391,8 +2391,8 @@ mod tests {
             expiry_ms: u64::MAX,
             review_completed: true,
         };
-        let json = serde_json::to_string(&grant).unwrap();
-        let back: EmergencyGrant = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&grant).expect("serde deserialization should succeed");
+        let back: EmergencyGrant = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(grant, back);
         assert!(back.review_completed);
     }
@@ -2403,8 +2403,8 @@ mod tests {
             route_id: "empty-conds".into(),
             conditions_met: vec![],
         };
-        let json = serde_json::to_string(&r).unwrap();
-        let back: PolicyEvalResult = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let back: PolicyEvalResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 
@@ -2414,8 +2414,8 @@ mod tests {
             route_id: "r-many".into(),
             failed_conditions: (0..20).map(|i| format!("cond_{i}")).collect(),
         };
-        let json = serde_json::to_string(&r).unwrap();
-        let back: PolicyEvalResult = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let back: PolicyEvalResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 
@@ -2444,8 +2444,8 @@ mod tests {
         ];
         for e in ifc_errors {
             let pe = PipelineError::ValidationError(e);
-            let json = serde_json::to_string(&pe).unwrap();
-            let back: PipelineError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&pe).expect("serde deserialization should succeed");
+            let back: PipelineError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(pe, back);
         }
     }
@@ -2459,8 +2459,8 @@ mod tests {
             historical_abuse_detected: true,
             summary: "maximum exposure scenario with long description text".to_string(),
         };
-        let json = serde_json::to_string(&loss).unwrap();
-        let back: LossAssessment = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&loss).expect("serde deserialization should succeed");
+        let back: LossAssessment = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(loss, back);
     }
 
@@ -2591,7 +2591,7 @@ mod tests {
         // Extension mismatch => PolicyUnavailable, but emergency still fires
         let result = pipeline.process(&request, &policy, &low_loss(), &test_key());
         // Emergency pathway should bypass the PolicyUnavailable error
-        let receipt = result.unwrap();
+        let receipt = result.expect("serde deserialization should succeed");
         assert_eq!(receipt.decision, DeclassificationDecision::Allow);
     }
 
@@ -2605,7 +2605,7 @@ mod tests {
             let mut req = make_request(&format!("bad-route-{i}"), Label::Secret, Label::Public);
             req.request_id = format!("req-emg-{i}");
             req.is_emergency = true;
-            pipeline.process(&req, &policy, &low_loss(), &key).unwrap();
+            pipeline.process(&req, &policy, &low_loss(), &key).expect("serde deserialization should succeed");
         }
 
         let stats = pipeline.stats();
@@ -2620,7 +2620,7 @@ mod tests {
         let request = make_request("declass-secret-internal", Label::Secret, Label::Internal);
         let receipt = pipeline
             .process(&request, &policy, &high_loss(), &test_key())
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(receipt.decision, DeclassificationDecision::Deny);
         assert_eq!(pipeline.receipts().len(), 1);
         assert_eq!(
@@ -2643,7 +2643,7 @@ mod tests {
 
         pipeline
             .process(&request, &policy, &low_loss(), &test_key())
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Grant should be active at timestamp + 59_999
         assert!(
@@ -2680,7 +2680,7 @@ mod tests {
 
         pipeline
             .process(&request, &policy, &low_loss(), &test_key())
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Correct labels find the grant
         assert!(
@@ -2750,7 +2750,7 @@ mod tests {
         let request = make_request("declass-conf-public", Label::Confidential, Label::Public);
         let receipt = pipeline
             .process(&request, &policy, &low_loss(), &test_key())
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(receipt.decision, DeclassificationDecision::Allow);
         assert_eq!(receipt.source_label, Label::Confidential);
         assert_eq!(receipt.sink_clearance, Label::Public);
@@ -2764,7 +2764,7 @@ mod tests {
         let request = make_request("declass-secret-internal", Label::Secret, Label::Internal);
         let receipt = pipeline
             .process(&request, &policy, &low_loss(), &test_key())
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(
             receipt.receipt_id.starts_with("rcpt-"),
             "receipt_id should start with 'rcpt-'"
@@ -2778,7 +2778,7 @@ mod tests {
         let request = make_request("declass-secret-internal", Label::Secret, Label::Internal);
         let receipt = pipeline
             .process(&request, &policy, &low_loss(), &test_key())
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(receipt.timestamp_ms, request.timestamp_ms);
     }
 
@@ -2790,7 +2790,7 @@ mod tests {
         let loss = low_loss();
         let receipt = pipeline
             .process(&request, &policy, &loss, &test_key())
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(receipt.loss_assessment_milli, loss.expected_loss_milli);
     }
 }

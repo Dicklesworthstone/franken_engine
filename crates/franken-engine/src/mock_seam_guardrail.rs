@@ -888,8 +888,8 @@ mod tests {
     #[test]
     fn pattern_category_serde_round_trip() {
         for c in PatternCategory::all() {
-            let json = serde_json::to_string(c).unwrap();
-            let back: PatternCategory = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(c).expect("serde deserialization should succeed");
+            let back: PatternCategory = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*c, back);
         }
     }
@@ -910,8 +910,8 @@ mod tests {
             ScopeClassification::Production,
             ScopeClassification::Unknown,
         ] {
-            let json = serde_json::to_string(&s).unwrap();
-            let back: ScopeClassification = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+            let back: ScopeClassification = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(s, back);
         }
     }
@@ -942,7 +942,7 @@ mod tests {
             PatternCategory::MockContextType,
             "custom mock type".to_string(),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(reg.total_count, before + 1);
     }
 
@@ -973,8 +973,8 @@ mod tests {
     #[test]
     fn registry_serde_round_trip() {
         let reg = build_default_registry();
-        let json = serde_json::to_string(&reg).unwrap();
-        let back: PatternRegistry = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&reg).expect("serde deserialization should succeed");
+        let back: PatternRegistry = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(reg.total_count, back.total_count);
         assert_eq!(reg.registry_hash, back.registry_hash);
     }
@@ -1071,8 +1071,8 @@ mod tests {
         let waiver = empty_waiver_policy();
         let content = "use MockCx;\n";
         let result = scan_file_content("src/bad.rs", content, &reg, &waiver, epoch(1));
-        let json = serde_json::to_string(&result).unwrap();
-        let back: FileScanResult = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let back: FileScanResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result.verdict, back.verdict);
         assert_eq!(result.file_hash, back.file_hash);
     }
@@ -1097,7 +1097,7 @@ mod tests {
             epoch(1),
             Some(epoch(100)),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(p.waivers.len(), 1);
     }
 
@@ -1113,7 +1113,7 @@ mod tests {
             epoch(1),
             None,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let err = add_waiver(
             &mut p,
             "w-001".to_string(),
@@ -1153,7 +1153,7 @@ mod tests {
             epoch(1),
             None,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert!(is_waived(&p, "src/legacy.rs", "MockCx", epoch(5)));
         assert!(!is_waived(&p, "src/legacy.rs", "MockBudget", epoch(5)));
         assert!(!is_waived(&p, "src/other.rs", "MockCx", epoch(5)));
@@ -1171,7 +1171,7 @@ mod tests {
             epoch(1),
             Some(epoch(10)),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert!(is_waived(&p, "src/legacy.rs", "MockCx", epoch(5)));
         assert!(!is_waived(&p, "src/legacy.rs", "MockCx", epoch(11)));
     }
@@ -1189,7 +1189,7 @@ mod tests {
             epoch(1),
             None,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let content = "let cx = MockCx::new();\n";
         let result = scan_file_content("src/waived.rs", content, &reg, &waiver, epoch(1));
         // MockCx should be waived, but MockBudget etc. should not appear.
@@ -1208,9 +1208,9 @@ mod tests {
             epoch(1),
             Some(epoch(100)),
         )
-        .unwrap();
-        let json = serde_json::to_string(&p).unwrap();
-        let back: WaiverPolicy = serde_json::from_str(&json).unwrap();
+        .expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
+        let back: WaiverPolicy = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(p.waivers.len(), back.waivers.len());
         assert_eq!(p.policy_hash, back.policy_hash);
     }
@@ -1222,7 +1222,7 @@ mod tests {
         let reg = build_default_registry();
         let waiver = empty_waiver_policy();
         let files: Vec<(&str, &str)> = vec![("src/a.rs", "fn a() {}"), ("src/b.rs", "fn b() {}")];
-        let report = run_guard_sweep(&files, &reg, &waiver, epoch(1)).unwrap();
+        let report = run_guard_sweep(&files, &reg, &waiver, epoch(1)).expect("serde deserialization should succeed");
         assert_eq!(report.decision, GateDecision::Pass);
         assert_eq!(report.files_scanned, 2);
         assert_eq!(report.clean_files, 2);
@@ -1233,7 +1233,7 @@ mod tests {
         let reg = build_default_registry();
         let waiver = empty_waiver_policy();
         let files: Vec<(&str, &str)> = vec![("src/bad.rs", "let cx = MockCx::new();")];
-        let report = run_guard_sweep(&files, &reg, &waiver, epoch(1)).unwrap();
+        let report = run_guard_sweep(&files, &reg, &waiver, epoch(1)).expect("serde deserialization should succeed");
         assert_eq!(report.decision, GateDecision::Fail);
         assert_eq!(report.files_with_violations, 1);
         assert!(report.total_production_violations > 0);
@@ -1244,7 +1244,7 @@ mod tests {
         let reg = build_default_registry();
         let waiver = empty_waiver_policy();
         let files: Vec<(&str, &str)> = vec![("tests/test_a.rs", "use MockCx;\nuse MockBudget;")];
-        let report = run_guard_sweep(&files, &reg, &waiver, epoch(1)).unwrap();
+        let report = run_guard_sweep(&files, &reg, &waiver, epoch(1)).expect("serde deserialization should succeed");
         assert_eq!(report.decision, GateDecision::Pass);
         assert_eq!(report.files_with_test_only, 1);
         assert_eq!(report.total_production_violations, 0);
@@ -1255,8 +1255,8 @@ mod tests {
         let reg = build_default_registry();
         let waiver = empty_waiver_policy();
         let files: Vec<(&str, &str)> = vec![("src/a.rs", "fn a() {}")];
-        let r1 = run_guard_sweep(&files, &reg, &waiver, epoch(1)).unwrap();
-        let r2 = run_guard_sweep(&files, &reg, &waiver, epoch(1)).unwrap();
+        let r1 = run_guard_sweep(&files, &reg, &waiver, epoch(1)).expect("serde deserialization should succeed");
+        let r2 = run_guard_sweep(&files, &reg, &waiver, epoch(1)).expect("serde deserialization should succeed");
         assert_eq!(r1.report_hash, r2.report_hash);
     }
 
@@ -1265,9 +1265,9 @@ mod tests {
         let reg = build_default_registry();
         let waiver = empty_waiver_policy();
         let files: Vec<(&str, &str)> = vec![("src/bad.rs", "let cx = MockCx::new();")];
-        let report = run_guard_sweep(&files, &reg, &waiver, epoch(1)).unwrap();
-        let json = serde_json::to_string(&report).unwrap();
-        let back: GuardReport = serde_json::from_str(&json).unwrap();
+        let report = run_guard_sweep(&files, &reg, &waiver, epoch(1)).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let back: GuardReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report.decision, back.decision);
         assert_eq!(report.report_hash, back.report_hash);
     }
@@ -1278,7 +1278,7 @@ mod tests {
         let waiver = empty_waiver_policy();
         let files: Vec<(&str, &str)> =
             vec![("src/bad.rs", "MockCx::new();\ntrace_id_from_seed(42);\n")];
-        let report = run_guard_sweep(&files, &reg, &waiver, epoch(1)).unwrap();
+        let report = run_guard_sweep(&files, &reg, &waiver, epoch(1)).expect("serde deserialization should succeed");
         assert!(report.violation_categories.contains("mock_context_type"));
         assert!(report.violation_categories.contains("seed_derived_trace"));
     }
@@ -1302,8 +1302,8 @@ mod tests {
             FileVerdict::TestOnlyUsage,
             FileVerdict::ProductionViolation,
         ] {
-            let json = serde_json::to_string(&v).unwrap();
-            let back: FileVerdict = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let back: FileVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(v, back);
         }
     }
@@ -1327,8 +1327,8 @@ mod tests {
             GateDecision::Fail,
             GateDecision::AbortedExcessViolations,
         ] {
-            let json = serde_json::to_string(&d).unwrap();
-            let back: GateDecision = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
+            let back: GateDecision = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(d, back);
         }
     }
@@ -1375,8 +1375,8 @@ mod tests {
             },
         ];
         for e in &errors {
-            let json = serde_json::to_string(e).unwrap();
-            let back: GuardrailError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(e).expect("serde deserialization should succeed");
+            let back: GuardrailError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*e, back);
         }
     }
@@ -1388,7 +1388,7 @@ mod tests {
         let reg = build_default_registry();
         let waiver = empty_waiver_policy();
         let files: Vec<(&str, &str)> = vec![];
-        let report = run_guard_sweep(&files, &reg, &waiver, epoch(1)).unwrap();
+        let report = run_guard_sweep(&files, &reg, &waiver, epoch(1)).expect("serde deserialization should succeed");
         assert_eq!(report.decision, GateDecision::Pass);
         assert_eq!(report.files_scanned, 0);
     }
@@ -1402,7 +1402,7 @@ mod tests {
             ("src/bad.rs", "let b = MockBudget::new(100);"),
             ("tests/ok.rs", "use MockCx;"),
         ];
-        let report = run_guard_sweep(&files, &reg, &waiver, epoch(1)).unwrap();
+        let report = run_guard_sweep(&files, &reg, &waiver, epoch(1)).expect("serde deserialization should succeed");
         assert_eq!(report.decision, GateDecision::Fail);
         assert_eq!(report.files_scanned, 3);
         assert_eq!(report.clean_files, 1);
@@ -1423,12 +1423,12 @@ mod tests {
             epoch(1),
             None,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let files: Vec<(&str, &str)> = vec![(
             "src/legacy.rs",
             "let cx = MockCx::new();\nlet b = MockBudget::new(10);",
         )];
-        let report = run_guard_sweep(&files, &reg, &waiver, epoch(1)).unwrap();
+        let report = run_guard_sweep(&files, &reg, &waiver, epoch(1)).expect("serde deserialization should succeed");
         assert_eq!(report.decision, GateDecision::Pass);
     }
 
@@ -1459,7 +1459,7 @@ mod tests {
             PatternCategory::HardcodedSentinel,
             "test sentinel".to_string(),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let waiver = empty_waiver_policy();
         let content = "let ctx = BOGUS_CONTEXT;\n";
         let result = scan_file_content("src/custom.rs", content, &reg, &waiver, epoch(1));

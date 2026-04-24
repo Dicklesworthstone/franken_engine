@@ -637,9 +637,9 @@ mod tests {
     fn runtime_mode_serde() {
         for mode in ReactRuntimeMode::ALL {
             // SAFETY: Test-only unwrap for serde serialization of known valid enum variants
-            let json = serde_json::to_string(mode).unwrap();
+            let json = serde_json::to_string(mode).expect("serde deserialization should succeed");
             // SAFETY: Test-only unwrap for serde deserialization of valid JSON roundtrip
-            let back: ReactRuntimeMode = serde_json::from_str(&json).unwrap();
+            let back: ReactRuntimeMode = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*mode, back);
         }
     }
@@ -661,9 +661,9 @@ mod tests {
     fn build_target_serde() {
         for target in ReactBuildTarget::ALL {
             // SAFETY: to_string cannot fail on derived Serialize enum
-            let json = serde_json::to_string(target).unwrap();
+            let json = serde_json::to_string(target).expect("serde deserialization should succeed");
             // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-            let back: ReactBuildTarget = serde_json::from_str(&json).unwrap();
+            let back: ReactBuildTarget = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*target, back);
         }
     }
@@ -678,9 +678,9 @@ mod tests {
     fn operator_command_serde() {
         for cmd in ReactOperatorCommand::ALL {
             // SAFETY: to_string cannot fail on derived Serialize enum
-            let json = serde_json::to_string(cmd).unwrap();
+            let json = serde_json::to_string(cmd).expect("serde deserialization should succeed");
             // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-            let back: ReactOperatorCommand = serde_json::from_str(&json).unwrap();
+            let back: ReactOperatorCommand = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*cmd, back);
         }
     }
@@ -698,9 +698,9 @@ mod tests {
         let langs = [ReactInputLanguage::Jsx, ReactInputLanguage::Tsx];
         for lang in &langs {
             // SAFETY: to_string cannot fail on derived Serialize enum
-            let json = serde_json::to_string(lang).unwrap();
+            let json = serde_json::to_string(lang).expect("serde deserialization should succeed");
             // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-            let back: ReactInputLanguage = serde_json::from_str(&json).unwrap();
+            let back: ReactInputLanguage = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*lang, back);
         }
     }
@@ -715,9 +715,9 @@ mod tests {
             DiagnosticSeverity::Hint,
         ] {
             // SAFETY: to_string cannot fail on derived Serialize enum
-            let json = serde_json::to_string(&sev).unwrap();
+            let json = serde_json::to_string(&sev).expect("serde deserialization should succeed");
             // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-            let back: DiagnosticSeverity = serde_json::from_str(&json).unwrap();
+            let back: DiagnosticSeverity = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(sev, back);
         }
     }
@@ -727,9 +727,9 @@ mod tests {
     fn category_serde() {
         let cat = DiagnosticCategory::JsxSyntax;
         // SAFETY: to_string cannot fail on derived Serialize enum
-        let json = serde_json::to_string(&cat).unwrap();
+        let json = serde_json::to_string(&cat).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let back: DiagnosticCategory = serde_json::from_str(&json).unwrap();
+        let back: DiagnosticCategory = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cat, back);
     }
 
@@ -753,9 +753,9 @@ mod tests {
             FeatureSupport::Deprecated,
         ] {
             // SAFETY: to_string cannot fail on derived Serialize enum
-            let json = serde_json::to_string(&fs).unwrap();
+            let json = serde_json::to_string(&fs).expect("serde deserialization should succeed");
             // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-            let back: FeatureSupport = serde_json::from_str(&json).unwrap();
+            let back: FeatureSupport = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(fs, back);
         }
     }
@@ -854,9 +854,9 @@ mod tests {
     fn contract_serde_roundtrip() {
         let contract = build_seed_contract();
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&contract).unwrap();
+        let json = serde_json::to_string(&contract).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let back: ReactOperatorContract = serde_json::from_str(&json).unwrap();
+        let back: ReactOperatorContract = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(contract.commands.len(), back.commands.len());
         assert_eq!(contract.content_hash(), back.content_hash());
     }
@@ -879,9 +879,9 @@ mod tests {
             location: Some("test.tsx:10:5".to_string()),
         };
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&diag).unwrap();
+        let json = serde_json::to_string(&diag).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let back: ReactDiagnostic = serde_json::from_str(&json).unwrap();
+        let back: ReactDiagnostic = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(diag, back);
     }
 
@@ -898,9 +898,9 @@ mod tests {
             input_hash: ContentHash::compute(b"test"),
         };
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&input).unwrap();
+        let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let back: ReactCompileInput = serde_json::from_str(&json).unwrap();
+        let back: ReactCompileInput = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(input, back);
     }
 
@@ -918,9 +918,9 @@ mod tests {
             target: ReactBuildTarget::Client,
         };
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&output).unwrap();
+        let json = serde_json::to_string(&output).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let back: ReactCompileOutput = serde_json::from_str(&json).unwrap();
+        let back: ReactCompileOutput = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(output, back);
     }
 

@@ -666,7 +666,7 @@ mod tests {
     #[test]
     fn single_observation_updates_count() {
         let mut det = test_detector("hostcall_rate");
-        det.observe(100_000).unwrap();
+        det.observe(100_000).expect("serde deserialization should succeed");
         assert_eq!(det.observation_count(), 1);
     }
 
@@ -674,7 +674,7 @@ mod tests {
     fn normal_observations_maintain_normal_regime() {
         let mut det = test_detector("hostcall_rate");
         for _ in 0..20 {
-            det.observe(300_000).unwrap(); // 0.3, well within normal
+            det.observe(300_000).expect("serde deserialization should succeed"); // 0.3, well within normal
         }
         assert_eq!(det.regime(), Regime::Normal);
         let events = det.drain_events();
@@ -688,13 +688,13 @@ mod tests {
 
         // Feed 10+ normal observations first to fill window
         for _ in 0..10 {
-            det.observe(300_000).unwrap();
+            det.observe(300_000).expect("serde deserialization should succeed");
         }
         assert_eq!(det.regime(), Regime::Normal);
 
         // Now feed high observations to push mean above elevated threshold
         for _ in 0..15 {
-            det.observe(950_000).unwrap();
+            det.observe(950_000).expect("serde deserialization should succeed");
         }
 
         // With window_size=10, after 10+ high obs the mean should be high
@@ -707,18 +707,18 @@ mod tests {
 
         // Fill with normal
         for _ in 0..10 {
-            det.observe(300_000).unwrap();
+            det.observe(300_000).expect("serde deserialization should succeed");
         }
 
         // Push to attack
         for _ in 0..15 {
-            det.observe(950_000).unwrap();
+            det.observe(950_000).expect("serde deserialization should succeed");
         }
 
         let events = det.drain_events();
         assert!(!events.is_empty());
 
-        let last = events.last().unwrap();
+        let last = events.last().expect("serde deserialization should succeed");
         assert_eq!(last.detector_id, "det-1");
         assert_eq!(last.metric_stream, "hostcall_rate");
     }
@@ -735,7 +735,7 @@ mod tests {
     fn run_length_increases_with_stable_observations() {
         let mut det = test_detector("m");
         for _ in 0..20 {
-            det.observe(500_000).unwrap();
+            det.observe(500_000).expect("serde deserialization should succeed");
         }
         // After stable observations, most probable run length should be > 0
         assert!(det.most_probable_run_length() > 0);
@@ -752,7 +752,7 @@ mod tests {
 
         let run = |obs: &[i64]| -> (Vec<Regime>, Vec<RegimeChangeEvent>) {
             let mut det = test_detector("m");
-            let regimes: Vec<Regime> = obs.iter().map(|&x| det.observe(x).unwrap()).collect();
+            let regimes: Vec<Regime> = obs.iter().map(|&x| det.observe(x).expect("serde deserialization should succeed")).collect();
             let events = det.drain_events();
             (regimes, events)
         };
@@ -776,8 +776,8 @@ mod tests {
         assert_eq!(multi.regime("hostcall_rate"), Some(Regime::Normal));
         assert_eq!(multi.regime("error_rate"), Some(Regime::Normal));
 
-        multi.observe("hostcall_rate", 300_000).unwrap();
-        assert_eq!(multi.get("hostcall_rate").unwrap().observation_count(), 1);
+        multi.observe("hostcall_rate", 300_000).expect("serde deserialization should succeed");
+        assert_eq!(multi.get("hostcall_rate").expect("serde deserialization should succeed").observation_count(), 1);
     }
 
     #[test]
@@ -800,12 +800,12 @@ mod tests {
 
         // Feed "a" with attack-level data
         for _ in 0..15 {
-            multi.observe("a", 950_000).unwrap();
+            multi.observe("a", 950_000).expect("serde deserialization should succeed");
         }
 
         // "b" stays normal
         for _ in 0..15 {
-            multi.observe("b", 300_000).unwrap();
+            multi.observe("b", 300_000).expect("serde deserialization should succeed");
         }
 
         // Overall should be at least elevated (worst case across streams)
@@ -822,7 +822,7 @@ mod tests {
 
         // Feed observation that triggers a regime change
         for _ in 0..15 {
-            multi.observe("a", 950_000).unwrap();
+            multi.observe("a", 950_000).expect("serde deserialization should succeed");
         }
 
         let events = multi.drain_all_events();
@@ -863,8 +863,8 @@ mod tests {
             Regime::Recovery,
         ];
         for regime in &regimes {
-            let json = serde_json::to_string(regime).unwrap();
-            let restored: Regime = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(regime).expect("serde deserialization should succeed");
+            let restored: Regime = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*regime, restored);
         }
     }
@@ -880,8 +880,8 @@ mod tests {
             change_point_index: 42,
             epoch: SecurityEpoch::from_raw(3),
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let restored: RegimeChangeEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let restored: RegimeChangeEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, restored);
     }
 
@@ -896,8 +896,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap();
-            let restored: DetectorError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let restored: DetectorError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, restored);
         }
     }
@@ -905,8 +905,8 @@ mod tests {
     #[test]
     fn normal_stats_serialization_round_trip() {
         let stats = NormalStats::default_prior();
-        let json = serde_json::to_string(&stats).unwrap();
-        let restored: NormalStats = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&stats).expect("serde deserialization should succeed");
+        let restored: NormalStats = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(stats, restored);
     }
 
@@ -930,8 +930,8 @@ mod tests {
     #[test]
     fn constant_hazard_serde_roundtrip() {
         let h = ConstantHazard { lambda: 42 };
-        let json = serde_json::to_string(&h).unwrap();
-        let restored: ConstantHazard = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&h).expect("serde deserialization should succeed");
+        let restored: ConstantHazard = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(restored.lambda, 42);
     }
 
@@ -969,17 +969,17 @@ mod tests {
     #[test]
     fn regime_serde_format() {
         // Verify the JSON representation uses quoted enum names
-        let json = serde_json::to_string(&Regime::Normal).unwrap();
+        let json = serde_json::to_string(&Regime::Normal).expect("serde deserialization should succeed");
         assert_eq!(json, "\"Normal\"");
-        let json = serde_json::to_string(&Regime::Attack).unwrap();
+        let json = serde_json::to_string(&Regime::Attack).expect("serde deserialization should succeed");
         assert_eq!(json, "\"Attack\"");
     }
 
     #[test]
     fn classifier_serialization_round_trip() {
         let c = RegimeClassifier::default();
-        let json = serde_json::to_string(&c).unwrap();
-        let restored: RegimeClassifier = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let restored: RegimeClassifier = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c, restored);
     }
 
@@ -989,7 +989,7 @@ mod tests {
     fn negative_observations_classify_degraded() {
         let mut det = test_detector("health");
         for _ in 0..15 {
-            det.observe(-600_000).unwrap();
+            det.observe(-600_000).expect("serde deserialization should succeed");
         }
         assert!(det.regime() >= Regime::Degraded);
     }
@@ -1004,7 +1004,7 @@ mod tests {
 
         // Feed observations to trigger a change event
         for _ in 0..15 {
-            det.observe(950_000).unwrap();
+            det.observe(950_000).expect("serde deserialization should succeed");
         }
         let events = det.drain_events();
         if let Some(event) = events.last() {
@@ -1022,8 +1022,8 @@ mod tests {
 
         // Push both streams to high values to trigger regime changes
         for _ in 0..15 {
-            multi.observe("a", 950_000).unwrap();
-            multi.observe("b", 950_000).unwrap();
+            multi.observe("a", 950_000).expect("serde deserialization should succeed");
+            multi.observe("b", 950_000).expect("serde deserialization should succeed");
         }
 
         let events = multi.drain_all_events();
@@ -1042,8 +1042,8 @@ mod tests {
     #[test]
     fn detector_config_serde_roundtrip() {
         let config = test_config("hostcall_rate");
-        let json = serde_json::to_string(&config).unwrap();
-        let restored: DetectorConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let restored: DetectorConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(restored.detector_id, config.detector_id);
         assert_eq!(restored.metric_stream, config.metric_stream);
         assert_eq!(restored.max_run_length, config.max_run_length);
@@ -1058,7 +1058,7 @@ mod tests {
     fn observation_count_accumulates() {
         let mut det = test_detector("m");
         for i in 0..25 {
-            det.observe(300_000 + i * 1000).unwrap();
+            det.observe(300_000 + i * 1000).expect("serde deserialization should succeed");
         }
         assert_eq!(det.observation_count(), 25);
     }
@@ -1075,8 +1075,8 @@ mod tests {
             Regime::Recovery,
         ];
         for r in &regimes {
-            let json = serde_json::to_string(r).unwrap();
-            let back: Regime = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(r).expect("serde deserialization should succeed");
+            let back: Regime = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*r, back);
         }
     }
@@ -1179,7 +1179,7 @@ mod tests {
         let mut det = test_detector("m");
         let initial_cp = det.change_point_probability();
         for _ in 0..20 {
-            det.observe(500_000).unwrap();
+            det.observe(500_000).expect("serde deserialization should succeed");
         }
         // After stable observations, change-point probability should decrease
         // (run-length mass moves away from 0)
@@ -1191,12 +1191,12 @@ mod tests {
         let mut det = test_detector("m");
         // Stable period
         for _ in 0..20 {
-            det.observe(500_000).unwrap();
+            det.observe(500_000).expect("serde deserialization should succeed");
         }
         let mprl_before = det.most_probable_run_length();
         // Sudden shift: large deviation
         for _ in 0..5 {
-            det.observe(-500_000).unwrap();
+            det.observe(-500_000).expect("serde deserialization should succeed");
         }
         let mprl_after = det.most_probable_run_length();
         // Most probable run length should decrease after a regime shift
@@ -1211,20 +1211,20 @@ mod tests {
         let mut det = test_detector("m");
         // Normal phase
         for _ in 0..10 {
-            det.observe(300_000).unwrap();
+            det.observe(300_000).expect("serde deserialization should succeed");
         }
         assert_eq!(det.regime(), Regime::Normal);
 
         // Transition to elevated
         for _ in 0..15 {
-            det.observe(750_000).unwrap();
+            det.observe(750_000).expect("serde deserialization should succeed");
         }
         // Mean should now be in elevated range
         assert_eq!(det.regime(), Regime::Elevated);
 
         // Transition to attack
         for _ in 0..15 {
-            det.observe(950_000).unwrap();
+            det.observe(950_000).expect("serde deserialization should succeed");
         }
         assert_eq!(det.regime(), Regime::Attack);
 
@@ -1238,13 +1238,13 @@ mod tests {
         let mut det = test_detector("m");
         // Attack phase
         for _ in 0..15 {
-            det.observe(950_000).unwrap();
+            det.observe(950_000).expect("serde deserialization should succeed");
         }
         assert!(det.regime() >= Regime::Elevated);
 
         // Recovery: observations drop back to normal
         for _ in 0..15 {
-            det.observe(200_000).unwrap();
+            det.observe(200_000).expect("serde deserialization should succeed");
         }
         assert_eq!(det.regime(), Regime::Normal);
     }
@@ -1259,7 +1259,7 @@ mod tests {
 
         // Observe to change state
         for _ in 0..15 {
-            multi.observe("a", 950_000).unwrap();
+            multi.observe("a", 950_000).expect("serde deserialization should succeed");
         }
         let regime_before = multi.regime("a");
 
@@ -1278,11 +1278,11 @@ mod tests {
 
         // Keep "a" normal
         for _ in 0..15 {
-            multi.observe("a", 300_000).unwrap();
+            multi.observe("a", 300_000).expect("serde deserialization should succeed");
         }
         // Push "b" to degraded
         for _ in 0..15 {
-            multi.observe("b", -600_000).unwrap();
+            multi.observe("b", -600_000).expect("serde deserialization should succeed");
         }
         // Overall should reflect worst case
         assert!(multi.overall_regime() >= Regime::Degraded);
@@ -1315,7 +1315,7 @@ mod tests {
             let regimes: Vec<(String, Regime)> = observations
                 .iter()
                 .map(|(stream, val)| {
-                    let r = multi.observe(stream, *val).unwrap();
+                    let r = multi.observe(stream, *val).expect("serde deserialization should succeed");
                     (stream.to_string(), r)
                 })
                 .collect();
@@ -1347,10 +1347,10 @@ mod tests {
 
         // Fill window with normal, then push to attack
         for _ in 0..10 {
-            det.observe(300_000).unwrap();
+            det.observe(300_000).expect("serde deserialization should succeed");
         }
         for _ in 0..15 {
-            det.observe(950_000).unwrap();
+            det.observe(950_000).expect("serde deserialization should succeed");
         }
 
         let events = det.drain_events();
@@ -1399,7 +1399,7 @@ mod tests {
 
         // Feed more observations than max_run_length
         for _ in 0..20 {
-            det.observe(500_000).unwrap();
+            det.observe(500_000).expect("serde deserialization should succeed");
         }
         // Most probable run length should be bounded
         assert!(det.most_probable_run_length() <= 5);
@@ -1431,7 +1431,7 @@ mod tests {
             change_point_index: 10,
             epoch: SecurityEpoch::GENESIS,
         };
-        let json = serde_json::to_string(&event).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
         // Verify all fields are present in serialization
         assert!(json.contains("detector_id"));
         assert!(json.contains("metric_stream"));
@@ -1449,7 +1449,7 @@ mod tests {
         let mut det = test_detector("m");
         // Feed 100 observations
         for i in 0..100 {
-            det.observe(300_000 + i * 100).unwrap();
+            det.observe(300_000 + i * 100).expect("serde deserialization should succeed");
         }
         // Verify observation count is correct
         assert_eq!(det.observation_count(), 100);
@@ -1463,7 +1463,7 @@ mod tests {
     fn zero_value_observations_stay_normal() {
         let mut det = test_detector("m");
         for _ in 0..15 {
-            det.observe(0).unwrap();
+            det.observe(0).expect("serde deserialization should succeed");
         }
         assert_eq!(det.regime(), Regime::Normal);
     }
@@ -1486,7 +1486,7 @@ mod tests {
     fn drain_events_idempotent() {
         let mut det = test_detector("m");
         for _ in 0..15 {
-            det.observe(950_000).unwrap();
+            det.observe(950_000).expect("serde deserialization should succeed");
         }
         let events1 = det.drain_events();
         assert!(!events1.is_empty());
@@ -1504,8 +1504,8 @@ mod tests {
             alpha0: 2_000_000,
             beta0: 500_000,
         };
-        let json = serde_json::to_string(&stats).unwrap();
-        let restored: NormalStats = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&stats).expect("serde deserialization should succeed");
+        let restored: NormalStats = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(stats, restored);
     }
 
@@ -1518,8 +1518,8 @@ mod tests {
             attack_threshold: 500_000,
             degraded_threshold: -100_000,
         };
-        let json = serde_json::to_string(&c).unwrap();
-        let restored: RegimeClassifier = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let restored: RegimeClassifier = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c, restored);
     }
 
@@ -1530,7 +1530,7 @@ mod tests {
         let mut det = test_detector("m");
         // Large values should not panic (overflow protection via i128 casts)
         for _ in 0..15 {
-            det.observe(10_000_000).unwrap();
+            det.observe(10_000_000).expect("serde deserialization should succeed");
         }
         assert_eq!(det.observation_count(), 15);
         // Regime should be Attack due to very high mean
@@ -1544,15 +1544,15 @@ mod tests {
         let mut det = test_detector("m");
         // Normal -> Elevated
         for _ in 0..15 {
-            det.observe(750_000).unwrap();
+            det.observe(750_000).expect("serde deserialization should succeed");
         }
         // Elevated -> Attack
         for _ in 0..15 {
-            det.observe(950_000).unwrap();
+            det.observe(950_000).expect("serde deserialization should succeed");
         }
         // Attack -> Normal
         for _ in 0..15 {
-            det.observe(200_000).unwrap();
+            det.observe(200_000).expect("serde deserialization should succeed");
         }
 
         let events = det.drain_events();

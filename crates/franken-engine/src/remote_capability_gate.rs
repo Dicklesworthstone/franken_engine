@@ -552,7 +552,7 @@ mod tests {
             "trace-1",
             100,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let events = gate.drain_events();
         assert_eq!(events.len(), 1);
@@ -590,7 +590,7 @@ mod tests {
             "t",
             0,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let e1 = gate.drain_events();
         assert_eq!(e1.len(), 1);
         let e2 = gate.drain_events();
@@ -611,7 +611,7 @@ mod tests {
             "t1",
             0,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         gate.check(
             &remote_profile(),
             RemoteOperationType::HttpRequest,
@@ -620,7 +620,7 @@ mod tests {
             "t2",
             0,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let _ = gate.check(
             &compute_only_profile(),
             RemoteOperationType::GrpcCall,
@@ -674,7 +674,7 @@ mod tests {
                 "https://example.com",
                 b"payload",
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert_eq!(result, b"ok");
         assert_eq!(transport.recorded.len(), 1);
@@ -728,8 +728,8 @@ mod tests {
             required_capabilities: vec![RuntimeCapability::NetworkEgress],
             trace_id: "trace-1".to_string(),
         };
-        let json = serde_json::to_string(&denied).unwrap();
-        let restored: RemoteCapabilityDenied = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&denied).expect("serde deserialization should succeed");
+        let restored: RemoteCapabilityDenied = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(denied, restored);
     }
 
@@ -745,8 +745,8 @@ mod tests {
             outcome: "permitted".to_string(),
             held_profile: "RemoteCaps".to_string(),
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let restored: RemoteGateEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let restored: RemoteGateEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, restored);
     }
 
@@ -763,8 +763,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap();
-            let restored: RemoteTransportError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let restored: RemoteTransportError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, restored);
         }
     }
@@ -799,8 +799,8 @@ mod tests {
             RemoteOperationType::RemoteIpc,
         ];
         for op in &all {
-            let json = serde_json::to_string(op).unwrap();
-            let restored: RemoteOperationType = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(op).expect("serde deserialization should succeed");
+            let restored: RemoteOperationType = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*op, restored);
         }
     }
@@ -976,8 +976,8 @@ mod tests {
             status: 500,
             message: "internal server error".to_string(),
         };
-        let json = serde_json::to_string(&err).unwrap();
-        let restored: RemoteTransportError = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let restored: RemoteTransportError = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, restored);
     }
 
@@ -1004,7 +1004,7 @@ mod tests {
             "t1",
             0,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         gate.check(
             &remote_profile(),
             RemoteOperationType::GrpcCall,
@@ -1013,7 +1013,7 @@ mod tests {
             "t2",
             0,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         gate.check(
             &remote_profile(),
             RemoteOperationType::DnsResolution,
@@ -1022,7 +1022,7 @@ mod tests {
             "t3",
             0,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         assert_eq!(gate.total_permitted(), 3);
         assert_eq!(gate.permitted_counts().len(), 3);
@@ -1090,7 +1090,7 @@ mod tests {
             "t-1",
             100,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let events = gate.drain_events();
         assert_eq!(events[0].remote_endpoint, "https://***@host.com/api");
@@ -1108,7 +1108,7 @@ mod tests {
             "t",
             500,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let events = gate.drain_events();
         assert_eq!(events[0].epoch_id, 77);
@@ -1125,8 +1125,8 @@ mod tests {
             trace_id: "t".to_string(),
         };
         let err = RemoteTransportError::CapabilityDenied(denied);
-        let json = serde_json::to_string(&err).unwrap();
-        let restored: RemoteTransportError = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let restored: RemoteTransportError = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, restored);
     }
 
@@ -1139,13 +1139,13 @@ mod tests {
 
         transport
             .execute(&RemoteOperationType::HttpRequest, "http://a", b"1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         transport
             .execute(&RemoteOperationType::GrpcCall, "grpc://b", b"2")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         transport
             .execute(&RemoteOperationType::DnsResolution, "dns://c", b"3")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert_eq!(transport.recorded.len(), 3);
         assert_eq!(transport.recorded[0].payload, b"1");
@@ -1185,7 +1185,7 @@ mod tests {
                 "t",
                 0,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         }
         assert_eq!(gate.total_permitted(), 5);
         assert_eq!(gate.permitted_counts().get("http_request"), Some(&5));
@@ -1214,11 +1214,11 @@ mod tests {
         let mut gate = RemoteOperationGate::new(test_epoch());
         let profile = remote_profile();
         gate.check(&profile, RemoteOperationType::HttpRequest, "c", "e", "t", 0)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         gate.check(&profile, RemoteOperationType::GrpcCall, "c", "e", "t", 0)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         gate.check(&profile, RemoteOperationType::HttpRequest, "c", "e", "t", 0)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(gate.permitted_counts().get("http_request"), Some(&2));
         assert_eq!(gate.permitted_counts().get("grpc_call"), Some(&1));
         assert_eq!(gate.total_permitted(), 3);
@@ -1235,7 +1235,7 @@ mod tests {
             "t",
             0,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let events = gate.drain_events();
         assert_eq!(events.len(), 1);
         let events2 = gate.drain_events();
@@ -1272,8 +1272,8 @@ mod tests {
             RemoteOperationType::RemoteIpc,
         ];
         for op in &ops {
-            let json = serde_json::to_string(op).unwrap();
-            let back: RemoteOperationType = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(op).expect("serde deserialization should succeed");
+            let back: RemoteOperationType = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*op, back);
         }
     }
@@ -1330,8 +1330,8 @@ mod tests {
             outcome: "permitted".to_string(),
             held_profile: "Remote".to_string(),
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let back: RemoteGateEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let back: RemoteGateEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
     }
 
@@ -1347,7 +1347,7 @@ mod tests {
             outcome: "denied".to_string(),
             held_profile: "ComputeOnly".to_string(),
         };
-        let json = serde_json::to_string(&event).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
         assert!(json.contains("\"trace_id\""));
         assert!(json.contains("\"component\""));
         assert!(json.contains("\"operation_type\""));
@@ -1382,7 +1382,7 @@ mod tests {
             "t",
             0,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let events = gate.drain_events();
         assert_eq!(events[0].outcome, "permitted");
     }
@@ -1432,7 +1432,7 @@ mod tests {
             required_capabilities: vec![RuntimeCapability::NetworkEgress],
             trace_id: "trace-json-check".to_string(),
         };
-        let json = serde_json::to_string(&denied).unwrap();
+        let json = serde_json::to_string(&denied).expect("serde deserialization should succeed");
         assert!(json.contains("\"operation\""));
         assert!(json.contains("\"component\""));
         assert!(json.contains("\"held_profile\""));
@@ -1526,7 +1526,7 @@ mod tests {
             "t1",
             10,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let _ = gate.check(&compute, RemoteOperationType::GrpcCall, "b", "e", "t2", 20);
         gate.check(
             &remote,
@@ -1536,7 +1536,7 @@ mod tests {
             "t3",
             30,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let _ = gate.check(
             &compute,
             RemoteOperationType::LeaseRenewal,
@@ -1612,8 +1612,8 @@ mod tests {
             required_capabilities: vec![],
             trace_id: "t-empty".to_string(),
         };
-        let json = serde_json::to_string(&denied).unwrap();
-        let back: RemoteCapabilityDenied = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&denied).expect("serde deserialization should succeed");
+        let back: RemoteCapabilityDenied = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.required_capabilities.len(), 0);
         // Display still works fine with empty capabilities.
         let msg = denied.to_string();
@@ -1631,7 +1631,7 @@ mod tests {
             "t-comp",
             42,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let events = gate.drain_events();
         assert_eq!(events[0].component, "anti_entropy_sync");
@@ -1644,8 +1644,8 @@ mod tests {
             endpoint: "https://unreachable.example.com".to_string(),
             reason: "connection timed out".to_string(),
         };
-        let json = serde_json::to_string(&err).unwrap();
-        let back: RemoteTransportError = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let back: RemoteTransportError = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, back);
         assert!(json.contains("unreachable.example.com"));
         assert!(json.contains("connection timed out"));
@@ -1698,9 +1698,9 @@ mod tests {
 
         // 3 permitted + 2 denied = 5 events total before drain.
         gate.check(&remote, RemoteOperationType::HttpRequest, "a", "e", "t1", 0)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         gate.check(&remote, RemoteOperationType::GrpcCall, "a", "e", "t2", 0)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let _ = gate.check(
             &compute,
             RemoteOperationType::DnsResolution,
@@ -1710,7 +1710,7 @@ mod tests {
             0,
         );
         gate.check(&remote, RemoteOperationType::RemoteIpc, "a", "e", "t4", 0)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let _ = gate.check(
             &compute,
             RemoteOperationType::LeaseRenewal,

@@ -847,10 +847,10 @@ mod tests {
         for stage in &stages {
             // SAFETY: ExecutionStage derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json = serde_json::to_string(stage).unwrap();
+            let json = serde_json::to_string(stage).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by to_string of a valid ExecutionStage,
             // so from_str back to ExecutionStage cannot fail (valid format + matching schema).
-            let deser: ExecutionStage = serde_json::from_str(&json).unwrap();
+            let deser: ExecutionStage = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*stage, deser);
         }
     }
@@ -893,8 +893,8 @@ mod tests {
             EnvelopeVerdict::Violated,
             EnvelopeVerdict::InsufficientData,
         ] {
-            let json = serde_json::to_string(v).unwrap();
-            let deser: EnvelopeVerdict = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let deser: EnvelopeVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, deser);
         }
     }
@@ -978,8 +978,8 @@ mod tests {
         let env = default_envelope(ExecutionStage::GcPause);
         let obs = compliant_observation(ExecutionStage::GcPause);
         let cert = issue_stage_certificate(&env, &obs, "serde-cert", 42, vec!["ev-1".to_string()]);
-        let json = serde_json::to_string(&cert).unwrap();
-        let deser: StageEnvelopeCertificate = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&cert).expect("serde deserialization should succeed");
+        let deser: StageEnvelopeCertificate = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cert, deser);
     }
 
@@ -1028,8 +1028,8 @@ mod tests {
         let envelopes = vec![default_envelope(ExecutionStage::Parse)];
         let observations = vec![compliant_observation(ExecutionStage::Parse)];
         let bundle = build_envelope_bundle(&envelopes, &observations, 0);
-        let json = serde_json::to_string(&bundle).unwrap();
-        let deser: EnvelopeBundle = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&bundle).expect("serde deserialization should succeed");
+        let deser: EnvelopeBundle = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(bundle, deser);
     }
 
@@ -1042,7 +1042,7 @@ mod tests {
         let cert = issue_stage_certificate(&env, &obs, "v-cert", 0, vec![]);
         let report = generate_violation_report(&cert, "rpt-1");
         assert!(report.is_some());
-        let rpt = report.unwrap();
+        let rpt = report.expect("serde deserialization should succeed");
         assert!(!rpt.violations.is_empty());
         assert_eq!(rpt.stage, ExecutionStage::GcPause);
     }
@@ -1060,9 +1060,9 @@ mod tests {
         let env = default_envelope(ExecutionStage::GcPause);
         let obs = violating_observation(ExecutionStage::GcPause);
         let cert = issue_stage_certificate(&env, &obs, "v-cert", 0, vec![]);
-        let report = generate_violation_report(&cert, "rpt-serde").unwrap();
-        let json = serde_json::to_string(&report).unwrap();
-        let deser: ViolationReport = serde_json::from_str(&json).unwrap();
+        let report = generate_violation_report(&cert, "rpt-serde").expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let deser: ViolationReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report, deser);
     }
 
@@ -1083,7 +1083,7 @@ mod tests {
         let env = default_envelope(ExecutionStage::GcPause);
         let obs = violating_observation(ExecutionStage::GcPause);
         let cert = issue_stage_certificate(&env, &obs, "v", 0, vec![]);
-        let report = generate_violation_report(&cert, "rpt").unwrap();
+        let report = generate_violation_report(&cert, "rpt").expect("serde deserialization should succeed");
         let summary = render_violation_summary(&report);
         assert!(summary.contains("stage: gc_pause"));
         assert!(summary.contains("severity:"));
@@ -1154,8 +1154,8 @@ mod tests {
     #[test]
     fn envelope_serde_round_trip() {
         let env = default_envelope(ExecutionStage::Parse);
-        let json = serde_json::to_string(&env).unwrap();
-        let deser: StageLatencyEnvelope = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&env).expect("serde deserialization should succeed");
+        let deser: StageLatencyEnvelope = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(env, deser);
     }
 
@@ -1244,8 +1244,8 @@ mod tests {
             LatencyPercentile::P99,
             LatencyPercentile::P999,
         ] {
-            let json = serde_json::to_string(&p).unwrap();
-            let back: LatencyPercentile = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
+            let back: LatencyPercentile = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(p, back);
         }
     }
@@ -1271,8 +1271,8 @@ mod tests {
             ViolationSeverity::Severe,
             ViolationSeverity::Catastrophic,
         ] {
-            let json = serde_json::to_string(&s).unwrap();
-            let back: ViolationSeverity = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+            let back: ViolationSeverity = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(s, back);
         }
     }
@@ -1287,8 +1287,8 @@ mod tests {
             RemediationAction::SplitStage,
             RemediationAction::Downgrade,
         ] {
-            let json = serde_json::to_string(&r).unwrap();
-            let back: RemediationAction = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+            let back: RemediationAction = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(r, back);
         }
     }
@@ -1429,16 +1429,16 @@ mod tests {
             overshoot_ns: 10_000_000,
             overshoot_fraction_millionths: 1_000_000,
         };
-        let json = serde_json::to_string(&v).unwrap();
-        let back: PercentileViolation = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let back: PercentileViolation = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, back);
     }
 
     #[test]
     fn observation_serde() {
         let obs = compliant_observation(ExecutionStage::Parse);
-        let json = serde_json::to_string(&obs).unwrap();
-        let back: StageLatencyObservation = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&obs).expect("serde deserialization should succeed");
+        let back: StageLatencyObservation = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(obs, back);
     }
 
@@ -1447,7 +1447,7 @@ mod tests {
         let env = default_envelope(ExecutionStage::GcPause);
         let obs = violating_observation(ExecutionStage::GcPause);
         let cert = issue_stage_certificate(&env, &obs, "v-cert", 0, vec![]);
-        let report = generate_violation_report(&cert, "rpt").unwrap();
+        let report = generate_violation_report(&cert, "rpt").expect("serde deserialization should succeed");
         assert_eq!(report.schema_version, VIOLATION_REPORT_SCHEMA_VERSION);
         assert_eq!(report.bead_id, STAGE_ENVELOPE_BEAD_ID);
     }

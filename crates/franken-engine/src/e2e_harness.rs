@@ -2127,7 +2127,7 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "path has no parent"))?;
     fs::create_dir_all(parent)?;
 
-    let mut tmp_name = path.file_name().unwrap().to_owned();
+    let mut tmp_name = path.file_name().expect("serde deserialization should succeed").to_owned();
     tmp_name.push(".tmp");
     let tmp = parent.join(tmp_name);
     fs::write(&tmp, bytes)?;
@@ -2164,8 +2164,8 @@ mod tests {
     #[test]
     fn virtual_clock_serde_round_trip() {
         let clock = VirtualClock::new(42);
-        let json = serde_json::to_string(&clock).unwrap();
-        let back: VirtualClock = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&clock).expect("serde deserialization should succeed");
+        let back: VirtualClock = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(clock, back);
     }
 
@@ -2199,8 +2199,8 @@ mod tests {
     #[test]
     fn rng_serde_round_trip() {
         let rng = DeterministicRng::seeded(999);
-        let json = serde_json::to_string(&rng).unwrap();
-        let back: DeterministicRng = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&rng).expect("serde deserialization should succeed");
+        let back: DeterministicRng = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(rng, back);
     }
 
@@ -2209,7 +2209,7 @@ mod tests {
     #[test]
     fn scenario_step_defaults() {
         let json = r#"{"component":"c","event":"e"}"#;
-        let step: ScenarioStep = serde_json::from_str(json).unwrap();
+        let step: ScenarioStep = serde_json::from_str(json).expect("serde deserialization should succeed");
         assert_eq!(step.advance_micros, 0);
         assert!(step.metadata.is_empty());
     }
@@ -2222,8 +2222,8 @@ mod tests {
             outcome: "ok".into(),
             error_code: Some("E001".into()),
         };
-        let json = serde_json::to_string(&ev).unwrap();
-        let back: ExpectedEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
+        let back: ExpectedEvent = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(ev, back);
     }
 
@@ -2315,8 +2315,8 @@ mod tests {
     #[test]
     fn fixture_serde_round_trip() {
         let f = valid_fixture();
-        let json = serde_json::to_string(&f).unwrap();
-        let back: TestFixture = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&f).expect("serde deserialization should succeed");
+        let back: TestFixture = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(f, back);
     }
 
@@ -2336,8 +2336,8 @@ mod tests {
                 }
             ]
         });
-        let bytes = serde_json::to_vec(&legacy).unwrap();
-        let migrated = parse_fixture_with_migration(&bytes).unwrap();
+        let bytes = serde_json::to_vec(&legacy).expect("serde deserialization should succeed");
+        let migrated = parse_fixture_with_migration(&bytes).expect("serde deserialization should succeed");
         assert_eq!(migrated.fixture_version, TestFixture::CURRENT_VERSION);
         assert_eq!(migrated.fixture_id, "legacy-fix");
         assert!(migrated.expected_events.is_empty());
@@ -2354,7 +2354,7 @@ mod tests {
             "policy_id": "policy",
             "steps": [{"component":"c","event":"e"}]
         });
-        let bytes = serde_json::to_vec(&payload).unwrap();
+        let bytes = serde_json::to_vec(&payload).expect("serde deserialization should succeed");
         let err = parse_fixture_with_migration(&bytes).unwrap_err();
         assert!(matches!(
             err,
@@ -2417,7 +2417,7 @@ mod tests {
     fn runner_run_fixture_basic() {
         let runner = DeterministicRunner::default();
         let fixture = valid_fixture();
-        let result = runner.run_fixture(&fixture).unwrap();
+        let result = runner.run_fixture(&fixture).expect("serde deserialization should succeed");
         assert_eq!(result.fixture_id, "fix-001");
         assert_eq!(result.seed, 42);
         assert_eq!(result.events.len(), 1);
@@ -2430,8 +2430,8 @@ mod tests {
     fn runner_run_fixture_deterministic() {
         let runner = DeterministicRunner::default();
         let fixture = valid_fixture();
-        let r1 = runner.run_fixture(&fixture).unwrap();
-        let r2 = runner.run_fixture(&fixture).unwrap();
+        let r1 = runner.run_fixture(&fixture).expect("serde deserialization should succeed");
+        let r2 = runner.run_fixture(&fixture).expect("serde deserialization should succeed");
         assert_eq!(r1.output_digest, r2.output_digest);
         assert_eq!(r1.events, r2.events);
         assert_eq!(r1.random_transcript, r2.random_transcript);
@@ -2452,7 +2452,7 @@ mod tests {
                 trace_prefix: "custom".into(),
             },
         };
-        let result = runner.run_fixture(&valid_fixture()).unwrap();
+        let result = runner.run_fixture(&valid_fixture()).expect("serde deserialization should succeed");
         assert!(result.events[0].trace_id.starts_with("custom-"));
     }
 
@@ -2463,7 +2463,7 @@ mod tests {
         meta.insert("error_code".into(), "E_TEST".into());
         f.steps[0].metadata = meta;
         let runner = DeterministicRunner::default();
-        let result = runner.run_fixture(&f).unwrap();
+        let result = runner.run_fixture(&f).expect("serde deserialization should succeed");
         assert_eq!(result.events[0].outcome, "error");
         assert_eq!(result.events[0].error_code.as_deref(), Some("E_TEST"));
     }
@@ -2475,7 +2475,7 @@ mod tests {
         meta.insert("outcome".into(), "warn".into());
         f.steps[0].metadata = meta;
         let runner = DeterministicRunner::default();
-        let result = runner.run_fixture(&f).unwrap();
+        let result = runner.run_fixture(&f).expect("serde deserialization should succeed");
         assert_eq!(result.events[0].outcome, "warn");
     }
 
@@ -2489,7 +2489,7 @@ mod tests {
             metadata: BTreeMap::new(),
         });
         let runner = DeterministicRunner::default();
-        let result = runner.run_fixture(&f).unwrap();
+        let result = runner.run_fixture(&f).expect("serde deserialization should succeed");
         assert_eq!(result.events.len(), 2);
         assert_eq!(result.events[0].virtual_time_micros, 1100);
         assert_eq!(result.events[1].virtual_time_micros, 1300);
@@ -2840,8 +2840,8 @@ mod tests {
     fn counterfactual_identical_runs() {
         let runner = DeterministicRunner::default();
         let fixture = valid_fixture();
-        let a = runner.run_fixture(&fixture).unwrap();
-        let b = runner.run_fixture(&fixture).unwrap();
+        let a = runner.run_fixture(&fixture).expect("serde deserialization should succeed");
+        let b = runner.run_fixture(&fixture).expect("serde deserialization should succeed");
         let delta = compare_counterfactual(&a, &b);
         assert!(!delta.digest_changed);
         assert_eq!(delta.changed_events, 0);
@@ -2860,8 +2860,8 @@ mod tests {
         let mut f2 = valid_fixture();
         f2.seed = 999;
         f2.fixture_id = "fix-002".into();
-        let a = runner.run_fixture(&f1).unwrap();
-        let b = runner.run_fixture(&f2).unwrap();
+        let a = runner.run_fixture(&f1).expect("serde deserialization should succeed");
+        let b = runner.run_fixture(&f2).expect("serde deserialization should succeed");
         let delta = compare_counterfactual(&a, &b);
         assert!(delta.digest_changed);
     }
@@ -2925,7 +2925,7 @@ mod tests {
     #[test]
     fn run_report_from_result_pass() {
         let runner = DeterministicRunner::default();
-        let result = runner.run_fixture(&valid_fixture()).unwrap();
+        let result = runner.run_fixture(&valid_fixture()).expect("serde deserialization should succeed");
         let report = RunReport::from_result(&result);
         assert!(report.pass);
         assert_eq!(report.event_count, 1);
@@ -2939,7 +2939,7 @@ mod tests {
         meta.insert("error_code".into(), "E_BOOM".into());
         f.steps[0].metadata = meta;
         let runner = DeterministicRunner::default();
-        let result = runner.run_fixture(&f).unwrap();
+        let result = runner.run_fixture(&f).expect("serde deserialization should succeed");
         let report = RunReport::from_result(&result);
         assert!(!report.pass);
         assert_eq!(report.first_error_code.as_deref(), Some("E_BOOM"));
@@ -2948,7 +2948,7 @@ mod tests {
     #[test]
     fn run_report_to_markdown_contains_status() {
         let runner = DeterministicRunner::default();
-        let result = runner.run_fixture(&valid_fixture()).unwrap();
+        let result = runner.run_fixture(&valid_fixture()).expect("serde deserialization should succeed");
         let report = RunReport::from_result(&result);
         let md = report.to_markdown();
         assert!(md.contains("status: `pass`"));
@@ -2958,10 +2958,10 @@ mod tests {
     #[test]
     fn run_report_serde_round_trip() {
         let runner = DeterministicRunner::default();
-        let result = runner.run_fixture(&valid_fixture()).unwrap();
+        let result = runner.run_fixture(&valid_fixture()).expect("serde deserialization should succeed");
         let report = RunReport::from_result(&result);
-        let json = serde_json::to_string(&report).unwrap();
-        let back: RunReport = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let back: RunReport = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(report, back);
     }
 
@@ -2986,8 +2986,8 @@ mod tests {
                 endian: "little".into(),
             },
         };
-        let json = serde_json::to_string(&m).unwrap();
-        let back: RunManifest = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
+        let back: RunManifest = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(m, back);
     }
 
@@ -2998,8 +2998,8 @@ mod tests {
             output_digest: "d".into(),
             source_run_id: "r".into(),
         };
-        let json = serde_json::to_string(&g).unwrap();
-        let back: GoldenBaseline = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&g).expect("serde deserialization should succeed");
+        let back: GoldenBaseline = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(g, back);
     }
 
@@ -3015,8 +3015,8 @@ mod tests {
             signature: "sig".into(),
             rationale: "reason".into(),
         };
-        let json = serde_json::to_string(&u).unwrap();
-        let back: SignedGoldenUpdate = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&u).expect("serde deserialization should succeed");
+        let back: SignedGoldenUpdate = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(u, back);
     }
 
@@ -3037,8 +3037,8 @@ mod tests {
             expected_transcript_len: 0,
             actual_transcript_len: 0,
         };
-        let json = serde_json::to_string(&v).unwrap();
-        let back: ReplayVerification = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let back: ReplayVerification = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(v, back);
     }
 
@@ -3078,8 +3078,8 @@ mod tests {
                 "replay mismatch: digest mismatch; environment mismatch fields: os, family".into(),
             ),
         };
-        let json = serde_json::to_string(&d).unwrap();
-        let back: CrossMachineReplayDiagnosis = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
+        let back: CrossMachineReplayDiagnosis = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(d, back);
     }
 
@@ -3112,8 +3112,8 @@ mod tests {
                 counterfactual_error_code: Some("FE-ERR".into()),
             }],
         };
-        let json = serde_json::to_string(&d).unwrap();
-        let back: CounterfactualDelta = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
+        let back: CounterfactualDelta = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(d, back);
     }
 
@@ -3213,8 +3213,8 @@ mod tests {
             sequence: 7,
             virtual_time_micros: 42,
         };
-        let json = serde_json::to_string(&ev).unwrap();
-        let back: HarnessEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
+        let back: HarnessEvent = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(ev, back);
     }
 
@@ -3223,9 +3223,9 @@ mod tests {
     #[test]
     fn run_result_serde_round_trip() {
         let runner = DeterministicRunner::default();
-        let result = runner.run_fixture(&valid_fixture()).unwrap();
-        let json = serde_json::to_string(&result).unwrap();
-        let back: RunResult = serde_json::from_str(&json).unwrap();
+        let result = runner.run_fixture(&valid_fixture()).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let back: RunResult = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(result, back);
     }
 
@@ -3274,11 +3274,11 @@ mod tests {
     fn fixture_store_save_and_load() {
         let dir = std::env::temp_dir().join(format!("e2e_test_fixture_{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
-        let store = FixtureStore::new(&dir).unwrap();
+        let store = FixtureStore::new(&dir).expect("serde deserialization should succeed");
         let fixture = valid_fixture();
-        let path = store.save_fixture(&fixture).unwrap();
+        let path = store.save_fixture(&fixture).expect("serde deserialization should succeed");
         assert!(path.exists());
-        let loaded = store.load_fixture(&path).unwrap();
+        let loaded = store.load_fixture(&path).expect("serde deserialization should succeed");
         assert_eq!(fixture, loaded);
         let _ = fs::remove_dir_all(&dir);
     }
@@ -3287,7 +3287,7 @@ mod tests {
     fn fixture_store_rejects_invalid_fixture() {
         let dir = std::env::temp_dir().join(format!("e2e_test_invalid_{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
-        let store = FixtureStore::new(&dir).unwrap();
+        let store = FixtureStore::new(&dir).expect("serde deserialization should succeed");
         let mut f = valid_fixture();
         f.steps.clear();
         assert!(store.save_fixture(&f).is_err());
@@ -3298,10 +3298,10 @@ mod tests {
     fn golden_store_write_and_verify() {
         let dir = std::env::temp_dir().join(format!("e2e_test_golden_{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
-        let store = GoldenStore::new(&dir).unwrap();
+        let store = GoldenStore::new(&dir).expect("serde deserialization should succeed");
         let runner = DeterministicRunner::default();
-        let result = runner.run_fixture(&valid_fixture()).unwrap();
-        store.write_baseline(&result).unwrap();
+        let result = runner.run_fixture(&valid_fixture()).expect("serde deserialization should succeed");
+        store.write_baseline(&result).expect("serde deserialization should succeed");
         assert!(store.verify_run(&result).is_ok());
         let _ = fs::remove_dir_all(&dir);
     }
@@ -3310,7 +3310,7 @@ mod tests {
     fn golden_store_verify_missing_baseline() {
         let dir = std::env::temp_dir().join(format!("e2e_test_no_bl_{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
-        let store = GoldenStore::new(&dir).unwrap();
+        let store = GoldenStore::new(&dir).expect("serde deserialization should succeed");
         let result = make_run_result("abc", 1);
         let err = store.verify_run(&result).unwrap_err();
         assert!(matches!(
@@ -3324,10 +3324,10 @@ mod tests {
     fn golden_store_verify_digest_mismatch() {
         let dir = std::env::temp_dir().join(format!("e2e_test_mismatch_{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
-        let store = GoldenStore::new(&dir).unwrap();
+        let store = GoldenStore::new(&dir).expect("serde deserialization should succeed");
         let runner = DeterministicRunner::default();
-        let result = runner.run_fixture(&valid_fixture()).unwrap();
-        store.write_baseline(&result).unwrap();
+        let result = runner.run_fixture(&valid_fixture()).expect("serde deserialization should succeed");
+        store.write_baseline(&result).expect("serde deserialization should succeed");
         let mut altered = result.clone();
         altered.output_digest = "tampered".into();
         let err = store.verify_run(&altered).unwrap_err();
@@ -3342,13 +3342,13 @@ mod tests {
     fn golden_store_signed_update() {
         let dir = std::env::temp_dir().join(format!("e2e_test_signed_{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
-        let store = GoldenStore::new(&dir).unwrap();
+        let store = GoldenStore::new(&dir).expect("serde deserialization should succeed");
         let runner = DeterministicRunner::default();
-        let result = runner.run_fixture(&valid_fixture()).unwrap();
-        store.write_baseline(&result).unwrap();
+        let result = runner.run_fixture(&valid_fixture()).expect("serde deserialization should succeed");
+        store.write_baseline(&result).expect("serde deserialization should succeed");
         let path = store
             .write_signed_update(&result, "alice", "sig123", "intentional update")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(path.exists());
         let _ = fs::remove_dir_all(&dir);
     }
@@ -3357,10 +3357,10 @@ mod tests {
     fn golden_store_signed_update_empty_signer() {
         let dir = std::env::temp_dir().join(format!("e2e_test_nosig_{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
-        let store = GoldenStore::new(&dir).unwrap();
+        let store = GoldenStore::new(&dir).expect("serde deserialization should succeed");
         let runner = DeterministicRunner::default();
-        let result = runner.run_fixture(&valid_fixture()).unwrap();
-        store.write_baseline(&result).unwrap();
+        let result = runner.run_fixture(&valid_fixture()).expect("serde deserialization should succeed");
+        store.write_baseline(&result).expect("serde deserialization should succeed");
         assert!(
             store
                 .write_signed_update(&result, " ", "sig", "reason")
@@ -3383,10 +3383,10 @@ mod tests {
     fn artifact_collector_collect() {
         let dir = std::env::temp_dir().join(format!("e2e_test_artifacts_{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
-        let collector = ArtifactCollector::new(&dir).unwrap();
+        let collector = ArtifactCollector::new(&dir).expect("serde deserialization should succeed");
         let runner = DeterministicRunner::default();
-        let result = runner.run_fixture(&valid_fixture()).unwrap();
-        let artifacts = collector.collect(&result).unwrap();
+        let result = runner.run_fixture(&valid_fixture()).expect("serde deserialization should succeed");
+        let artifacts = collector.collect(&result).expect("serde deserialization should succeed");
         assert!(artifacts.manifest_path.exists());
         assert!(artifacts.events_path.exists());
         assert!(artifacts.evidence_linkage_path.exists());
@@ -3409,8 +3409,8 @@ mod tests {
             ReplayInputErrorCode::CorruptedTranscript,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: ReplayInputErrorCode = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: ReplayInputErrorCode = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
             assert_eq!(*v, back);
         }
     }
@@ -3421,8 +3421,8 @@ mod tests {
             code: ReplayInputErrorCode::PartialTrace,
             message: "trace incomplete".into(),
         };
-        let json = serde_json::to_string(&err).unwrap();
-        let back: ReplayInputError = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let back: ReplayInputError = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(err, back);
     }
 
@@ -3434,8 +3434,8 @@ mod tests {
             ReplayMismatchKind::RandomTranscript,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: ReplayMismatchKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: ReplayMismatchKind = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
             assert_eq!(*v, back);
         }
     }
@@ -3448,8 +3448,8 @@ mod tests {
             CounterfactualDivergenceKind::MissingCounterfactualEvent,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: CounterfactualDivergenceKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: CounterfactualDivergenceKind = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
             assert_eq!(*v, back);
         }
     }
@@ -3465,8 +3465,8 @@ mod tests {
             ScenarioClass::CrossArch,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: ScenarioClass = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: ScenarioClass = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
             assert_eq!(*v, back);
         }
     }
@@ -3540,8 +3540,8 @@ mod tests {
             target_arch: Some("x86_64".into()),
             worker_pool: None,
         };
-        let json = serde_json::to_string(&entry).unwrap();
-        let back: ScenarioMatrixEntry = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let back: ScenarioMatrixEntry = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(entry, back);
     }
 
@@ -3568,7 +3568,7 @@ mod tests {
     #[test]
     fn validate_replay_input_success_path() {
         let runner = DeterministicRunner::default();
-        let result = runner.run_fixture(&valid_fixture()).unwrap();
+        let result = runner.run_fixture(&valid_fixture()).expect("serde deserialization should succeed");
         assert!(validate_replay_input(&result, Some("model://snapshot/fix-001")).is_ok());
     }
 
@@ -3724,8 +3724,8 @@ mod tests {
             faster_than_realtime: true,
             speedup_milli: 2000,
         };
-        let json = serde_json::to_string(&perf).unwrap();
-        let back: ReplayPerformance = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&perf).expect("serde deserialization should succeed");
+        let back: ReplayPerformance = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(perf, back);
     }
 
@@ -3738,8 +3738,8 @@ mod tests {
             event_sequence: 3,
             evidence_hash: "abc123".into(),
         };
-        let json = serde_json::to_string(&rec).unwrap();
-        let back: EvidenceLinkageRecord = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&rec).expect("serde deserialization should succeed");
+        let back: EvidenceLinkageRecord = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(rec, back);
     }
 
@@ -3755,7 +3755,7 @@ mod tests {
     #[test]
     fn parse_fixture_with_migration_missing_fixture_version() {
         let payload = serde_json::json!({"fixture_id": "x"});
-        let bytes = serde_json::to_vec(&payload).unwrap();
+        let bytes = serde_json::to_vec(&payload).expect("serde deserialization should succeed");
         let err = parse_fixture_with_migration(&bytes).unwrap_err();
         assert!(matches!(
             err,
@@ -3776,7 +3776,7 @@ mod tests {
             "policy_id": "pol",
             "steps": [{"component":"c","event":"e"}]
         });
-        let bytes = serde_json::to_vec(&payload).unwrap();
+        let bytes = serde_json::to_vec(&payload).expect("serde deserialization should succeed");
         let err = parse_fixture_with_migration(&bytes).unwrap_err();
         assert!(matches!(
             err,
@@ -3873,8 +3873,8 @@ mod tests {
         let cfg = DeterministicRunnerConfig {
             trace_prefix: "my-prefix".into(),
         };
-        let json = serde_json::to_string(&cfg).unwrap();
-        let back: DeterministicRunnerConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
+        let back: DeterministicRunnerConfig = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(cfg, back);
     }
 
@@ -3887,8 +3887,8 @@ mod tests {
             event_count: 5,
             linkage_count: 5,
         };
-        let json = serde_json::to_string(&report).unwrap();
-        let back: ArtifactCompletenessReport = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let back: ArtifactCompletenessReport = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(report, back);
     }
 
@@ -3925,7 +3925,7 @@ mod tests {
         meta.insert("error_code".into(), "FE-ERR-42".into());
         f.steps[0].metadata = meta;
         let runner = DeterministicRunner::default();
-        let result = runner.run_fixture(&f).unwrap();
+        let result = runner.run_fixture(&f).expect("serde deserialization should succeed");
         let report = RunReport::from_result(&result);
         let md = report.to_markdown();
         assert!(md.contains("status: `fail`"));
@@ -3935,7 +3935,7 @@ mod tests {
     #[test]
     fn run_report_to_markdown_contains_all_fields() {
         let runner = DeterministicRunner::default();
-        let result = runner.run_fixture(&valid_fixture()).unwrap();
+        let result = runner.run_fixture(&valid_fixture()).expect("serde deserialization should succeed");
         let report = RunReport::from_result(&result);
         let md = report.to_markdown();
         assert!(md.contains(&format!("fixture_id: `{}`", report.fixture_id)));
@@ -3986,7 +3986,7 @@ mod tests {
         meta.insert("error_code".into(), "FE-FIRST".into());
         f.steps[0].metadata = meta;
         let runner = DeterministicRunner::default();
-        let result = runner.run_fixture(&f).unwrap();
+        let result = runner.run_fixture(&f).expect("serde deserialization should succeed");
         let report = RunReport::from_result(&result);
         assert!(!report.pass);
         assert_eq!(report.first_error_code.as_deref(), Some("FE-FIRST"));
@@ -4002,8 +4002,8 @@ mod tests {
             fail_scenarios: 1,
             scenario_packs: vec![],
         };
-        let json = serde_json::to_string(&report).unwrap();
-        let back: ScenarioMatrixReport = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let back: ScenarioMatrixReport = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(report, back);
     }
 
@@ -4016,8 +4016,8 @@ mod tests {
             report_json: "a/report.json".into(),
             report_markdown: "a/report.md".into(),
         };
-        let json = serde_json::to_string(&paths).unwrap();
-        let back: ScenarioArtifactPaths = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&paths).expect("serde deserialization should succeed");
+        let back: ScenarioArtifactPaths = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(paths, back);
     }
 
@@ -4053,8 +4053,8 @@ mod tests {
                 linkage_count: 3,
             },
         };
-        let json = serde_json::to_string(&pack).unwrap();
-        let back: ScenarioEvidencePack = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&pack).expect("serde deserialization should succeed");
+        let back: ScenarioEvidencePack = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(pack, back);
     }
 
@@ -4101,8 +4101,8 @@ mod tests {
             pointer_width_bits: 64,
             endian: "little".into(),
         };
-        let json = serde_json::to_string(&fp).unwrap();
-        let back: ReplayEnvironmentFingerprint = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&fp).expect("serde deserialization should succeed");
+        let back: ReplayEnvironmentFingerprint = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(fp, back);
     }
 
@@ -4164,7 +4164,7 @@ mod tests {
     #[test]
     fn runner_random_transcript_values_non_zero() {
         let runner = DeterministicRunner::default();
-        let result = runner.run_fixture(&valid_fixture()).unwrap();
+        let result = runner.run_fixture(&valid_fixture()).expect("serde deserialization should succeed");
         for val in &result.random_transcript {
             assert_ne!(*val, 0, "transcript values should be non-zero");
         }
@@ -4238,8 +4238,8 @@ mod tests {
             baseline_error_code: None,
             counterfactual_error_code: None,
         };
-        let json = serde_json::to_string(&sample).unwrap();
-        let back: CounterfactualDivergenceSample = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&sample).expect("serde deserialization should succeed");
+        let back: CounterfactualDivergenceSample = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(sample, back);
     }
 
@@ -4303,8 +4303,8 @@ mod tests {
         };
         assert!(!report.complete);
         assert_eq!(report.missing_files.len(), 2);
-        let json = serde_json::to_string(&report).unwrap();
-        let back: ArtifactCompletenessReport = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let back: ArtifactCompletenessReport = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(report, back);
     }
 
@@ -4339,7 +4339,7 @@ mod tests {
     #[test]
     fn runner_run_id_format_contains_fixture_and_digest() {
         let runner = DeterministicRunner::default();
-        let result = runner.run_fixture(&valid_fixture()).unwrap();
+        let result = runner.run_fixture(&valid_fixture()).expect("serde deserialization should succeed");
         assert!(result.run_id.starts_with("run-"));
         assert!(result.run_id.contains("fix-001"));
     }
@@ -4379,7 +4379,7 @@ mod enrichment_tests {
 
     fn run_valid_fixture() -> RunResult {
         let runner = DeterministicRunner::default();
-        runner.run_fixture(&valid_fixture()).unwrap()
+        runner.run_fixture(&valid_fixture()).expect("serde deserialization should succeed")
     }
 
     // ── verify_replay ────────────────────────────────────────────────
@@ -4398,8 +4398,8 @@ mod enrichment_tests {
     #[test]
     fn verify_replay_deterministic_across_runners() {
         let f = valid_fixture();
-        let r1 = DeterministicRunner::default().run_fixture(&f).unwrap();
-        let r2 = DeterministicRunner::default().run_fixture(&f).unwrap();
+        let r1 = DeterministicRunner::default().run_fixture(&f).expect("serde deserialization should succeed");
+        let r2 = DeterministicRunner::default().run_fixture(&f).expect("serde deserialization should succeed");
         let v = verify_replay(&r1, &r2);
         assert!(v.matches, "same fixture should produce identical runs");
     }
@@ -4410,8 +4410,8 @@ mod enrichment_tests {
         let mut f2 = valid_fixture();
         f2.seed = 999;
         f2.fixture_id = "fix-other".into();
-        let r1 = DeterministicRunner::default().run_fixture(&f1).unwrap();
-        let r2 = DeterministicRunner::default().run_fixture(&f2).unwrap();
+        let r1 = DeterministicRunner::default().run_fixture(&f1).expect("serde deserialization should succeed");
+        let r2 = DeterministicRunner::default().run_fixture(&f2).expect("serde deserialization should succeed");
         let v = verify_replay(&r1, &r2);
         assert!(!v.matches);
         assert!(v.mismatch_kind.is_some());
@@ -4463,8 +4463,8 @@ mod enrichment_tests {
             faster_than_realtime: true,
             speedup_milli: 3000,
         };
-        let json = serde_json::to_string(&perf).unwrap();
-        let back: ReplayPerformance = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&perf).expect("serde deserialization should succeed");
+        let back: ReplayPerformance = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(perf, back);
     }
 
@@ -4504,8 +4504,8 @@ mod enrichment_tests {
             event_sequence: 0,
             evidence_hash: "abc123".into(),
         };
-        let json = serde_json::to_string(&record).unwrap();
-        let back: EvidenceLinkageRecord = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&record).expect("serde deserialization should succeed");
+        let back: EvidenceLinkageRecord = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(record, back);
     }
 
@@ -4514,7 +4514,7 @@ mod enrichment_tests {
     #[test]
     fn validate_replay_input_valid() {
         let result = run_valid_fixture();
-        validate_replay_input(&result, Some("snapshot-1")).unwrap();
+        validate_replay_input(&result, Some("snapshot-1")).expect("serde deserialization should succeed");
     }
 
     #[test]
@@ -4605,8 +4605,8 @@ mod enrichment_tests {
         let mut f2 = valid_fixture();
         f2.seed = 888;
         f2.fixture_id = "fix-alt".into();
-        let r1 = DeterministicRunner::default().run_fixture(&f1).unwrap();
-        let r2 = DeterministicRunner::default().run_fixture(&f2).unwrap();
+        let r1 = DeterministicRunner::default().run_fixture(&f1).expect("serde deserialization should succeed");
+        let r2 = DeterministicRunner::default().run_fixture(&f2).expect("serde deserialization should succeed");
         let delta = compare_counterfactual(&r1, &r2);
         assert!(delta.digest_changed);
         assert!(delta.transcript_changed);
@@ -4618,8 +4618,8 @@ mod enrichment_tests {
         let mut f2 = valid_fixture();
         f2.steps.pop();
         f2.fixture_id = "fix-short".into();
-        let r1 = DeterministicRunner::default().run_fixture(&f1).unwrap();
-        let r2 = DeterministicRunner::default().run_fixture(&f2).unwrap();
+        let r1 = DeterministicRunner::default().run_fixture(&f1).expect("serde deserialization should succeed");
+        let r2 = DeterministicRunner::default().run_fixture(&f2).expect("serde deserialization should succeed");
         let delta = compare_counterfactual(&r1, &r2);
         assert!(delta.changed_events > 0);
         assert!(
@@ -4634,8 +4634,8 @@ mod enrichment_tests {
     fn counterfactual_delta_serde_roundtrip() {
         let result = run_valid_fixture();
         let delta = compare_counterfactual(&result, &result);
-        let json = serde_json::to_string(&delta).unwrap();
-        let back: CounterfactualDelta = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&delta).expect("serde deserialization should succeed");
+        let back: CounterfactualDelta = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(delta, back);
     }
 
@@ -4655,8 +4655,8 @@ mod enrichment_tests {
         f2.seed = 12345;
         f2.fixture_id = "fix-many-alt".into();
         f1.fixture_id = "fix-many-base".into();
-        let r1 = DeterministicRunner::default().run_fixture(&f1).unwrap();
-        let r2 = DeterministicRunner::default().run_fixture(&f2).unwrap();
+        let r1 = DeterministicRunner::default().run_fixture(&f1).expect("serde deserialization should succeed");
+        let r2 = DeterministicRunner::default().run_fixture(&f2).expect("serde deserialization should succeed");
         let delta = compare_counterfactual(&r1, &r2);
         assert!(delta.divergence_samples.len() <= 8);
     }
@@ -4690,18 +4690,18 @@ mod enrichment_tests {
             diag.environment_mismatches
                 .contains(&"architecture".to_string())
         );
-        let d = diag.diagnosis.as_deref().unwrap();
+        let d = diag.diagnosis.as_deref().expect("serde deserialization should succeed");
         assert!(d.contains("matched across environment"));
     }
 
     #[test]
     fn cross_machine_mismatch_with_env_delta_includes_both() {
         let f = valid_fixture();
-        let r1 = DeterministicRunner::default().run_fixture(&f).unwrap();
+        let r1 = DeterministicRunner::default().run_fixture(&f).expect("serde deserialization should succeed");
         let mut f2 = f.clone();
         f2.seed = 555;
         f2.fixture_id = "fix-cross-alt".into();
-        let r2 = DeterministicRunner::default().run_fixture(&f2).unwrap();
+        let r2 = DeterministicRunner::default().run_fixture(&f2).expect("serde deserialization should succeed");
         let env_a = ReplayEnvironmentFingerprint::local();
         let env_b = ReplayEnvironmentFingerprint {
             endian: "big".into(),
@@ -4709,7 +4709,7 @@ mod enrichment_tests {
         };
         let diag = diagnose_cross_machine_replay(&r1, &r2, &env_a, &env_b);
         assert!(!diag.cross_machine_match);
-        let d = diag.diagnosis.as_deref().unwrap();
+        let d = diag.diagnosis.as_deref().expect("serde deserialization should succeed");
         assert!(d.contains("mismatch"));
         assert!(d.contains("environment"));
     }
@@ -4719,8 +4719,8 @@ mod enrichment_tests {
         let result = run_valid_fixture();
         let env = ReplayEnvironmentFingerprint::local();
         let diag = diagnose_cross_machine_replay(&result, &result, &env, &env);
-        let json = serde_json::to_string(&diag).unwrap();
-        let back: CrossMachineReplayDiagnosis = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&diag).expect("serde deserialization should succeed");
+        let back: CrossMachineReplayDiagnosis = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(diag, back);
     }
 
@@ -4739,8 +4739,8 @@ mod enrichment_tests {
     #[test]
     fn environment_fingerprint_serde_roundtrip() {
         let fp = ReplayEnvironmentFingerprint::local();
-        let json = serde_json::to_string(&fp).unwrap();
-        let back: ReplayEnvironmentFingerprint = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&fp).expect("serde deserialization should succeed");
+        let back: ReplayEnvironmentFingerprint = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(fp, back);
     }
 
@@ -4762,7 +4762,7 @@ mod enrichment_tests {
         f.steps[0]
             .metadata
             .insert("error_code".into(), "FE-TEST-001".into());
-        let result = DeterministicRunner::default().run_fixture(&f).unwrap();
+        let result = DeterministicRunner::default().run_fixture(&f).expect("serde deserialization should succeed");
         let report = RunReport::from_result(&result);
         assert!(!report.pass);
         assert_eq!(report.first_error_code.as_deref(), Some("FE-TEST-001"));
@@ -4783,8 +4783,8 @@ mod enrichment_tests {
     fn run_report_serde_roundtrip() {
         let result = run_valid_fixture();
         let report = RunReport::from_result(&result);
-        let json = serde_json::to_string(&report).unwrap();
-        let back: RunReport = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let back: RunReport = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(report, back);
     }
 
@@ -4807,7 +4807,7 @@ mod enrichment_tests {
     #[test]
     fn scenario_class_as_str_matches_serde() {
         for c in &ScenarioClass::ALL {
-            let json = serde_json::to_string(c).unwrap();
+            let json = serde_json::to_string(c).expect("serde deserialization should succeed");
             let expected = format!("\"{}\"", c.as_str());
             assert_eq!(json, expected, "as_str and serde should agree for {c:?}");
         }
@@ -4867,7 +4867,7 @@ mod enrichment_tests {
             outcome: "ok".into(),
             error_code: None,
         }];
-        assert_structured_logs(&result.events, &expectations).unwrap();
+        assert_structured_logs(&result.events, &expectations).expect("serde deserialization should succeed");
     }
 
     #[test]
@@ -4887,7 +4887,7 @@ mod enrichment_tests {
     #[test]
     fn assert_logs_empty_expectations_pass() {
         let result = run_valid_fixture();
-        assert_structured_logs(&result.events, &[]).unwrap();
+        assert_structured_logs(&result.events, &[]).expect("serde deserialization should succeed");
     }
 
     // ── parse_fixture_with_migration ────────────────────────────────
@@ -4895,8 +4895,8 @@ mod enrichment_tests {
     #[test]
     fn parse_migration_v1_fixture() {
         let f = valid_fixture();
-        let bytes = serde_json::to_vec(&f).unwrap();
-        let parsed = parse_fixture_with_migration(&bytes).unwrap();
+        let bytes = serde_json::to_vec(&f).expect("serde deserialization should succeed");
+        let parsed = parse_fixture_with_migration(&bytes).expect("serde deserialization should succeed");
         assert_eq!(parsed.fixture_id, f.fixture_id);
         assert_eq!(parsed.fixture_version, TestFixture::CURRENT_VERSION);
     }
@@ -4911,8 +4911,8 @@ mod enrichment_tests {
             "policy_id": "policy-legacy",
             "steps": [{"component": "c", "event": "e"}]
         });
-        let bytes = serde_json::to_vec(&json).unwrap();
-        let parsed = parse_fixture_with_migration(&bytes).unwrap();
+        let bytes = serde_json::to_vec(&json).expect("serde deserialization should succeed");
+        let parsed = parse_fixture_with_migration(&bytes).expect("serde deserialization should succeed");
         assert_eq!(parsed.fixture_id, "legacy-1");
         assert_eq!(parsed.fixture_version, TestFixture::CURRENT_VERSION);
         assert!(parsed.determinism_check);
@@ -4929,7 +4929,7 @@ mod enrichment_tests {
             "policy_id": "p",
             "steps": [{"component": "c", "event": "e"}]
         });
-        let bytes = serde_json::to_vec(&json).unwrap();
+        let bytes = serde_json::to_vec(&json).expect("serde deserialization should succeed");
         let err = parse_fixture_with_migration(&bytes).unwrap_err();
         assert!(matches!(
             err,
@@ -4949,7 +4949,7 @@ mod enrichment_tests {
     #[test]
     fn parse_migration_missing_version_field() {
         let json = serde_json::json!({"fixture_id": "x"});
-        let bytes = serde_json::to_vec(&json).unwrap();
+        let bytes = serde_json::to_vec(&json).expect("serde deserialization should succeed");
         let err = parse_fixture_with_migration(&bytes).unwrap_err();
         assert!(matches!(
             err,
@@ -4966,7 +4966,7 @@ mod enrichment_tests {
                 trace_prefix: "custom-prefix".into(),
             },
         };
-        let result = runner.run_fixture(&valid_fixture()).unwrap();
+        let result = runner.run_fixture(&valid_fixture()).expect("serde deserialization should succeed");
         assert!(result.events[0].trace_id.starts_with("custom-prefix-"));
     }
 
@@ -4994,7 +4994,7 @@ mod enrichment_tests {
         f.steps[0]
             .metadata
             .insert("error_code".into(), "ERR-1".into());
-        let result = DeterministicRunner::default().run_fixture(&f).unwrap();
+        let result = DeterministicRunner::default().run_fixture(&f).expect("serde deserialization should succeed");
         assert_eq!(result.events[0].outcome, "error");
         assert_eq!(result.events[0].error_code.as_deref(), Some("ERR-1"));
     }
@@ -5003,7 +5003,7 @@ mod enrichment_tests {
     fn runner_custom_outcome_metadata() {
         let mut f = valid_fixture();
         f.steps[0].metadata.insert("outcome".into(), "warn".into());
-        let result = DeterministicRunner::default().run_fixture(&f).unwrap();
+        let result = DeterministicRunner::default().run_fixture(&f).expect("serde deserialization should succeed");
         assert_eq!(result.events[0].outcome, "warn");
     }
 
@@ -5020,8 +5020,8 @@ mod enrichment_tests {
     #[test]
     fn run_result_serde_roundtrip() {
         let result = run_valid_fixture();
-        let json = serde_json::to_string(&result).unwrap();
-        let back: RunResult = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let back: RunResult = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(result, back);
     }
 
@@ -5031,8 +5031,8 @@ mod enrichment_tests {
     fn harness_event_serde_roundtrip() {
         let result = run_valid_fixture();
         for event in &result.events {
-            let json = serde_json::to_string(event).unwrap();
-            let back: HarnessEvent = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(event).expect("serde deserialization should succeed");
+            let back: HarnessEvent = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
             assert_eq!(*event, back);
         }
     }
@@ -5043,8 +5043,8 @@ mod enrichment_tests {
     fn replay_verification_serde_roundtrip() {
         let result = run_valid_fixture();
         let v = verify_replay(&result, &result);
-        let json = serde_json::to_string(&v).unwrap();
-        let back: ReplayVerification = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let back: ReplayVerification = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(v, back);
     }
 
@@ -5063,8 +5063,8 @@ mod enrichment_tests {
             artifact_schema_version: 1,
             environment_fingerprint: ReplayEnvironmentFingerprint::local(),
         };
-        let json = serde_json::to_string(&manifest).unwrap();
-        let back: RunManifest = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&manifest).expect("serde deserialization should succeed");
+        let back: RunManifest = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(manifest, back);
     }
 
@@ -5077,8 +5077,8 @@ mod enrichment_tests {
             output_digest: "abc".into(),
             source_run_id: "run-1".into(),
         };
-        let json = serde_json::to_string(&gb).unwrap();
-        let back: GoldenBaseline = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&gb).expect("serde deserialization should succeed");
+        let back: GoldenBaseline = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(gb, back);
     }
 
@@ -5094,8 +5094,8 @@ mod enrichment_tests {
             signature: "sig".into(),
             rationale: "intentional change".into(),
         };
-        let json = serde_json::to_string(&u).unwrap();
-        let back: SignedGoldenUpdate = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&u).expect("serde deserialization should succeed");
+        let back: SignedGoldenUpdate = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(u, back);
     }
 
@@ -5164,8 +5164,8 @@ mod enrichment_tests {
             event_count: 2,
             linkage_count: 2,
         };
-        let json = serde_json::to_string(&report).unwrap();
-        let back: ArtifactCompletenessReport = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let back: ArtifactCompletenessReport = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(report, back);
     }
 
@@ -5180,8 +5180,8 @@ mod enrichment_tests {
             report_json: "r.json".into(),
             report_markdown: "r.md".into(),
         };
-        let json = serde_json::to_string(&paths).unwrap();
-        let back: ScenarioArtifactPaths = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&paths).expect("serde deserialization should succeed");
+        let back: ScenarioArtifactPaths = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(paths, back);
     }
 
@@ -5197,8 +5197,8 @@ mod enrichment_tests {
             fail_scenarios: 1,
             scenario_packs: vec![],
         };
-        let json = serde_json::to_string(&report).unwrap();
-        let back: ScenarioMatrixReport = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let back: ScenarioMatrixReport = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(report, back);
     }
 
@@ -5215,8 +5215,8 @@ mod enrichment_tests {
         let config = DeterministicRunnerConfig {
             trace_prefix: "test-prefix".into(),
         };
-        let json = serde_json::to_string(&config).unwrap();
-        let back: DeterministicRunnerConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let back: DeterministicRunnerConfig = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(config, back);
     }
 

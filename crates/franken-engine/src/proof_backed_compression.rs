@@ -263,7 +263,7 @@ impl CompressionResult {
     fn recompute_hash(&mut self) {
         let mut data = Vec::new();
         data.extend_from_slice(self.artifact_id.as_bytes());
-        data.extend_from_slice(serde_json::to_string(&self.strategy).unwrap().as_bytes());
+        data.extend_from_slice(serde_json::to_string(&self.strategy).expect("serde deserialization should succeed").as_bytes());
         data.extend_from_slice(&self.original_size_bytes.to_le_bytes());
         data.extend_from_slice(&self.compressed_size_bytes.to_le_bytes());
         data.extend_from_slice(&self.ratio_millionths.to_le_bytes());
@@ -314,8 +314,8 @@ impl CompressionReceipt {
         if let Some(ref canonical) = self.canonical_id {
             data.extend_from_slice(canonical.as_bytes());
         }
-        data.extend_from_slice(serde_json::to_string(&self.strategy).unwrap().as_bytes());
-        data.extend_from_slice(serde_json::to_string(&self.domain).unwrap().as_bytes());
+        data.extend_from_slice(serde_json::to_string(&self.strategy).expect("serde deserialization should succeed").as_bytes());
+        data.extend_from_slice(serde_json::to_string(&self.domain).expect("serde deserialization should succeed").as_bytes());
         data.push(u8::from(self.restoration_verified));
         data.extend_from_slice(&self.receipt_epoch.as_u64().to_le_bytes());
         self.receipt_hash = ContentHash::compute(&data);
@@ -770,8 +770,8 @@ mod tests {
     #[test]
     fn domain_serde_roundtrip() {
         for d in ArtifactDomain::ALL {
-            let json = serde_json::to_string(d).unwrap();
-            let back: ArtifactDomain = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(d).expect("serde deserialization should succeed");
+            let back: ArtifactDomain = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*d, back);
         }
     }
@@ -800,8 +800,8 @@ mod tests {
     #[test]
     fn strategy_serde_roundtrip() {
         for s in CompressionStrategy::ALL {
-            let json = serde_json::to_string(s).unwrap();
-            let back: CompressionStrategy = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(s).expect("serde deserialization should succeed");
+            let back: CompressionStrategy = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*s, back);
         }
     }
@@ -866,8 +866,8 @@ mod tests {
             },
         ];
         for r in &reasons {
-            let json = serde_json::to_string(r).unwrap();
-            let back: CompressionRefusalReason = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(r).expect("serde deserialization should succeed");
+            let back: CompressionRefusalReason = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*r, back);
         }
     }
@@ -920,8 +920,8 @@ mod tests {
             result_hash: ContentHash::compute(b"placeholder"),
         };
         r.recompute_hash();
-        let json = serde_json::to_string(&r).unwrap();
-        let back: CompressionResult = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let back: CompressionResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 
@@ -962,8 +962,8 @@ mod tests {
             receipt_hash: ContentHash::compute(b"placeholder"),
         };
         r.recompute_hash();
-        let json = serde_json::to_string(&r).unwrap();
-        let back: CompressionReceipt = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let back: CompressionReceipt = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 
@@ -1029,7 +1029,7 @@ mod tests {
         pipeline.process_artifact(&d2);
         assert_eq!(pipeline.results.len(), 2);
         // Second artifact should be deduped
-        let r2 = pipeline.result_for("a-2").unwrap();
+        let r2 = pipeline.result_for("a-2").expect("serde deserialization should succeed");
         assert_eq!(r2.strategy, CompressionStrategy::Dedup);
         assert!(r2.dedup_representative_id.is_some());
         assert_eq!(r2.compressed_size_bytes, 0);
@@ -1046,7 +1046,7 @@ mod tests {
             None,
         );
         pipeline.process_artifact(&d);
-        let result = pipeline.result_for("a-cache").unwrap();
+        let result = pipeline.result_for("a-cache").expect("serde deserialization should succeed");
         assert_eq!(result.strategy, CompressionStrategy::DictionaryCompression);
         assert!(result.compressed_size_bytes < result.original_size_bytes);
     }
@@ -1062,7 +1062,7 @@ mod tests {
             None,
         );
         pipeline.process_artifact(&d);
-        let result = pipeline.result_for("a-aot").unwrap();
+        let result = pipeline.result_for("a-aot").expect("serde deserialization should succeed");
         assert_eq!(result.strategy, CompressionStrategy::DeltaEncoding);
     }
 
@@ -1115,8 +1115,8 @@ mod tests {
             None,
         );
         pipeline.process_artifact(&d);
-        let json = serde_json::to_string(&pipeline).unwrap();
-        let back: CompressionPipeline = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&pipeline).expect("serde deserialization should succeed");
+        let back: CompressionPipeline = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(pipeline, back);
     }
 
@@ -1156,10 +1156,10 @@ mod tests {
         }
         // First is representative, rest are deduped
         assert_eq!(pipeline.dedup_entries.len(), 4);
-        let r0 = pipeline.result_for("dup-0").unwrap();
+        let r0 = pipeline.result_for("dup-0").expect("serde deserialization should succeed");
         assert!(r0.dedup_representative_id.is_none());
         for i in 1..5 {
-            let r = pipeline.result_for(&format!("dup-{i}")).unwrap();
+            let r = pipeline.result_for(&format!("dup-{i}")).expect("serde deserialization should succeed");
             assert_eq!(r.compressed_size_bytes, 0);
         }
     }
@@ -1228,8 +1228,8 @@ mod tests {
                 detail: "z".to_string(),
             },
         ] {
-            let json = serde_json::to_string(&err).unwrap();
-            let back: CompressionError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+            let back: CompressionError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(err, back);
         }
     }
@@ -1636,7 +1636,7 @@ mod tests {
             None,
         );
         pipeline.process_artifact(&d);
-        let result = pipeline.result_for("ev-1").unwrap();
+        let result = pipeline.result_for("ev-1").expect("serde deserialization should succeed");
         assert_eq!(result.strategy, CompressionStrategy::DictionaryCompression);
     }
 
@@ -1652,7 +1652,7 @@ mod tests {
                 Some(b"has-canonical"),
             );
             pipeline.process_artifact(&d);
-            let result = pipeline.result_for(&format!("canon-{domain}")).unwrap();
+            let result = pipeline.result_for(&format!("canon-{domain}")).expect("serde deserialization should succeed");
             assert_eq!(
                 result.strategy,
                 CompressionStrategy::Dedup,
@@ -1672,7 +1672,7 @@ mod tests {
             None,
         );
         pipeline.process_artifact(&d);
-        let result = pipeline.result_for("dict-test").unwrap();
+        let result = pipeline.result_for("dict-test").expect("serde deserialization should succeed");
         // 350_000 millionths = 35% of original
         assert_eq!(result.compressed_size_bytes, 3500);
         assert_eq!(result.ratio_millionths, 350_000);
@@ -1689,7 +1689,7 @@ mod tests {
             None,
         );
         pipeline.process_artifact(&d);
-        let result = pipeline.result_for("delta-test").unwrap();
+        let result = pipeline.result_for("delta-test").expect("serde deserialization should succeed");
         // 200_000 millionths = 20% of original
         assert_eq!(result.compressed_size_bytes, 2000);
         assert_eq!(result.ratio_millionths, 200_000);
@@ -1707,7 +1707,7 @@ mod tests {
             None,
         );
         pipeline.process_artifact(&d);
-        let result = pipeline.result_for("tiny-compress").unwrap();
+        let result = pipeline.result_for("tiny-compress").expect("serde deserialization should succeed");
         assert!(result.compressed_size_bytes >= 1);
     }
 
@@ -1751,7 +1751,7 @@ mod tests {
             1000,
             Some(canonical),
         ));
-        let r_second = pipeline.result_for("second").unwrap();
+        let r_second = pipeline.result_for("second").expect("serde deserialization should succeed");
         assert_eq!(r_second.dedup_representative_id.as_deref(), Some("first"));
     }
 
@@ -1765,7 +1765,7 @@ mod tests {
             5000,
             Some(b"sole-canonical"),
         ));
-        let result = pipeline.result_for("only-one").unwrap();
+        let result = pipeline.result_for("only-one").expect("serde deserialization should succeed");
         // First occurrence with canonical ID keeps full size (no dedup partner yet)
         assert_eq!(result.compressed_size_bytes, 5000);
         assert!(result.dedup_representative_id.is_none());
@@ -1844,14 +1844,14 @@ mod tests {
             .by_strategy
             .iter()
             .find(|b| b.strategy == CompressionStrategy::DictionaryCompression)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(dict_breakdown.artifact_count, 2);
         assert_eq!(dict_breakdown.original_bytes, 3000);
         let delta_breakdown = summary
             .by_strategy
             .iter()
             .find(|b| b.strategy == CompressionStrategy::DeltaEncoding)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(delta_breakdown.artifact_count, 1);
         assert_eq!(delta_breakdown.original_bytes, 3000);
     }
@@ -1875,8 +1875,8 @@ mod tests {
             None,
         ));
         let summary = pipeline.summary_report();
-        let json = serde_json::to_string(&summary).unwrap();
-        let back: CompressionSummary = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
+        let back: CompressionSummary = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(summary, back);
     }
 
@@ -1993,7 +1993,7 @@ mod tests {
             None,
         );
         pipeline.process_artifact(&d);
-        let receipt = pipeline.receipt_for("linked").unwrap();
+        let receipt = pipeline.receipt_for("linked").expect("serde deserialization should succeed");
         assert_eq!(receipt.artifact_id, "linked");
         assert_eq!(receipt.receipt_id, "receipt-linked");
         assert_eq!(receipt.domain, ArtifactDomain::Evidence);
@@ -2014,7 +2014,7 @@ mod tests {
         );
         let original_hash = d.content_hash;
         pipeline.process_artifact(&d);
-        let receipt = pipeline.receipt_for("hash-check").unwrap();
+        let receipt = pipeline.receipt_for("hash-check").expect("serde deserialization should succeed");
         assert_eq!(receipt.original_hash, original_hash);
     }
 
@@ -2050,8 +2050,8 @@ mod tests {
             domain: ArtifactDomain::Evidence,
             size_saved_bytes: 4096,
         };
-        let json = serde_json::to_string(&entry).unwrap();
-        let back: DedupEntry = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let back: DedupEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, back);
     }
 
@@ -2063,8 +2063,8 @@ mod tests {
             original_bytes: 100_000,
             compressed_bytes: 20_000,
         };
-        let json = serde_json::to_string(&breakdown).unwrap();
-        let back: StrategyBreakdown = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&breakdown).expect("serde deserialization should succeed");
+        let back: StrategyBreakdown = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(breakdown, back);
     }
 
@@ -2077,8 +2077,8 @@ mod tests {
             9999,
             Some(b"canonical-bytes"),
         );
-        let json = serde_json::to_string(&d).unwrap();
-        let back: ArtifactDescriptor = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
+        let back: ArtifactDescriptor = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(d, back);
     }
 
@@ -2119,7 +2119,7 @@ mod tests {
             None,
         );
         pipeline.process_artifact(&d);
-        let result = pipeline.result_for("huge").unwrap();
+        let result = pipeline.result_for("huge").expect("serde deserialization should succeed");
         // Should not panic from overflow; compressed_size uses saturating_mul
         assert!(result.compressed_size_bytes > 0);
     }
@@ -2171,15 +2171,15 @@ mod tests {
         ));
         assert_eq!(pipeline.results.len(), 3);
         assert_eq!(
-            pipeline.result_for("c1").unwrap().strategy,
+            pipeline.result_for("c1").expect("serde deserialization should succeed").strategy,
             CompressionStrategy::Dedup
         );
         assert_eq!(
-            pipeline.result_for("c2").unwrap().strategy,
+            pipeline.result_for("c2").expect("serde deserialization should succeed").strategy,
             CompressionStrategy::Dedup
         );
         assert_eq!(
-            pipeline.result_for("nc1").unwrap().strategy,
+            pipeline.result_for("nc1").expect("serde deserialization should succeed").strategy,
             CompressionStrategy::DictionaryCompression
         );
         assert_eq!(pipeline.dedup_entries.len(), 1);

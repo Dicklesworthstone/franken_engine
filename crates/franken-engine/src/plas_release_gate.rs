@@ -949,10 +949,10 @@ mod tests {
         use crate::signature_preimage::SigningKey;
         PlasReleaseGateTrustAnchors {
             witness_verification_key: SigningKey::from_bytes([1u8; 32])
-                .unwrap()
+                .expect("serde deserialization should succeed")
                 .verification_key(),
             transparency_log_verification_key: SigningKey::from_bytes([2u8; 32])
-                .unwrap()
+                .expect("serde deserialization should succeed")
                 .verification_key(),
         }
     }
@@ -1009,8 +1009,8 @@ mod tests {
             PlasActivationMode::AuditOnly,
             PlasActivationMode::Disabled,
         ] {
-            let json = serde_json::to_string(&variant).unwrap();
-            let back: PlasActivationMode = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&variant).expect("serde deserialization should succeed");
+            let back: PlasActivationMode = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(variant, back);
         }
     }
@@ -1080,8 +1080,8 @@ mod tests {
             PlasReleaseGateFailureCode::RevocationEscrowEventMissing,
             PlasReleaseGateFailureCode::AmbientAuthorityDetected,
         ] {
-            let json = serde_json::to_string(&variant).unwrap();
-            let back: PlasReleaseGateFailureCode = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&variant).expect("serde deserialization should succeed");
+            let back: PlasReleaseGateFailureCode = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(variant, back);
         }
     }
@@ -1109,8 +1109,8 @@ mod tests {
         let err = PlasReleaseGateError::InvalidInput {
             detail: "test".to_string(),
         };
-        let json = serde_json::to_string(&err).unwrap();
-        let back: PlasReleaseGateError = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let back: PlasReleaseGateError = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, back);
     }
 
@@ -1144,8 +1144,8 @@ mod tests {
             deterministic_replay: true,
             replay_trace_id: "t1".to_string(),
         };
-        let json = serde_json::to_string(&e).unwrap();
-        let back: PlasEscrowReplayEvidence = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
+        let back: PlasEscrowReplayEvidence = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(e, back);
     }
 
@@ -1215,7 +1215,7 @@ mod tests {
     #[test]
     fn evaluate_not_active_shadow() {
         let input = make_input(vec![minimal_extension(1, PlasActivationMode::Shadow)]);
-        let result = evaluate_plas_release_gate(&input, &trust_anchors()).unwrap();
+        let result = evaluate_plas_release_gate(&input, &trust_anchors()).expect("serde deserialization should succeed");
         assert!(!result.pass);
         assert!(
             result
@@ -1228,7 +1228,7 @@ mod tests {
     #[test]
     fn evaluate_not_active_disabled() {
         let input = make_input(vec![minimal_extension(1, PlasActivationMode::Disabled)]);
-        let result = evaluate_plas_release_gate(&input, &trust_anchors()).unwrap();
+        let result = evaluate_plas_release_gate(&input, &trust_anchors()).expect("serde deserialization should succeed");
         assert!(!result.pass);
         assert!(
             result
@@ -1241,13 +1241,13 @@ mod tests {
     #[test]
     fn evaluate_not_active_audit_only() {
         let input = make_input(vec![minimal_extension(1, PlasActivationMode::AuditOnly)]);
-        let result = evaluate_plas_release_gate(&input, &trust_anchors()).unwrap();
+        let result = evaluate_plas_release_gate(&input, &trust_anchors()).expect("serde deserialization should succeed");
         assert!(!result.pass);
         let finding = result
             .findings
             .iter()
             .find(|f| f.code == PlasReleaseGateFailureCode::CohortPlasNotActive)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(finding.detail.contains("audit_only"));
     }
 
@@ -1256,7 +1256,7 @@ mod tests {
     #[test]
     fn evaluate_empty_grants() {
         let input = make_input(vec![minimal_extension(1, PlasActivationMode::Active)]);
-        let result = evaluate_plas_release_gate(&input, &trust_anchors()).unwrap();
+        let result = evaluate_plas_release_gate(&input, &trust_anchors()).expect("serde deserialization should succeed");
         assert!(!result.pass);
         assert!(
             result
@@ -1274,7 +1274,7 @@ mod tests {
         ext.active_capabilities
             .insert(Capability::new("net.connect"));
         let input = make_input(vec![ext]);
-        let result = evaluate_plas_release_gate(&input, &trust_anchors()).unwrap();
+        let result = evaluate_plas_release_gate(&input, &trust_anchors()).expect("serde deserialization should succeed");
         assert!(!result.pass);
         assert!(
             result
@@ -1289,7 +1289,7 @@ mod tests {
     #[test]
     fn evaluate_decision_artifact_ids() {
         let input = make_input(vec![minimal_extension(1, PlasActivationMode::Active)]);
-        let result = evaluate_plas_release_gate(&input, &trust_anchors()).unwrap();
+        let result = evaluate_plas_release_gate(&input, &trust_anchors()).expect("serde deserialization should succeed");
         assert_eq!(result.decision_id, "d1");
         assert_eq!(result.cohort_id, "c1");
         assert_eq!(result.checked_extensions, 1);
@@ -1300,8 +1300,8 @@ mod tests {
     #[test]
     fn evaluate_decision_hash_deterministic() {
         let input = make_input(vec![minimal_extension(1, PlasActivationMode::Active)]);
-        let r1 = evaluate_plas_release_gate(&input, &trust_anchors()).unwrap();
-        let r2 = evaluate_plas_release_gate(&input, &trust_anchors()).unwrap();
+        let r1 = evaluate_plas_release_gate(&input, &trust_anchors()).expect("serde deserialization should succeed");
+        let r2 = evaluate_plas_release_gate(&input, &trust_anchors()).expect("serde deserialization should succeed");
         assert_eq!(r1.decision_hash, r2.decision_hash);
     }
 
@@ -1309,8 +1309,8 @@ mod tests {
     fn evaluate_decision_hash_differs_on_different_input() {
         let input1 = make_input(vec![minimal_extension(1, PlasActivationMode::Active)]);
         let input2 = make_input(vec![minimal_extension(2, PlasActivationMode::Active)]);
-        let r1 = evaluate_plas_release_gate(&input1, &trust_anchors()).unwrap();
-        let r2 = evaluate_plas_release_gate(&input2, &trust_anchors()).unwrap();
+        let r1 = evaluate_plas_release_gate(&input1, &trust_anchors()).expect("serde deserialization should succeed");
+        let r2 = evaluate_plas_release_gate(&input2, &trust_anchors()).expect("serde deserialization should succeed");
         assert_ne!(r1.decision_hash, r2.decision_hash);
     }
 
@@ -1319,7 +1319,7 @@ mod tests {
     #[test]
     fn evaluate_produces_logs() {
         let input = make_input(vec![minimal_extension(1, PlasActivationMode::Active)]);
-        let result = evaluate_plas_release_gate(&input, &trust_anchors()).unwrap();
+        let result = evaluate_plas_release_gate(&input, &trust_anchors()).expect("serde deserialization should succeed");
         assert!(!result.logs.is_empty());
         // Should have a release_gate_decision log
         assert!(
@@ -1340,12 +1340,12 @@ mod tests {
     #[test]
     fn evaluate_fail_log_has_error_code() {
         let input = make_input(vec![minimal_extension(1, PlasActivationMode::Active)]);
-        let result = evaluate_plas_release_gate(&input, &trust_anchors()).unwrap();
+        let result = evaluate_plas_release_gate(&input, &trust_anchors()).expect("serde deserialization should succeed");
         let decision_log = result
             .logs
             .iter()
             .find(|l| l.event == "release_gate_decision")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(decision_log.outcome, "fail");
         assert_eq!(
             decision_log.error_code.as_deref(),
@@ -1362,7 +1362,7 @@ mod tests {
             minimal_extension(2, PlasActivationMode::Shadow),
             minimal_extension(3, PlasActivationMode::Active),
         ]);
-        let result = evaluate_plas_release_gate(&input, &trust_anchors()).unwrap();
+        let result = evaluate_plas_release_gate(&input, &trust_anchors()).expect("serde deserialization should succeed");
         assert_eq!(result.checked_extensions, 3);
         assert!(!result.pass);
     }
@@ -1377,8 +1377,8 @@ mod tests {
             receipt_id: Some("r-1".to_string()),
             detail: "not active".to_string(),
         };
-        let json = serde_json::to_string(&f).unwrap();
-        let back: PlasReleaseGateFinding = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&f).expect("serde deserialization should succeed");
+        let back: PlasReleaseGateFinding = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(f, back);
     }
 
@@ -1398,8 +1398,8 @@ mod tests {
             receipt_id: None,
             capability: Some("net.connect".to_string()),
         };
-        let json = serde_json::to_string(&le).unwrap();
-        let back: PlasReleaseGateLogEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&le).expect("serde deserialization should succeed");
+        let back: PlasReleaseGateLogEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(le, back);
     }
 
@@ -1408,9 +1408,9 @@ mod tests {
     #[test]
     fn decision_artifact_serde_roundtrip() {
         let input = make_input(vec![minimal_extension(1, PlasActivationMode::Active)]);
-        let artifact = evaluate_plas_release_gate(&input, &trust_anchors()).unwrap();
-        let json = serde_json::to_string(&artifact).unwrap();
-        let back: PlasReleaseGateDecisionArtifact = serde_json::from_str(&json).unwrap();
+        let artifact = evaluate_plas_release_gate(&input, &trust_anchors()).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&artifact).expect("serde deserialization should succeed");
+        let back: PlasReleaseGateDecisionArtifact = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(artifact, back);
     }
 
@@ -1419,8 +1419,8 @@ mod tests {
     #[test]
     fn input_serde_roundtrip() {
         let input = make_input(vec![minimal_extension(1, PlasActivationMode::Active)]);
-        let json = serde_json::to_string(&input).unwrap();
-        let back: PlasReleaseGateInput = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
+        let back: PlasReleaseGateInput = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(input, back);
     }
 
@@ -1429,8 +1429,8 @@ mod tests {
     #[test]
     fn trust_anchors_serde_roundtrip() {
         let ta = trust_anchors();
-        let json = serde_json::to_string(&ta).unwrap();
-        let back: PlasReleaseGateTrustAnchors = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&ta).expect("serde deserialization should succeed");
+        let back: PlasReleaseGateTrustAnchors = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ta, back);
     }
 
@@ -1439,8 +1439,8 @@ mod tests {
     #[test]
     fn cohort_extension_serde_roundtrip() {
         let ext = minimal_extension(1, PlasActivationMode::Active);
-        let json = serde_json::to_string(&ext).unwrap();
-        let back: PlasCohortExtension = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&ext).expect("serde deserialization should succeed");
+        let back: PlasCohortExtension = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ext, back);
     }
 
@@ -1452,7 +1452,7 @@ mod tests {
             minimal_extension(2, PlasActivationMode::Shadow),
             minimal_extension(1, PlasActivationMode::Disabled),
         ]);
-        let result = evaluate_plas_release_gate(&input, &trust_anchors()).unwrap();
+        let result = evaluate_plas_release_gate(&input, &trust_anchors()).expect("serde deserialization should succeed");
         let codes: Vec<_> = result.findings.iter().map(|f| f.code).collect();
         // All CohortPlasNotActive codes should be grouped (sorted)
         let mut sorted_codes = codes.clone();
@@ -1548,8 +1548,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap();
-            let restored: PlasReleaseGateError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let restored: PlasReleaseGateError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, restored);
         }
     }
@@ -1585,8 +1585,8 @@ mod tests {
             deterministic_replay: false,
             replay_trace_id: "t1".into(),
         };
-        let json = serde_json::to_string(&evidence).unwrap();
-        let back: PlasEscrowReplayEvidence = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&evidence).expect("serde deserialization should succeed");
+        let back: PlasEscrowReplayEvidence = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(evidence, back);
         assert!(!back.deterministic_replay);
     }
@@ -1601,8 +1601,8 @@ mod tests {
             grants: Vec::new(),
             revocations: Vec::new(),
         };
-        let json = serde_json::to_string(&ext).unwrap();
-        let back: PlasCohortExtension = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&ext).expect("serde deserialization should succeed");
+        let back: PlasCohortExtension = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ext, back);
         assert!(back.manifest_capabilities.is_empty());
         assert!(back.active_capabilities.is_empty());
@@ -1616,8 +1616,8 @@ mod tests {
             receipt_id: None,
             detail: "ambient authority".into(),
         };
-        let json = serde_json::to_string(&finding).unwrap();
-        let back: PlasReleaseGateFinding = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&finding).expect("serde deserialization should succeed");
+        let back: PlasReleaseGateFinding = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(finding, back);
         assert!(back.receipt_id.is_none());
     }
@@ -1636,8 +1636,8 @@ mod tests {
             receipt_id: None,
             capability: None,
         };
-        let json = serde_json::to_string(&le).unwrap();
-        let back: PlasReleaseGateLogEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&le).expect("serde deserialization should succeed");
+        let back: PlasReleaseGateLogEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(le, back);
         assert!(back.error_code.is_none());
         assert!(back.extension_id.is_none());
@@ -1659,8 +1659,8 @@ mod tests {
             receipt_id: Some("rcpt".into()),
             capability: Some("cap".into()),
         };
-        let json = serde_json::to_string(&le).unwrap();
-        let back: PlasReleaseGateLogEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&le).expect("serde deserialization should succeed");
+        let back: PlasReleaseGateLogEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(le, back);
     }
 
@@ -1674,16 +1674,16 @@ mod tests {
             minimal_extension(1, PlasActivationMode::Active),
             minimal_extension(2, PlasActivationMode::Active),
         ]);
-        let r1 = evaluate_plas_release_gate(&input1, &trust_anchors()).unwrap();
-        let r2 = evaluate_plas_release_gate(&input2, &trust_anchors()).unwrap();
+        let r1 = evaluate_plas_release_gate(&input1, &trust_anchors()).expect("serde deserialization should succeed");
+        let r2 = evaluate_plas_release_gate(&input2, &trust_anchors()).expect("serde deserialization should succeed");
         assert_eq!(r1.decision_hash, r2.decision_hash);
     }
 
     #[test]
     fn activation_mode_serde_rename_snake_case() {
-        let json = serde_json::to_string(&PlasActivationMode::AuditOnly).unwrap();
+        let json = serde_json::to_string(&PlasActivationMode::AuditOnly).expect("serde deserialization should succeed");
         assert_eq!(json, "\"audit_only\"");
-        let back: PlasActivationMode = serde_json::from_str("\"audit_only\"").unwrap();
+        let back: PlasActivationMode = serde_json::from_str("\"audit_only\"").expect("serde deserialization should succeed");
         assert_eq!(back, PlasActivationMode::AuditOnly);
     }
 
@@ -1702,10 +1702,10 @@ mod tests {
 
     #[test]
     fn failure_code_serde_rename_snake_case() {
-        let json = serde_json::to_string(&PlasReleaseGateFailureCode::CohortPlasNotActive).unwrap();
+        let json = serde_json::to_string(&PlasReleaseGateFailureCode::CohortPlasNotActive).expect("serde deserialization should succeed");
         assert_eq!(json, "\"cohort_plas_not_active\"");
         let back: PlasReleaseGateFailureCode =
-            serde_json::from_str("\"cohort_plas_not_active\"").unwrap();
+            serde_json::from_str("\"cohort_plas_not_active\"").expect("serde deserialization should succeed");
         assert_eq!(back, PlasReleaseGateFailureCode::CohortPlasNotActive);
     }
 
@@ -1779,7 +1779,7 @@ mod tests {
             deterministic_replay: true,
             replay_trace_id: "t1".into(),
         };
-        let j = serde_json::to_string(&e).unwrap();
+        let j = serde_json::to_string(&e).expect("serde deserialization should succeed");
         assert!(j.contains("\"receipt_id\""));
         assert!(j.contains("\"replay_decision_kind\""));
         assert!(j.contains("\"replay_outcome\""));
@@ -1796,7 +1796,7 @@ mod tests {
             receipt_id: Some("r-1".into()),
             detail: "ambient".into(),
         };
-        let j = serde_json::to_string(&f).unwrap();
+        let j = serde_json::to_string(&f).expect("serde deserialization should succeed");
         assert!(j.contains("\"code\""));
         assert!(j.contains("\"extension_id\""));
         assert!(j.contains("\"receipt_id\""));
@@ -1817,7 +1817,7 @@ mod tests {
             receipt_id: Some("rcpt".into()),
             capability: Some("cap".into()),
         };
-        let j = serde_json::to_string(&le).unwrap();
+        let j = serde_json::to_string(&le).expect("serde deserialization should succeed");
         assert!(j.contains("\"trace_id\""));
         assert!(j.contains("\"decision_id\""));
         assert!(j.contains("\"policy_id\""));
@@ -1939,7 +1939,7 @@ mod tests {
         set.insert(PlasReleaseGateFailureCode::MissingCapabilityWitness);
         set.insert(PlasReleaseGateFailureCode::CohortPlasNotActive); // dup
         assert_eq!(set.len(), 3);
-        let first = *set.iter().next().unwrap();
+        let first = *set.iter().next().expect("serde deserialization should succeed");
         assert_eq!(first, PlasReleaseGateFailureCode::CohortPlasNotActive);
     }
 
@@ -1989,8 +1989,8 @@ mod tests {
     #[test]
     fn enrichment_decision_artifact_json_field_names() {
         let input = make_input(vec![minimal_extension(1, PlasActivationMode::Active)]);
-        let artifact = evaluate_plas_release_gate(&input, &trust_anchors()).unwrap();
-        let json = serde_json::to_string(&artifact).unwrap();
+        let artifact = evaluate_plas_release_gate(&input, &trust_anchors()).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&artifact).expect("serde deserialization should succeed");
         assert!(json.contains("\"decision_id\""));
         assert!(json.contains("\"cohort_id\""));
         assert!(json.contains("\"pass\""));
@@ -2005,7 +2005,7 @@ mod tests {
     #[test]
     fn enrichment_input_json_field_names() {
         let input = make_input(vec![minimal_extension(1, PlasActivationMode::Active)]);
-        let json = serde_json::to_string(&input).unwrap();
+        let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
         assert!(json.contains("\"trace_id\""));
         assert!(json.contains("\"decision_id\""));
         assert!(json.contains("\"policy_id\""));
@@ -2016,7 +2016,7 @@ mod tests {
     #[test]
     fn enrichment_trust_anchors_json_field_names() {
         let ta = trust_anchors();
-        let json = serde_json::to_string(&ta).unwrap();
+        let json = serde_json::to_string(&ta).expect("serde deserialization should succeed");
         assert!(json.contains("\"witness_verification_key\""));
         assert!(json.contains("\"transparency_log_verification_key\""));
     }
@@ -2029,7 +2029,7 @@ mod tests {
             "extension_id": [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
             "activation_mode": "active"
         }"#;
-        let ext: PlasCohortExtension = serde_json::from_str(json).unwrap();
+        let ext: PlasCohortExtension = serde_json::from_str(json).expect("serde deserialization should succeed");
         assert_eq!(ext.activation_mode, PlasActivationMode::Active);
         assert!(ext.manifest_capabilities.is_empty());
         assert!(ext.active_capabilities.is_empty());
@@ -2069,7 +2069,7 @@ mod tests {
             minimal_extension(5, PlasActivationMode::Disabled),
             minimal_extension(3, PlasActivationMode::Shadow),
         ]);
-        let result = evaluate_plas_release_gate(&input, &trust_anchors()).unwrap();
+        let result = evaluate_plas_release_gate(&input, &trust_anchors()).expect("serde deserialization should succeed");
         let not_active: Vec<&PlasReleaseGateFinding> = result
             .findings
             .iter()
@@ -2087,7 +2087,7 @@ mod tests {
             minimal_extension(2, PlasActivationMode::AuditOnly),
             minimal_extension(3, PlasActivationMode::Disabled),
         ]);
-        let result = evaluate_plas_release_gate(&input, &trust_anchors()).unwrap();
+        let result = evaluate_plas_release_gate(&input, &trust_anchors()).expect("serde deserialization should succeed");
         let not_active_count = result
             .findings
             .iter()
@@ -2113,8 +2113,8 @@ mod tests {
         input1.cohort_id = "cohort_alpha".to_string();
         let mut input2 = make_input(vec![minimal_extension(1, PlasActivationMode::Active)]);
         input2.cohort_id = "cohort_beta".to_string();
-        let r1 = evaluate_plas_release_gate(&input1, &trust_anchors()).unwrap();
-        let r2 = evaluate_plas_release_gate(&input2, &trust_anchors()).unwrap();
+        let r1 = evaluate_plas_release_gate(&input1, &trust_anchors()).expect("serde deserialization should succeed");
+        let r2 = evaluate_plas_release_gate(&input2, &trust_anchors()).expect("serde deserialization should succeed");
         assert_ne!(r1.decision_hash, r2.decision_hash);
         assert_eq!(r1.cohort_id, "cohort_alpha");
         assert_eq!(r2.cohort_id, "cohort_beta");
@@ -2126,7 +2126,7 @@ mod tests {
             minimal_extension(1, PlasActivationMode::Active),
             minimal_extension(2, PlasActivationMode::Shadow),
         ]);
-        let result = evaluate_plas_release_gate(&input, &trust_anchors()).unwrap();
+        let result = evaluate_plas_release_gate(&input, &trust_anchors()).expect("serde deserialization should succeed");
         assert!(result.logs.len() >= 2);
         for log in &result.logs {
             assert_eq!(log.trace_id, "t1");

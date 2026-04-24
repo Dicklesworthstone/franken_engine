@@ -588,7 +588,7 @@ pub fn apply_redaction_with_audit(
         audit_entries: &audit_entries,
         detected_secret_patterns: &detected_secret_patterns,
     };
-    let report_hash = stable_sensitive_hash(&serde_json::to_string(&hash_input).unwrap());
+    let report_hash = stable_sensitive_hash(&serde_json::to_string(&hash_input).expect("serde deserialization should succeed"));
 
     RedactionAuditReport {
         schema_version: RGC_SECRET_REDACTION_AUDIT_SCHEMA_VERSION.to_string(),
@@ -1025,8 +1025,8 @@ mod tests {
             TestLane::Governance,
             TestLane::E2e,
         ] {
-            let json = serde_json::to_string(&lane).unwrap();
-            let back: TestLane = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&lane).expect("serde deserialization should succeed");
+            let back: TestLane = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(lane, back);
         }
     }
@@ -1049,8 +1049,8 @@ mod tests {
             FailureTaxonomy::SchemaDrift,
             FailureTaxonomy::Unknown,
         ] {
-            let json = serde_json::to_string(&tax).unwrap();
-            let back: FailureTaxonomy = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&tax).expect("serde deserialization should succeed");
+            let back: FailureTaxonomy = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(tax, back);
         }
     }
@@ -1063,8 +1063,8 @@ mod tests {
             DataSensitivity::Sensitive,
             DataSensitivity::Secret,
         ] {
-            let json = serde_json::to_string(&sensitivity).unwrap();
-            let back: DataSensitivity = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&sensitivity).expect("serde deserialization should succeed");
+            let back: DataSensitivity = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(sensitivity, back);
         }
     }
@@ -1076,8 +1076,8 @@ mod tests {
             RedactionAction::Hash,
             RedactionAction::Drop,
         ] {
-            let json = serde_json::to_string(&action).unwrap();
-            let back: RedactionAction = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&action).expect("serde deserialization should succeed");
+            let back: RedactionAction = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(action, back);
         }
     }
@@ -1092,8 +1092,8 @@ mod tests {
             ValidationErrorCode::SecretPatternLeak,
             ValidationErrorCode::ContractValidationViolation,
         ] {
-            let json = serde_json::to_string(&code).unwrap();
-            let back: ValidationErrorCode = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&code).expect("serde deserialization should succeed");
+            let back: ValidationErrorCode = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(code, back);
         }
     }
@@ -1108,8 +1108,8 @@ mod tests {
             action: RedactionAction::Drop,
             rationale: "must never be retained".to_string(),
         };
-        let json = serde_json::to_string(&rule).unwrap();
-        let back: RedactionRule = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&rule).expect("serde deserialization should succeed");
+        let back: RedactionRule = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(rule, back);
     }
 
@@ -1120,16 +1120,16 @@ mod tests {
             require_redaction_for_sensitive: true,
             permit_raw_seed_storage: false,
         };
-        let json = serde_json::to_string(&policy).unwrap();
-        let back: RetentionPolicy = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
+        let back: RetentionPolicy = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(policy, back);
     }
 
     #[test]
     fn test_log_event_serde_roundtrip() {
         let event = baseline_event();
-        let json = serde_json::to_string(&event).unwrap();
-        let back: TestLogEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let back: TestLogEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
     }
 
@@ -1137,8 +1137,8 @@ mod tests {
     fn test_log_event_with_failure_taxonomy_serde() {
         let mut event = baseline_event();
         event.failure_taxonomy = Some(FailureTaxonomy::DeterminismDrift);
-        let json = serde_json::to_string(&event).unwrap();
-        let back: TestLogEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let back: TestLogEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
         assert_eq!(
             back.failure_taxonomy,
@@ -1149,24 +1149,24 @@ mod tests {
     #[test]
     fn test_logging_schema_spec_serde_roundtrip() {
         let spec = TestLoggingSchemaSpec::default();
-        let json = serde_json::to_string(&spec).unwrap();
-        let back: TestLoggingSchemaSpec = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&spec).expect("serde deserialization should succeed");
+        let back: TestLoggingSchemaSpec = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(spec, back);
     }
 
     #[test]
     fn validation_failure_serde_roundtrip() {
         let failure = ValidationFailure::missing_field("trace_id");
-        let json = serde_json::to_string(&failure).unwrap();
-        let back: ValidationFailure = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&failure).expect("serde deserialization should succeed");
+        let back: ValidationFailure = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(failure, back);
     }
 
     #[test]
     fn validation_report_serde_roundtrip() {
         let report = validate_events(&[baseline_event()]);
-        let json = serde_json::to_string(&report).unwrap();
-        let back: ValidationReport = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let back: ValidationReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report, back);
     }
 
@@ -1491,8 +1491,8 @@ mod tests {
         let baseline_report = apply_redaction_with_audit(&record, &baseline_spec);
         let reordered_report = apply_redaction_with_audit(&record, &reordered_spec);
 
-        let baseline_serialized = serialize_redaction_audit_report(&baseline_report).unwrap();
-        let reordered_serialized = serialize_redaction_audit_report(&reordered_report).unwrap();
+        let baseline_serialized = serialize_redaction_audit_report(&baseline_report).expect("serde deserialization should succeed");
+        let reordered_serialized = serialize_redaction_audit_report(&reordered_report).expect("serde deserialization should succeed");
 
         assert_eq!(baseline_serialized, reordered_serialized);
     }
@@ -1513,8 +1513,8 @@ mod tests {
         let spec = TestLoggingSchemaSpec::default();
 
         let report = apply_redaction_with_audit(&record, &spec);
-        let serialized = serialize_redaction_audit_report(&report).unwrap();
-        let deserialized = deserialize_redaction_audit_report(&serialized).unwrap();
+        let serialized = serialize_redaction_audit_report(&report).expect("serde deserialization should succeed");
+        let deserialized = deserialize_redaction_audit_report(&serialized).expect("serde deserialization should succeed");
 
         assert_eq!(deserialized, report);
     }
@@ -1722,7 +1722,7 @@ mod tests {
     #[test]
     fn json_field_presence_test_log_event() {
         let event = baseline_event();
-        let json = serde_json::to_string(&event).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
         assert!(json.contains("\"scenario_id\""));
         assert!(json.contains("\"fixture_id\""));
         assert!(json.contains("\"trace_id\""));
@@ -1736,7 +1736,7 @@ mod tests {
     #[test]
     fn json_field_presence_validation_report() {
         let report = validate_events(&[baseline_event()]);
-        let json = serde_json::to_string(&report).unwrap();
+        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
         assert!(json.contains("\"schema_version\""));
         assert!(json.contains("\"trace_id\""));
         assert!(json.contains("\"valid\""));
@@ -1752,7 +1752,7 @@ mod tests {
             action: RedactionAction::Redact,
             rationale: "reason".to_string(),
         };
-        let json = serde_json::to_string(&rule).unwrap();
+        let json = serde_json::to_string(&rule).expect("serde deserialization should succeed");
         assert!(json.contains("\"field_path\""));
         assert!(json.contains("\"sensitivity\""));
         assert!(json.contains("\"action\""));
@@ -1804,8 +1804,8 @@ mod tests {
             require_redaction_for_sensitive: false,
             permit_raw_seed_storage: false,
         };
-        let json = serde_json::to_string(&policy).unwrap();
-        let back: RetentionPolicy = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
+        let back: RetentionPolicy = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(policy, back);
         assert_eq!(back.retention_days, 0);
     }

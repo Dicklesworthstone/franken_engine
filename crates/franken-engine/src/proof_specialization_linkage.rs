@@ -1026,8 +1026,8 @@ mod tests {
     #[test]
     fn linkage_id_serde_roundtrip() {
         let id = LinkageId::new("link-42");
-        let json = serde_json::to_string(&id).unwrap();
-        let back: LinkageId = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&id).expect("serde deserialization should succeed");
+        let back: LinkageId = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(id, back);
     }
 
@@ -1038,8 +1038,8 @@ mod tests {
     #[test]
     fn proof_input_ref_serde_roundtrip() {
         let input = make_proof_input("proof-1", 5);
-        let json = serde_json::to_string(&input).unwrap();
-        let back: ProofInputRef = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
+        let back: ProofInputRef = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(input, back);
     }
 
@@ -1065,8 +1065,8 @@ mod tests {
             speedup_millionths: 1_500_000,
             instruction_ratio_millionths: 800_000,
         };
-        let json = serde_json::to_string(&d).unwrap();
-        let back: PerformanceDelta = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
+        let back: PerformanceDelta = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(d, back);
     }
 
@@ -1081,8 +1081,8 @@ mod tests {
             activation_epoch: test_epoch(3),
             activation_tick: 42,
         };
-        let json = serde_json::to_string(&rs).unwrap();
-        let back: RollbackState = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&rs).expect("serde deserialization should succeed");
+        let back: RollbackState = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(rs, back);
     }
 
@@ -1118,8 +1118,8 @@ mod tests {
     #[test]
     fn linkage_record_serde_roundtrip() {
         let record = make_linkage("link-1", 5, &["proof-a", "proof-b"]);
-        let json = serde_json::to_string(&record).unwrap();
-        let back: LinkageRecord = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&record).expect("serde deserialization should succeed");
+        let back: LinkageRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(record, back);
     }
 
@@ -1157,8 +1157,8 @@ mod tests {
             old_epoch: test_epoch(1),
             new_epoch: test_epoch(2),
         };
-        let json = serde_json::to_string(&cause).unwrap();
-        let back: InvalidationCause = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&cause).expect("serde deserialization should succeed");
+        let back: InvalidationCause = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cause, back);
     }
 
@@ -1219,7 +1219,7 @@ mod tests {
     fn register_linkage() {
         let mut engine = make_engine(5);
         let record = make_linkage("link-1", 5, &["proof-a"]);
-        engine.register(record, "t1").unwrap();
+        engine.register(record, "t1").expect("serde deserialization should succeed");
         assert_eq!(engine.total_count(), 1);
         assert_eq!(engine.active_count(), 1);
     }
@@ -1229,7 +1229,7 @@ mod tests {
         let mut engine = make_engine(5);
         let r1 = make_linkage("link-1", 5, &["proof-a"]);
         let r2 = make_linkage("link-1", 5, &["proof-b"]);
-        engine.register(r1, "t1").unwrap();
+        engine.register(r1, "t1").expect("serde deserialization should succeed");
         let err = engine.register(r2, "t2").unwrap_err();
         assert_eq!(error_code(&err), "LINKAGE_DUPLICATE");
     }
@@ -1251,15 +1251,15 @@ mod tests {
     fn attach_to_ir3_module() {
         let mut engine = make_engine(5);
         let record = make_linkage("link-1", 5, &["proof-a"]);
-        engine.register(record, "t1").unwrap();
+        engine.register(record, "t1").expect("serde deserialization should succeed");
 
         let mut ir3 = make_ir3();
         assert!(ir3.specialization.is_none());
 
         let lid = LinkageId::new("link-1");
-        engine.attach_to_ir3(&lid, &mut ir3, "t2").unwrap();
+        engine.attach_to_ir3(&lid, &mut ir3, "t2").expect("serde deserialization should succeed");
         assert!(ir3.specialization.is_some());
-        let spec = ir3.specialization.unwrap();
+        let spec = ir3.specialization.expect("serde deserialization should succeed");
         assert_eq!(spec.proof_input_ids, vec!["proof-a"]);
         assert_eq!(spec.validity_epoch, 5);
     }
@@ -1269,13 +1269,13 @@ mod tests {
         let mut engine = make_engine(5);
         let r1 = make_linkage("link-1", 5, &["proof-a"]);
         let r2 = make_linkage("link-2", 5, &["proof-b"]);
-        engine.register(r1, "t1").unwrap();
-        engine.register(r2, "t1").unwrap();
+        engine.register(r1, "t1").expect("serde deserialization should succeed");
+        engine.register(r2, "t1").expect("serde deserialization should succeed");
 
         let mut ir3 = make_ir3();
         let lid1 = LinkageId::new("link-1");
         let lid2 = LinkageId::new("link-2");
-        engine.attach_to_ir3(&lid1, &mut ir3, "t2").unwrap();
+        engine.attach_to_ir3(&lid1, &mut ir3, "t2").expect("serde deserialization should succeed");
 
         let err = engine.attach_to_ir3(&lid2, &mut ir3, "t3").unwrap_err();
         assert_eq!(error_code(&err), "LINKAGE_IR3_ALREADY_SPECIALIZED");
@@ -1286,7 +1286,7 @@ mod tests {
         let mut engine = make_engine(5);
         let mut record = make_linkage("link-1", 5, &["proof-a"]);
         record.active = false;
-        engine.register(record, "t1").unwrap();
+        engine.register(record, "t1").expect("serde deserialization should succeed");
 
         let mut ir3 = make_ir3();
         let lid = LinkageId::new("link-1");
@@ -1298,7 +1298,7 @@ mod tests {
     fn attach_epoch_mismatch_rejected() {
         let mut engine = make_engine(5);
         let record = make_linkage("link-1", 3, &["proof-a"]); // epoch 3, engine at 5
-        engine.register(record, "t1").unwrap();
+        engine.register(record, "t1").expect("serde deserialization should succeed");
 
         let mut ir3 = make_ir3();
         let lid = LinkageId::new("link-1");
@@ -1321,7 +1321,7 @@ mod tests {
         let mut record = make_linkage("link-expire", 5, &["proof-a"]);
         record.rollback.activation_tick = 100;
         record.proof_inputs[0].validity_window_ticks = 10; // expires at 110
-        engine.register(record, "t1").unwrap();
+        engine.register(record, "t1").expect("serde deserialization should succeed");
 
         let mut ir3 = make_ir3();
         let lid = LinkageId::new("link-expire");
@@ -1331,9 +1331,9 @@ mod tests {
 
         assert_eq!(error_code(&err), "LINKAGE_ALREADY_INACTIVE");
         assert!(ir3.specialization.is_none());
-        assert!(!engine.get(&lid).unwrap().active);
+        assert!(!engine.get(&lid).expect("serde deserialization should succeed").active);
 
-        let (_, cause) = engine.invalidations().last().unwrap();
+        let (_, cause) = engine.invalidations().last().expect("serde deserialization should succeed");
         match cause {
             InvalidationCause::PolicyChange { reason } => {
                 assert!(reason.contains("proof_window_expired"));
@@ -1351,16 +1351,16 @@ mod tests {
         let mut record = make_linkage("link-safe", 5, &["proof-a"]);
         record.rollback.activation_tick = 100;
         record.proof_inputs[0].validity_window_ticks = 20; // expires at 120
-        engine.register(record, "t1").unwrap();
+        engine.register(record, "t1").expect("serde deserialization should succeed");
 
         let mut ir3 = make_ir3();
         let lid = LinkageId::new("link-safe");
         engine
             .attach_to_ir3_at_tick(&lid, &mut ir3, 119, "t2")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert!(ir3.specialization.is_some());
-        assert!(engine.get(&lid).unwrap().active);
+        assert!(engine.get(&lid).expect("serde deserialization should succeed").active);
         assert!(engine.invalidations().is_empty());
     }
 
@@ -1372,7 +1372,7 @@ mod tests {
     fn record_execution_updates_ir4() {
         let mut engine = make_engine(5);
         let record = make_linkage("link-1", 5, &["proof-a"]);
-        engine.register(record, "t1").unwrap();
+        engine.register(record, "t1").expect("serde deserialization should succeed");
 
         let mut ir4 = make_ir4();
         ir4.instructions_executed = 100;
@@ -1383,7 +1383,7 @@ mod tests {
             speedup_millionths: 1_200_000,
             instruction_ratio_millionths: 900_000,
         };
-        let exec = engine.record_execution(&lid, &mut ir4, perf, "t2").unwrap();
+        let exec = engine.record_execution(&lid, &mut ir4, perf, "t2").expect("serde deserialization should succeed");
 
         assert_eq!(exec.linkage_id, lid);
         assert_eq!(exec.instructions_executed, 100);
@@ -1397,10 +1397,10 @@ mod tests {
         );
 
         // Engine updated
-        let stored = engine.get(&lid).unwrap();
+        let stored = engine.get(&lid).expect("serde deserialization should succeed");
         assert_eq!(stored.execution_count, 1);
         assert_eq!(
-            stored.performance_delta.unwrap().speedup_millionths,
+            stored.performance_delta.expect("serde deserialization should succeed").speedup_millionths,
             1_200_000
         );
     }
@@ -1421,7 +1421,7 @@ mod tests {
         let mut engine = make_engine(5);
         let mut record = make_linkage("link-inactive", 5, &["proof-a"]);
         record.active = false;
-        engine.register(record, "t1").unwrap();
+        engine.register(record, "t1").expect("serde deserialization should succeed");
 
         let mut ir4 = make_ir4();
         let lid = LinkageId::new("link-inactive");
@@ -1435,7 +1435,7 @@ mod tests {
     fn record_execution_epoch_mismatch_rejected() {
         let mut engine = make_engine(5);
         let record = make_linkage("link-epoch3", 3, &["proof-a"]);
-        engine.register(record, "t1").unwrap();
+        engine.register(record, "t1").expect("serde deserialization should succeed");
 
         let mut ir4 = make_ir4();
         let lid = LinkageId::new("link-epoch3");
@@ -1451,7 +1451,7 @@ mod tests {
         let mut record = make_linkage("link-expire-exec", 5, &["proof-a"]);
         record.rollback.activation_tick = 100;
         record.proof_inputs[0].validity_window_ticks = 10; // expires at 110
-        engine.register(record, "t1").unwrap();
+        engine.register(record, "t1").expect("serde deserialization should succeed");
 
         let mut ir4 = make_ir4();
         let lid = LinkageId::new("link-expire-exec");
@@ -1460,9 +1460,9 @@ mod tests {
             .unwrap_err();
 
         assert_eq!(error_code(&err), "LINKAGE_ALREADY_INACTIVE");
-        assert!(!engine.get(&lid).unwrap().active);
+        assert!(!engine.get(&lid).expect("serde deserialization should succeed").active);
 
-        let (_, cause) = engine.invalidations().last().unwrap();
+        let (_, cause) = engine.invalidations().last().expect("serde deserialization should succeed");
         match cause {
             InvalidationCause::PolicyChange { reason } => {
                 assert!(reason.contains("proof_window_expired"));
@@ -1480,7 +1480,7 @@ mod tests {
         let mut record = make_linkage("link-safe-exec", 5, &["proof-a"]);
         record.rollback.activation_tick = 100;
         record.proof_inputs[0].validity_window_ticks = 10; // expires at 110
-        engine.register(record, "t1").unwrap();
+        engine.register(record, "t1").expect("serde deserialization should succeed");
 
         let mut ir4 = make_ir4();
         ir4.instructions_executed = 55;
@@ -1498,27 +1498,27 @@ mod tests {
                 109,
                 "t2",
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert_eq!(exec.instructions_executed, 55);
         assert_eq!(exec.duration_ticks, 12);
-        assert_eq!(engine.get(&lid).unwrap().execution_count, 1);
+        assert_eq!(engine.get(&lid).expect("serde deserialization should succeed").execution_count, 1);
     }
 
     #[test]
     fn record_execution_idempotent_ir4_ids() {
         let mut engine = make_engine(5);
         let record = make_linkage("link-1", 5, &["proof-a"]);
-        engine.register(record, "t1").unwrap();
+        engine.register(record, "t1").expect("serde deserialization should succeed");
 
         let mut ir4 = make_ir4();
         let lid = LinkageId::new("link-1");
         engine
             .record_execution(&lid, &mut ir4, PerformanceDelta::NEUTRAL, "t2")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         engine
             .record_execution(&lid, &mut ir4, PerformanceDelta::NEUTRAL, "t3")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Should only appear once in IR4
         assert_eq!(
@@ -1529,7 +1529,7 @@ mod tests {
             1
         );
         // But execution count should be 2
-        assert_eq!(engine.get(&lid).unwrap().execution_count, 2);
+        assert_eq!(engine.get(&lid).expect("serde deserialization should succeed").execution_count, 2);
     }
 
     // -----------------------------------------------------------------------
@@ -1541,7 +1541,7 @@ mod tests {
         let mut engine = make_engine(5);
         engine
             .register(make_linkage("link-old", 5, &["proof-a"]), "t1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let rollbacks = engine.on_epoch_change(test_epoch(6), "t2");
         assert_eq!(rollbacks.len(), 1);
@@ -1557,19 +1557,19 @@ mod tests {
         let mut engine = make_engine(5);
         engine
             .register(make_linkage("link-1", 5, &["proof-a"]), "t1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Register one at epoch 6 too
         let mut r2 = make_linkage("link-2", 6, &["proof-b"]);
         r2.validity_epoch = test_epoch(6);
-        engine.register(r2, "t1").unwrap();
+        engine.register(r2, "t1").expect("serde deserialization should succeed");
 
         let rollbacks = engine.on_epoch_change(test_epoch(6), "t2");
         assert_eq!(rollbacks.len(), 1); // Only link-1 invalidated
         assert_eq!(rollbacks[0].0, LinkageId::new("link-1"));
 
         assert_eq!(engine.active_count(), 1);
-        assert!(engine.get(&LinkageId::new("link-2")).unwrap().active);
+        assert!(engine.get(&LinkageId::new("link-2")).expect("serde deserialization should succeed").active);
     }
 
     #[test]
@@ -1577,7 +1577,7 @@ mod tests {
         let mut engine = make_engine(5);
         let record = make_linkage("link-1", 5, &["proof-a"]);
         let expected_baseline = record.rollback.baseline_ir3_hash;
-        engine.register(record, "t1").unwrap();
+        engine.register(record, "t1").expect("serde deserialization should succeed");
 
         let rollbacks = engine.on_epoch_change(test_epoch(6), "t2");
         assert_eq!(rollbacks[0].1, expected_baseline);
@@ -1588,7 +1588,7 @@ mod tests {
         let mut engine = make_engine(5);
         engine
             .register(make_linkage("link-1", 5, &["proof-a"]), "t1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         engine.on_epoch_change(test_epoch(6), "t2");
 
         assert_eq!(engine.invalidations().len(), 1);
@@ -1613,17 +1613,17 @@ mod tests {
         let mut engine = make_engine(5);
         engine
             .register(make_linkage("link-1", 5, &["proof-a", "proof-b"]), "t1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         engine
             .register(make_linkage("link-2", 5, &["proof-c"]), "t1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let rollbacks = engine.invalidate_by_proof("proof-a", "t2");
         assert_eq!(rollbacks.len(), 1);
         assert_eq!(rollbacks[0].0, LinkageId::new("link-1"));
 
-        assert!(!engine.get(&LinkageId::new("link-1")).unwrap().active);
-        assert!(engine.get(&LinkageId::new("link-2")).unwrap().active);
+        assert!(!engine.get(&LinkageId::new("link-1")).expect("serde deserialization should succeed").active);
+        assert!(engine.get(&LinkageId::new("link-2")).expect("serde deserialization should succeed").active);
     }
 
     #[test]
@@ -1631,11 +1631,11 @@ mod tests {
         let mut engine = make_engine(5);
         engine
             .register(make_linkage("link-1", 5, &["proof-a"]), "t1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let rollbacks = engine.invalidate_by_proof("proof-zzz", "t2");
         assert!(rollbacks.is_empty());
-        assert!(engine.get(&LinkageId::new("link-1")).unwrap().active);
+        assert!(engine.get(&LinkageId::new("link-1")).expect("serde deserialization should succeed").active);
     }
 
     // -----------------------------------------------------------------------
@@ -1647,12 +1647,12 @@ mod tests {
         let mut engine = make_engine(5);
         let record = make_linkage("link-1", 5, &["proof-a"]);
         let expected_baseline = record.rollback.baseline_ir3_hash;
-        engine.register(record, "t1").unwrap();
+        engine.register(record, "t1").expect("serde deserialization should succeed");
 
         let lid = LinkageId::new("link-1");
-        let baseline = engine.invalidate_manual(&lid, "operator-1", "t2").unwrap();
+        let baseline = engine.invalidate_manual(&lid, "operator-1", "t2").expect("serde deserialization should succeed");
         assert_eq!(baseline, expected_baseline);
-        assert!(!engine.get(&lid).unwrap().active);
+        assert!(!engine.get(&lid).expect("serde deserialization should succeed").active);
     }
 
     #[test]
@@ -1660,7 +1660,7 @@ mod tests {
         let mut engine = make_engine(5);
         let mut record = make_linkage("link-1", 5, &["proof-a"]);
         record.active = false;
-        engine.register(record, "t1").unwrap();
+        engine.register(record, "t1").expect("serde deserialization should succeed");
 
         let lid = LinkageId::new("link-1");
         let err = engine
@@ -1688,10 +1688,10 @@ mod tests {
         let mut engine = make_engine(5);
         engine
             .register(make_linkage("link-1", 5, &["proof-a", "proof-b"]), "t1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         engine
             .register(make_linkage("link-2", 5, &["proof-a", "proof-c"]), "t1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let ids = engine.consumed_proof_ids();
         assert_eq!(ids, vec!["proof-a", "proof-b", "proof-c"]);
@@ -1702,10 +1702,10 @@ mod tests {
         let mut engine = make_engine(5);
         engine
             .register(make_linkage("link-1", 5, &["proof-a"]), "t1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let mut inactive = make_linkage("link-2", 5, &["proof-b"]);
         inactive.active = false;
-        engine.register(inactive, "t1").unwrap();
+        engine.register(inactive, "t1").expect("serde deserialization should succeed");
 
         let plan = engine.rollback_plan();
         assert_eq!(plan.len(), 1);
@@ -1717,10 +1717,10 @@ mod tests {
         let mut engine = make_engine(5);
         engine
             .register(make_linkage("link-1", 5, &["proof-a"]), "t1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let mut inactive = make_linkage("link-2", 5, &["proof-b"]);
         inactive.active = false;
-        engine.register(inactive, "t1").unwrap();
+        engine.register(inactive, "t1").expect("serde deserialization should succeed");
 
         let active = engine.active_linkages();
         assert_eq!(active.len(), 1);
@@ -1736,10 +1736,10 @@ mod tests {
         let mut engine = make_engine(5);
         engine
             .register(make_linkage("link-1", 5, &["proof-a"]), "t1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         engine
             .register(make_linkage("link-2", 5, &["proof-b"]), "t1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let events = engine.produce_witness_events(100, 42);
         assert_eq!(events.len(), 2);
@@ -1753,10 +1753,10 @@ mod tests {
         let mut engine = make_engine(5);
         engine
             .register(make_linkage("link-1", 5, &["proof-a"]), "t1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let mut inactive = make_linkage("link-2", 5, &["proof-b"]);
         inactive.active = false;
-        engine.register(inactive, "t1").unwrap();
+        engine.register(inactive, "t1").expect("serde deserialization should succeed");
 
         let events = engine.produce_witness_events(0, 0);
         assert_eq!(events.len(), 1);
@@ -1771,7 +1771,7 @@ mod tests {
         let mut engine = make_engine(5);
         engine
             .register(make_linkage("link-1", 5, &["proof-a"]), "t1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert!(!engine.events().is_empty());
         assert_eq!(engine.events()[0].event, "register");
@@ -1786,7 +1786,7 @@ mod tests {
         record.proof_inputs.clear();
         let _ = engine.register(record, "t1");
 
-        let last = engine.events().last().unwrap();
+        let last = engine.events().last().expect("serde deserialization should succeed");
         assert_eq!(last.outcome, "rejected");
         assert_eq!(
             last.error_code.as_deref(),
@@ -1810,8 +1810,8 @@ mod tests {
             instructions_executed: 500,
             duration_ticks: 200,
         };
-        let json = serde_json::to_string(&er).unwrap();
-        let back: ExecutionRecord = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&er).expect("serde deserialization should succeed");
+        let back: ExecutionRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(er, back);
     }
 
@@ -1826,13 +1826,13 @@ mod tests {
         // 1. Register
         let record = make_linkage("link-1", 5, &["proof-a", "proof-b"]);
         let expected_baseline = record.rollback.baseline_ir3_hash;
-        engine.register(record, "t1").unwrap();
+        engine.register(record, "t1").expect("serde deserialization should succeed");
         assert_eq!(engine.active_count(), 1);
 
         // 2. Attach to IR3
         let mut ir3 = make_ir3();
         let lid = LinkageId::new("link-1");
-        engine.attach_to_ir3(&lid, &mut ir3, "t2").unwrap();
+        engine.attach_to_ir3(&lid, &mut ir3, "t2").expect("serde deserialization should succeed");
         assert!(ir3.specialization.is_some());
 
         // 3. Record execution in IR4
@@ -1843,7 +1843,7 @@ mod tests {
             speedup_millionths: 1_500_000,
             instruction_ratio_millionths: 750_000,
         };
-        let exec = engine.record_execution(&lid, &mut ir4, perf, "t3").unwrap();
+        let exec = engine.record_execution(&lid, &mut ir4, perf, "t3").expect("serde deserialization should succeed");
         assert_eq!(exec.instructions_executed, 1000);
         assert!(
             ir4.active_specialization_ids
@@ -1873,11 +1873,11 @@ mod tests {
         let mut engine = make_engine(5);
         engine
             .register(make_linkage("link-epoch5", 5, &["proof-a"]), "t1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let mut r2 = make_linkage("link-epoch6", 6, &["proof-b"]);
         r2.validity_epoch = test_epoch(6);
-        engine.register(r2, "t1").unwrap();
+        engine.register(r2, "t1").expect("serde deserialization should succeed");
 
         // Advance to epoch 6
         let rollbacks = engine.on_epoch_change(test_epoch(6), "t2");
@@ -1885,8 +1885,8 @@ mod tests {
         assert_eq!(rollbacks[0].0, LinkageId::new("link-epoch5"));
 
         // link-epoch6 should still be active
-        assert!(engine.get(&LinkageId::new("link-epoch6")).unwrap().active);
-        assert!(!engine.get(&LinkageId::new("link-epoch5")).unwrap().active);
+        assert!(engine.get(&LinkageId::new("link-epoch6")).expect("serde deserialization should succeed").active);
+        assert!(!engine.get(&LinkageId::new("link-epoch5")).expect("serde deserialization should succeed").active);
     }
 
     // -----------------------------------------------------------------------
@@ -1899,13 +1899,13 @@ mod tests {
         // Insert in non-alphabetical order
         engine
             .register(make_linkage("link-c", 5, &["proof-c"]), "t1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         engine
             .register(make_linkage("link-a", 5, &["proof-a"]), "t1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         engine
             .register(make_linkage("link-b", 5, &["proof-b"]), "t1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let rollbacks = engine.on_epoch_change(test_epoch(6), "t2");
         // BTreeMap order: a, b, c
@@ -1929,8 +1929,8 @@ mod tests {
             outcome: "ok".to_string(),
             error_code: None,
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let back: LinkageEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let back: LinkageEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
     }
 
@@ -1985,8 +1985,8 @@ mod tests {
             LinkageError::Ir3AlreadySpecialized,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: LinkageError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: LinkageError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -2199,7 +2199,7 @@ mod tests {
         ];
         let mut jsons = std::collections::BTreeSet::new();
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
             jsons.insert(json);
         }
         assert_eq!(jsons.len(), 4);
@@ -2220,7 +2220,7 @@ mod tests {
         ];
         let mut jsons = std::collections::BTreeSet::new();
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
             jsons.insert(json);
         }
         assert_eq!(jsons.len(), 6);
@@ -2330,7 +2330,7 @@ mod tests {
     #[test]
     fn proof_input_ref_json_field_names() {
         let input = make_proof_input("proof-1", 5);
-        let json = serde_json::to_string(&input).unwrap();
+        let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
         assert!(json.contains("\"proof_id\""));
         assert!(json.contains("\"proof_type\""));
         assert!(json.contains("\"proof_epoch\""));
@@ -2343,7 +2343,7 @@ mod tests {
             speedup_millionths: 1_500_000,
             instruction_ratio_millionths: 800_000,
         };
-        let json = serde_json::to_string(&d).unwrap();
+        let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
         assert!(json.contains("\"speedup_millionths\""));
         assert!(json.contains("\"instruction_ratio_millionths\""));
     }
@@ -2355,7 +2355,7 @@ mod tests {
             activation_epoch: test_epoch(3),
             activation_tick: 42,
         };
-        let json = serde_json::to_string(&rs).unwrap();
+        let json = serde_json::to_string(&rs).expect("serde deserialization should succeed");
         assert!(json.contains("\"baseline_ir3_hash\""));
         assert!(json.contains("\"activation_epoch\""));
         assert!(json.contains("\"activation_tick\""));
@@ -2364,7 +2364,7 @@ mod tests {
     #[test]
     fn linkage_record_json_field_names() {
         let record = make_linkage("link-1", 5, &["proof-a"]);
-        let json = serde_json::to_string(&record).unwrap();
+        let json = serde_json::to_string(&record).expect("serde deserialization should succeed");
         assert!(json.contains("\"id\""));
         assert!(json.contains("\"proof_inputs\""));
         assert!(json.contains("\"optimization_class\""));
@@ -2387,7 +2387,7 @@ mod tests {
             outcome: "ok".into(),
             error_code: Some("ERR".into()),
         };
-        let json = serde_json::to_string(&event).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
         assert!(json.contains("\"trace_id\""));
         assert!(json.contains("\"decision_id\""));
         assert!(json.contains("\"policy_id\""));
@@ -2406,7 +2406,7 @@ mod tests {
             instructions_executed: 42,
             duration_ticks: 99,
         };
-        let json = serde_json::to_string(&er).unwrap();
+        let json = serde_json::to_string(&er).expect("serde deserialization should succeed");
         assert!(json.contains("\"linkage_id\""));
         assert!(json.contains("\"witness_hash\""));
         assert!(json.contains("\"performance_delta\""));
@@ -2577,8 +2577,8 @@ mod tests {
             speedup_millionths: 0,
             instruction_ratio_millionths: 0,
         };
-        let json = serde_json::to_string(&d).unwrap();
-        let back: PerformanceDelta = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
+        let back: PerformanceDelta = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(d, back);
         assert_eq!(back.speedup_millionths, 0);
     }
@@ -2589,8 +2589,8 @@ mod tests {
             speedup_millionths: u64::MAX,
             instruction_ratio_millionths: u64::MAX,
         };
-        let json = serde_json::to_string(&d).unwrap();
-        let back: PerformanceDelta = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
+        let back: PerformanceDelta = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(d, back);
     }
 
@@ -2601,8 +2601,8 @@ mod tests {
             activation_epoch: SecurityEpoch::from_raw(u64::MAX),
             activation_tick: u64::MAX,
         };
-        let json = serde_json::to_string(&rs).unwrap();
-        let back: RollbackState = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&rs).expect("serde deserialization should succeed");
+        let back: RollbackState = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(rs, back);
     }
 
@@ -2614,8 +2614,8 @@ mod tests {
             proof_epoch: test_epoch(1),
             validity_window_ticks: 0,
         };
-        let json = serde_json::to_string(&input).unwrap();
-        let back: ProofInputRef = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
+        let back: ProofInputRef = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(input, back);
         assert_eq!(back.validity_window_ticks, 0);
     }
@@ -2628,8 +2628,8 @@ mod tests {
             proof_epoch: test_epoch(u64::MAX),
             validity_window_ticks: u64::MAX,
         };
-        let json = serde_json::to_string(&input).unwrap();
-        let back: ProofInputRef = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
+        let back: ProofInputRef = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(input, back);
     }
 
@@ -2637,8 +2637,8 @@ mod tests {
     fn linkage_record_empty_id() {
         let record = make_linkage("", 5, &["proof-a"]);
         assert_eq!(record.id.as_str(), "");
-        let json = serde_json::to_string(&record).unwrap();
-        let back: LinkageRecord = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&record).expect("serde deserialization should succeed");
+        let back: LinkageRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(record, back);
     }
 
@@ -2685,7 +2685,7 @@ mod tests {
         let mut engine = make_engine(5);
         engine
             .register(make_linkage("link-1", 5, &["proof-a"]), "t1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let rollbacks = engine.on_epoch_change(test_epoch(5), "t2");
         assert!(rollbacks.is_empty());
         assert_eq!(engine.active_count(), 1);
@@ -2696,7 +2696,7 @@ mod tests {
         let mut engine = make_engine(5);
         engine
             .register(make_linkage("link-1", 5, &["proof-a"]), "t1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let r1 = engine.invalidate_by_proof("proof-a", "t2");
         assert_eq!(r1.len(), 1);
         // Second call: already inactive, should not match
@@ -2710,16 +2710,16 @@ mod tests {
         let mut linkage = make_linkage("link-expire", 5, &["proof-a"]);
         linkage.rollback.activation_tick = 50;
         linkage.proof_inputs[0].validity_window_ticks = 10; // expires at 60
-        engine.register(linkage, "t1").unwrap();
+        engine.register(linkage, "t1").expect("serde deserialization should succeed");
 
         let rollbacks = engine.invalidate_expired_proof_windows(60, "t2");
         assert_eq!(rollbacks.len(), 1);
         assert_eq!(rollbacks[0].0, LinkageId::new("link-expire"));
 
-        let stored = engine.get(&LinkageId::new("link-expire")).unwrap();
+        let stored = engine.get(&LinkageId::new("link-expire")).expect("serde deserialization should succeed");
         assert!(!stored.active);
 
-        let (_, cause) = engine.invalidations().last().unwrap();
+        let (_, cause) = engine.invalidations().last().expect("serde deserialization should succeed");
         match cause {
             InvalidationCause::PolicyChange { reason } => {
                 assert!(reason.contains("proof_window_expired"));
@@ -2736,7 +2736,7 @@ mod tests {
         let mut engine = make_engine(5);
         let mut linkage = make_linkage("link-unbounded", 5, &["proof-a"]);
         linkage.proof_inputs[0].validity_window_ticks = 0; // unbounded
-        engine.register(linkage, "t1").unwrap();
+        engine.register(linkage, "t1").expect("serde deserialization should succeed");
 
         let rollbacks = engine.invalidate_expired_proof_windows(u64::MAX, "t2");
         assert!(rollbacks.is_empty());
@@ -2750,7 +2750,7 @@ mod tests {
         let mut linkage = make_linkage("link-saturating", 5, &["proof-a"]);
         linkage.rollback.activation_tick = u64::MAX - 5;
         linkage.proof_inputs[0].validity_window_ticks = 100; // saturates to u64::MAX
-        engine.register(linkage, "t1").unwrap();
+        engine.register(linkage, "t1").expect("serde deserialization should succeed");
 
         let before_max = engine.invalidate_expired_proof_windows(u64::MAX - 1, "t2");
         assert!(before_max.is_empty());
@@ -2770,8 +2770,8 @@ mod tests {
             instructions_executed: 0,
             duration_ticks: 0,
         };
-        let json = serde_json::to_string(&er).unwrap();
-        let back: ExecutionRecord = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&er).expect("serde deserialization should succeed");
+        let back: ExecutionRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(er, back);
     }
 
@@ -2787,8 +2787,8 @@ mod tests {
             instructions_executed: u64::MAX,
             duration_ticks: u64::MAX,
         };
-        let json = serde_json::to_string(&er).unwrap();
-        let back: ExecutionRecord = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&er).expect("serde deserialization should succeed");
+        let back: ExecutionRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(er, back);
     }
 
@@ -2801,8 +2801,8 @@ mod tests {
         let cause = InvalidationCause::ProofRevoked {
             proof_id: "special-char-!@#$%".into(),
         };
-        let json = serde_json::to_string(&cause).unwrap();
-        let back: InvalidationCause = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&cause).expect("serde deserialization should succeed");
+        let back: InvalidationCause = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cause, back);
     }
 
@@ -2811,8 +2811,8 @@ mod tests {
         let cause = InvalidationCause::PolicyChange {
             reason: "policy v2 deployed with breaking changes".into(),
         };
-        let json = serde_json::to_string(&cause).unwrap();
-        let back: InvalidationCause = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&cause).expect("serde deserialization should succeed");
+        let back: InvalidationCause = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cause, back);
     }
 
@@ -2821,8 +2821,8 @@ mod tests {
         let cause = InvalidationCause::ManualInvalidation {
             operator_id: "ops-team/admin-42".into(),
         };
-        let json = serde_json::to_string(&cause).unwrap();
-        let back: InvalidationCause = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&cause).expect("serde deserialization should succeed");
+        let back: InvalidationCause = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cause, back);
     }
 
@@ -2834,11 +2834,11 @@ mod tests {
             instruction_ratio_millionths: 400_000,
         });
         record.execution_count = 42;
-        let json = serde_json::to_string(&record).unwrap();
-        let back: LinkageRecord = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&record).expect("serde deserialization should succeed");
+        let back: LinkageRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(record, back);
         assert_eq!(
-            back.performance_delta.unwrap().speedup_millionths,
+            back.performance_delta.expect("serde deserialization should succeed").speedup_millionths,
             2_500_000
         );
     }
@@ -2847,8 +2847,8 @@ mod tests {
     fn linkage_record_inactive_roundtrip() {
         let mut record = make_linkage("link-inactive", 5, &["proof-a"]);
         record.active = false;
-        let json = serde_json::to_string(&record).unwrap();
-        let back: LinkageRecord = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&record).expect("serde deserialization should succeed");
+        let back: LinkageRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(record, back);
         assert!(!back.active);
     }
@@ -2864,8 +2864,8 @@ mod tests {
             outcome: "rejected".into(),
             error_code: Some("LINKAGE_EPOCH_MISMATCH".into()),
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let back: LinkageEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let back: LinkageEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
     }
 
@@ -2928,7 +2928,7 @@ mod tests {
         let mut engine = make_engine(5);
         let mut r = make_linkage("link-1", 5, &["proof-a"]);
         r.active = false;
-        engine.register(r, "t1").unwrap();
+        engine.register(r, "t1").expect("serde deserialization should succeed");
         assert!(engine.consumed_proof_ids().is_empty());
     }
 
@@ -2944,13 +2944,13 @@ mod tests {
         let mut engine = make_engine(5);
         engine
             .register(make_linkage("link-1", 5, &["proof-a"]), "t1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         engine
             .register(make_linkage("link-2", 5, &["proof-b"]), "t1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         engine
             .register(make_linkage("link-3", 5, &["proof-c"]), "t1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let events = engine.produce_witness_events(1000, 555);
         assert_eq!(events.len(), 3);
         assert_eq!(events[0].seq, 1000);
@@ -2980,10 +2980,10 @@ mod tests {
         let mut engine = make_engine(1);
         engine
             .register(make_linkage("link-e1", 1, &["p1"]), "t1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let mut r2 = make_linkage("link-e2", 2, &["p2"]);
         r2.validity_epoch = test_epoch(2);
-        engine.register(r2, "t1").unwrap();
+        engine.register(r2, "t1").expect("serde deserialization should succeed");
 
         // Epoch 1 -> 2: link-e1 invalidated
         engine.on_epoch_change(test_epoch(2), "t2");
@@ -3001,15 +3001,15 @@ mod tests {
         let mut engine = make_engine(5);
         engine
             .register(make_linkage("link-1", 5, &["proof-a"]), "t1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let lid = LinkageId::new("link-1");
         let mut ir4 = make_ir4();
         for i in 0..10 {
             engine
                 .record_execution(&lid, &mut ir4, PerformanceDelta::NEUTRAL, &format!("t{i}"))
-                .unwrap();
+                .expect("serde deserialization should succeed");
         }
-        assert_eq!(engine.get(&lid).unwrap().execution_count, 10);
+        assert_eq!(engine.get(&lid).expect("serde deserialization should succeed").execution_count, 10);
     }
 
     #[test]
@@ -3017,7 +3017,7 @@ mod tests {
         let mut engine = make_engine(5);
         engine
             .register(make_linkage("link-1", 5, &["proof-a"]), "t1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let lid = LinkageId::new("link-1");
         let mut ir4 = make_ir4();
 
@@ -3027,13 +3027,13 @@ mod tests {
         };
         engine
             .record_execution(&lid, &mut ir4, perf1, "t2")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(
             engine
                 .get(&lid)
-                .unwrap()
+                .expect("serde deserialization should succeed")
                 .performance_delta
-                .unwrap()
+                .expect("serde deserialization should succeed")
                 .speedup_millionths,
             1_100_000
         );
@@ -3044,13 +3044,13 @@ mod tests {
         };
         engine
             .record_execution(&lid, &mut ir4, perf2, "t3")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(
             engine
                 .get(&lid)
-                .unwrap()
+                .expect("serde deserialization should succeed")
                 .performance_delta
-                .unwrap()
+                .expect("serde deserialization should succeed")
                 .speedup_millionths,
             2_000_000
         );
@@ -3090,21 +3090,21 @@ mod tests {
                 make_linkage("link-1", 5, &["shared-proof", "proof-b"]),
                 "t1",
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         engine
             .register(
                 make_linkage("link-2", 5, &["shared-proof", "proof-c"]),
                 "t1",
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         engine
             .register(make_linkage("link-3", 5, &["proof-d"]), "t1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let rollbacks = engine.invalidate_by_proof("shared-proof", "t2");
         assert_eq!(rollbacks.len(), 2);
         assert_eq!(engine.active_count(), 1);
-        assert!(engine.get(&LinkageId::new("link-3")).unwrap().active);
+        assert!(engine.get(&LinkageId::new("link-3")).expect("serde deserialization should succeed").active);
     }
 
     #[test]
@@ -3112,9 +3112,9 @@ mod tests {
         let mut engine = make_engine(5);
         engine
             .register(make_linkage("link-1", 5, &["proof-a"]), "t1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let lid = LinkageId::new("link-1");
-        engine.invalidate_manual(&lid, "admin-ops", "t2").unwrap();
+        engine.invalidate_manual(&lid, "admin-ops", "t2").expect("serde deserialization should succeed");
         assert_eq!(engine.invalidations().len(), 1);
         match &engine.invalidations()[0].1 {
             InvalidationCause::ManualInvalidation { operator_id } => {
@@ -3167,8 +3167,8 @@ mod tests {
                 proof_epoch: test_epoch(1),
                 validity_window_ticks: 100,
             };
-            let json = serde_json::to_string(&input).unwrap();
-            let back: ProofInputRef = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
+            let back: ProofInputRef = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(input, back);
         }
     }
@@ -3188,8 +3188,8 @@ mod tests {
         for oc in &classes {
             let mut record = make_linkage("link-oc", 5, &["proof-a"]);
             record.optimization_class = *oc;
-            let json = serde_json::to_string(&record).unwrap();
-            let back: LinkageRecord = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&record).expect("serde deserialization should succeed");
+            let back: LinkageRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(record, back);
         }
     }
@@ -3203,8 +3203,8 @@ mod tests {
         let mut engine = make_engine(5);
         engine
             .register(make_linkage("link-1", 5, &["proof-a"]), "my-trace-42")
-            .unwrap();
-        let last = engine.events().last().unwrap();
+            .expect("serde deserialization should succeed");
+        let last = engine.events().last().expect("serde deserialization should succeed");
         assert_eq!(last.trace_id, "my-trace-42");
     }
 
@@ -3213,8 +3213,8 @@ mod tests {
         let mut engine = LinkageEngine::new("custom-policy-xyz", test_epoch(1));
         engine
             .register(make_linkage("link-1", 1, &["proof-a"]), "t1")
-            .unwrap();
-        let last = engine.events().last().unwrap();
+            .expect("serde deserialization should succeed");
+        let last = engine.events().last().expect("serde deserialization should succeed");
         assert_eq!(last.policy_id, "custom-policy-xyz");
     }
 
@@ -3223,14 +3223,14 @@ mod tests {
         let mut engine = make_engine(5);
         engine
             .register(make_linkage("link-1", 5, &["proof-a"]), "t1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let lid = LinkageId::new("link-1");
         let mut ir3 = make_ir3();
-        engine.attach_to_ir3(&lid, &mut ir3, "t2").unwrap();
+        engine.attach_to_ir3(&lid, &mut ir3, "t2").expect("serde deserialization should succeed");
         let mut ir4 = make_ir4();
         engine
             .record_execution(&lid, &mut ir4, PerformanceDelta::NEUTRAL, "t3")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         engine.on_epoch_change(test_epoch(6), "t4");
         // register + attach + record_execution + epoch_change = at least 4
         assert!(engine.events().len() >= 4);

@@ -492,7 +492,7 @@ mod tests {
     #[test]
     fn gate_fails_closed_over_missing_children() {
         // After bd-2yez8 fix: gate should fail closed when child artifacts are missing
-        let gate = build_asupersync_leverage_adoption_gate().unwrap();
+        let gate = build_asupersync_leverage_adoption_gate().expect("serde deserialization should succeed");
         assert_eq!(gate.verdict, AdoptionGateVerdict::Stop);
         assert!(!gate.is_go());
         assert!(gate.has_outstanding_child_artifacts());
@@ -512,13 +512,13 @@ mod tests {
 
     #[test]
     fn content_hash_and_summary_are_stable() {
-        let first = build_asupersync_leverage_adoption_gate().unwrap();
-        let second = build_asupersync_leverage_adoption_gate().unwrap();
+        let first = build_asupersync_leverage_adoption_gate().expect("serde deserialization should succeed");
+        let second = build_asupersync_leverage_adoption_gate().expect("serde deserialization should succeed");
         assert_eq!(first.content_hash, second.content_hash);
         assert!(first.content_hash.starts_with("sha256:"));
         let summary = render_operator_summary(&first);
         assert!(summary.contains("targeted_promotion"));
-        assert!(summary.contains("extension-host topology assessment"));
+        assert!(summary.contains("topology_promotion_assessment"));
         assert!(summary.contains("control_plane_policy_diagnostics"));
     }
 }

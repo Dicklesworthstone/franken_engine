@@ -1158,9 +1158,9 @@ mod tests {
     fn test_sentinel_error_serde_roundtrip() {
         let err = SentinelError::InternalError("test msg".into());
         // SAFETY: SentinelError derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&err).unwrap();
+        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid SentinelError serialization
-        let back: SentinelError = serde_json::from_str(&json).unwrap();
+        let back: SentinelError = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, back);
     }
 
@@ -1623,7 +1623,7 @@ mod tests {
             .iter()
             .find(|d| d.rule == PromotionRule::SuppressClaim)
             // SAFETY: Test verifies SuppressClaim decision exists in hardcoded manifest
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(!suppress_decision.allowed);
     }
 
@@ -1635,7 +1635,7 @@ mod tests {
             .iter()
             .find(|d| d.rule == PromotionRule::FailClosed)
             // SAFETY: Test verifies FailClosed decision exists in hardcoded manifest
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(fc_decision.allowed);
     }
 
@@ -1647,7 +1647,7 @@ mod tests {
             .iter()
             .find(|d| d.rule == PromotionRule::AllowWithWarning)
             // SAFETY: Test verifies AllowWithWarning decision exists in hardcoded manifest
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(aw_decision.allowed);
         // The cell has a red sentinel, so there should be warnings.
         assert!(!aw_decision.suppression_reasons.is_empty());
@@ -1675,9 +1675,9 @@ mod tests {
     fn test_sentinel_kind_serde_roundtrip() {
         for kind in SentinelKind::all() {
             // SAFETY: SentinelKind derives Serialize and has no non-serializable fields
-            let json = serde_json::to_string(kind).unwrap();
+            let json = serde_json::to_string(kind).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by valid SentinelKind serialization
-            let back: SentinelKind = serde_json::from_str(&json).unwrap();
+            let back: SentinelKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*kind, back);
         }
     }
@@ -1693,9 +1693,9 @@ mod tests {
         ];
         for rule in &rules {
             // SAFETY: PromotionRule derives Serialize and has no non-serializable fields
-            let json = serde_json::to_string(rule).unwrap();
+            let json = serde_json::to_string(rule).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by valid PromotionRule serialization
-            let back: PromotionRule = serde_json::from_str(&json).unwrap();
+            let back: PromotionRule = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*rule, back);
         }
     }
@@ -1710,9 +1710,9 @@ mod tests {
         ];
         for state in &states {
             // SAFETY: SentinelState derives Serialize and has no non-serializable fields
-            let json = serde_json::to_string(state).unwrap();
+            let json = serde_json::to_string(state).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by valid SentinelState serialization
-            let back: SentinelState = serde_json::from_str(&json).unwrap();
+            let back: SentinelState = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*state, back);
         }
     }
@@ -1721,9 +1721,9 @@ mod tests {
     fn test_calibration_sentinel_serde_roundtrip() {
         let s = make_sentinel("rt", SentinelKind::ErrorBound, 500_000, 100_000);
         // SAFETY: CalibrationSentinel derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&s).unwrap();
+        let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid CalibrationSentinel serialization
-        let back: CalibrationSentinel = serde_json::from_str(&json).unwrap();
+        let back: CalibrationSentinel = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(s, back);
     }
 
@@ -1731,9 +1731,9 @@ mod tests {
     fn test_observability_cell_serde_roundtrip() {
         let cell = make_green_cell("serde-cell", "latency", PromotionRule::FailClosed);
         // SAFETY: ObservabilityCell derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&cell).unwrap();
+        let json = serde_json::to_string(&cell).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid ObservabilityCell serialization
-        let back: ObservabilityCell = serde_json::from_str(&json).unwrap();
+        let back: ObservabilityCell = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cell, back);
     }
 
@@ -1742,9 +1742,9 @@ mod tests {
         let cell = make_green_cell("sd-cell", "latency", PromotionRule::FailClosed);
         let decision = evaluate_promotion(&cell);
         // SAFETY: PromotionDecision derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&decision).unwrap();
+        let json = serde_json::to_string(&decision).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid PromotionDecision serialization
-        let back: PromotionDecision = serde_json::from_str(&json).unwrap();
+        let back: PromotionDecision = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(decision, back);
     }
 
@@ -1753,9 +1753,9 @@ mod tests {
         let c1 = make_green_cell("sr1", "a", PromotionRule::FailClosed);
         let report = build_report(SecurityEpoch::from_raw(1), vec![c1]);
         // SAFETY: SentinelReport derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&report).unwrap();
+        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid SentinelReport serialization
-        let back: SentinelReport = serde_json::from_str(&json).unwrap();
+        let back: SentinelReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report, back);
     }
 

@@ -3599,7 +3599,7 @@ mod tests {
         }
         // SAFETY: Fixed 32-byte array is valid signing key format for test purposes.
         // SigningKey::from_bytes only fails on invalid length (not 32 bytes).
-        SigningKey::from_bytes(key).unwrap()
+        SigningKey::from_bytes(key).expect("serde deserialization should succeed")
     }
 
     fn test_extension_id() -> EngineObjectId {
@@ -3611,7 +3611,7 @@ mod tests {
             &SchemaId::from_definition(b"TestExtension.v1"),
             b"ext-001",
         )
-        .unwrap()
+        .expect("serde deserialization should succeed")
     }
 
     fn test_policy_id() -> EngineObjectId {
@@ -3623,7 +3623,7 @@ mod tests {
             &SchemaId::from_definition(b"TestPolicy.v1"),
             b"policy-001",
         )
-        .unwrap()
+        .expect("serde deserialization should succeed")
     }
 
     fn test_proof_artifact_id() -> EngineObjectId {
@@ -3633,7 +3633,7 @@ mod tests {
             &SchemaId::from_definition(b"TestProof.v1"),
             b"proof-001",
         )
-        .unwrap()
+        .expect("serde deserialization should succeed")
     }
 
     fn make_proof(cap: &Capability) -> ProofObligation {
@@ -3712,7 +3712,7 @@ mod tests {
         .transcript_hash(ContentHash::compute(b"synthesis-transcript"))
         .meta("synthesizer", "plas-v1")
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
         apply_passing_promotion_theorems(&mut witness);
         witness
     }
@@ -3807,10 +3807,10 @@ mod tests {
         let mut witness = build_test_witness();
         assert_eq!(witness.lifecycle_state, LifecycleState::Draft);
 
-        witness.transition_to(LifecycleState::Validated).unwrap();
-        witness.transition_to(LifecycleState::Promoted).unwrap();
-        witness.transition_to(LifecycleState::Active).unwrap();
-        witness.transition_to(LifecycleState::Superseded).unwrap();
+        witness.transition_to(LifecycleState::Validated).expect("serde deserialization should succeed");
+        witness.transition_to(LifecycleState::Promoted).expect("serde deserialization should succeed");
+        witness.transition_to(LifecycleState::Active).expect("serde deserialization should succeed");
+        witness.transition_to(LifecycleState::Superseded).expect("serde deserialization should succeed");
 
         assert!(witness.lifecycle_state.is_terminal());
     }
@@ -3839,9 +3839,9 @@ mod tests {
         .require(cap.clone())
         .proof(make_proof(&cap))
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
-        witness.transition_to(LifecycleState::Validated).unwrap();
+        witness.transition_to(LifecycleState::Validated).expect("serde deserialization should succeed");
         let err = witness.transition_to(LifecycleState::Promoted).unwrap_err();
         assert!(matches!(
             err,
@@ -3862,8 +3862,8 @@ mod tests {
         .require(cap.clone())
         .proof(make_proof(&cap))
         .build()
-        .unwrap();
-        witness.transition_to(LifecycleState::Validated).unwrap();
+        .expect("serde deserialization should succeed");
+        witness.transition_to(LifecycleState::Validated).expect("serde deserialization should succeed");
 
         let input = PromotionTheoremInput {
             source_capability_sets: vec![SourceCapabilitySet {
@@ -3875,10 +3875,10 @@ mod tests {
             non_interference_dependencies: BTreeMap::new(),
             custom_extensions: Vec::new(),
         };
-        let report = witness.evaluate_promotion_theorems(&input).unwrap();
+        let report = witness.evaluate_promotion_theorems(&input).expect("serde deserialization should succeed");
         assert!(report.all_passed);
         witness.apply_promotion_theorem_report(&report);
-        witness.transition_to(LifecycleState::Promoted).unwrap();
+        witness.transition_to(LifecycleState::Promoted).expect("serde deserialization should succeed");
         assert_eq!(witness.lifecycle_state, LifecycleState::Promoted);
         assert_eq!(
             witness.metadata.get("promotion_theorem.merge_legality"),
@@ -3905,7 +3905,7 @@ mod tests {
         .proof(make_proof(&cap_read))
         .proof(make_proof(&cap_write))
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let input = PromotionTheoremInput {
             source_capability_sets: vec![SourceCapabilitySet {
@@ -3917,13 +3917,13 @@ mod tests {
             non_interference_dependencies: BTreeMap::new(),
             custom_extensions: Vec::new(),
         };
-        let report = witness.evaluate_promotion_theorems(&input).unwrap();
+        let report = witness.evaluate_promotion_theorems(&input).expect("serde deserialization should succeed");
         assert!(!report.all_passed);
         let merge = report
             .results
             .iter()
             .find(|result| result.theorem == PromotionTheoremKind::MergeLegality)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(!merge.passed);
         assert!(
             merge
@@ -3947,7 +3947,7 @@ mod tests {
         .require(cap_read.clone())
         .proof(make_proof(&cap_read))
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let input = PromotionTheoremInput {
             source_capability_sets: vec![SourceCapabilitySet {
@@ -3962,12 +3962,12 @@ mod tests {
             non_interference_dependencies: BTreeMap::new(),
             custom_extensions: Vec::new(),
         };
-        let report = witness.evaluate_promotion_theorems(&input).unwrap();
+        let report = witness.evaluate_promotion_theorems(&input).expect("serde deserialization should succeed");
         let merge = report
             .results
             .iter()
             .find(|result| result.theorem == PromotionTheoremKind::MergeLegality)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(merge.passed);
     }
 
@@ -3987,7 +3987,7 @@ mod tests {
         .deny(cap_denied.clone(), "forbidden capability")
         .proof(make_proof(&cap_read))
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let input = PromotionTheoremInput {
             source_capability_sets: vec![SourceCapabilitySet {
@@ -4002,12 +4002,12 @@ mod tests {
             ]),
             custom_extensions: Vec::new(),
         };
-        let report = witness.evaluate_promotion_theorems(&input).unwrap();
+        let report = witness.evaluate_promotion_theorems(&input).expect("serde deserialization should succeed");
         let non_interference = report
             .results
             .iter()
             .find(|result| result.theorem == PromotionTheoremKind::NonInterference)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(!non_interference.passed);
         assert!(
             non_interference
@@ -4030,7 +4030,7 @@ mod tests {
         .require(cap_read.clone())
         .proof(make_proof(&cap_read))
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let input = PromotionTheoremInput {
             source_capability_sets: vec![SourceCapabilitySet {
@@ -4046,14 +4046,14 @@ mod tests {
                 forbidden_capabilities: BTreeSet::from([Capability::new("network")]),
             }],
         };
-        let report = witness.evaluate_promotion_theorems(&input).unwrap();
+        let report = witness.evaluate_promotion_theorems(&input).expect("serde deserialization should succeed");
         let custom = report
             .results
             .iter()
             .find(|result| {
                 result.theorem == PromotionTheoremKind::Custom("deny-network".to_string())
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(custom.passed);
     }
 
@@ -4070,10 +4070,10 @@ mod tests {
         .require(cap.clone())
         .proof(make_proof(&cap))
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let report = witness
             .evaluate_promotion_theorems(&promotion_theorem_input_for(&witness))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let events = report.structured_events("trace-a", "decision-a", "policy-a");
         assert_eq!(events.len(), report.results.len() + 1);
         assert!(events.iter().all(|event| event.trace_id == "trace-a"
@@ -4188,8 +4188,8 @@ mod tests {
     #[test]
     fn confidence_serde_roundtrip() {
         let ci = ConfidenceInterval::from_trials(50, 48);
-        let json = serde_json::to_string(&ci).unwrap();
-        let restored: ConfidenceInterval = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&ci).expect("serde deserialization should succeed");
+        let restored: ConfidenceInterval = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(ci, restored);
     }
 
@@ -4216,8 +4216,8 @@ mod tests {
     fn proof_obligation_serde_roundtrip() {
         let cap = Capability::new("test-cap");
         let po = make_proof(&cap);
-        let json = serde_json::to_string(&po).unwrap();
-        let restored: ProofObligation = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&po).expect("serde deserialization should succeed");
+        let restored: ProofObligation = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(po.capability, restored.capability);
         assert_eq!(po.kind, restored.kind);
     }
@@ -4239,7 +4239,7 @@ mod tests {
         .require(cap.clone())
         .proof(make_proof(&cap))
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         assert_eq!(witness.lifecycle_state, LifecycleState::Draft);
         assert_eq!(witness.required_capabilities.len(), 1);
@@ -4313,10 +4313,10 @@ mod tests {
         .rollback(token.clone())
         // SAFETY: Builder configured with valid test data; build() succeeds in controlled test
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         // SAFETY: Test just called rollback(token) on builder; witness has rollback token
-        assert_eq!(witness.rollback_token.as_ref().unwrap().sequence, 1);
+        assert_eq!(witness.rollback_token.as_ref().expect("serde deserialization should succeed").sequence, 1);
     }
 
     // -----------------------------------------------------------------------
@@ -4348,7 +4348,7 @@ mod tests {
     fn verify_signature_fails_wrong_key() {
         let witness = build_test_witness();
         let wrong_key = SigningKey::from_bytes([99u8; 32])
-            .unwrap()
+            .expect("serde deserialization should succeed")
             .verification_key();
         let err = witness
             .verify_synthesizer_signature(&wrong_key)
@@ -4390,7 +4390,7 @@ mod tests {
         .require(cap_b)
         .proof(make_proof(&cap_a)) // Only proof for 'a', not 'b'.
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let err = witness.verify_proof_coverage().unwrap_err();
         assert!(matches!(err, WitnessError::MissingProofObligation { .. }));
@@ -4445,7 +4445,7 @@ mod tests {
         .proof(make_proof(&cap))
         .confidence(ConfidenceInterval::from_trials(10, 5)) // ~50%
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let validator = WitnessValidator::new();
         let errors = validator.validate(&witness);
@@ -4459,8 +4459,8 @@ mod tests {
     #[test]
     fn validator_serde_roundtrip() {
         let v = WitnessValidator::new();
-        let json = serde_json::to_string(&v).unwrap();
-        let restored: WitnessValidator = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let restored: WitnessValidator = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(v.supported_version, restored.supported_version);
     }
 
@@ -4493,13 +4493,13 @@ mod tests {
         let ext_id = witness.extension_id.clone();
         store.insert(witness);
 
-        store.transition(&wid, LifecycleState::Validated).unwrap();
-        store.transition(&wid, LifecycleState::Promoted).unwrap();
-        store.transition(&wid, LifecycleState::Active).unwrap();
+        store.transition(&wid, LifecycleState::Validated).expect("serde deserialization should succeed");
+        store.transition(&wid, LifecycleState::Promoted).expect("serde deserialization should succeed");
+        store.transition(&wid, LifecycleState::Active).expect("serde deserialization should succeed");
 
         assert!(store.active_for_extension(&ext_id).is_some());
         assert_eq!(
-            store.get(&wid).unwrap().lifecycle_state,
+            store.get(&wid).expect("serde deserialization should succeed").lifecycle_state,
             LifecycleState::Active
         );
     }
@@ -4513,9 +4513,9 @@ mod tests {
         let w1_id = w1.witness_id.clone();
         let ext_id = w1.extension_id.clone();
         store.insert(w1);
-        store.transition(&w1_id, LifecycleState::Validated).unwrap();
-        store.transition(&w1_id, LifecycleState::Promoted).unwrap();
-        store.transition(&w1_id, LifecycleState::Active).unwrap();
+        store.transition(&w1_id, LifecycleState::Validated).expect("serde deserialization should succeed");
+        store.transition(&w1_id, LifecycleState::Promoted).expect("serde deserialization should succeed");
+        store.transition(&w1_id, LifecycleState::Active).expect("serde deserialization should succeed");
 
         // Build second witness for same extension (different timestamp).
         let cap = Capability::new("read-data");
@@ -4529,23 +4529,23 @@ mod tests {
         .require(cap.clone())
         .proof(make_proof(&cap))
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let mut w2 = w2;
         apply_passing_promotion_theorems(&mut w2);
         let w2_id = w2.witness_id.clone();
         store.insert(w2);
-        store.transition(&w2_id, LifecycleState::Validated).unwrap();
-        store.transition(&w2_id, LifecycleState::Promoted).unwrap();
-        store.transition(&w2_id, LifecycleState::Active).unwrap();
+        store.transition(&w2_id, LifecycleState::Validated).expect("serde deserialization should succeed");
+        store.transition(&w2_id, LifecycleState::Promoted).expect("serde deserialization should succeed");
+        store.transition(&w2_id, LifecycleState::Active).expect("serde deserialization should succeed");
 
         // w1 should be superseded.
         assert_eq!(
-            store.get(&w1_id).unwrap().lifecycle_state,
+            store.get(&w1_id).expect("serde deserialization should succeed").lifecycle_state,
             LifecycleState::Superseded
         );
         // w2 is the active one.
         assert_eq!(
-            store.active_for_extension(&ext_id).unwrap().witness_id,
+            store.active_for_extension(&ext_id).expect("serde deserialization should succeed").witness_id,
             w2_id
         );
     }
@@ -4557,10 +4557,10 @@ mod tests {
         let wid = witness.witness_id.clone();
         let ext_id = witness.extension_id.clone();
         store.insert(witness);
-        store.transition(&wid, LifecycleState::Validated).unwrap();
-        store.transition(&wid, LifecycleState::Promoted).unwrap();
-        store.transition(&wid, LifecycleState::Active).unwrap();
-        store.transition(&wid, LifecycleState::Revoked).unwrap();
+        store.transition(&wid, LifecycleState::Validated).expect("serde deserialization should succeed");
+        store.transition(&wid, LifecycleState::Promoted).expect("serde deserialization should succeed");
+        store.transition(&wid, LifecycleState::Active).expect("serde deserialization should succeed");
+        store.transition(&wid, LifecycleState::Revoked).expect("serde deserialization should succeed");
 
         assert!(store.active_for_extension(&ext_id).is_none());
     }
@@ -4593,11 +4593,11 @@ mod tests {
         let ext_id = witness.extension_id.clone();
         store.insert(witness);
 
-        store.transition(&wid, LifecycleState::Validated).unwrap();
-        store.transition(&wid, LifecycleState::Promoted).unwrap();
+        store.transition(&wid, LifecycleState::Validated).expect("serde deserialization should succeed");
+        store.transition(&wid, LifecycleState::Promoted).expect("serde deserialization should succeed");
         store
             .get_mut(&wid)
-            .unwrap()
+            .expect("serde deserialization should succeed")
             .synthesizer_signature
             .fill(0x7f);
 
@@ -4612,16 +4612,16 @@ mod tests {
         let mut witness = build_test_witness();
         let wid = witness.witness_id.clone();
         let ext_id = witness.extension_id.clone();
-        witness.transition_to(LifecycleState::Validated).unwrap();
-        witness.transition_to(LifecycleState::Promoted).unwrap();
-        witness.transition_to(LifecycleState::Active).unwrap();
+        witness.transition_to(LifecycleState::Validated).expect("serde deserialization should succeed");
+        witness.transition_to(LifecycleState::Promoted).expect("serde deserialization should succeed");
+        witness.transition_to(LifecycleState::Active).expect("serde deserialization should succeed");
         witness.synthesizer_signature.clear();
 
         store.insert(witness);
 
         assert!(store.active_for_extension(&ext_id).is_none());
         assert_eq!(
-            store.get(&wid).unwrap().lifecycle_state,
+            store.get(&wid).expect("serde deserialization should succeed").lifecycle_state,
             LifecycleState::Promoted
         );
     }
@@ -4637,7 +4637,7 @@ mod tests {
             &SchemaId::from_definition(b"TestExtension.v1"),
             &seed.to_be_bytes(),
         )
-        .unwrap()
+        .expect("serde deserialization should succeed")
     }
 
     fn build_promoted_witness(seed: u64) -> CapabilityWitness {
@@ -4658,10 +4658,10 @@ mod tests {
             format!("transcript-{seed}").as_bytes(),
         ))
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
         apply_passing_promotion_theorems(&mut witness);
-        witness.transition_to(LifecycleState::Validated).unwrap();
-        witness.transition_to(LifecycleState::Promoted).unwrap();
+        witness.transition_to(LifecycleState::Validated).expect("serde deserialization should succeed");
+        witness.transition_to(LifecycleState::Promoted).expect("serde deserialization should succeed");
         witness
     }
 
@@ -4679,16 +4679,16 @@ mod tests {
 
     #[test]
     fn publication_pipeline_publish_emits_artifact_and_ledgers() {
-        let head_signing_key = SigningKey::from_bytes([17u8; 32]).unwrap();
+        let head_signing_key = SigningKey::from_bytes([17u8; 32]).expect("serde deserialization should succeed");
         let mut pipeline = WitnessPublicationPipeline::new(
             SecurityEpoch::from_raw(500),
             head_signing_key.clone(),
             publication_config_with_governance(),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let witness = build_promoted_witness(1);
-        let publication_id = pipeline.publish_witness(witness.clone(), 90_000).unwrap();
+        let publication_id = pipeline.publish_witness(witness.clone(), 90_000).expect("serde deserialization should succeed");
 
         assert_eq!(pipeline.publications().len(), 1);
         let artifact = &pipeline.publications()[0];
@@ -4700,25 +4700,25 @@ mod tests {
         assert!(artifact.publication_proof.log_entry.verify_leaf_hash());
         assert_eq!(pipeline.evidence_entries().len(), 1);
         // SAFETY: Pipeline configured with governance config; governance ledger exists
-        assert_eq!(pipeline.governance_ledger().unwrap().entries().len(), 1);
+        assert_eq!(pipeline.governance_ledger().expect("serde deserialization should succeed").entries().len(), 1);
 
         WitnessPublicationPipeline::verify_artifact(
             artifact,
             &test_signing_key().verification_key(),
             &head_signing_key.verification_key(),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
     }
 
     #[test]
     fn publication_pipeline_rejects_missing_promotion_signature_quorum() {
-        let head_signing_key = SigningKey::from_bytes([18u8; 32]).unwrap();
+        let head_signing_key = SigningKey::from_bytes([18u8; 32]).expect("serde deserialization should succeed");
         let mut pipeline = WitnessPublicationPipeline::new(
             SecurityEpoch::from_raw(501),
             head_signing_key,
             publication_config_with_governance(),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let mut witness = build_promoted_witness(2);
         witness.promotion_signatures.clear();
 
@@ -4732,7 +4732,7 @@ mod tests {
 
     #[test]
     fn publication_pipeline_second_publish_has_consistency_chain() {
-        let head_signing_key = SigningKey::from_bytes([21u8; 32]).unwrap();
+        let head_signing_key = SigningKey::from_bytes([21u8; 32]).expect("serde deserialization should succeed");
         let mut pipeline = WitnessPublicationPipeline::new(
             SecurityEpoch::from_raw(600),
             head_signing_key.clone(),
@@ -4742,18 +4742,18 @@ mod tests {
                 governance_ledger_config: None,
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let first = build_promoted_witness(10);
         let second = build_promoted_witness(11);
-        pipeline.publish_witness(first, 100).unwrap();
-        let pub2 = pipeline.publish_witness(second, 200).unwrap();
+        pipeline.publish_witness(first, 100).expect("serde deserialization should succeed");
+        let pub2 = pipeline.publish_witness(second, 200).expect("serde deserialization should succeed");
 
         let second_artifact = pipeline
             .publications()
             .iter()
             .find(|artifact| artifact.publication_id == pub2)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(
             !second_artifact
                 .publication_proof
@@ -4766,39 +4766,39 @@ mod tests {
             &test_signing_key().verification_key(),
             &head_signing_key.verification_key(),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
     }
 
     #[test]
     fn publication_pipeline_revocation_appends_signed_entry() {
-        let head_signing_key = SigningKey::from_bytes([33u8; 32]).unwrap();
+        let head_signing_key = SigningKey::from_bytes([33u8; 32]).expect("serde deserialization should succeed");
         let mut pipeline = WitnessPublicationPipeline::new(
             SecurityEpoch::from_raw(700),
             head_signing_key.clone(),
             publication_config_with_governance(),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let witness = build_promoted_witness(20);
         let witness_id = witness.witness_id.clone();
-        pipeline.publish_witness(witness.clone(), 1_000).unwrap();
+        pipeline.publish_witness(witness.clone(), 1_000).expect("serde deserialization should succeed");
         pipeline
             .revoke_witness(&witness_id, "compromise detected", 2_000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let artifact = pipeline
             .publications()
             .iter()
             .find(|artifact| artifact.witness.witness_id == witness_id)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(artifact.is_revoked());
-        let revocation = artifact.revocation_proof.as_ref().unwrap();
+        let revocation = artifact.revocation_proof.as_ref().expect("serde deserialization should succeed");
         assert_eq!(revocation.log_entry.kind, PublicationEntryKind::Revoke);
         assert_eq!(
             revocation.log_entry.revocation_reason.as_deref(),
             Some("compromise detected")
         );
-        assert_eq!(pipeline.governance_ledger().unwrap().entries().len(), 2);
+        assert_eq!(pipeline.governance_ledger().expect("serde deserialization should succeed").entries().len(), 2);
         assert_eq!(pipeline.evidence_entries().len(), 2);
 
         WitnessPublicationPipeline::verify_artifact(
@@ -4806,12 +4806,12 @@ mod tests {
             &test_signing_key().verification_key(),
             &head_signing_key.verification_key(),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
     }
 
     #[test]
     fn publication_pipeline_query_filters() {
-        let head_signing_key = SigningKey::from_bytes([44u8; 32]).unwrap();
+        let head_signing_key = SigningKey::from_bytes([44u8; 32]).expect("serde deserialization should succeed");
         let mut pipeline = WitnessPublicationPipeline::new(
             SecurityEpoch::from_raw(800),
             head_signing_key,
@@ -4821,14 +4821,14 @@ mod tests {
                 governance_ledger_config: None,
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let w1 = build_promoted_witness(31);
         let w2 = build_promoted_witness(32);
         let w1_ext = w1.extension_id.clone();
         let w2_hash = w2.content_hash;
-        pipeline.publish_witness(w1, 10).unwrap();
-        pipeline.publish_witness(w2, 20).unwrap();
+        pipeline.publish_witness(w1, 10).expect("serde deserialization should succeed");
+        pipeline.publish_witness(w2, 20).expect("serde deserialization should succeed");
 
         let by_ext = pipeline.query(&WitnessPublicationQuery {
             extension_id: Some(w1_ext),
@@ -4851,7 +4851,7 @@ mod tests {
 
     #[test]
     fn publication_pipeline_detects_tampered_inclusion_root() {
-        let head_signing_key = SigningKey::from_bytes([55u8; 32]).unwrap();
+        let head_signing_key = SigningKey::from_bytes([55u8; 32]).expect("serde deserialization should succeed");
         let mut pipeline = WitnessPublicationPipeline::new(
             SecurityEpoch::from_raw(900),
             head_signing_key.clone(),
@@ -4861,10 +4861,10 @@ mod tests {
                 governance_ledger_config: None,
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let witness = build_promoted_witness(40);
-        pipeline.publish_witness(witness, 30).unwrap();
+        pipeline.publish_witness(witness, 30).expect("serde deserialization should succeed");
 
         let mut artifact = pipeline.publications()[0].clone();
         artifact.publication_proof.inclusion_proof.root_hash = ContentHash([0xabu8; 32]);
@@ -4889,8 +4889,8 @@ mod tests {
     #[test]
     fn witness_serde_roundtrip() {
         let witness = build_test_witness();
-        let json = serde_json::to_string(&witness).unwrap();
-        let restored: CapabilityWitness = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&witness).expect("serde deserialization should succeed");
+        let restored: CapabilityWitness = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(witness.witness_id, restored.witness_id);
         assert_eq!(witness.content_hash, restored.content_hash);
         assert_eq!(
@@ -4907,8 +4907,8 @@ mod tests {
             created_epoch: SecurityEpoch::from_raw(99),
             sequence: 5,
         };
-        let json = serde_json::to_string(&token).unwrap();
-        let restored: RollbackToken = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&token).expect("serde deserialization should succeed");
+        let restored: RollbackToken = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(token, restored);
     }
 
@@ -4919,8 +4919,8 @@ mod tests {
             reason: "not needed".to_string(),
             evidence_id: None,
         };
-        let json = serde_json::to_string(&dr).unwrap();
-        let restored: DenialRecord = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&dr).expect("serde deserialization should succeed");
+        let restored: DenialRecord = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(dr, restored);
     }
 
@@ -4928,8 +4928,8 @@ mod tests {
     fn store_serde_roundtrip() {
         let mut store = WitnessStore::new();
         store.insert(build_test_witness());
-        let json = serde_json::to_string(&store).unwrap();
-        let restored: WitnessStore = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&store).expect("serde deserialization should succeed");
+        let restored: WitnessStore = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(store.len(), restored.len());
     }
 
@@ -4982,8 +4982,8 @@ mod tests {
             LifecycleState::Revoked,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let restored: LifecycleState = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let restored: LifecycleState = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
             assert_eq!(*v, restored);
         }
     }
@@ -4998,8 +4998,8 @@ mod tests {
             ProofKind::InheritedFromPredecessor,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let restored: ProofKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let restored: ProofKind = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
             assert_eq!(*v, restored);
         }
     }
@@ -5013,8 +5013,8 @@ mod tests {
             PromotionTheoremKind::Custom("my_theorem".to_string()),
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let restored: PromotionTheoremKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let restored: PromotionTheoremKind = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
             assert_eq!(*v, restored);
         }
     }
@@ -5022,16 +5022,16 @@ mod tests {
     #[test]
     fn witness_schema_version_serde_roundtrip() {
         let v = WitnessSchemaVersion::CURRENT;
-        let json = serde_json::to_string(&v).unwrap();
-        let restored: WitnessSchemaVersion = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let restored: WitnessSchemaVersion = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(v, restored);
     }
 
     #[test]
     fn confidence_interval_serde_roundtrip() {
         let ci = ConfidenceInterval::from_trials(100, 90);
-        let json = serde_json::to_string(&ci).unwrap();
-        let restored: ConfidenceInterval = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&ci).expect("serde deserialization should succeed");
+        let restored: ConfidenceInterval = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(ci, restored);
     }
 
@@ -5076,8 +5076,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap();
-            let restored: WitnessError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let restored: WitnessError = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
             assert_eq!(*err, restored);
         }
     }
@@ -5086,8 +5086,8 @@ mod tests {
     fn publication_entry_kind_serde_roundtrip() {
         let variants = [PublicationEntryKind::Publish, PublicationEntryKind::Revoke];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let restored: PublicationEntryKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let restored: PublicationEntryKind = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
             assert_eq!(*v, restored);
         }
     }
@@ -5118,8 +5118,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap();
-            let restored: WitnessPublicationError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let restored: WitnessPublicationError = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
             assert_eq!(*err, restored);
         }
     }
@@ -5140,8 +5140,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap();
-            let restored: WitnessIndexError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let restored: WitnessIndexError = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
             assert_eq!(*err, restored);
         }
     }
@@ -5152,8 +5152,8 @@ mod tests {
             source_id: "src-1".to_string(),
             capabilities: BTreeSet::from([Capability::new("cap_a")]),
         };
-        let json = serde_json::to_string(&scs).unwrap();
-        let restored: SourceCapabilitySet = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&scs).expect("serde deserialization should succeed");
+        let restored: SourceCapabilitySet = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(scs, restored);
     }
 
@@ -5169,8 +5169,8 @@ mod tests {
     #[test]
     fn witness_publication_config_serde_roundtrip() {
         let config = WitnessPublicationConfig::default();
-        let json = serde_json::to_string(&config).unwrap();
-        let restored: WitnessPublicationConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let restored: WitnessPublicationConfig = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(config, restored);
     }
 
@@ -5186,8 +5186,8 @@ mod tests {
             error_code: None,
             timestamp_ns: 12345,
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let restored: WitnessPublicationEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let restored: WitnessPublicationEvent = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(event, restored);
     }
 
@@ -5263,7 +5263,7 @@ mod tests {
         .replay_seed(42)
         .transcript_hash(ContentHash::compute(b"tx"))
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let rec = WitnessIndexRecord {
             witness_id: w.witness_id.clone(),
             extension_id: w.extension_id.clone(),
@@ -5274,8 +5274,8 @@ mod tests {
             content_hash: w.content_hash,
             witness: w,
         };
-        let json = serde_json::to_string(&rec).unwrap();
-        let restored: WitnessIndexRecord = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&rec).expect("serde deserialization should succeed");
+        let restored: WitnessIndexRecord = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(rec, restored);
     }
 
@@ -5293,8 +5293,8 @@ mod tests {
             policy_id: "p-1".to_string(),
             error_code: None,
         };
-        let json = serde_json::to_string(&rec).unwrap();
-        let restored: CapabilityEscrowReceiptRecord = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&rec).expect("serde deserialization should succeed");
+        let restored: CapabilityEscrowReceiptRecord = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(rec, restored);
     }
 
@@ -5312,8 +5312,8 @@ mod tests {
             cursor: None,
             limit: 10,
         };
-        let json = serde_json::to_string(&q).unwrap();
-        let restored: WitnessIndexQuery = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&q).expect("serde deserialization should succeed");
+        let restored: WitnessIndexQuery = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(q, restored);
     }
 
@@ -5328,8 +5328,8 @@ mod tests {
             outcome: "ok".to_string(),
             error_code: None,
         };
-        let json = serde_json::to_string(&ev).unwrap();
-        let restored: WitnessIndexEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
+        let restored: WitnessIndexEvent = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(ev, restored);
     }
 
@@ -5342,8 +5342,8 @@ mod tests {
             content_hash: Some(ContentHash::compute(b"hash")),
             include_revoked: true,
         };
-        let json = serde_json::to_string(&q).unwrap();
-        let restored: WitnessPublicationQuery = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&q).expect("serde deserialization should succeed");
+        let restored: WitnessPublicationQuery = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(q, restored);
     }
 
@@ -5358,8 +5358,8 @@ mod tests {
             },
             forbidden_capabilities: BTreeSet::new(),
         };
-        let json = serde_json::to_string(&ext).unwrap();
-        let restored: CustomTheoremExtension = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&ext).expect("serde deserialization should succeed");
+        let restored: CustomTheoremExtension = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(ext, restored);
     }
 
@@ -5374,8 +5374,8 @@ mod tests {
             outcome: "passed".to_string(),
             error_code: None,
         };
-        let json = serde_json::to_string(&ev).unwrap();
-        let restored: PromotionTheoremLogEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
+        let restored: PromotionTheoremLogEvent = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(ev, restored);
     }
 
@@ -5775,11 +5775,11 @@ mod tests {
             non_interference_dependencies: BTreeMap::new(),
             custom_extensions: Vec::new(),
         };
-        let report = witness.evaluate_promotion_theorems(&input).unwrap();
+        let report = witness.evaluate_promotion_theorems(&input).expect("serde deserialization should succeed");
         let events = report.structured_events("t1", "d1", "p1");
         // 3 theorem checks + 1 gate summary = 4 events
         assert_eq!(events.len(), 4);
-        assert_eq!(events.last().unwrap().event, "promotion_theorem_gate");
+        assert_eq!(events.last().expect("serde deserialization should succeed").event, "promotion_theorem_gate");
     }
 
     // -----------------------------------------------------------------------
@@ -5801,7 +5801,7 @@ mod tests {
         .proof(make_proof(&cap_r))
         .deny(cap_w.clone(), "not needed")
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert!(witness.denied_capabilities.contains(&cap_w));
         assert_eq!(witness.denial_records.len(), 1);
         assert_eq!(witness.denial_records[0].reason, "not needed");
@@ -5827,8 +5827,8 @@ mod tests {
         .proof(make_proof(&cap))
         .rollback(token.clone())
         .build()
-        .unwrap();
-        assert_eq!(witness.rollback_token.unwrap().sequence, 7);
+        .expect("serde deserialization should succeed");
+        assert_eq!(witness.rollback_token.expect("serde deserialization should succeed").sequence, 7);
     }
 
     #[test]
@@ -5866,7 +5866,7 @@ mod tests {
         .require(cap.clone())
         .proof(make_proof(&cap))
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let w2_id = w2.witness_id.clone();
         store.insert(w2);
 
@@ -5888,8 +5888,8 @@ mod tests {
             end_timestamp_ns: Some(999),
             include_revoked: false,
         };
-        let json = serde_json::to_string(&q).unwrap();
-        let restored: WitnessReplayJoinQuery = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&q).expect("serde deserialization should succeed");
+        let restored: WitnessReplayJoinQuery = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(q, restored);
     }
 
@@ -5927,8 +5927,8 @@ mod tests {
             non_interference_dependencies: BTreeMap::new(),
             custom_extensions: Vec::new(),
         };
-        let json = serde_json::to_string(&input).unwrap();
-        let restored: PromotionTheoremInput = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
+        let restored: PromotionTheoremInput = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(input, restored);
     }
 
@@ -5947,7 +5947,7 @@ mod tests {
             outcome: "pass".to_string(),
             error_code: None,
         };
-        let json = serde_json::to_string(&ev).unwrap();
+        let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
         assert!(json.contains("\"outcome\":\"pass\""));
         assert!(json.contains("\"error_code\":null"));
     }
@@ -5960,8 +5960,8 @@ mod tests {
             records: Vec::new(),
             next_cursor: Some("cursor-abc".to_string()),
         };
-        let json = serde_json::to_string(&page).unwrap();
-        let back: WitnessIndexPage = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&page).expect("serde deserialization should succeed");
+        let back: WitnessIndexPage = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(page, back);
     }
 
@@ -5971,9 +5971,9 @@ mod tests {
             records: Vec::new(),
             next_cursor: None,
         };
-        let json = serde_json::to_string(&page).unwrap();
+        let json = serde_json::to_string(&page).expect("serde deserialization should succeed");
         assert!(json.contains("\"next_cursor\":null"));
-        let back: WitnessIndexPage = serde_json::from_str(&json).unwrap();
+        let back: WitnessIndexPage = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(page, back);
     }
 
@@ -5985,8 +5985,8 @@ mod tests {
             end_timestamp_ns: Some(999),
             include_revoked: false,
         };
-        let json = serde_json::to_string(&query).unwrap();
-        let back: WitnessReplayJoinQuery = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&query).expect("serde deserialization should succeed");
+        let back: WitnessReplayJoinQuery = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(query, back);
     }
 
@@ -5998,7 +5998,7 @@ mod tests {
             end_timestamp_ns: None,
             include_revoked: true,
         };
-        let json = serde_json::to_string(&query).unwrap();
+        let json = serde_json::to_string(&query).expect("serde deserialization should succeed");
         assert!(json.contains("\"start_timestamp_ns\":null"));
         assert!(json.contains("\"end_timestamp_ns\":null"));
     }
@@ -6014,8 +6014,8 @@ mod tests {
             outcome: "ok".to_string(),
             error_code: Some("FE-0001".to_string()),
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let back: WitnessIndexEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let back: WitnessIndexEvent = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(event, back);
         assert_eq!(back.error_code.as_deref(), Some("FE-0001"));
     }
@@ -6103,8 +6103,8 @@ mod tests {
             head_hash: ContentHash::compute(b"head"),
             signature: vec![0xab, 0xcd],
         };
-        let json = serde_json::to_string(&head).unwrap();
-        let back: WitnessTreeHead = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&head).expect("serde deserialization should succeed");
+        let back: WitnessTreeHead = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(head, back);
     }
 
@@ -6123,8 +6123,8 @@ mod tests {
             predecessor_leaf_hash: ContentHash::compute(b"pred"),
             leaf_hash: ContentHash::compute(b"leaf"),
         };
-        let json = serde_json::to_string(&entry).unwrap();
-        let back: PublicationLogEntry = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let back: PublicationLogEntry = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(entry, back);
     }
 
@@ -6134,13 +6134,13 @@ mod tests {
 
     #[test]
     fn publish_draft_witness_rejected() {
-        let head_key = SigningKey::from_bytes([60u8; 32]).unwrap();
+        let head_key = SigningKey::from_bytes([60u8; 32]).expect("serde deserialization should succeed");
         let mut pipeline = WitnessPublicationPipeline::new(
             SecurityEpoch::from_raw(1),
             head_key,
             WitnessPublicationConfig::default(),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let cap = Capability::new("read");
         let witness = WitnessBuilder::new(
             test_extension_id(),
@@ -6152,7 +6152,7 @@ mod tests {
         .require(cap.clone())
         .proof(make_proof(&cap))
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let err = pipeline.publish_witness(witness, 1000).unwrap_err();
         assert!(matches!(
             err,
@@ -6162,15 +6162,15 @@ mod tests {
 
     #[test]
     fn publish_duplicate_witness_rejected() {
-        let head_key = SigningKey::from_bytes([61u8; 32]).unwrap();
+        let head_key = SigningKey::from_bytes([61u8; 32]).expect("serde deserialization should succeed");
         let mut pipeline = WitnessPublicationPipeline::new(
             SecurityEpoch::from_raw(1),
             head_key,
             WitnessPublicationConfig::default(),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let witness = build_promoted_witness(50);
-        pipeline.publish_witness(witness.clone(), 100).unwrap();
+        pipeline.publish_witness(witness.clone(), 100).expect("serde deserialization should succeed");
         let err = pipeline.publish_witness(witness, 200).unwrap_err();
         assert!(matches!(
             err,
@@ -6180,16 +6180,16 @@ mod tests {
 
     #[test]
     fn revoke_empty_reason_rejected() {
-        let head_key = SigningKey::from_bytes([62u8; 32]).unwrap();
+        let head_key = SigningKey::from_bytes([62u8; 32]).expect("serde deserialization should succeed");
         let mut pipeline = WitnessPublicationPipeline::new(
             SecurityEpoch::from_raw(1),
             head_key,
             WitnessPublicationConfig::default(),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let witness = build_promoted_witness(51);
         let wid = witness.witness_id.clone();
-        pipeline.publish_witness(witness, 100).unwrap();
+        pipeline.publish_witness(witness, 100).expect("serde deserialization should succeed");
         let err = pipeline.revoke_witness(&wid, "  ", 200).unwrap_err();
         assert!(matches!(
             err,
@@ -6199,13 +6199,13 @@ mod tests {
 
     #[test]
     fn revoke_unpublished_witness_rejected() {
-        let head_key = SigningKey::from_bytes([63u8; 32]).unwrap();
+        let head_key = SigningKey::from_bytes([63u8; 32]).expect("serde deserialization should succeed");
         let mut pipeline = WitnessPublicationPipeline::new(
             SecurityEpoch::from_raw(1),
             head_key,
             WitnessPublicationConfig::default(),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let err = pipeline
             .revoke_witness(&test_extension_id(), "reason", 100)
             .unwrap_err();
@@ -6217,17 +6217,17 @@ mod tests {
 
     #[test]
     fn revoke_already_revoked_rejected() {
-        let head_key = SigningKey::from_bytes([64u8; 32]).unwrap();
+        let head_key = SigningKey::from_bytes([64u8; 32]).expect("serde deserialization should succeed");
         let mut pipeline = WitnessPublicationPipeline::new(
             SecurityEpoch::from_raw(1),
             head_key,
             WitnessPublicationConfig::default(),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let witness = build_promoted_witness(52);
         let wid = witness.witness_id.clone();
-        pipeline.publish_witness(witness, 100).unwrap();
-        pipeline.revoke_witness(&wid, "compromise", 200).unwrap();
+        pipeline.publish_witness(witness, 100).expect("serde deserialization should succeed");
+        pipeline.revoke_witness(&wid, "compromise", 200).expect("serde deserialization should succeed");
         let err = pipeline.revoke_witness(&wid, "again", 300).unwrap_err();
         assert!(matches!(
             err,
@@ -6237,7 +6237,7 @@ mod tests {
 
     #[test]
     fn pipeline_zero_checkpoint_interval_rejected() {
-        let head_key = SigningKey::from_bytes([65u8; 32]).unwrap();
+        let head_key = SigningKey::from_bytes([65u8; 32]).expect("serde deserialization should succeed");
         let err = WitnessPublicationPipeline::new(
             SecurityEpoch::from_raw(1),
             head_key,
@@ -6253,7 +6253,7 @@ mod tests {
 
     #[test]
     fn pipeline_empty_policy_id_rejected() {
-        let head_key = SigningKey::from_bytes([66u8; 32]).unwrap();
+        let head_key = SigningKey::from_bytes([66u8; 32]).expect("serde deserialization should succeed");
         let err = WitnessPublicationPipeline::new(
             SecurityEpoch::from_raw(1),
             head_key,
@@ -6287,7 +6287,7 @@ mod tests {
         .proof(make_proof(&cap_r))
         .proof(make_proof(&cap_w))
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         // Only one source covers cap_r, so merge fails for cap_w
         let input = PromotionTheoremInput {
@@ -6300,7 +6300,7 @@ mod tests {
             non_interference_dependencies: BTreeMap::new(),
             custom_extensions: Vec::new(),
         };
-        let report = witness.evaluate_promotion_theorems(&input).unwrap();
+        let report = witness.evaluate_promotion_theorems(&input).expect("serde deserialization should succeed");
         assert!(!report.all_passed);
 
         let proofs_before = witness
@@ -6341,7 +6341,7 @@ mod tests {
         .proof(make_proof(&cap_r))
         .proof(make_proof(&cap_w))
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let input = PromotionTheoremInput {
             source_capability_sets: vec![SourceCapabilitySet {
@@ -6353,18 +6353,18 @@ mod tests {
             non_interference_dependencies: BTreeMap::new(),
             custom_extensions: Vec::new(),
         };
-        let report = witness.evaluate_promotion_theorems(&input).unwrap();
+        let report = witness.evaluate_promotion_theorems(&input).expect("serde deserialization should succeed");
         let attenuation = report
             .results
             .iter()
             .find(|r| r.theorem == PromotionTheoremKind::AttenuationLegality)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(!attenuation.passed);
         assert!(
             attenuation
                 .counterexample
                 .as_deref()
-                .unwrap()
+                .expect("serde deserialization should succeed")
                 .contains("write")
         );
     }
@@ -6383,7 +6383,7 @@ mod tests {
         .require(cap_r.clone())
         .proof(make_proof(&cap_r))
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let input = PromotionTheoremInput {
             source_capability_sets: vec![SourceCapabilitySet {
@@ -6399,14 +6399,14 @@ mod tests {
                 forbidden_capabilities: BTreeSet::from([cap_r]),
             }],
         };
-        let report = witness.evaluate_promotion_theorems(&input).unwrap();
+        let report = witness.evaluate_promotion_theorems(&input).expect("serde deserialization should succeed");
         let custom = report
             .results
             .iter()
             .find(|r| r.theorem == PromotionTheoremKind::Custom("strict-check".to_string()))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(!custom.passed);
-        let cx = custom.counterexample.as_deref().unwrap();
+        let cx = custom.counterexample.as_deref().expect("serde deserialization should succeed");
         assert!(
             cx.contains("write"),
             "counterexample should mention missing write"
@@ -6430,7 +6430,7 @@ mod tests {
         .require(cap.clone())
         .proof(make_proof(&cap))
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let input = PromotionTheoremInput {
             source_capability_sets: vec![SourceCapabilitySet {
@@ -6453,7 +6453,7 @@ mod tests {
                 },
             ],
         };
-        let report = witness.evaluate_promotion_theorems(&input).unwrap();
+        let report = witness.evaluate_promotion_theorems(&input).expect("serde deserialization should succeed");
         let custom_results: Vec<_> = report
             .results
             .iter()
@@ -6494,7 +6494,7 @@ mod tests {
         for p in proofs {
             builder = builder.proof(p);
         }
-        let witness = builder.build().unwrap();
+        let witness = builder.build().expect("serde deserialization should succeed");
         assert_eq!(witness.required_capabilities.len(), 3);
         for cap in &caps {
             assert!(witness.required_capabilities.contains(cap));
@@ -6516,7 +6516,7 @@ mod tests {
         .meta("key1", "value1")
         .meta("key2", "value2")
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(witness.metadata.get("key1"), Some(&"value1".to_string()));
         assert_eq!(witness.metadata.get("key2"), Some(&"value2".to_string()));
     }
@@ -6540,7 +6540,7 @@ mod tests {
         store.insert(witness);
         assert_eq!(store.len(), 1); // Still only 1
         assert_eq!(
-            store.get(&wid).unwrap().metadata.get("replaced"),
+            store.get(&wid).expect("serde deserialization should succeed").metadata.get("replaced"),
             Some(&"true".to_string())
         );
     }
@@ -6566,19 +6566,19 @@ mod tests {
 
     #[test]
     fn publication_query_exclude_revoked() {
-        let head_key = SigningKey::from_bytes([67u8; 32]).unwrap();
+        let head_key = SigningKey::from_bytes([67u8; 32]).expect("serde deserialization should succeed");
         let mut pipeline = WitnessPublicationPipeline::new(
             SecurityEpoch::from_raw(1),
             head_key,
             WitnessPublicationConfig::default(),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let w1 = build_promoted_witness(60);
         let w2 = build_promoted_witness(61);
         let w1_id = w1.witness_id.clone();
-        pipeline.publish_witness(w1, 100).unwrap();
-        pipeline.publish_witness(w2, 200).unwrap();
-        pipeline.revoke_witness(&w1_id, "reason", 300).unwrap();
+        pipeline.publish_witness(w1, 100).expect("serde deserialization should succeed");
+        pipeline.publish_witness(w2, 200).expect("serde deserialization should succeed");
+        pipeline.revoke_witness(&w1_id, "reason", 300).expect("serde deserialization should succeed");
 
         let all = pipeline.query(&WitnessPublicationQuery::all());
         assert_eq!(all.len(), 2);
@@ -6600,33 +6600,33 @@ mod tests {
 
     #[test]
     fn verify_publication_from_pipeline() {
-        let head_key = SigningKey::from_bytes([68u8; 32]).unwrap();
+        let head_key = SigningKey::from_bytes([68u8; 32]).expect("serde deserialization should succeed");
         let mut pipeline = WitnessPublicationPipeline::new(
             SecurityEpoch::from_raw(1),
             head_key.clone(),
             WitnessPublicationConfig::default(),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let witness = build_promoted_witness(70);
-        let pub_id = pipeline.publish_witness(witness, 100).unwrap();
+        let pub_id = pipeline.publish_witness(witness, 100).expect("serde deserialization should succeed");
         pipeline
             .verify_publication(
                 &pub_id,
                 &test_signing_key().verification_key(),
                 &head_key.verification_key(),
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
     }
 
     #[test]
     fn verify_publication_not_found() {
-        let head_key = SigningKey::from_bytes([69u8; 32]).unwrap();
+        let head_key = SigningKey::from_bytes([69u8; 32]).expect("serde deserialization should succeed");
         let pipeline = WitnessPublicationPipeline::new(
             SecurityEpoch::from_raw(1),
             head_key.clone(),
             WitnessPublicationConfig::default(),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let err = pipeline
             .verify_publication(
                 &test_extension_id(),
@@ -6646,27 +6646,27 @@ mod tests {
 
     #[test]
     fn pipeline_events_emitted_on_publish_and_revoke() {
-        let head_key = SigningKey::from_bytes([70u8; 32]).unwrap();
+        let head_key = SigningKey::from_bytes([70u8; 32]).expect("serde deserialization should succeed");
         let mut pipeline = WitnessPublicationPipeline::new(
             SecurityEpoch::from_raw(1),
             head_key,
             WitnessPublicationConfig::default(),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let w = build_promoted_witness(80);
         let wid = w.witness_id.clone();
-        pipeline.publish_witness(w, 100).unwrap();
+        pipeline.publish_witness(w, 100).expect("serde deserialization should succeed");
         assert_eq!(pipeline.events().len(), 1);
         assert_eq!(pipeline.events()[0].event, "publish_witness");
 
-        pipeline.revoke_witness(&wid, "compromised", 200).unwrap();
+        pipeline.revoke_witness(&wid, "compromised", 200).expect("serde deserialization should succeed");
         assert_eq!(pipeline.events().len(), 2);
         assert_eq!(pipeline.events()[1].event, "revoke_witness");
     }
 
     #[test]
     fn pipeline_checkpoints_at_interval() {
-        let head_key = SigningKey::from_bytes([71u8; 32]).unwrap();
+        let head_key = SigningKey::from_bytes([71u8; 32]).expect("serde deserialization should succeed");
         let mut pipeline = WitnessPublicationPipeline::new(
             SecurityEpoch::from_raw(1),
             head_key,
@@ -6676,10 +6676,10 @@ mod tests {
                 governance_ledger_config: None,
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let w1 = build_promoted_witness(90);
-        pipeline.publish_witness(w1, 100).unwrap();
+        pipeline.publish_witness(w1, 100).expect("serde deserialization should succeed");
         assert_eq!(
             pipeline.checkpoints().len(),
             0,
@@ -6687,7 +6687,7 @@ mod tests {
         );
 
         let w2 = build_promoted_witness(91);
-        pipeline.publish_witness(w2, 200).unwrap();
+        pipeline.publish_witness(w2, 200).expect("serde deserialization should succeed");
         assert_eq!(
             pipeline.checkpoints().len(),
             1,
@@ -6701,19 +6701,19 @@ mod tests {
 
     #[test]
     fn published_witness_artifact_is_revoked_reflects_state() {
-        let head_key = SigningKey::from_bytes([72u8; 32]).unwrap();
+        let head_key = SigningKey::from_bytes([72u8; 32]).expect("serde deserialization should succeed");
         let mut pipeline = WitnessPublicationPipeline::new(
             SecurityEpoch::from_raw(1),
             head_key,
             WitnessPublicationConfig::default(),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let w = build_promoted_witness(100);
         let wid = w.witness_id.clone();
-        pipeline.publish_witness(w, 100).unwrap();
+        pipeline.publish_witness(w, 100).expect("serde deserialization should succeed");
         assert!(!pipeline.publications()[0].is_revoked());
 
-        pipeline.revoke_witness(&wid, "reason", 200).unwrap();
+        pipeline.revoke_witness(&wid, "reason", 200).expect("serde deserialization should succeed");
         assert!(pipeline.publications()[0].is_revoked());
     }
 
@@ -6734,13 +6734,13 @@ mod tests {
         .require(cap.clone())
         .proof(make_proof(&cap))
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let report = witness
             .evaluate_promotion_theorems(&promotion_theorem_input_for(&witness))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         for result in &report.results {
-            let json = serde_json::to_string(result).unwrap();
-            let back: PromotionTheoremResult = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(result).expect("serde deserialization should succeed");
+            let back: PromotionTheoremResult = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
             assert_eq!(*result, back);
         }
     }
@@ -6758,12 +6758,12 @@ mod tests {
         .require(cap.clone())
         .proof(make_proof(&cap))
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let report = witness
             .evaluate_promotion_theorems(&promotion_theorem_input_for(&witness))
-            .unwrap();
-        let json = serde_json::to_string(&report).unwrap();
-        let back: PromotionTheoremReport = serde_json::from_str(&json).unwrap();
+            .expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let back: PromotionTheoremReport = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(report, back);
     }
 
@@ -6784,8 +6784,8 @@ mod tests {
         .require(cap.clone())
         .proof(make_proof(&cap))
         .build()
-        .unwrap();
-        witness.transition_to(LifecycleState::Validated).unwrap();
+        .expect("serde deserialization should succeed");
+        witness.transition_to(LifecycleState::Validated).expect("serde deserialization should succeed");
         // Insert a "fail" metadata entry to trigger PromotionTheoremFailed
         witness.metadata.insert(
             "promotion_theorem.merge_legality".to_string(),
@@ -6820,7 +6820,7 @@ mod tests {
         .require(cap.clone())
         .proof(make_proof(&cap))
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let base = witness.synthesis_unsigned_bytes();
 
         // Add a PolicyTheoremCheck proof
@@ -6856,13 +6856,13 @@ mod tests {
 
         let witness = build_test_witness();
         let wid = witness.witness_id.clone();
-        let record = store.index_witness(&witness, 5000, &ctx).unwrap();
+        let record = store.index_witness(&witness, 5000, &ctx).expect("serde deserialization should succeed");
         assert_eq!(record.witness_id, wid);
         assert_eq!(record.promotion_timestamp_ns, 5000);
 
-        let found = store.witness_by_id(&wid, &ctx).unwrap();
+        let found = store.witness_by_id(&wid, &ctx).expect("serde deserialization should succeed");
         assert!(found.is_some());
-        assert_eq!(found.unwrap().witness_id, wid);
+        assert_eq!(found.expect("serde deserialization should succeed").witness_id, wid);
     }
 
     #[test]
@@ -6872,9 +6872,9 @@ mod tests {
         let mut store = WitnessIndexStore::new(adapter);
         let ctx = test_event_context();
         let mut witness = build_test_witness();
-        witness.transition_to(LifecycleState::Validated).unwrap();
-        witness.transition_to(LifecycleState::Promoted).unwrap();
-        witness.transition_to(LifecycleState::Active).unwrap();
+        witness.transition_to(LifecycleState::Validated).expect("serde deserialization should succeed");
+        witness.transition_to(LifecycleState::Promoted).expect("serde deserialization should succeed");
+        witness.transition_to(LifecycleState::Active).expect("serde deserialization should succeed");
         witness.synthesizer_signature = vec![0x55; 64];
 
         let err = store.index_witness(&witness, 5000, &ctx).unwrap_err();
@@ -6888,7 +6888,7 @@ mod tests {
         let adapter = InMemoryStorageAdapter::new();
         let mut store = WitnessIndexStore::new(adapter);
         let ctx = test_event_context();
-        let result = store.witness_by_id(&test_extension_id(), &ctx).unwrap();
+        let result = store.witness_by_id(&test_extension_id(), &ctx).expect("serde deserialization should succeed");
         assert!(result.is_none());
     }
 
@@ -6901,7 +6901,7 @@ mod tests {
 
         let witness = build_test_witness();
         let ext_id = witness.extension_id.clone();
-        store.index_witness(&witness, 1000, &ctx).unwrap();
+        store.index_witness(&witness, 1000, &ctx).expect("serde deserialization should succeed");
 
         let page = store
             .query_witnesses(
@@ -6912,7 +6912,7 @@ mod tests {
                 },
                 &ctx,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(page.records.len(), 1);
         assert!(page.next_cursor.is_none());
     }
@@ -6943,7 +6943,7 @@ mod tests {
         let ctx = test_event_context();
 
         let witness = build_test_witness();
-        store.index_witness(&witness, 1000, &ctx).unwrap();
+        store.index_witness(&witness, 1000, &ctx).expect("serde deserialization should succeed");
 
         let draft_page = store
             .query_witnesses(
@@ -6954,7 +6954,7 @@ mod tests {
                 },
                 &ctx,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(draft_page.records.len(), 1);
 
         let active_page = store
@@ -6966,7 +6966,7 @@ mod tests {
                 },
                 &ctx,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(active_page.records.len(), 0);
     }
 
@@ -6978,7 +6978,7 @@ mod tests {
         let ctx = test_event_context();
 
         let witness = build_test_witness();
-        store.index_witness(&witness, 1000, &ctx).unwrap();
+        store.index_witness(&witness, 1000, &ctx).expect("serde deserialization should succeed");
 
         let cap_page = store
             .query_witnesses(
@@ -6989,7 +6989,7 @@ mod tests {
                 },
                 &ctx,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(cap_page.records.len(), 1);
 
         let missing_page = store
@@ -7001,7 +7001,7 @@ mod tests {
                 },
                 &ctx,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(missing_page.records.len(), 0);
     }
 
@@ -7013,7 +7013,7 @@ mod tests {
         let ctx = test_event_context();
 
         let witness = build_test_witness();
-        store.index_witness(&witness, 5000, &ctx).unwrap();
+        store.index_witness(&witness, 5000, &ctx).expect("serde deserialization should succeed");
 
         let in_range = store
             .query_witnesses(
@@ -7025,7 +7025,7 @@ mod tests {
                 },
                 &ctx,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(in_range.records.len(), 1);
 
         let out_range = store
@@ -7038,7 +7038,7 @@ mod tests {
                 },
                 &ctx,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(out_range.records.len(), 0);
     }
 
@@ -7051,7 +7051,7 @@ mod tests {
 
         let witness = build_test_witness();
         let ext_id = witness.extension_id.clone();
-        store.index_witness(&witness, 1000, &ctx).unwrap();
+        store.index_witness(&witness, 1000, &ctx).expect("serde deserialization should succeed");
 
         let receipt = CapabilityEscrowReceiptRecord {
             receipt_id: "r-001".to_string(),
@@ -7065,7 +7065,7 @@ mod tests {
             policy_id: "p-1".to_string(),
             error_code: None,
         };
-        store.index_escrow_receipt(receipt, &ctx).unwrap();
+        store.index_escrow_receipt(receipt, &ctx).expect("serde deserialization should succeed");
 
         let join_query = WitnessReplayJoinQuery {
             extension_id: ext_id,
@@ -7073,7 +7073,7 @@ mod tests {
             end_timestamp_ns: None,
             include_revoked: true,
         };
-        let rows = store.replay_join(&join_query, &ctx).unwrap();
+        let rows = store.replay_join(&join_query, &ctx).expect("serde deserialization should succeed");
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].receipts.len(), 1);
         assert_eq!(rows[0].receipts[0].receipt_id, "r-001");
@@ -7174,10 +7174,10 @@ mod tests {
 
         let witness = build_test_witness();
         let ext_id = witness.extension_id.clone();
-        store.index_witness(&witness, 1000, &ctx).unwrap();
+        store.index_witness(&witness, 1000, &ctx).expect("serde deserialization should succeed");
 
-        let hash1 = store.deterministic_snapshot_hash(&ext_id, &ctx).unwrap();
-        let hash2 = store.deterministic_snapshot_hash(&ext_id, &ctx).unwrap();
+        let hash1 = store.deterministic_snapshot_hash(&ext_id, &ctx).expect("serde deserialization should succeed");
+        let hash2 = store.deterministic_snapshot_hash(&ext_id, &ctx).expect("serde deserialization should succeed");
         assert_eq!(hash1, hash2, "snapshot hash should be deterministic");
         assert!(!hash1.is_empty());
     }
@@ -7191,7 +7191,7 @@ mod tests {
 
         assert!(store.events().is_empty());
         let witness = build_test_witness();
-        store.index_witness(&witness, 1000, &ctx).unwrap();
+        store.index_witness(&witness, 1000, &ctx).expect("serde deserialization should succeed");
         assert!(!store.events().is_empty());
         assert_eq!(store.events()[0].event, "index_witness");
         assert_eq!(store.events()[0].outcome, "ok");
@@ -7216,7 +7216,7 @@ mod tests {
         let mut witness = build_test_witness();
         witness.lifecycle_state = LifecycleState::Revoked;
         rebind_witness(&mut witness, &test_signing_key());
-        store.index_witness(&witness, 1000, &ctx).unwrap();
+        store.index_witness(&witness, 1000, &ctx).expect("serde deserialization should succeed");
 
         let include_page = store
             .query_witnesses(
@@ -7227,7 +7227,7 @@ mod tests {
                 },
                 &ctx,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(include_page.records.len(), 1);
 
         let exclude_page = store
@@ -7239,7 +7239,7 @@ mod tests {
                 },
                 &ctx,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(exclude_page.records.len(), 0);
     }
 
@@ -7264,9 +7264,9 @@ mod tests {
             .require(cap.clone())
             .proof(make_proof(&cap))
             .build()
-            .unwrap();
+            .expect("serde deserialization should succeed");
             apply_passing_promotion_theorems(&mut witness);
-            store.index_witness(&witness, seed * 100, &ctx).unwrap();
+            store.index_witness(&witness, seed * 100, &ctx).expect("serde deserialization should succeed");
         }
 
         // First page with limit 2
@@ -7278,7 +7278,7 @@ mod tests {
                 },
                 &ctx,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(page1.records.len(), 2);
         assert!(page1.next_cursor.is_some());
 
@@ -7292,7 +7292,7 @@ mod tests {
                 },
                 &ctx,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(page2.records.len(), 1);
         assert!(page2.next_cursor.is_none());
     }
@@ -7491,16 +7491,16 @@ mod tests {
 
     #[test]
     fn pipeline_publish_active_witness_accepted() {
-        let head_key = SigningKey::from_bytes([73u8; 32]).unwrap();
+        let head_key = SigningKey::from_bytes([73u8; 32]).expect("serde deserialization should succeed");
         let mut pipeline = WitnessPublicationPipeline::new(
             SecurityEpoch::from_raw(1),
             head_key.clone(),
             WitnessPublicationConfig::default(),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let mut witness = build_promoted_witness(110);
-        witness.transition_to(LifecycleState::Active).unwrap();
-        let pub_id = pipeline.publish_witness(witness, 1000).unwrap();
+        witness.transition_to(LifecycleState::Active).expect("serde deserialization should succeed");
+        let pub_id = pipeline.publish_witness(witness, 1000).expect("serde deserialization should succeed");
         assert!(!pub_id.as_bytes().is_empty());
 
         WitnessPublicationPipeline::verify_artifact(
@@ -7508,7 +7508,7 @@ mod tests {
             &test_signing_key().verification_key(),
             &head_key.verification_key(),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
     }
 
     // -----------------------------------------------------------------------
@@ -7517,18 +7517,18 @@ mod tests {
 
     #[test]
     fn verify_artifact_rejects_revocation_witness_id_mismatch() {
-        let head_key = SigningKey::from_bytes([74u8; 32]).unwrap();
+        let head_key = SigningKey::from_bytes([74u8; 32]).expect("serde deserialization should succeed");
         let mut pipeline = WitnessPublicationPipeline::new(
             SecurityEpoch::from_raw(1),
             head_key.clone(),
             WitnessPublicationConfig::default(),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let witness = build_promoted_witness(120);
         let wid = witness.witness_id.clone();
-        pipeline.publish_witness(witness, 100).unwrap();
-        pipeline.revoke_witness(&wid, "compromised", 200).unwrap();
+        pipeline.publish_witness(witness, 100).expect("serde deserialization should succeed");
+        pipeline.revoke_witness(&wid, "compromised", 200).expect("serde deserialization should succeed");
 
         let mut artifact = pipeline.publications()[0].clone();
         // Tamper: change revocation log entry witness_id
@@ -7569,8 +7569,8 @@ mod tests {
             witness: record,
             receipts: Vec::new(),
         };
-        let json = serde_json::to_string(&row).unwrap();
-        let back: WitnessReplayJoinRow = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&row).expect("serde deserialization should succeed");
+        let back: WitnessReplayJoinRow = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(row, back);
     }
 
@@ -7632,8 +7632,8 @@ mod tests {
                 epoch_id: 1,
             },
         };
-        let json = serde_json::to_string(&link).unwrap();
-        let back: ConsistencyProofLink = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&link).expect("serde deserialization should succeed");
+        let back: ConsistencyProofLink = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(link, back);
     }
 
@@ -7719,7 +7719,7 @@ mod tests {
         .require(cap.clone())
         .proof(make_proof(&cap))
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(witness.confidence.n_trials, 0);
         assert_eq!(witness.confidence.n_successes, 0);
         assert_eq!(witness.confidence.lower_millionths, 0);
@@ -7740,7 +7740,7 @@ mod tests {
             active.is_some(),
             "active_for_extension should find the witness"
         );
-        assert_eq!(active.unwrap().witness_id, wid);
+        assert_eq!(active.expect("serde deserialization should succeed").witness_id, wid);
     }
 
     #[test]
@@ -7756,9 +7756,9 @@ mod tests {
         .require(cap.clone())
         .proof(make_proof(&cap))
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let input = promotion_theorem_input_for(&witness);
-        let report = witness.evaluate_promotion_theorems(&input).unwrap();
+        let report = witness.evaluate_promotion_theorems(&input).expect("serde deserialization should succeed");
         assert!(report.all_passed);
         witness.apply_promotion_theorem_report(&report);
         let count_after_first = witness
@@ -7780,7 +7780,7 @@ mod tests {
 
     #[test]
     fn pipeline_query_by_policy_id() {
-        let head_signing_key = SigningKey::from_bytes([77u8; 32]).unwrap();
+        let head_signing_key = SigningKey::from_bytes([77u8; 32]).expect("serde deserialization should succeed");
         let mut pipeline = WitnessPublicationPipeline::new(
             SecurityEpoch::from_raw(500),
             head_signing_key,
@@ -7790,10 +7790,10 @@ mod tests {
                 governance_ledger_config: None,
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let w1 = build_promoted_witness(90);
         let policy_id = w1.policy_id.clone();
-        pipeline.publish_witness(w1, 100).unwrap();
+        pipeline.publish_witness(w1, 100).expect("serde deserialization should succeed");
 
         let matches = pipeline.query(&WitnessPublicationQuery {
             extension_id: None,
@@ -7810,7 +7810,7 @@ mod tests {
             &SchemaId::from_definition(b"Bogus.v1"),
             b"nope",
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let no_match = pipeline.query(&WitnessPublicationQuery {
             extension_id: None,
             policy_id: Some(bogus_policy),
@@ -7831,15 +7831,15 @@ mod tests {
         store.insert(witness);
         assert!(store.active_for_extension(&ext_id).is_some());
 
-        let json = serde_json::to_string(&store).unwrap();
-        let restored: WitnessStore = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&store).expect("serde deserialization should succeed");
+        let restored: WitnessStore = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(restored.len(), 1);
         let active = restored.active_for_extension(&ext_id);
         assert!(
             active.is_some(),
             "active_pairs must survive serde roundtrip"
         );
-        assert_eq!(active.unwrap().witness_id, wid);
+        assert_eq!(active.expect("serde deserialization should succeed").witness_id, wid);
     }
 
     #[test]
@@ -7861,16 +7861,16 @@ mod tests {
 
     #[test]
     fn pipeline_log_entries_populated_after_publish() {
-        let head_key = SigningKey::from_bytes([90u8; 32]).unwrap();
+        let head_key = SigningKey::from_bytes([90u8; 32]).expect("serde deserialization should succeed");
         let mut pipeline = WitnessPublicationPipeline::new(
             SecurityEpoch::from_raw(1),
             head_key,
             WitnessPublicationConfig::default(),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert!(pipeline.log_entries().is_empty(), "empty before publish");
         let w = build_promoted_witness(90);
-        pipeline.publish_witness(w, 100).unwrap();
+        pipeline.publish_witness(w, 100).expect("serde deserialization should succeed");
         assert_eq!(pipeline.log_entries().len(), 1);
         assert_eq!(
             pipeline.log_entries()[0].kind,
@@ -7886,14 +7886,14 @@ mod tests {
             &SchemaId::from_definition(b"DenialEvidence.v1"),
             b"ev-001",
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let dr = DenialRecord {
             capability: Capability::new("network"),
             reason: "denied by policy".to_string(),
             evidence_id: Some(eid.clone()),
         };
-        let json = serde_json::to_string(&dr).unwrap();
-        let restored: DenialRecord = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&dr).expect("serde deserialization should succeed");
+        let restored: DenialRecord = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(restored.evidence_id, Some(eid));
     }
 
@@ -7921,7 +7921,7 @@ mod tests {
         .proof(make_proof(&cap))
         .confidence(ConfidenceInterval::from_trials(0, 0))
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let validator = WitnessValidator::new();
         let errors = validator.validate(&witness);
         // Zero trials means no empirical evidence — must fail validation.
@@ -7939,10 +7939,10 @@ mod tests {
         let mut store = WitnessStore::new();
         let wid = witness.witness_id.clone();
         store.insert(witness);
-        store.transition(&wid, LifecycleState::Validated).unwrap();
-        store.transition(&wid, LifecycleState::Promoted).unwrap();
-        store.transition(&wid, LifecycleState::Active).unwrap();
-        store.transition(&wid, LifecycleState::Revoked).unwrap();
+        store.transition(&wid, LifecycleState::Validated).expect("serde deserialization should succeed");
+        store.transition(&wid, LifecycleState::Promoted).expect("serde deserialization should succeed");
+        store.transition(&wid, LifecycleState::Active).expect("serde deserialization should succeed");
+        store.transition(&wid, LifecycleState::Revoked).expect("serde deserialization should succeed");
         assert_eq!(store.by_state(LifecycleState::Revoked).len(), 1);
         assert_eq!(store.by_state(LifecycleState::Active).len(), 0);
     }
@@ -7963,7 +7963,7 @@ mod tests {
         .proof(make_proof(&cap_r))
         .proof(make_proof(&cap_w))
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
         // Manifest missing cap_w → AttenuationLegality fails
         let input = PromotionTheoremInput {
             source_capability_sets: vec![SourceCapabilitySet {
@@ -7975,7 +7975,7 @@ mod tests {
             non_interference_dependencies: BTreeMap::new(),
             custom_extensions: Vec::new(),
         };
-        let report = witness.evaluate_promotion_theorems(&input).unwrap();
+        let report = witness.evaluate_promotion_theorems(&input).expect("serde deserialization should succeed");
         let events = report.structured_events("t1", "d1", "p1");
         let failed_event = events
             .iter()
@@ -7989,7 +7989,7 @@ mod tests {
             failed_event
                 .error_code
                 .as_deref()
-                .unwrap()
+                .expect("serde deserialization should succeed")
                 .contains("attenuation"),
             "error_code should mention the theorem kind"
         );
@@ -8009,7 +8009,7 @@ mod tests {
         .require(cap.clone())
         .proof(make_proof(&cap))
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let w_with_deny = WitnessBuilder::new(
             test_extension_id(),
             test_policy_id(),
@@ -8021,7 +8021,7 @@ mod tests {
         .proof(make_proof(&cap))
         .deny(cap_denied, "not needed")
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_ne!(
             w_no_deny.unsigned_bytes(),
             w_with_deny.unsigned_bytes(),
@@ -8042,10 +8042,10 @@ mod tests {
         .require(cap.clone())
         .proof(make_proof(&cap))
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let report = witness
             .evaluate_promotion_theorems(&promotion_theorem_input_for(&witness))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(report.all_passed);
         for result in &report.results {
             assert!(

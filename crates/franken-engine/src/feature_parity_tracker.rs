@@ -1239,7 +1239,7 @@ mod tests {
     fn register_feature_succeeds() {
         let mut tracker = FeatureParityTracker::empty();
         let entry = FeatureEntry::new(FeatureArea::BigInt, EsVersion::Es2020);
-        tracker.register_feature(entry).unwrap();
+        tracker.register_feature(entry).expect("serde deserialization should succeed");
         assert_eq!(tracker.feature_count(), 1);
     }
 
@@ -1247,7 +1247,7 @@ mod tests {
     fn register_duplicate_feature_rejected() {
         let mut tracker = FeatureParityTracker::empty();
         let entry = FeatureEntry::new(FeatureArea::BigInt, EsVersion::Es2020);
-        tracker.register_feature(entry.clone()).unwrap();
+        tracker.register_feature(entry.clone()).expect("serde deserialization should succeed");
         let err = tracker.register_feature(entry).unwrap_err();
         assert_eq!(err.code(), "FE-FPT-0007");
     }
@@ -1263,10 +1263,10 @@ mod tests {
         let fid = format!("{}-{}", EsVersion::Es2020, FeatureArea::BigInt);
         let old = tracker
             .set_status(&fid, FeatureStatus::InProgress, &ctx)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(old, FeatureStatus::NotStarted);
         assert_eq!(
-            tracker.feature(&fid).unwrap().status,
+            tracker.feature(&fid).expect("serde deserialization should succeed").status,
             FeatureStatus::InProgress
         );
     }
@@ -1301,10 +1301,10 @@ mod tests {
                 "t5".into(),
             ],
         };
-        tracker.ingest_test262(&result, &ctx).unwrap();
+        tracker.ingest_test262(&result, &ctx).expect("serde deserialization should succeed");
 
         let fid = format!("{}-{}", EsVersion::Es2020, FeatureArea::BigInt);
-        let entry = tracker.feature(&fid).unwrap();
+        let entry = tracker.feature(&fid).expect("serde deserialization should succeed");
         assert_eq!(entry.test262_total, 100);
         assert_eq!(entry.test262_passing, 95);
         assert_eq!(entry.test262_pass_rate_millionths, 950_000);
@@ -1323,9 +1323,9 @@ mod tests {
             passing: 0,
             failing_test_ids: (0..10).map(|i| format!("z{i}")).collect(),
         };
-        tracker.ingest_test262(&zero_pass, &ctx).unwrap();
+        tracker.ingest_test262(&zero_pass, &ctx).expect("serde deserialization should succeed");
         assert_eq!(
-            tracker.feature(&fid).unwrap().status,
+            tracker.feature(&fid).expect("serde deserialization should succeed").status,
             FeatureStatus::InProgress
         );
 
@@ -1336,9 +1336,9 @@ mod tests {
             passing: 5,
             failing_test_ids: (0..5).map(|i| format!("t{i}")).collect(),
         };
-        tracker.ingest_test262(&partial, &ctx).unwrap();
+        tracker.ingest_test262(&partial, &ctx).expect("serde deserialization should succeed");
         assert_eq!(
-            tracker.feature(&fid).unwrap().status,
+            tracker.feature(&fid).expect("serde deserialization should succeed").status,
             FeatureStatus::InProgress
         );
 
@@ -1349,9 +1349,9 @@ mod tests {
             passing: 10,
             failing_test_ids: vec![],
         };
-        tracker.ingest_test262(&full, &ctx).unwrap();
+        tracker.ingest_test262(&full, &ctx).expect("serde deserialization should succeed");
         assert_eq!(
-            tracker.feature(&fid).unwrap().status,
+            tracker.feature(&fid).expect("serde deserialization should succeed").status,
             FeatureStatus::Passing
         );
     }
@@ -1396,10 +1396,10 @@ mod tests {
                 },
             ],
         };
-        tracker.ingest_lockstep(&result, &ctx).unwrap();
+        tracker.ingest_lockstep(&result, &ctx).expect("serde deserialization should succeed");
 
         let fid = format!("{}-{}", EsVersion::Es2020, FeatureArea::GlobalThis);
-        let entry = tracker.feature(&fid).unwrap();
+        let entry = tracker.feature(&fid).expect("serde deserialization should succeed");
         assert_eq!(entry.lockstep_matches.get("node"), Some(&48));
         assert_eq!(entry.lockstep_total_comparisons.get("node"), Some(&50));
         assert_eq!(
@@ -1434,7 +1434,7 @@ mod tests {
         let fid = format!("{}-{}", EsVersion::Es2020, FeatureArea::BigInt);
         let waiver = make_waiver(&fid, "w-1");
 
-        tracker.register_waiver(waiver, &ctx).unwrap();
+        tracker.register_waiver(waiver, &ctx).expect("serde deserialization should succeed");
         assert_eq!(tracker.waiver_count(), 1);
         assert!(tracker.is_test262_waived("test-fail-1"));
         assert!(tracker.is_lockstep_waived("lockstep-fail-1"));
@@ -1447,7 +1447,7 @@ mod tests {
         let fid = format!("{}-{}", EsVersion::Es2020, FeatureArea::BigInt);
         let waiver = make_waiver(&fid, "w-1");
 
-        tracker.register_waiver(waiver.clone(), &ctx).unwrap();
+        tracker.register_waiver(waiver.clone(), &ctx).expect("serde deserialization should succeed");
         let err = tracker.register_waiver(waiver, &ctx).unwrap_err();
         assert_eq!(err.code(), "FE-FPT-0003");
     }
@@ -1500,10 +1500,10 @@ mod tests {
         let fid = format!("{}-{}", EsVersion::Es2020, FeatureArea::BigInt);
         let waiver = make_waiver(&fid, "w-1");
 
-        tracker.register_waiver(waiver, &ctx).unwrap();
-        tracker.seal_waiver("w-1", &ctx).unwrap();
+        tracker.register_waiver(waiver, &ctx).expect("serde deserialization should succeed");
+        tracker.seal_waiver("w-1", &ctx).expect("serde deserialization should succeed");
 
-        assert!(tracker.waivers().get("w-1").unwrap().sealed);
+        assert!(tracker.waivers().get("w-1").expect("serde deserialization should succeed").sealed);
     }
 
     #[test]
@@ -1513,8 +1513,8 @@ mod tests {
         let fid = format!("{}-{}", EsVersion::Es2020, FeatureArea::BigInt);
         let waiver = make_waiver(&fid, "w-1");
 
-        tracker.register_waiver(waiver, &ctx).unwrap();
-        tracker.seal_waiver("w-1", &ctx).unwrap();
+        tracker.register_waiver(waiver, &ctx).expect("serde deserialization should succeed");
+        tracker.seal_waiver("w-1", &ctx).expect("serde deserialization should succeed");
         let err = tracker.seal_waiver("w-1", &ctx).unwrap_err();
         assert_eq!(err.code(), "FE-FPT-0004");
     }
@@ -1543,14 +1543,14 @@ mod tests {
             passing: 80,
             failing_test_ids: (0..20).map(|i| format!("f{i}")).collect(),
         };
-        tracker.ingest_test262(&result, &ctx).unwrap();
+        tracker.ingest_test262(&result, &ctx).expect("serde deserialization should succeed");
 
         let dash = tracker.dashboard();
         assert_eq!(dash.total_features, FeatureArea::all().len());
         assert!(dash.overall_test262_pass_rate_millionths > 0);
 
         let fid = format!("{}-{}", EsVersion::Es2020, FeatureArea::BigInt);
-        let area = dash.per_area.get(&fid).unwrap();
+        let area = dash.per_area.get(&fid).expect("serde deserialization should succeed");
         assert_eq!(area.test262_pass_rate_millionths, 800_000);
     }
 
@@ -1579,7 +1579,7 @@ mod tests {
                 passing: 10,
                 failing_test_ids: vec![],
             };
-            tracker.ingest_test262(&result, &ctx).unwrap();
+            tracker.ingest_test262(&result, &ctx).expect("serde deserialization should succeed");
         }
 
         let decision = tracker.evaluate_gate(&ctx);
@@ -1599,7 +1599,7 @@ mod tests {
             passing: 5,
             failing_test_ids: (0..5).map(|i| format!("f{i}")).collect(),
         };
-        tracker.ingest_test262(&result, &ctx).unwrap();
+        tracker.ingest_test262(&result, &ctx).expect("serde deserialization should succeed");
 
         let decision = tracker.evaluate_gate(&ctx);
         assert!(!decision.passed);
@@ -1619,12 +1619,12 @@ mod tests {
             passing: 2,
             failing_test_ids: (0..8).map(|i| format!("f{i}")).collect(),
         };
-        tracker.ingest_test262(&result, &ctx).unwrap();
+        tracker.ingest_test262(&result, &ctx).expect("serde deserialization should succeed");
 
         // Apply an explicit feature-wide waiver.
         let fid = format!("{}-{}", EsVersion::Es2020, FeatureArea::BigInt);
         let waiver = make_feature_wide_waiver(&fid, "w-bigint");
-        tracker.register_waiver(waiver, &ctx).unwrap();
+        tracker.register_waiver(waiver, &ctx).expect("serde deserialization should succeed");
 
         // Make all other features pass
         for &area in FeatureArea::all() {
@@ -1637,7 +1637,7 @@ mod tests {
                 passing: 10,
                 failing_test_ids: vec![],
             };
-            tracker.ingest_test262(&r, &ctx).unwrap();
+            tracker.ingest_test262(&r, &ctx).expect("serde deserialization should succeed");
         }
 
         let decision = tracker.evaluate_gate(&ctx);
@@ -1659,7 +1659,7 @@ mod tests {
             passing: 10,
             failing_test_ids: vec![],
         };
-        tracker.ingest_test262(&result, &ctx).unwrap();
+        tracker.ingest_test262(&result, &ctx).expect("serde deserialization should succeed");
 
         let events = tracker.events();
         assert!(!events.is_empty());
@@ -1675,7 +1675,7 @@ mod tests {
         let fid = format!("{}-{}", EsVersion::Es2020, FeatureArea::BigInt);
         tracker
             .set_status(&fid, FeatureStatus::InProgress, &ctx)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let drained = tracker.drain_events();
         assert!(!drained.is_empty());
@@ -1689,16 +1689,16 @@ mod tests {
     #[test]
     fn feature_entry_serde_roundtrip() {
         let entry = FeatureEntry::new(FeatureArea::BigInt, EsVersion::Es2020);
-        let json = serde_json::to_string(&entry).unwrap();
-        let parsed: FeatureEntry = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let parsed: FeatureEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, parsed);
     }
 
     #[test]
     fn waiver_record_serde_roundtrip() {
         let waiver = make_waiver("feat-1", "w-1");
-        let json = serde_json::to_string(&waiver).unwrap();
-        let parsed: WaiverRecord = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&waiver).expect("serde deserialization should succeed");
+        let parsed: WaiverRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(waiver, parsed);
     }
 
@@ -1706,8 +1706,8 @@ mod tests {
     fn dashboard_snapshot_serde_roundtrip() {
         let tracker = FeatureParityTracker::new();
         let dash = tracker.dashboard();
-        let json = serde_json::to_string(&dash).unwrap();
-        let parsed: DashboardSnapshot = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&dash).expect("serde deserialization should succeed");
+        let parsed: DashboardSnapshot = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(dash, parsed);
     }
 
@@ -1720,8 +1720,8 @@ mod tests {
             overall_test262_pass_rate_millionths: 980_000,
             overall_lockstep_match_rate_millionths: 970_000,
         };
-        let json = serde_json::to_string(&decision).unwrap();
-        let parsed: ReleaseGateDecision = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&decision).expect("serde deserialization should succeed");
+        let parsed: ReleaseGateDecision = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(decision, parsed);
     }
 
@@ -1736,8 +1736,8 @@ mod tests {
             outcome: "ok".to_string(),
             error_code: None,
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let parsed: ParityEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let parsed: ParityEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, parsed);
     }
 
@@ -1852,7 +1852,7 @@ mod tests {
                 },
             ],
         };
-        tracker.ingest_lockstep(&node_result, &ctx).unwrap();
+        tracker.ingest_lockstep(&node_result, &ctx).expect("serde deserialization should succeed");
 
         // Bun results
         let bun_result = LockstepResult {
@@ -1862,10 +1862,10 @@ mod tests {
             matches: 20,
             mismatches: vec![],
         };
-        tracker.ingest_lockstep(&bun_result, &ctx).unwrap();
+        tracker.ingest_lockstep(&bun_result, &ctx).expect("serde deserialization should succeed");
 
         let fid = format!("{}-{}", EsVersion::Es2020, FeatureArea::OptionalChaining);
-        let entry = tracker.feature(&fid).unwrap();
+        let entry = tracker.feature(&fid).expect("serde deserialization should succeed");
         assert_eq!(
             entry.lockstep_match_rates_millionths.get("node"),
             Some(&900_000)
@@ -1887,14 +1887,14 @@ mod tests {
         let fid = format!("{}-{}", EsVersion::Es2020, FeatureArea::ImportMeta);
 
         assert_eq!(
-            tracker.feature(&fid).unwrap().status,
+            tracker.feature(&fid).expect("serde deserialization should succeed").status,
             FeatureStatus::NotStarted
         );
 
         let waiver = make_feature_wide_waiver(&fid, "w-import-meta");
-        tracker.register_waiver(waiver, &ctx).unwrap();
+        tracker.register_waiver(waiver, &ctx).expect("serde deserialization should succeed");
 
-        assert_eq!(tracker.feature(&fid).unwrap().status, FeatureStatus::Waived);
+        assert_eq!(tracker.feature(&fid).expect("serde deserialization should succeed").status, FeatureStatus::Waived);
     }
 
     #[test]
@@ -1906,14 +1906,14 @@ mod tests {
         // Set to passing first
         tracker
             .set_status(&fid, FeatureStatus::Passing, &ctx)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let waiver = make_waiver(&fid, "w-bigint");
-        tracker.register_waiver(waiver, &ctx).unwrap();
+        tracker.register_waiver(waiver, &ctx).expect("serde deserialization should succeed");
 
         // Should remain Passing, not downgraded to Waived
         assert_eq!(
-            tracker.feature(&fid).unwrap().status,
+            tracker.feature(&fid).expect("serde deserialization should succeed").status,
             FeatureStatus::Passing
         );
     }
@@ -1926,12 +1926,12 @@ mod tests {
 
         tracker
             .set_status(&fid, FeatureStatus::Passing, &ctx)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let waiver = make_feature_wide_waiver(&fid, "w-bigint-feature-wide");
-        tracker.register_waiver(waiver, &ctx).unwrap();
+        tracker.register_waiver(waiver, &ctx).expect("serde deserialization should succeed");
 
-        assert_eq!(tracker.feature(&fid).unwrap().status, FeatureStatus::Waived);
+        assert_eq!(tracker.feature(&fid).expect("serde deserialization should succeed").status, FeatureStatus::Waived);
     }
 
     // -----------------------------------------------------------------------
@@ -1946,24 +1946,24 @@ mod tests {
             FeatureStatus::Passing,
             FeatureStatus::Waived,
         ] {
-            let json = serde_json::to_string(&v).unwrap();
-            let restored: FeatureStatus = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let restored: FeatureStatus = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(v, restored);
         }
     }
 
     #[test]
     fn es_version_serde_roundtrip() {
-        let json = serde_json::to_string(&EsVersion::Es2020).unwrap();
-        let restored: EsVersion = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&EsVersion::Es2020).expect("serde deserialization should succeed");
+        let restored: EsVersion = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(EsVersion::Es2020, restored);
     }
 
     #[test]
     fn lockstep_runtime_serde_roundtrip() {
         for v in [LockstepRuntime::Node, LockstepRuntime::Bun] {
-            let json = serde_json::to_string(&v).unwrap();
-            let restored: LockstepRuntime = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let restored: LockstepRuntime = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(v, restored);
         }
     }
@@ -1971,8 +1971,8 @@ mod tests {
     #[test]
     fn feature_area_serde_roundtrip() {
         for v in FeatureArea::all() {
-            let json = serde_json::to_string(v).unwrap();
-            let restored: FeatureArea = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let restored: FeatureArea = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, restored);
         }
     }
@@ -2006,8 +2006,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap();
-            let restored: ParityTrackerError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let restored: ParityTrackerError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, restored);
         }
     }
@@ -2024,8 +2024,8 @@ mod tests {
             passing: 95,
             failing_test_ids: vec!["t1".to_string()],
         };
-        let json = serde_json::to_string(&r).unwrap();
-        let restored: Test262Result = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let restored: Test262Result = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, restored);
     }
 
@@ -2036,8 +2036,8 @@ mod tests {
             expected: "42".to_string(),
             actual: "43".to_string(),
         };
-        let json = serde_json::to_string(&m).unwrap();
-        let restored: LockstepMismatch = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
+        let restored: LockstepMismatch = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(m, restored);
     }
 
@@ -2048,8 +2048,8 @@ mod tests {
             min_lockstep_match_rate_millionths: 950_000,
             require_waiver_coverage: true,
         };
-        let json = serde_json::to_string(&c).unwrap();
-        let restored: ReleaseGateCriteria = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let restored: ReleaseGateCriteria = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c, restored);
     }
 
@@ -2060,8 +2060,8 @@ mod tests {
             failure_type: "test262".to_string(),
             test_id: "t1".to_string(),
         };
-        let json = serde_json::to_string(&f).unwrap();
-        let restored: UnwaivedFailure = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&f).expect("serde deserialization should succeed");
+        let restored: UnwaivedFailure = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(f, restored);
     }
 
@@ -2072,8 +2072,8 @@ mod tests {
             decision_id: "d-1".to_string(),
             policy_id: "p-1".to_string(),
         };
-        let json = serde_json::to_string(&c).unwrap();
-        let restored: TrackerContext = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let restored: TrackerContext = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c, restored);
     }
 
@@ -2298,7 +2298,7 @@ mod tests {
             FeatureStatus::Waived,
         ]
         .iter()
-        .map(|s| serde_json::to_string(s).unwrap())
+        .map(|s| serde_json::to_string(s).expect("serde deserialization should succeed"))
         .collect();
         assert_eq!(jsons.len(), 4);
     }
@@ -2307,7 +2307,7 @@ mod tests {
     fn feature_area_serde_all_distinct() {
         let jsons: BTreeSet<String> = FeatureArea::all()
             .iter()
-            .map(|a| serde_json::to_string(a).unwrap())
+            .map(|a| serde_json::to_string(a).expect("serde deserialization should succeed"))
             .collect();
         assert_eq!(jsons.len(), 10);
     }
@@ -2340,7 +2340,7 @@ mod tests {
         ];
         let jsons: BTreeSet<String> = errors
             .iter()
-            .map(|e| serde_json::to_string(e).unwrap())
+            .map(|e| serde_json::to_string(e).expect("serde deserialization should succeed"))
             .collect();
         assert_eq!(jsons.len(), 8);
     }
@@ -2413,7 +2413,7 @@ mod tests {
     #[test]
     fn feature_entry_json_field_names_stable() {
         let entry = FeatureEntry::new(FeatureArea::BigInt, EsVersion::Es2020);
-        let json = serde_json::to_string(&entry).unwrap();
+        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
         assert!(json.contains("\"feature_id\""));
         assert!(json.contains("\"area\""));
         assert!(json.contains("\"es_version\""));
@@ -2429,7 +2429,7 @@ mod tests {
     #[test]
     fn waiver_record_json_field_names_stable() {
         let waiver = make_waiver("feat-1", "w-1");
-        let json = serde_json::to_string(&waiver).unwrap();
+        let json = serde_json::to_string(&waiver).expect("serde deserialization should succeed");
         assert!(json.contains("\"waiver_id\""));
         assert!(json.contains("\"feature_id\""));
         assert!(json.contains("\"reason\""));
@@ -2444,7 +2444,7 @@ mod tests {
     #[test]
     fn release_gate_criteria_json_field_names_stable() {
         let c = ReleaseGateCriteria::default();
-        let json = serde_json::to_string(&c).unwrap();
+        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
         assert!(json.contains("\"min_test262_pass_rate_millionths\""));
         assert!(json.contains("\"min_lockstep_match_rate_millionths\""));
         assert!(json.contains("\"require_waiver_coverage\""));
@@ -2459,7 +2459,7 @@ mod tests {
             overall_test262_pass_rate_millionths: 0,
             overall_lockstep_match_rate_millionths: 0,
         };
-        let json = serde_json::to_string(&decision).unwrap();
+        let json = serde_json::to_string(&decision).expect("serde deserialization should succeed");
         assert!(json.contains("\"passed\""));
         assert!(json.contains("\"failing_features\""));
         assert!(json.contains("\"unwaived_failures\""));
@@ -2471,7 +2471,7 @@ mod tests {
     fn dashboard_snapshot_json_field_names_stable() {
         let tracker = FeatureParityTracker::new();
         let dash = tracker.dashboard();
-        let json = serde_json::to_string(&dash).unwrap();
+        let json = serde_json::to_string(&dash).expect("serde deserialization should succeed");
         assert!(json.contains("\"total_features\""));
         assert!(json.contains("\"status_counts\""));
         assert!(json.contains("\"total_waivers\""));
@@ -2562,10 +2562,10 @@ mod tests {
             passing: 0,
             failing_test_ids: vec![],
         };
-        tracker.ingest_test262(&r, &ctx).unwrap();
+        tracker.ingest_test262(&r, &ctx).expect("serde deserialization should succeed");
         let fid = format!("{}-{}", EsVersion::Es2020, FeatureArea::BigInt);
         assert_eq!(
-            tracker.feature(&fid).unwrap().test262_pass_rate_millionths,
+            tracker.feature(&fid).expect("serde deserialization should succeed").test262_pass_rate_millionths,
             0
         );
     }
@@ -2581,9 +2581,9 @@ mod tests {
             matches: 0,
             mismatches: vec![],
         };
-        tracker.ingest_lockstep(&r, &ctx).unwrap();
+        tracker.ingest_lockstep(&r, &ctx).expect("serde deserialization should succeed");
         let fid = format!("{}-{}", EsVersion::Es2020, FeatureArea::BigInt);
-        let entry = tracker.feature(&fid).unwrap();
+        let entry = tracker.feature(&fid).expect("serde deserialization should succeed");
         assert_eq!(entry.lockstep_match_rates_millionths.get("node"), Some(&0));
     }
 
@@ -2734,7 +2734,7 @@ mod tests {
             passing: 6,
             failing_test_ids: (0..4).map(|i| format!("f{i}")).collect(),
         };
-        tracker.ingest_test262(&result, &ctx).unwrap();
+        tracker.ingest_test262(&result, &ctx).expect("serde deserialization should succeed");
         let decision = tracker.evaluate_gate(&ctx);
         assert!(decision.passed);
     }
@@ -2754,11 +2754,11 @@ mod tests {
                 },
                 &ctx,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let mut waiver = make_waiver(&fid, "w-partial");
         waiver.test262_exemptions = vec!["f1".to_string()];
         waiver.lockstep_exemptions.clear();
-        tracker.register_waiver(waiver, &ctx).unwrap();
+        tracker.register_waiver(waiver, &ctx).expect("serde deserialization should succeed");
 
         let decision = tracker.evaluate_gate(&ctx);
         assert!(!decision.passed);
@@ -2794,10 +2794,10 @@ mod tests {
                 },
                 &ctx,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let mut waiver = make_waiver(&fid, "w-unrelated");
         waiver.lockstep_exemptions = vec!["other-lockstep".to_string()];
-        tracker.register_waiver(waiver, &ctx).unwrap();
+        tracker.register_waiver(waiver, &ctx).expect("serde deserialization should succeed");
 
         let decision = tracker.evaluate_gate(&ctx);
         assert!(!decision.passed);
@@ -2824,20 +2824,20 @@ mod tests {
                 },
                 &ctx,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         tracker
             .register_waiver(
                 make_feature_wide_waiver(&fid, "w-bigint-feature-wide"),
                 &ctx,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         tracker
             .set_status(&fid, FeatureStatus::Passing, &ctx)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let decision = tracker.evaluate_gate(&ctx);
         assert!(decision.passed);
-        assert_eq!(tracker.feature(&fid).unwrap().status, FeatureStatus::Waived);
+        assert_eq!(tracker.feature(&fid).expect("serde deserialization should succeed").status, FeatureStatus::Waived);
         assert!(!decision.failing_features.contains(&fid));
     }
 

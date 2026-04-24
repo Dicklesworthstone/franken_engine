@@ -1227,7 +1227,7 @@ mod tests {
         let receipts = passing_receipts(5);
         let fallbacks = passing_fallbacks();
         let input = make_passing_input(&spec, &amb, &receipts, &fallbacks);
-        let result = evaluate_gate(&input).unwrap();
+        let result = evaluate_gate(&input).expect("serde deserialization should succeed");
 
         assert!(result.outcome.is_pass());
         assert!(result.blockers.is_empty());
@@ -1244,8 +1244,8 @@ mod tests {
         let fallbacks = passing_fallbacks();
         let input = make_passing_input(&spec, &amb, &receipts, &fallbacks);
 
-        let r1 = evaluate_gate(&input).unwrap();
-        let r2 = evaluate_gate(&input).unwrap();
+        let r1 = evaluate_gate(&input).expect("serde deserialization should succeed");
+        let r2 = evaluate_gate(&input).expect("serde deserialization should succeed");
         assert_eq!(r1.evidence_hash, r2.evidence_hash);
     }
 
@@ -1272,8 +1272,8 @@ mod tests {
             ..input1.clone()
         };
 
-        let r1 = evaluate_gate(&input1).unwrap();
-        let r2 = evaluate_gate(&input2).unwrap();
+        let r1 = evaluate_gate(&input1).expect("serde deserialization should succeed");
+        let r2 = evaluate_gate(&input2).expect("serde deserialization should succeed");
         assert_ne!(r1.evidence_hash, r2.evidence_hash);
     }
 
@@ -1307,7 +1307,7 @@ mod tests {
         let receipts = passing_receipts(3);
         let fallbacks = passing_fallbacks();
         let input = make_passing_input(&spec, &amb, &receipts, &fallbacks);
-        let result = evaluate_gate(&input).unwrap();
+        let result = evaluate_gate(&input).expect("serde deserialization should succeed");
 
         assert!(!result.outcome.is_pass());
         assert!(
@@ -1326,7 +1326,7 @@ mod tests {
         let receipts = passing_receipts(5);
         let fallbacks = passing_fallbacks();
         let input = make_passing_input(&spec, &amb, &receipts, &fallbacks);
-        let result = evaluate_gate(&input).unwrap();
+        let result = evaluate_gate(&input).expect("serde deserialization should succeed");
 
         assert!(!result.outcome.is_pass());
         assert!(
@@ -1356,7 +1356,7 @@ mod tests {
         let receipts = passing_receipts(5);
         let fallbacks = passing_fallbacks();
         let input = make_passing_input(&spec, &amb, &receipts, &fallbacks);
-        let result = evaluate_gate(&input).unwrap();
+        let result = evaluate_gate(&input).expect("serde deserialization should succeed");
 
         assert!(!result.outcome.is_pass());
         assert!(
@@ -1384,7 +1384,7 @@ mod tests {
             fallback_results: &fallbacks,
             significance_threshold_millionths: 0,
         };
-        let result = evaluate_gate(&input).unwrap();
+        let result = evaluate_gate(&input).expect("serde deserialization should succeed");
 
         assert!(!result.outcome.is_pass());
         assert!(
@@ -1413,7 +1413,7 @@ mod tests {
             fallback_results: &fallbacks,
             significance_threshold_millionths: 0,
         };
-        let result = evaluate_gate(&input).unwrap();
+        let result = evaluate_gate(&input).expect("serde deserialization should succeed");
 
         assert!(!result.outcome.is_pass());
         // Both InsufficientReceiptCoverage (4/5=80%) and UnverifiedReceipt.
@@ -1435,7 +1435,7 @@ mod tests {
             make_fallback_fail("workload_1", InjectionKind::CapabilityRevocation),
         ];
         let input = make_passing_input(&spec, &amb, &receipts, &fallbacks);
-        let result = evaluate_gate(&input).unwrap();
+        let result = evaluate_gate(&input).expect("serde deserialization should succeed");
 
         assert!(!result.outcome.is_pass());
         assert!(
@@ -1456,7 +1456,7 @@ mod tests {
         fb.fallback_latency_ns = 2000; // 100% slower
         let fallbacks = vec![fb];
         let input = make_passing_input(&spec, &amb, &receipts, &fallbacks);
-        let result = evaluate_gate(&input).unwrap();
+        let result = evaluate_gate(&input).expect("serde deserialization should succeed");
 
         assert!(!result.outcome.is_pass());
         assert!(
@@ -1475,7 +1475,7 @@ mod tests {
         let receipts = passing_receipts(5);
         let fallbacks = passing_fallbacks();
         let input = make_passing_input(&spec, &amb, &receipts, &fallbacks);
-        let result = evaluate_gate(&input).unwrap();
+        let result = evaluate_gate(&input).expect("serde deserialization should succeed");
 
         assert!(!result.outcome.is_pass());
         assert!(
@@ -1494,7 +1494,7 @@ mod tests {
         let receipts = passing_receipts(5);
         let fallbacks = passing_fallbacks();
         let input = make_passing_input(&spec, &amb, &receipts, &fallbacks);
-        let result = evaluate_gate(&input).unwrap();
+        let result = evaluate_gate(&input).expect("serde deserialization should succeed");
 
         assert!(!result.outcome.is_pass());
         assert!(
@@ -1516,7 +1516,7 @@ mod tests {
         let receipts = passing_receipts(5);
         let fallbacks = passing_fallbacks();
         let input = make_passing_input(&spec, &amb, &receipts, &fallbacks);
-        let result = evaluate_gate(&input).unwrap();
+        let result = evaluate_gate(&input).expect("serde deserialization should succeed");
         assert!(passes_release_gate(&result));
     }
 
@@ -1527,7 +1527,7 @@ mod tests {
         let receipts = passing_receipts(3);
         let fallbacks = passing_fallbacks();
         let input = make_passing_input(&spec, &amb, &receipts, &fallbacks);
-        let result = evaluate_gate(&input).unwrap();
+        let result = evaluate_gate(&input).expect("serde deserialization should succeed");
         assert!(!passes_release_gate(&result));
     }
 
@@ -1542,7 +1542,7 @@ mod tests {
         let receipts = passing_receipts(5);
         let fallbacks = passing_fallbacks();
         let input = make_passing_input(&spec, &amb, &receipts, &fallbacks);
-        let result = evaluate_gate(&input).unwrap();
+        let result = evaluate_gate(&input).expect("serde deserialization should succeed");
         let entries = generate_log_entries("trace-1", &result);
 
         assert!(!entries.is_empty());
@@ -1558,7 +1558,7 @@ mod tests {
         let receipts = passing_receipts(5);
         let fallbacks = passing_fallbacks();
         let input = make_passing_input(&spec, &amb, &receipts, &fallbacks);
-        let result = evaluate_gate(&input).unwrap();
+        let result = evaluate_gate(&input).expect("serde deserialization should succeed");
         let entries = generate_log_entries("trace-1", &result);
 
         let delta_entries: Vec<_> = entries
@@ -1575,7 +1575,7 @@ mod tests {
         let receipts = passing_receipts(5);
         let fallbacks = passing_fallbacks();
         let input = make_passing_input(&spec, &amb, &receipts, &fallbacks);
-        let result = evaluate_gate(&input).unwrap();
+        let result = evaluate_gate(&input).expect("serde deserialization should succeed");
         let entries = generate_log_entries("trace-1", &result);
 
         let fb_entries: Vec<_> = entries
@@ -1592,7 +1592,7 @@ mod tests {
         let receipts = passing_receipts(3);
         let fallbacks = passing_fallbacks();
         let input = make_passing_input(&spec, &amb, &receipts, &fallbacks);
-        let result = evaluate_gate(&input).unwrap();
+        let result = evaluate_gate(&input).expect("serde deserialization should succeed");
         let entries = generate_log_entries("trace-1", &result);
 
         assert_eq!(entries[0].error_code, Some("GATE_FAILED".to_string()));
@@ -1605,16 +1605,16 @@ mod tests {
     #[test]
     fn serde_lane_type_roundtrip() {
         let val = LaneType::ProofSpecialized;
-        let json = serde_json::to_string(&val).unwrap();
-        let back: LaneType = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&val).expect("serde deserialization should succeed");
+        let back: LaneType = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(val, back);
     }
 
     #[test]
     fn serde_gate_outcome_roundtrip() {
         let val = GateOutcome::Pass;
-        let json = serde_json::to_string(&val).unwrap();
-        let back: GateOutcome = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&val).expect("serde deserialization should succeed");
+        let back: GateOutcome = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(val, back);
     }
 
@@ -1625,18 +1625,18 @@ mod tests {
         let receipts = passing_receipts(5);
         let fallbacks = passing_fallbacks();
         let input = make_passing_input(&spec, &amb, &receipts, &fallbacks);
-        let result = evaluate_gate(&input).unwrap();
+        let result = evaluate_gate(&input).expect("serde deserialization should succeed");
 
-        let json = serde_json::to_string(&result).unwrap();
-        let back: GateEvidenceBundle = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let back: GateEvidenceBundle = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, back);
     }
 
     #[test]
     fn serde_fallback_result_roundtrip() {
         let fb = make_fallback_pass("w1", InjectionKind::ProofFailure);
-        let json = serde_json::to_string(&fb).unwrap();
-        let back: FallbackTestResult = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&fb).expect("serde deserialization should succeed");
+        let back: FallbackTestResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(fb, back);
     }
 
@@ -1645,16 +1645,16 @@ mod tests {
         let blocker = GateBlocker::OutputDivergence {
             workload_id: "w1".to_string(),
         };
-        let json = serde_json::to_string(&blocker).unwrap();
-        let back: GateBlocker = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&blocker).expect("serde deserialization should succeed");
+        let back: GateBlocker = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(blocker, back);
     }
 
     #[test]
     fn serde_error_roundtrip() {
         let err = GateError::EmptyWorkloads;
-        let json = serde_json::to_string(&err).unwrap();
-        let back: GateError = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let back: GateError = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, back);
     }
 
@@ -1676,8 +1676,8 @@ mod tests {
             memory_peak_bytes: None,
             error_code: None,
         };
-        let json = serde_json::to_string(&entry).unwrap();
-        let back: GateLogEntry = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let back: GateLogEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, back);
     }
 
@@ -1759,7 +1759,7 @@ mod tests {
             fallback_results: &fallbacks,
             significance_threshold_millionths: 0,
         };
-        let result = evaluate_gate(&input).unwrap();
+        let result = evaluate_gate(&input).expect("serde deserialization should succeed");
         // Coverage is vacuously satisfied.
         assert_eq!(
             result.receipt_coverage.coverage_millionths,
@@ -1796,7 +1796,7 @@ mod tests {
             fallback_results: &fallbacks,
             significance_threshold_millionths: 50_000, // require 5% improvement
         };
-        let result = evaluate_gate(&input).unwrap();
+        let result = evaluate_gate(&input).expect("serde deserialization should succeed");
         // 1% improvement < 5% threshold → fails
         assert!(!result.outcome.is_pass());
     }
@@ -1808,7 +1808,7 @@ mod tests {
         let receipts = passing_receipts(5);
         let fallbacks = passing_fallbacks();
         let input = make_passing_input(&spec, &amb, &receipts, &fallbacks);
-        let result = evaluate_gate(&input).unwrap();
+        let result = evaluate_gate(&input).expect("serde deserialization should succeed");
         assert_eq!(result.schema_version, GATE_SCHEMA_VERSION);
     }
 
@@ -1819,7 +1819,7 @@ mod tests {
         let receipts = passing_receipts(5);
         let fallbacks = passing_fallbacks();
         let input = make_passing_input(&spec, &amb, &receipts, &fallbacks);
-        let result = evaluate_gate(&input).unwrap();
+        let result = evaluate_gate(&input).expect("serde deserialization should succeed");
 
         assert_eq!(result.summary.total_workloads, 12);
         assert_eq!(result.summary.workloads_with_positive_delta, 12);
@@ -1848,7 +1848,7 @@ mod tests {
             fallback_results: &fallbacks,
             significance_threshold_millionths: 0,
         };
-        let result = evaluate_gate(&input).unwrap();
+        let result = evaluate_gate(&input).expect("serde deserialization should succeed");
 
         assert!(!result.outcome.is_pass());
         // Should have at least InsufficientWorkloads, OutputDivergence,
@@ -1863,7 +1863,7 @@ mod tests {
         let receipts = passing_receipts(5);
         let fallbacks = passing_fallbacks();
         let input = make_passing_input(&spec, &amb, &receipts, &fallbacks);
-        let result = evaluate_gate(&input).unwrap();
+        let result = evaluate_gate(&input).expect("serde deserialization should succeed");
 
         assert_eq!(result.receipt_coverage.total_decisions, 5);
         assert_eq!(result.receipt_coverage.covered_decisions, 5);
@@ -1900,8 +1900,8 @@ mod tests {
             LaneType::Fallback,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: LaneType = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: LaneType = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, v);
         }
     }
@@ -1915,8 +1915,8 @@ mod tests {
             InjectionKind::ProofExpiry,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: InjectionKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: InjectionKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, v);
         }
     }
@@ -1925,8 +1925,8 @@ mod tests {
     fn gate_outcome_serde_roundtrip() {
         let variants = [GateOutcome::Pass, GateOutcome::Fail];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: GateOutcome = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: GateOutcome = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, v);
         }
     }
@@ -1945,8 +1945,8 @@ mod tests {
             },
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: GateError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: GateError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, v);
         }
         assert_eq!(variants.len(), 4);

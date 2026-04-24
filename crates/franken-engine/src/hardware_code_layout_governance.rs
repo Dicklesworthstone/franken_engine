@@ -1403,10 +1403,10 @@ mod tests {
         for s in LayoutStrategy::ALL {
             // SAFETY: LayoutStrategy derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let j = serde_json::to_string(s).unwrap();
+            let j = serde_json::to_string(s).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by to_string of a valid LayoutStrategy,
             // so from_str back to LayoutStrategy cannot fail (valid format + matching schema).
-            let back: LayoutStrategy = serde_json::from_str(&j).unwrap();
+            let back: LayoutStrategy = serde_json::from_str(&j).expect("serde deserialization should succeed");
             assert_eq!(*s, back);
         }
     }
@@ -1465,10 +1465,10 @@ mod tests {
         for c in StallCategory::ALL {
             // SAFETY: StallCategory derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let j = serde_json::to_string(c).unwrap();
+            let j = serde_json::to_string(c).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by to_string of a valid StallCategory,
             // so from_str back to StallCategory cannot fail (valid format + matching schema).
-            let back: StallCategory = serde_json::from_str(&j).unwrap();
+            let back: StallCategory = serde_json::from_str(&j).expect("serde deserialization should succeed");
             assert_eq!(*c, back);
         }
     }
@@ -1680,8 +1680,8 @@ mod tests {
         let cfg = default_config()
             .with_known_hardware(hw_set(&["zen3"]))
             .with_required_strategies(strat_set(&[LayoutStrategy::LoopAlignment]));
-        let j = serde_json::to_string(&cfg).unwrap();
-        let back: GovernanceConfig = serde_json::from_str(&j).unwrap();
+        let j = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
+        let back: GovernanceConfig = serde_json::from_str(&j).expect("serde deserialization should succeed");
         assert_eq!(cfg, back);
     }
 
@@ -1810,8 +1810,8 @@ mod tests {
             GovernanceVerdict::MultipleViolations { count: 2 },
         ];
         for v in &verdicts {
-            let j = serde_json::to_string(v).unwrap();
-            let back: GovernanceVerdict = serde_json::from_str(&j).unwrap();
+            let j = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: GovernanceVerdict = serde_json::from_str(&j).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }

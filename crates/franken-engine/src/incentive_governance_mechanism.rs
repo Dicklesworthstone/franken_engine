@@ -822,7 +822,7 @@ mod tests {
             // SAFETY: GovernanceRole derives Serialize/Deserialize with no non-serializable fields.
             // Nested serde operations succeed with valid enum variants in controlled test environment.
             let back: GovernanceRole =
-                serde_json::from_str(&serde_json::to_string(role).unwrap()).unwrap();
+                serde_json::from_str(&serde_json::to_string(role).expect("serde deserialization should succeed")).expect("serde deserialization should succeed");
             assert_eq!(*role, back);
         }
     }
@@ -845,7 +845,7 @@ mod tests {
             // SAFETY: GovernanceAction derives Serialize/Deserialize with no non-serializable fields.
             // Nested serde operations succeed with valid enum variants in controlled test environment.
             let back: GovernanceAction =
-                serde_json::from_str(&serde_json::to_string(action).unwrap()).unwrap();
+                serde_json::from_str(&serde_json::to_string(action).expect("serde deserialization should succeed")).expect("serde deserialization should succeed");
             assert_eq!(*action, back);
         }
     }
@@ -1274,10 +1274,10 @@ mod tests {
         let spec = canonical_governance_mechanism(test_epoch());
         // SAFETY: MechanismSpec derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&spec).unwrap();
+        let json = serde_json::to_string(&spec).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid MechanismSpec,
         // so from_str back to MechanismSpec cannot fail (valid format + matching schema).
-        let back: MechanismSpec = serde_json::from_str(&json).unwrap();
+        let back: MechanismSpec = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(spec, back);
     }
 
@@ -1333,7 +1333,7 @@ mod tests {
         let spec = canonical_governance_mechanism(test_epoch());
         let report = generate_report(&spec);
         let back: GovernanceReport =
-            serde_json::from_str(&serde_json::to_string(&report).unwrap()).unwrap();
+            serde_json::from_str(&serde_json::to_string(&report).expect("serde deserialization should succeed")).expect("serde deserialization should succeed");
         assert_eq!(report, back);
     }
 
@@ -1423,8 +1423,8 @@ mod tests {
     #[test]
     fn governance_role_serde_roundtrip_all() {
         for role in GovernanceRole::ALL {
-            let json = serde_json::to_string(&role).unwrap();
-            let back: GovernanceRole = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&role).expect("serde deserialization should succeed");
+            let back: GovernanceRole = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(role, back);
         }
     }
@@ -1432,8 +1432,8 @@ mod tests {
     #[test]
     fn governance_action_serde_roundtrip_all() {
         for action in GovernanceAction::ALL {
-            let json = serde_json::to_string(&action).unwrap();
-            let back: GovernanceAction = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&action).expect("serde deserialization should succeed");
+            let back: GovernanceAction = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(action, back);
         }
     }
@@ -1441,8 +1441,8 @@ mod tests {
     #[test]
     fn incentive_property_serde_roundtrip_all() {
         for prop in IncentiveProperty::ALL {
-            let json = serde_json::to_string(&prop).unwrap();
-            let back: IncentiveProperty = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&prop).expect("serde deserialization should succeed");
+            let back: IncentiveProperty = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(prop, back);
         }
     }
@@ -1454,8 +1454,8 @@ mod tests {
             VerificationStatus::Falsified,
             VerificationStatus::Inconclusive,
         ] {
-            let json = serde_json::to_string(&status).unwrap();
-            let back: VerificationStatus = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&status).expect("serde deserialization should succeed");
+            let back: VerificationStatus = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(status, back);
         }
     }
@@ -1572,8 +1572,8 @@ mod tests {
             StrategicBehavior::SybilAttack,
         ];
         for b in &behaviors {
-            let json = serde_json::to_string(b).unwrap();
-            let back: StrategicBehavior = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(b).expect("serde deserialization should succeed");
+            let back: StrategicBehavior = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*b, back);
         }
     }
@@ -1767,8 +1767,8 @@ mod tests {
             reward_millionths: 50_000,
             cooldown_epochs: 5,
         };
-        let json = serde_json::to_string(&rule).unwrap();
-        let back: EnforcementRule = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&rule).expect("serde deserialization should succeed");
+        let back: EnforcementRule = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(rule, back);
     }
 
@@ -1781,8 +1781,8 @@ mod tests {
             evidence: "partial".into(),
             counterexample: Some("cx".into()),
         };
-        let json = serde_json::to_string(&pv).unwrap();
-        let back: PropertyVerification = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&pv).expect("serde deserialization should succeed");
+        let back: PropertyVerification = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(pv, back);
     }
 
@@ -1797,8 +1797,8 @@ mod tests {
             expected_payoff_millionths: -50_000,
             honest_alternative_payoff_millionths: 30_000,
         };
-        let json = serde_json::to_string(&s).unwrap();
-        let back: StrategicScenario = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+        let back: StrategicScenario = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(s, back);
     }
 
@@ -1811,8 +1811,8 @@ mod tests {
             payoff_millionths: -25_000,
             rationale: "cost of appeal".into(),
         };
-        let json = serde_json::to_string(&entry).unwrap();
-        let back: PayoffEntry = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let back: PayoffEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, back);
     }
 
@@ -2007,8 +2007,8 @@ mod tests {
             publisher_bond_millionths: 250_000,
             epoch: test_epoch(),
         };
-        let json = serde_json::to_string(&policy).unwrap();
-        let back: EnforcementPolicy = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
+        let back: EnforcementPolicy = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(policy, back);
     }
 
@@ -2034,8 +2034,8 @@ mod tests {
             ],
             epoch: test_epoch(),
         };
-        let json = serde_json::to_string(&table).unwrap();
-        let back: PayoffTable = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&table).expect("serde deserialization should succeed");
+        let back: PayoffTable = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(table, back);
     }
 
@@ -2054,8 +2054,8 @@ mod tests {
             }],
             epoch: test_epoch(),
         };
-        let json = serde_json::to_string(&sst).unwrap();
-        let back: StrategicStressTest = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&sst).expect("serde deserialization should succeed");
+        let back: StrategicStressTest = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(sst, back);
     }
 

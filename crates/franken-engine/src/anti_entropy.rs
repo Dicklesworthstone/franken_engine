@@ -1049,9 +1049,9 @@ mod tests {
         // Create an empty IBLT and subtract.
         let empty = Iblt::new(64, 3);
         // SAFETY: Test subtracting compatible IBLTs with same parameters should succeed
-        let diff = iblt.subtract(&empty).unwrap();
+        let diff = iblt.subtract(&empty).expect("serde deserialization should succeed");
         // SAFETY: Test peeling simple difference (1 inserted element) should succeed
-        let (pos, neg) = diff.peel().unwrap();
+        let (pos, neg) = diff.peel().expect("serde deserialization should succeed");
         assert_eq!(pos.len(), 1);
         assert_eq!(pos[0], h);
         assert!(neg.is_empty());
@@ -1078,9 +1078,9 @@ mod tests {
         }
 
         // SAFETY: Test subtracting compatible IBLTs with same parameters should succeed
-        let diff = iblt_a.subtract(&iblt_b).unwrap();
+        let diff = iblt_a.subtract(&iblt_b).expect("serde deserialization should succeed");
         // SAFETY: Test peeling symmetric difference with known element counts should succeed
-        let (pos, neg) = diff.peel().unwrap();
+        let (pos, neg) = diff.peel().expect("serde deserialization should succeed");
 
         // pos = elements in A but not B (a_only).
         // neg = elements in B but not A (b_only).
@@ -1108,9 +1108,9 @@ mod tests {
         }
 
         // SAFETY: Test subtracting identical compatible IBLTs should succeed
-        let diff = iblt_a.subtract(&iblt_b).unwrap();
+        let diff = iblt_a.subtract(&iblt_b).expect("serde deserialization should succeed");
         // SAFETY: Test peeling empty difference from identical sets should succeed
-        let (pos, neg) = diff.peel().unwrap();
+        let (pos, neg) = diff.peel().expect("serde deserialization should succeed");
         assert!(pos.is_empty());
         assert!(neg.is_empty());
     }
@@ -1130,7 +1130,7 @@ mod tests {
         }
 
         // SAFETY: Test subtracting compatible IBLTs with same parameters should succeed
-        let diff = iblt_a.subtract(&iblt_b).unwrap();
+        let diff = iblt_a.subtract(&iblt_b).expect("serde deserialization should succeed");
         assert!(diff.peel().is_err());
     }
 
@@ -1188,7 +1188,7 @@ mod tests {
         let result = session
             .reconcile(&local, &remote_iblt, "peer-1", "t1")
             // SAFETY: Test reconciliation with valid IBLT parameters and small difference should succeed
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert!(!result.fallback_triggered);
         assert_eq!(result.objects_to_send.len(), 1);
@@ -1211,7 +1211,7 @@ mod tests {
         let result = session
             .reconcile(&objects, &remote_iblt, "peer-1", "t1")
             // SAFETY: Test reconciliation with identical sets should succeed
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert!(!result.fallback_triggered);
         assert!(result.objects_to_send.is_empty());
@@ -1235,7 +1235,7 @@ mod tests {
         let result = session
             .reconcile(&local, &remote_iblt, "peer-1", "t1")
             // SAFETY: Test reconciliation with fallback enabled should succeed (even if fallback triggered)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(result.fallback_triggered);
     }
 
@@ -1279,7 +1279,7 @@ mod tests {
         let remote_iblt = session.build_iblt(&objects);
         session
             .reconcile(&objects, &remote_iblt, "peer-1", "t1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let events = session.drain_events();
         assert_eq!(events.len(), 1);
@@ -1303,13 +1303,13 @@ mod tests {
         let remote_iblt = session.build_iblt(&remote);
         session
             .reconcile(&local, &remote_iblt, "peer-1", "t1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let events = session.drain_events();
         assert!(!events.is_empty());
         let fallback = events.iter().find(|e| e.event == "reconcile_fallback");
         assert!(fallback.is_some());
-        assert!(fallback.unwrap().fallback_triggered);
+        assert!(fallback.expect("serde deserialization should succeed").fallback_triggered);
     }
 
     #[test]
@@ -1326,7 +1326,7 @@ mod tests {
         let remote_iblt = session.build_iblt(&objects);
         session
             .reconcile(&objects, &remote_iblt, "peer-1", "t1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert_eq!(session.event_counts().get("reconcile_success"), Some(&1));
     }
@@ -1340,8 +1340,8 @@ mod tests {
             object_type: ReconcileObjectType::RevocationEvent,
             epoch: test_epoch(),
         };
-        let json = serde_json::to_string(&id).unwrap();
-        let restored: ObjectId = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&id).expect("serde deserialization should succeed");
+        let restored: ObjectId = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(id, restored);
     }
 
@@ -1358,8 +1358,8 @@ mod tests {
             event: "reconcile_success".to_string(),
             fallback_triggered: false,
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let restored: ReconcileEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let restored: ReconcileEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, restored);
     }
 
@@ -1376,8 +1376,8 @@ mod tests {
             ReconcileError::EmptyObjectSet,
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap();
-            let restored: ReconcileError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let restored: ReconcileError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, restored);
         }
     }
@@ -1388,16 +1388,16 @@ mod tests {
         iblt.insert(&make_hash(1));
         iblt.insert(&make_hash(2));
 
-        let json = serde_json::to_string(&iblt).unwrap();
-        let restored: Iblt = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&iblt).expect("serde deserialization should succeed");
+        let restored: Iblt = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(iblt, restored);
     }
 
     #[test]
     fn reconcile_config_serialization_round_trip() {
         let config = ReconcileConfig::default();
-        let json = serde_json::to_string(&config).unwrap();
-        let restored: ReconcileConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let restored: ReconcileConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, restored);
     }
 
@@ -1449,7 +1449,7 @@ mod tests {
             let remote_iblt = session.build_iblt(&remote);
             session
                 .reconcile(&local, &remote_iblt, "peer-1", "t1")
-                .unwrap()
+                .expect("serde deserialization should succeed")
         };
 
         let r1 = run();
@@ -1613,7 +1613,7 @@ mod tests {
         let remote_iblt = session.build_iblt(&remote);
         let iblt_result = session
             .reconcile(&local, &remote_iblt, "peer-1", "t1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let fb_result = fb.execute(FallbackRequest {
             local_hashes: &local,
@@ -1736,7 +1736,7 @@ mod tests {
         }
         let alert = monitor.record(true);
         assert!(alert.is_some());
-        let alert = alert.unwrap();
+        let alert = alert.expect("serde deserialization should succeed");
         assert_eq!(alert.threshold_pct, 5);
         assert!(alert.rate_pct > 5);
         assert!(monitor.is_rate_exceeded());
@@ -1805,8 +1805,8 @@ mod tests {
             },
         ];
         for t in &triggers {
-            let json = serde_json::to_string(t).unwrap();
-            let restored: FallbackTrigger = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(t).expect("serde deserialization should succeed");
+            let restored: FallbackTrigger = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*t, restored);
         }
     }
@@ -1824,8 +1824,8 @@ mod tests {
             epoch_id: 1,
             trace_id: "t1".to_string(),
         };
-        let json = serde_json::to_string(&ev).unwrap();
-        let restored: FallbackEvidence = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
+        let restored: FallbackEvidence = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ev, restored);
     }
 
@@ -1838,16 +1838,16 @@ mod tests {
             total_in_window: 50,
             epoch_id: 1,
         };
-        let json = serde_json::to_string(&alert).unwrap();
-        let restored: FallbackRateAlert = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&alert).expect("serde deserialization should succeed");
+        let restored: FallbackRateAlert = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(alert, restored);
     }
 
     #[test]
     fn fallback_config_serialization_round_trip() {
         let config = FallbackConfig::default();
-        let json = serde_json::to_string(&config).unwrap();
-        let restored: FallbackConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let restored: FallbackConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, restored);
     }
 
@@ -1892,8 +1892,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap();
-            let restored: ReconcileError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let restored: ReconcileError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, restored);
         }
     }
@@ -1925,8 +1925,8 @@ mod tests {
             ReconcileObjectType::EvidenceEntry,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let restored: ReconcileObjectType = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let restored: ReconcileObjectType = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, restored);
         }
     }
@@ -1938,8 +1938,8 @@ mod tests {
             objects_to_send: vec![make_hash(3)],
             fallback_triggered: false,
         };
-        let json = serde_json::to_string(&result).unwrap();
-        let restored: ReconcileResult = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let restored: ReconcileResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, restored);
     }
 
@@ -1960,8 +1960,8 @@ mod tests {
                 trace_id: "t1".to_string(),
             },
         };
-        let json = serde_json::to_string(&result).unwrap();
-        let restored: FallbackResult = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let restored: FallbackResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, restored);
     }
 
@@ -2138,8 +2138,8 @@ mod tests {
             key_hash_xor: make_hash(77),
             checksum_xor: 0xDEAD_BEEF,
         };
-        let json = serde_json::to_string(&cell).unwrap();
-        let restored: IbltCell = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&cell).expect("serde deserialization should succeed");
+        let restored: IbltCell = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cell, restored);
     }
 
@@ -2152,8 +2152,8 @@ mod tests {
             object_type: ReconcileObjectType::RevocationEvent,
             epoch: test_epoch(),
         };
-        let json = serde_json::to_string(&id).unwrap();
-        let back: ObjectId = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&id).expect("serde deserialization should succeed");
+        let back: ObjectId = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, id);
     }
 
@@ -2169,8 +2169,8 @@ mod tests {
                 object_type: otype,
                 epoch: test_epoch(),
             };
-            let json = serde_json::to_string(&id).unwrap();
-            let back: ObjectId = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&id).expect("serde deserialization should succeed");
+            let back: ObjectId = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(back, id);
         }
     }
@@ -2194,8 +2194,8 @@ mod tests {
             },
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: FallbackTrigger = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: FallbackTrigger = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, v);
         }
     }
@@ -2203,8 +2203,8 @@ mod tests {
     #[test]
     fn reconcile_config_serde_roundtrip() {
         let cfg = ReconcileConfig::default();
-        let json = serde_json::to_string(&cfg).unwrap();
-        let back: ReconcileConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
+        let back: ReconcileConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, cfg);
     }
 
@@ -2216,16 +2216,16 @@ mod tests {
             max_retries: 4,
             retry_scale_factor: 3,
         };
-        let json = serde_json::to_string(&cfg).unwrap();
-        let back: ReconcileConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
+        let back: ReconcileConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, cfg);
     }
 
     #[test]
     fn fallback_config_serde_roundtrip() {
         let cfg = FallbackConfig::default();
-        let json = serde_json::to_string(&cfg).unwrap();
-        let back: FallbackConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
+        let back: FallbackConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, cfg);
     }
 
@@ -2235,16 +2235,16 @@ mod tests {
             max_fallback_rate_pct: 10,
             monitoring_window: 200,
         };
-        let json = serde_json::to_string(&cfg).unwrap();
-        let back: FallbackConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
+        let back: FallbackConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, cfg);
     }
 
     #[test]
     fn iblt_serde_roundtrip() {
         let iblt = Iblt::new(8, 3);
-        let json = serde_json::to_string(&iblt).unwrap();
-        let back: Iblt = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&iblt).expect("serde deserialization should succeed");
+        let back: Iblt = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, iblt);
     }
 
@@ -2253,8 +2253,8 @@ mod tests {
         let mut iblt = Iblt::new(16, 3);
         iblt.insert(&make_hash(1));
         iblt.insert(&make_hash(2));
-        let json = serde_json::to_string(&iblt).unwrap();
-        let back: Iblt = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&iblt).expect("serde deserialization should succeed");
+        let back: Iblt = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, iblt);
     }
 
@@ -2280,7 +2280,7 @@ mod tests {
         let remote_iblt = session.build_iblt(&objects);
         session
             .reconcile(&objects, &remote_iblt, "peer", "t1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(!session.drain_events().is_empty());
         assert!(session.drain_events().is_empty());
     }

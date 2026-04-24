@@ -263,7 +263,7 @@ pub fn emit_default_rollout_bundle(context: &ArtifactContext) -> io::Result<Bund
 
 pub fn build_docs_contract_fixture() -> DocsContractFixture {
     let mut disabled_candidates = accepted_candidates("2026-03-06T00:00:00Z")
-        .unwrap()
+        .expect("serde deserialization should succeed")
         .into_iter()
         .map(|candidate| candidate.candidate_id)
         .collect::<Vec<_>>();
@@ -545,13 +545,13 @@ fn write_bundle(
             "trace_id": &context.trace_id,
         },
     }))
-    .unwrap();
+    .expect("serde deserialization should succeed");
 
-    let trace_ids_json = serde_json::to_string_pretty(&evaluated.trace_ids).unwrap();
+    let trace_ids_json = serde_json::to_string_pretty(&evaluated.trace_ids).expect("serde deserialization should succeed");
     let events_jsonl = evaluated
         .logs
         .iter()
-        .map(|event| serde_json::to_string(event).unwrap())
+        .map(|event| serde_json::to_string(event).expect("serde deserialization should succeed"))
         .collect::<Vec<_>>()
         .join("\n");
 
@@ -585,7 +585,7 @@ fn write_bundle(
         "bead_id": BEAD_ID,
         "commands": &commands,
     }))
-    .unwrap();
+    .expect("serde deserialization should succeed");
     let repro_lock_artifact = FileArtifact::text("repro.lock", &repro_lock_json);
     artifact_hashes.insert(
         repro_lock_artifact.path.clone(),
@@ -646,7 +646,7 @@ fn write_bundle(
         },
         "artifacts": &manifest_artifacts,
     }))
-    .unwrap();
+    .expect("serde deserialization should succeed");
     let manifest_artifact = FileArtifact::text("manifest.json", &manifest_json);
 
     let _bundle_lock = acquire_bundle_write_lock(&context.artifact_dir)?;
@@ -924,7 +924,7 @@ impl Drop for BundleWriteLock {
 }
 
 fn digest_json(value: &serde_json::Value) -> String {
-    let bytes = serde_json::to_vec(value).unwrap();
+    let bytes = serde_json::to_vec(value).expect("serde deserialization should succeed");
     sha256_hex(&bytes)
 }
 
@@ -938,7 +938,7 @@ impl FileArtifact {
     fn json<T: Serialize>(path: &str, value: &T) -> Self {
         Self {
             path: path.to_string(),
-            contents: serde_json::to_vec_pretty(value).unwrap(),
+            contents: serde_json::to_vec_pretty(value).expect("serde deserialization should succeed"),
         }
     }
 
@@ -1083,8 +1083,8 @@ mod tests {
             GuardEvidenceVerdict::Missing,
             GuardEvidenceVerdict::Fail,
         ] {
-            let json = serde_json::to_string(&v).unwrap();
-            let back: GuardEvidenceVerdict = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let back: GuardEvidenceVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(v, back);
         }
     }
@@ -1093,13 +1093,13 @@ mod tests {
 
     #[test]
     fn accepted_candidates_returns_three() {
-        let candidates = accepted_candidates("2026-03-06T00:00:00Z").unwrap();
+        let candidates = accepted_candidates("2026-03-06T00:00:00Z").expect("serde deserialization should succeed");
         assert_eq!(candidates.len(), 3);
     }
 
     #[test]
     fn accepted_candidates_are_sorted_by_id() {
-        let candidates = accepted_candidates("2026-03-06T00:00:00Z").unwrap();
+        let candidates = accepted_candidates("2026-03-06T00:00:00Z").expect("serde deserialization should succeed");
         let ids: Vec<_> = candidates.iter().map(|c| c.candidate_id.as_str()).collect();
         let mut sorted = ids.clone();
         sorted.sort();
@@ -1108,7 +1108,7 @@ mod tests {
 
     #[test]
     fn all_accepted_candidates_have_accept_disposition() {
-        let candidates = accepted_candidates("2026-03-06T00:00:00Z").unwrap();
+        let candidates = accepted_candidates("2026-03-06T00:00:00Z").expect("serde deserialization should succeed");
         for candidate in &candidates {
             assert_eq!(
                 candidate.disposition,
@@ -1123,7 +1123,7 @@ mod tests {
 
     #[test]
     fn all_candidates_pass_starvation_microbench() {
-        let candidates = accepted_candidates("2026-03-06T00:00:00Z").unwrap();
+        let candidates = accepted_candidates("2026-03-06T00:00:00Z").expect("serde deserialization should succeed");
         for candidate in &candidates {
             let report = run_starvation_microbench(candidate);
             assert_eq!(
@@ -1139,10 +1139,10 @@ mod tests {
     #[test]
     fn starvation_microbench_fallback_reads_match_burst_writes() {
         let candidate = accepted_candidates("2026-03-06T00:00:00Z")
-            .unwrap()
+            .expect("serde deserialization should succeed")
             .into_iter()
             .next()
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let report = run_starvation_microbench(&candidate);
         assert_eq!(report.telemetry.fallback_reads, report.burst_writes as u64);
         assert_eq!(report.telemetry.fast_path_reads, report.burst_writes as u64);
@@ -1152,7 +1152,7 @@ mod tests {
 
     #[test]
     fn model_check_missing_for_all_candidates() {
-        let candidates = accepted_candidates("2026-03-06T00:00:00Z").unwrap();
+        let candidates = accepted_candidates("2026-03-06T00:00:00Z").expect("serde deserialization should succeed");
         for candidate in &candidates {
             let row = build_missing_model_check_row(candidate);
             assert_eq!(row.verdict, GuardEvidenceVerdict::Missing);
@@ -1165,7 +1165,7 @@ mod tests {
 
     #[test]
     fn safety_case_disallows_rollout_when_model_check_missing() {
-        let candidates = accepted_candidates("2026-03-06T00:00:00Z").unwrap();
+        let candidates = accepted_candidates("2026-03-06T00:00:00Z").expect("serde deserialization should succeed");
         for candidate in &candidates {
             let starvation = run_starvation_microbench(candidate);
             let model_check = build_missing_model_check_row(candidate);
@@ -1247,8 +1247,8 @@ mod tests {
                 3, 1,
             ),
         };
-        let json = serde_json::to_string(&input).unwrap();
-        let back: super::CandidateRolloutInput = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
+        let back: super::CandidateRolloutInput = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(input, back);
     }
 
@@ -1303,8 +1303,8 @@ mod tests {
             decision_id: "dec-1".to_string(),
             policy_id: "pol-1".to_string(),
         };
-        let json = serde_json::to_string_pretty(&artifact).unwrap();
-        let back: super::TraceIdsArtifact = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string_pretty(&artifact).expect("serde deserialization should succeed");
+        let back: super::TraceIdsArtifact = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(artifact, back);
     }
 
@@ -1321,26 +1321,26 @@ mod tests {
             candidate_id: Some("candidate-1".to_string()),
             detail: "detail text".to_string(),
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let back: super::StructuredLogEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let back: super::StructuredLogEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
         let event_none = super::StructuredLogEvent {
             error_code: None,
             candidate_id: None,
             ..event
         };
-        let json2 = serde_json::to_string(&event_none).unwrap();
-        let back2: super::StructuredLogEvent = serde_json::from_str(&json2).unwrap();
+        let json2 = serde_json::to_string(&event_none).expect("serde deserialization should succeed");
+        let back2: super::StructuredLogEvent = serde_json::from_str(&json2).expect("serde deserialization should succeed");
         assert_eq!(event_none, back2);
     }
 
     #[test]
     fn safety_case_row_disallows_rollout_when_starvation_fails() {
         let candidate = accepted_candidates("2026-03-06T00:00:00Z")
-            .unwrap()
+            .expect("serde deserialization should succeed")
             .into_iter()
             .next()
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let failing_starvation = super::StarvationMicrobenchRow {
             candidate_id: candidate.candidate_id.clone(),
             retry_budget_policy: candidate.retry_budget_policy,
@@ -1397,30 +1397,30 @@ mod tests {
             GuardEvidenceVerdict::Missing,
             GuardEvidenceVerdict::Fail,
         ] {
-            let json = serde_json::to_string(&verdict).unwrap();
-            let back: GuardEvidenceVerdict = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&verdict).expect("serde deserialization should succeed");
+            let back: GuardEvidenceVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(verdict, back);
         }
     }
 
     #[test]
     fn starvation_microbench_row_serde_roundtrip() {
-        let candidates = accepted_candidates("2026-03-06T00:00:00Z").unwrap();
+        let candidates = accepted_candidates("2026-03-06T00:00:00Z").expect("serde deserialization should succeed");
         let row = run_starvation_microbench(&candidates[0]);
-        let json = serde_json::to_string(&row).unwrap();
-        let back: StarvationMicrobenchRow = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&row).expect("serde deserialization should succeed");
+        let back: StarvationMicrobenchRow = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(row.candidate_id, back.candidate_id);
         assert_eq!(row.verdict, back.verdict);
     }
 
     #[test]
     fn safety_case_row_serde_roundtrip() {
-        let candidates = accepted_candidates("2026-03-06T00:00:00Z").unwrap();
+        let candidates = accepted_candidates("2026-03-06T00:00:00Z").expect("serde deserialization should succeed");
         let starvation = run_starvation_microbench(&candidates[0]);
         let model_check = build_missing_model_check_row(&candidates[0]);
         let safety = build_safety_case_row(&candidates[0], &starvation, &model_check);
-        let json = serde_json::to_string(&safety).unwrap();
-        let back: SeqlockSafetyCaseRow = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&safety).expect("serde deserialization should succeed");
+        let back: SeqlockSafetyCaseRow = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(safety.candidate_id, back.candidate_id);
         assert_eq!(safety.rollout_allowed, back.rollout_allowed);
     }
@@ -1434,14 +1434,14 @@ mod tests {
             required_artifacts: vec!["safety_case.json".to_string()],
             disable_reasons: vec!["model_check_missing".to_string()],
         };
-        let json = serde_json::to_string(&row).unwrap();
-        let back: SeqlockRolloutGuardRow = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&row).expect("serde deserialization should succeed");
+        let back: SeqlockRolloutGuardRow = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(row, back);
     }
 
     #[test]
     fn candidate_rollout_input_fields_non_empty() {
-        let candidates = accepted_candidates("2026-03-06T00:00:00Z").unwrap();
+        let candidates = accepted_candidates("2026-03-06T00:00:00Z").expect("serde deserialization should succeed");
         for c in &candidates {
             assert!(!c.candidate_id.is_empty());
             assert!(!c.surface_name.is_empty());
@@ -1450,14 +1450,14 @@ mod tests {
 
     #[test]
     fn starvation_microbench_observations_non_empty() {
-        let candidates = accepted_candidates("2026-03-06T00:00:00Z").unwrap();
+        let candidates = accepted_candidates("2026-03-06T00:00:00Z").expect("serde deserialization should succeed");
         let row = run_starvation_microbench(&candidates[0]);
         assert!(!row.observations.is_empty());
     }
 
     #[test]
     fn all_candidates_have_distinct_ids() {
-        let candidates = accepted_candidates("2026-03-06T00:00:00Z").unwrap();
+        let candidates = accepted_candidates("2026-03-06T00:00:00Z").expect("serde deserialization should succeed");
         let ids: std::collections::BTreeSet<&str> =
             candidates.iter().map(|c| c.candidate_id.as_str()).collect();
         assert_eq!(ids.len(), candidates.len());
@@ -1531,15 +1531,15 @@ mod tests {
     fn guard_evidence_verdict_serde_snake_case_encoding() {
         // Verify that serde(rename_all = "snake_case") produces expected JSON strings
         assert_eq!(
-            serde_json::to_string(&GuardEvidenceVerdict::Pass).unwrap(),
+            serde_json::to_string(&GuardEvidenceVerdict::Pass).expect("serde deserialization should succeed"),
             "\"pass\""
         );
         assert_eq!(
-            serde_json::to_string(&GuardEvidenceVerdict::Missing).unwrap(),
+            serde_json::to_string(&GuardEvidenceVerdict::Missing).expect("serde deserialization should succeed"),
             "\"missing\""
         );
         assert_eq!(
-            serde_json::to_string(&GuardEvidenceVerdict::Fail).unwrap(),
+            serde_json::to_string(&GuardEvidenceVerdict::Fail).expect("serde deserialization should succeed"),
             "\"fail\""
         );
     }
@@ -1563,7 +1563,7 @@ mod tests {
             GuardEvidenceVerdict::Fail,
         ] {
             let label = super::verdict_label(verdict);
-            let serde_str = serde_json::to_string(&verdict).unwrap();
+            let serde_str = serde_json::to_string(&verdict).expect("serde deserialization should succeed");
             // serde_str is "\"pass\"", strip quotes to get "pass"
             let serde_str_trimmed = serde_str.trim_matches('"');
             assert_eq!(
@@ -1656,10 +1656,10 @@ mod tests {
     #[test]
     fn safety_case_row_allows_rollout_when_both_verdicts_pass() {
         let candidate = accepted_candidates("2026-03-06T00:00:00Z")
-            .unwrap()
+            .expect("serde deserialization should succeed")
             .into_iter()
             .next()
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let passing_starvation = super::StarvationMicrobenchRow {
             candidate_id: candidate.candidate_id.clone(),
             retry_budget_policy: candidate.retry_budget_policy,
@@ -1700,10 +1700,10 @@ mod tests {
     #[test]
     fn safety_case_row_both_verdicts_fail_produces_two_disable_reasons() {
         let candidate = accepted_candidates("2026-03-06T00:00:00Z")
-            .unwrap()
+            .expect("serde deserialization should succeed")
             .into_iter()
             .next()
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let failing_starvation = super::StarvationMicrobenchRow {
             candidate_id: candidate.candidate_id.clone(),
             retry_budget_policy: candidate.retry_budget_policy,
@@ -1847,14 +1847,14 @@ mod tests {
         assert_ne!(p1, p2, "consecutive unique_temp_path calls must differ");
         assert!(
             p1.file_name()
-                .unwrap()
+                .expect("serde deserialization should succeed")
                 .to_str()
-                .unwrap()
+                .expect("serde deserialization should succeed")
                 .starts_with(".test_artifact.json."),
             "temp path should start with dot-prefixed original name"
         );
         assert!(
-            p1.file_name().unwrap().to_str().unwrap().ends_with(".tmp"),
+            p1.file_name().expect("serde deserialization should succeed").to_str().expect("serde deserialization should succeed").ends_with(".tmp"),
             "temp path should end with .tmp"
         );
     }
@@ -1863,7 +1863,7 @@ mod tests {
     fn unique_temp_path_with_no_filename_uses_artifact_fallback() {
         let base = std::path::Path::new("/");
         let p = super::unique_temp_path(base);
-        let name = p.file_name().unwrap().to_str().unwrap();
+        let name = p.file_name().expect("serde deserialization should succeed").to_str().expect("serde deserialization should succeed");
         assert!(
             name.starts_with(".artifact."),
             "when no file_name exists, fallback to 'artifact'"
@@ -1881,8 +1881,8 @@ mod tests {
             report_hash: "abc".to_string(),
             rows: Vec::new(),
         };
-        let json = serde_json::to_string_pretty(&artifact).unwrap();
-        let back: super::StarvationMicrobenchReportArtifact = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string_pretty(&artifact).expect("serde deserialization should succeed");
+        let back: super::StarvationMicrobenchReportArtifact = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(artifact, back);
     }
 
@@ -1897,8 +1897,8 @@ mod tests {
             report_hash: "def".to_string(),
             rows: Vec::new(),
         };
-        let json = serde_json::to_string_pretty(&artifact).unwrap();
-        let back: super::LoomScheduleCoverageReportArtifact = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string_pretty(&artifact).expect("serde deserialization should succeed");
+        let back: super::LoomScheduleCoverageReportArtifact = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(artifact, back);
     }
 
@@ -1913,8 +1913,8 @@ mod tests {
             safety_case_hash: "hash123".to_string(),
             rows: Vec::new(),
         };
-        let json = serde_json::to_string_pretty(&artifact).unwrap();
-        let back: super::SeqlockSafetyCaseArtifact = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string_pretty(&artifact).expect("serde deserialization should succeed");
+        let back: super::SeqlockSafetyCaseArtifact = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(artifact, back);
     }
 
@@ -1930,16 +1930,16 @@ mod tests {
             all_candidates_disabled: true,
             rows: Vec::new(),
         };
-        let json = serde_json::to_string_pretty(&artifact).unwrap();
-        let back: super::SeqlockRolloutGuardArtifact = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string_pretty(&artifact).expect("serde deserialization should succeed");
+        let back: super::SeqlockRolloutGuardArtifact = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(artifact, back);
     }
 
     #[test]
     fn docs_contract_fixture_serde_roundtrip() {
         let fixture = build_docs_contract_fixture();
-        let json = serde_json::to_string_pretty(&fixture).unwrap();
-        let back: super::DocsContractFixture = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string_pretty(&fixture).expect("serde deserialization should succeed");
+        let back: super::DocsContractFixture = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(fixture.schema_version, back.schema_version);
         assert_eq!(fixture.bead_id, back.bead_id);
         assert_eq!(
@@ -2023,8 +2023,8 @@ mod tests {
             post_publish_source: FastPathReadSource::FastPath,
             post_publish_value: 42,
         };
-        let json = serde_json::to_string(&obs).unwrap();
-        let back: super::StarvationBurstObservation = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&obs).expect("serde deserialization should succeed");
+        let back: super::StarvationBurstObservation = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(obs, back);
     }
 
@@ -2039,8 +2039,8 @@ mod tests {
             post_publish_source: FastPathReadSource::FastPath,
             post_publish_value: 100,
         };
-        let json = serde_json::to_string(&obs).unwrap();
-        let back: super::StarvationBurstObservation = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&obs).expect("serde deserialization should succeed");
+        let back: super::StarvationBurstObservation = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(obs, back);
         assert!(json.contains("null"), "None should serialize as null");
     }
@@ -2051,14 +2051,14 @@ mod tests {
             path: "seqlock_safety_case.json".to_string(),
             sha256: "sha256:abcdef0123456789".to_string(),
         };
-        let json = serde_json::to_string(&reference).unwrap();
-        let back: super::ManifestArtifactReference = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&reference).expect("serde deserialization should succeed");
+        let back: super::ManifestArtifactReference = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(reference, back);
     }
 
     #[test]
     fn safety_case_row_preserves_incumbent_baseline() {
-        let candidates = accepted_candidates("2026-03-06T00:00:00Z").unwrap();
+        let candidates = accepted_candidates("2026-03-06T00:00:00Z").expect("serde deserialization should succeed");
         for candidate in &candidates {
             let starvation = run_starvation_microbench(candidate);
             let model_check = build_missing_model_check_row(candidate);

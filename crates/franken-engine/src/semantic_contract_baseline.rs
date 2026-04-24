@@ -334,9 +334,9 @@ impl HookSemanticContract {
 
     pub fn contract_hash(&self) -> ContentHash {
         let mut data = Vec::new();
-        data.extend_from_slice(serde_json::to_string(&self.hook_kind).unwrap().as_bytes());
+        data.extend_from_slice(serde_json::to_string(&self.hook_kind).expect("serde deserialization should succeed").as_bytes());
         for rule in &self.invocation_rules {
-            data.extend_from_slice(serde_json::to_string(rule).unwrap().as_bytes());
+            data.extend_from_slice(serde_json::to_string(rule).expect("serde deserialization should succeed").as_bytes());
         }
         data.extend_from_slice(&(self.ordering_constraints.len() as u64).to_le_bytes());
         for constraint in &self.ordering_constraints {
@@ -348,7 +348,7 @@ impl HookSemanticContract {
         }
         data.extend_from_slice(
             serde_json::to_string(&self.cleanup_semantics)
-                .unwrap()
+                .expect("serde deserialization should succeed")
                 .as_bytes(),
         );
         for pat in &self.forbidden_patterns {
@@ -426,8 +426,8 @@ impl EffectSemanticContract {
 
     pub fn contract_hash(&self) -> ContentHash {
         let mut data = Vec::new();
-        data.extend_from_slice(serde_json::to_string(&self.effect_kind).unwrap().as_bytes());
-        data.extend_from_slice(serde_json::to_string(&self.timing).unwrap().as_bytes());
+        data.extend_from_slice(serde_json::to_string(&self.effect_kind).expect("serde deserialization should succeed").as_bytes());
+        data.extend_from_slice(serde_json::to_string(&self.timing).expect("serde deserialization should succeed").as_bytes());
         data.extend_from_slice(&(self.capability_requirements.len() as u64).to_le_bytes());
         for cap in &self.capability_requirements {
             data.extend_from_slice(&(cap.len() as u64).to_le_bytes());
@@ -435,12 +435,12 @@ impl EffectSemanticContract {
         }
         data.extend_from_slice(
             serde_json::to_string(&self.side_effect_boundary)
-                .unwrap()
+                .expect("serde deserialization should succeed")
                 .as_bytes(),
         );
         data.extend_from_slice(
             serde_json::to_string(&self.determinism_guarantee)
-                .unwrap()
+                .expect("serde deserialization should succeed")
                 .as_bytes(),
         );
         ContentHash::compute(&data)
@@ -490,9 +490,9 @@ impl AdjudicationRule {
     pub fn rule_hash(&self) -> ContentHash {
         let mut data = Vec::new();
         data.extend_from_slice(self.name.as_bytes());
-        data.extend_from_slice(serde_json::to_string(&self.category).unwrap().as_bytes());
+        data.extend_from_slice(serde_json::to_string(&self.category).expect("serde deserialization should succeed").as_bytes());
         data.extend_from_slice(self.condition.as_bytes());
-        data.extend_from_slice(serde_json::to_string(&self.resolution).unwrap().as_bytes());
+        data.extend_from_slice(serde_json::to_string(&self.resolution).expect("serde deserialization should succeed").as_bytes());
         ContentHash::compute(&data)
     }
 }
@@ -1164,7 +1164,7 @@ impl DriftDetector {
             let alert = DriftAlert {
                 id: derive_drift_alert_id(&format!(
                     "effect_boundary_{}_{epoch}",
-                    serde_json::to_string(effect_kind).unwrap()
+                    serde_json::to_string(effect_kind).expect("serde deserialization should succeed")
                 )),
                 kind: DriftKind::EffectBoundaryLeak,
                 severity: ViolationSeverity::Error,
@@ -1207,7 +1207,7 @@ impl DriftDetector {
             let alert = DriftAlert {
                 id: derive_drift_alert_id(&format!(
                     "hook_ordering_{}_{epoch}",
-                    serde_json::to_string(hook_kind).unwrap()
+                    serde_json::to_string(hook_kind).expect("serde deserialization should succeed")
                 )),
                 kind: DriftKind::HookContractBreach,
                 severity: ViolationSeverity::Fatal,
@@ -1539,7 +1539,7 @@ mod tests {
                 FixtureCategory::HookState,
                 FixturePriority::High,
             );
-            corpus.add_fixture(fixture).unwrap();
+            corpus.add_fixture(fixture).expect("serde deserialization should succeed");
         }
         corpus
     }
@@ -1567,17 +1567,17 @@ mod tests {
                     cat.clone(),
                     FixturePriority::Critical,
                 ))
-                .unwrap();
+                .expect("serde deserialization should succeed");
         }
-        let mut pkg = ContractPackage::new(corpus).unwrap();
+        let mut pkg = ContractPackage::new(corpus).expect("serde deserialization should succeed");
         pkg.add_hook_contract(HookSemanticContract::canonical_use_state())
-            .unwrap();
+            .expect("serde deserialization should succeed");
         pkg.add_hook_contract(HookSemanticContract::canonical_use_effect())
-            .unwrap();
+            .expect("serde deserialization should succeed");
         pkg.add_effect_contract(EffectSemanticContract::canonical_dom_mutation())
-            .unwrap();
+            .expect("serde deserialization should succeed");
         pkg.add_effect_contract(EffectSemanticContract::canonical_state_update())
-            .unwrap();
+            .expect("serde deserialization should succeed");
         pkg
     }
 
@@ -1650,7 +1650,7 @@ mod tests {
     fn corpus_add_fixture() {
         let mut corpus = CompatibilityCorpus::new(SemanticContractVersion::CURRENT, 1);
         let fix = make_fixture("test1", FixtureCategory::HookState, FixturePriority::High);
-        corpus.add_fixture(fix).unwrap();
+        corpus.add_fixture(fix).expect("serde deserialization should succeed");
         assert_eq!(corpus.fixtures.len(), 1);
     }
 
@@ -1658,7 +1658,7 @@ mod tests {
     fn corpus_reject_duplicate() {
         let mut corpus = CompatibilityCorpus::new(SemanticContractVersion::CURRENT, 1);
         let fix = make_fixture("dup", FixtureCategory::HookState, FixturePriority::High);
-        corpus.add_fixture(fix.clone()).unwrap();
+        corpus.add_fixture(fix.clone()).expect("serde deserialization should succeed");
         assert_eq!(
             corpus.add_fixture(fix),
             Err(FoundationError::DuplicateFixture)
@@ -1668,7 +1668,7 @@ mod tests {
     #[test]
     fn corpus_freeze() {
         let mut corpus = make_corpus_with_fixtures(3);
-        corpus.freeze().unwrap();
+        corpus.freeze().expect("serde deserialization should succeed");
         assert!(corpus.frozen);
     }
 
@@ -1681,7 +1681,7 @@ mod tests {
     #[test]
     fn corpus_frozen_reject_add() {
         let mut corpus = make_corpus_with_fixtures(1);
-        corpus.freeze().unwrap();
+        corpus.freeze().expect("serde deserialization should succeed");
         let fix = make_fixture("new", FixtureCategory::HookEffect, FixturePriority::Low);
         assert_eq!(
             corpus.add_fixture(fix),
@@ -1692,7 +1692,7 @@ mod tests {
     #[test]
     fn corpus_double_freeze_fails() {
         let mut corpus = make_corpus_with_fixtures(1);
-        corpus.freeze().unwrap();
+        corpus.freeze().expect("serde deserialization should succeed");
         assert_eq!(corpus.freeze(), Err(FoundationError::CorpusAlreadyFrozen));
     }
 
@@ -1728,7 +1728,7 @@ mod tests {
                     cat.clone(),
                     FixturePriority::Medium,
                 ))
-                .unwrap();
+                .expect("serde deserialization should succeed");
         }
         assert_eq!(corpus.coverage_score_millionths(), MILLION);
     }
@@ -1748,14 +1748,14 @@ mod tests {
                 FixtureCategory::HookState,
                 FixturePriority::Low,
             ))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         corpus
             .add_fixture(make_fixture(
                 "crit",
                 FixtureCategory::HookEffect,
                 FixturePriority::Critical,
             ))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let sorted = corpus.fixtures_by_priority();
         assert_eq!(sorted[0].priority, FixturePriority::Critical);
         assert_eq!(sorted[1].priority, FixturePriority::Low);
@@ -1770,14 +1770,14 @@ mod tests {
                 FixtureCategory::HookState,
                 FixturePriority::High,
             ))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         corpus
             .add_fixture(make_fixture(
                 "b",
                 FixtureCategory::Suspense,
                 FixturePriority::High,
             ))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(
             corpus
                 .fixtures_by_category(&FixtureCategory::Suspense)
@@ -1800,7 +1800,7 @@ mod tests {
                 FixtureCategory::HookState,
                 FixturePriority::High,
             ))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_ne!(h1, corpus.corpus_hash);
     }
 
@@ -1808,7 +1808,7 @@ mod tests {
     fn corpus_hash_changes_on_freeze() {
         let mut corpus = make_corpus_with_fixtures(2);
         let h1 = corpus.corpus_hash;
-        corpus.freeze().unwrap();
+        corpus.freeze().expect("serde deserialization should succeed");
         assert_ne!(h1, corpus.corpus_hash);
     }
 
@@ -1914,7 +1914,7 @@ mod tests {
     #[test]
     fn package_create() {
         let corpus = make_corpus_with_fixtures(3);
-        let pkg = ContractPackage::new(corpus).unwrap();
+        let pkg = ContractPackage::new(corpus).expect("serde deserialization should succeed");
         assert!(!pkg.is_frozen());
         assert_eq!(pkg.total_contracts(), 0);
     }
@@ -1922,25 +1922,25 @@ mod tests {
     #[test]
     fn package_add_hook_contract() {
         let corpus = make_corpus_with_fixtures(1);
-        let mut pkg = ContractPackage::new(corpus).unwrap();
+        let mut pkg = ContractPackage::new(corpus).expect("serde deserialization should succeed");
         pkg.add_hook_contract(HookSemanticContract::canonical_use_state())
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(pkg.total_contracts(), 1);
     }
 
     #[test]
     fn package_add_effect_contract() {
         let corpus = make_corpus_with_fixtures(1);
-        let mut pkg = ContractPackage::new(corpus).unwrap();
+        let mut pkg = ContractPackage::new(corpus).expect("serde deserialization should succeed");
         pkg.add_effect_contract(EffectSemanticContract::canonical_dom_mutation())
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(pkg.total_contracts(), 1);
     }
 
     #[test]
     fn package_add_adjudication_rule() {
         let corpus = make_corpus_with_fixtures(1);
-        let mut pkg = ContractPackage::new(corpus).unwrap();
+        let mut pkg = ContractPackage::new(corpus).expect("serde deserialization should succeed");
         let rule = AdjudicationRule {
             id: make_id("r1"),
             name: "test_rule".to_string(),
@@ -1950,14 +1950,14 @@ mod tests {
             rationale: "safety first".to_string(),
             precedent_fixture_ids: Vec::new(),
         };
-        pkg.add_adjudication_rule(rule).unwrap();
+        pkg.add_adjudication_rule(rule).expect("serde deserialization should succeed");
         assert_eq!(pkg.adjudication_rules.len(), 1);
     }
 
     #[test]
     fn package_freeze() {
         let mut pkg = make_full_package();
-        pkg.freeze(100).unwrap();
+        pkg.freeze(100).expect("serde deserialization should succeed");
         assert!(pkg.is_frozen());
         assert_eq!(pkg.frozen_at_epoch, Some(100));
     }
@@ -1965,21 +1965,21 @@ mod tests {
     #[test]
     fn package_freeze_empty_fails() {
         let corpus = make_corpus_with_fixtures(1);
-        let mut pkg = ContractPackage::new(corpus).unwrap();
+        let mut pkg = ContractPackage::new(corpus).expect("serde deserialization should succeed");
         assert_eq!(pkg.freeze(1), Err(FoundationError::EmptyPackage));
     }
 
     #[test]
     fn package_double_freeze_fails() {
         let mut pkg = make_full_package();
-        pkg.freeze(1).unwrap();
+        pkg.freeze(1).expect("serde deserialization should succeed");
         assert_eq!(pkg.freeze(2), Err(FoundationError::PackageAlreadyFrozen));
     }
 
     #[test]
     fn package_frozen_reject_add() {
         let mut pkg = make_full_package();
-        pkg.freeze(1).unwrap();
+        pkg.freeze(1).expect("serde deserialization should succeed");
         assert_eq!(
             pkg.add_hook_contract(HookSemanticContract::canonical_use_state()),
             Err(FoundationError::PackageAlreadyFrozen)
@@ -1989,17 +1989,17 @@ mod tests {
     #[test]
     fn package_hash_changes_on_add() {
         let corpus = make_corpus_with_fixtures(1);
-        let mut pkg = ContractPackage::new(corpus).unwrap();
+        let mut pkg = ContractPackage::new(corpus).expect("serde deserialization should succeed");
         let h1 = pkg.package_hash;
         pkg.add_hook_contract(HookSemanticContract::canonical_use_state())
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_ne!(h1, pkg.package_hash);
     }
 
     #[test]
     fn package_validate_full() {
         let pkg = make_full_package();
-        let v = pkg.validate().unwrap();
+        let v = pkg.validate().expect("serde deserialization should succeed");
         assert_eq!(v.coverage_millionths, MILLION);
         // Missing UseMemo/UseRef contracts
         assert!(!v.warnings.is_empty());
@@ -2015,7 +2015,7 @@ mod tests {
             cleanup_semantics: CleanupPolicy::NoCleanup,
             forbidden_patterns: Vec::new(),
         })
-        .unwrap();
+        .expect("serde deserialization should succeed");
         pkg.add_hook_contract(HookSemanticContract {
             hook_kind: HookKind::UseRef,
             invocation_rules: vec![InvocationRule::MustBeTopLevel],
@@ -2023,8 +2023,8 @@ mod tests {
             cleanup_semantics: CleanupPolicy::NoCleanup,
             forbidden_patterns: Vec::new(),
         })
-        .unwrap();
-        let v = pkg.validate().unwrap();
+        .expect("serde deserialization should succeed");
+        let v = pkg.validate().expect("serde deserialization should succeed");
         assert!(v.is_valid);
     }
 
@@ -2039,7 +2039,7 @@ mod tests {
             100,
             vec![ConsumerLane::Compiler, ConsumerLane::Runtime],
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(baseline.cut_line_id, "C0");
         assert!(baseline.serves_lane(&ConsumerLane::Compiler));
         assert!(!baseline.serves_lane(&ConsumerLane::Governance));
@@ -2060,7 +2060,7 @@ mod tests {
         assert!(!pkg.is_frozen());
         let baseline =
             FrozenBaseline::create(pkg, "C0".to_string(), 10, vec![ConsumerLane::Verification])
-                .unwrap();
+                .expect("serde deserialization should succeed");
         assert!(baseline.package.is_frozen());
     }
 
@@ -2069,9 +2069,9 @@ mod tests {
         let pkg1 = make_full_package();
         let pkg2 = make_full_package();
         let b1 = FrozenBaseline::create(pkg1, "C0".to_string(), 10, vec![ConsumerLane::Compiler])
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let b2 = FrozenBaseline::create(pkg2, "C0".to_string(), 10, vec![ConsumerLane::Compiler])
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(b1.baseline_hash, b2.baseline_hash);
     }
 
@@ -2085,7 +2085,7 @@ mod tests {
             1,
             vec![ConsumerLane::Compiler],
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let detector = DriftDetector::new(baseline);
         assert!(detector.alerts.is_empty());
         assert!(!detector.exceeds_threshold());
@@ -2099,7 +2099,7 @@ mod tests {
             1,
             vec![ConsumerLane::Compiler],
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let detector = DriftDetector::new(baseline).with_sensitivity(100_000);
         assert_eq!(detector.sensitivity_threshold_millionths, 100_000);
     }
@@ -2112,7 +2112,7 @@ mod tests {
             1,
             vec![ConsumerLane::Runtime],
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let mut detector = DriftDetector::new(baseline.clone());
         let fixture = &baseline.package.corpus.fixtures[0];
         let result = detector.check_trace_compliance(
@@ -2132,14 +2132,14 @@ mod tests {
             1,
             vec![ConsumerLane::Runtime],
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let mut detector = DriftDetector::new(baseline.clone());
         let fixture = &baseline.package.corpus.fixtures[0];
         let bad_hash = ContentHash::compute(b"wrong_trace");
         let result =
             detector.check_trace_compliance(&fixture.id, &bad_hash, ConsumerLane::Runtime, 2);
         assert!(result.is_some());
-        let alert = result.unwrap();
+        let alert = result.expect("serde deserialization should succeed");
         assert_eq!(alert.kind, DriftKind::SemanticRegression);
         assert_eq!(alert.severity, ViolationSeverity::Fatal); // Critical fixture
     }
@@ -2152,7 +2152,7 @@ mod tests {
             1,
             vec![ConsumerLane::Runtime],
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let mut detector = DriftDetector::new(baseline);
         let result = detector.check_trace_compliance(
             &make_id("nonexistent"),
@@ -2171,7 +2171,7 @@ mod tests {
             1,
             vec![ConsumerLane::Runtime],
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let mut detector = DriftDetector::new(baseline);
         let result = detector.check_effect_boundary(
             &EffectKind::DomMutation,
@@ -2190,7 +2190,7 @@ mod tests {
             1,
             vec![ConsumerLane::Runtime],
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let mut detector = DriftDetector::new(baseline);
         let result = detector.check_effect_boundary(
             &EffectKind::DomMutation,
@@ -2199,7 +2199,7 @@ mod tests {
             2,
         );
         assert!(result.is_some());
-        assert_eq!(result.unwrap().kind, DriftKind::EffectBoundaryLeak);
+        assert_eq!(result.expect("serde deserialization should succeed").kind, DriftKind::EffectBoundaryLeak);
     }
 
     #[test]
@@ -2210,7 +2210,7 @@ mod tests {
             1,
             vec![ConsumerLane::Compiler],
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let mut detector = DriftDetector::new(baseline);
         let result = detector.check_hook_ordering(
             &HookKind::UseState,
@@ -2229,7 +2229,7 @@ mod tests {
             1,
             vec![ConsumerLane::Compiler],
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let mut detector = DriftDetector::new(baseline);
         let result = detector.check_hook_ordering(
             &HookKind::UseState,
@@ -2238,7 +2238,7 @@ mod tests {
             2,
         );
         assert!(result.is_some());
-        assert_eq!(result.unwrap().kind, DriftKind::HookContractBreach);
+        assert_eq!(result.expect("serde deserialization should succeed").kind, DriftKind::HookContractBreach);
     }
 
     #[test]
@@ -2249,7 +2249,7 @@ mod tests {
             1,
             vec![ConsumerLane::Runtime],
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let mut detector = DriftDetector::new(baseline.clone());
         // Trigger fatal alerts on all critical fixtures
         for fixture in &baseline.package.corpus.fixtures {
@@ -2267,7 +2267,7 @@ mod tests {
             1,
             vec![ConsumerLane::Runtime],
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let mut detector = DriftDetector::new(baseline.clone()).with_sensitivity(1); // very sensitive
         let fixture = &baseline.package.corpus.fixtures[0];
         detector.check_trace_compliance(
@@ -2287,7 +2287,7 @@ mod tests {
             1,
             vec![ConsumerLane::Runtime, ConsumerLane::Compiler],
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let mut detector = DriftDetector::new(baseline.clone());
         let fixture = &baseline.package.corpus.fixtures[0];
         detector.check_trace_compliance(
@@ -2313,7 +2313,7 @@ mod tests {
             1,
             vec![ConsumerLane::Runtime],
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let mut detector = DriftDetector::new(baseline.clone());
         let fixture = &baseline.package.corpus.fixtures[0];
         detector.check_trace_compliance(
@@ -2362,7 +2362,7 @@ mod tests {
         f.register_package(make_full_package());
         let idx = f
             .freeze_baseline(0, "C0".to_string(), 10, vec![ConsumerLane::Compiler])
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(idx, 0);
         assert_eq!(f.frozen_baselines.len(), 1);
     }
@@ -2381,8 +2381,8 @@ mod tests {
         let mut f = SemanticContractFoundation::new();
         f.register_package(make_full_package());
         f.freeze_baseline(0, "C0".to_string(), 10, vec![ConsumerLane::Compiler])
-            .unwrap();
-        f.activate_drift_detection(0).unwrap();
+            .expect("serde deserialization should succeed");
+        f.activate_drift_detection(0).expect("serde deserialization should succeed");
         assert!(f.drift_detector.is_some());
     }
 
@@ -2401,7 +2401,7 @@ mod tests {
         assert!(f.latest_baseline().is_none());
         f.register_package(make_full_package());
         f.freeze_baseline(0, "C0".to_string(), 10, vec![ConsumerLane::Compiler])
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(f.latest_baseline().is_some());
     }
 
@@ -2418,8 +2418,8 @@ mod tests {
     #[test]
     fn serde_version() {
         let v = SemanticContractVersion::CURRENT;
-        let json = serde_json::to_string(&v).unwrap();
-        let v2: SemanticContractVersion = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let v2: SemanticContractVersion = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, v2);
     }
 
@@ -2430,40 +2430,40 @@ mod tests {
             FixtureCategory::HookState,
             FixturePriority::High,
         );
-        let json = serde_json::to_string(&fix).unwrap();
-        let fix2: TraceFixture = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&fix).expect("serde deserialization should succeed");
+        let fix2: TraceFixture = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(fix, fix2);
     }
 
     #[test]
     fn serde_corpus() {
         let corpus = make_corpus_with_fixtures(3);
-        let json = serde_json::to_string(&corpus).unwrap();
-        let c2: CompatibilityCorpus = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&corpus).expect("serde deserialization should succeed");
+        let c2: CompatibilityCorpus = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(corpus, c2);
     }
 
     #[test]
     fn serde_hook_contract() {
         let c = HookSemanticContract::canonical_use_state();
-        let json = serde_json::to_string(&c).unwrap();
-        let c2: HookSemanticContract = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let c2: HookSemanticContract = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c, c2);
     }
 
     #[test]
     fn serde_effect_contract() {
         let c = EffectSemanticContract::canonical_dom_mutation();
-        let json = serde_json::to_string(&c).unwrap();
-        let c2: EffectSemanticContract = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let c2: EffectSemanticContract = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c, c2);
     }
 
     #[test]
     fn serde_package() {
         let pkg = make_full_package();
-        let json = serde_json::to_string(&pkg).unwrap();
-        let p2: ContractPackage = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&pkg).expect("serde deserialization should succeed");
+        let p2: ContractPackage = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(pkg, p2);
     }
 
@@ -2479,8 +2479,8 @@ mod tests {
             detected_epoch: 5,
             evidence_hash: ContentHash::compute(b"evidence"),
         };
-        let json = serde_json::to_string(&alert).unwrap();
-        let a2: DriftAlert = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&alert).expect("serde deserialization should succeed");
+        let a2: DriftAlert = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(alert, a2);
     }
 
@@ -2488,8 +2488,8 @@ mod tests {
     fn serde_foundation() {
         let mut f = SemanticContractFoundation::new();
         f.register_package(make_full_package());
-        let json = serde_json::to_string(&f).unwrap();
-        let f2: SemanticContractFoundation = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&f).expect("serde deserialization should succeed");
+        let f2: SemanticContractFoundation = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(f, f2);
     }
 
@@ -2505,8 +2505,8 @@ mod tests {
             drift_ratio_millionths: 83_333,
             alerts_by_kind: BTreeMap::new(),
         };
-        let json = serde_json::to_string(&summary).unwrap();
-        let s2: DriftSummary = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
+        let s2: DriftSummary = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(summary, s2);
     }
 
@@ -2548,8 +2548,8 @@ mod tests {
             kind: MutationKind::AppendChild,
             value: "<span>hi</span>".to_string(),
         };
-        let json = serde_json::to_string(&m).unwrap();
-        let m2: DomMutation = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
+        let m2: DomMutation = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(m, m2);
     }
 
@@ -2578,21 +2578,21 @@ mod tests {
                 FixtureCategory::HookState,
                 FixturePriority::Critical,
             ))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         corpus
             .add_fixture(make_fixture(
                 "effect_basic",
                 FixtureCategory::HookEffect,
                 FixturePriority::High,
             ))
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // 2. Build package
-        let mut pkg = ContractPackage::new(corpus).unwrap();
+        let mut pkg = ContractPackage::new(corpus).expect("serde deserialization should succeed");
         pkg.add_hook_contract(HookSemanticContract::canonical_use_state())
-            .unwrap();
+            .expect("serde deserialization should succeed");
         pkg.add_effect_contract(EffectSemanticContract::canonical_dom_mutation())
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // 3. Foundation + freeze
         let mut foundation = SemanticContractFoundation::new();
@@ -2608,13 +2608,13 @@ mod tests {
                     ConsumerLane::Verification,
                 ],
             )
-            .unwrap();
-        foundation.activate_drift_detection(0).unwrap();
+            .expect("serde deserialization should succeed");
+        foundation.activate_drift_detection(0).expect("serde deserialization should succeed");
 
         // 4. Check compliance — pass
-        let baseline = foundation.latest_baseline().unwrap().clone();
+        let baseline = foundation.latest_baseline().expect("serde deserialization should succeed").clone();
         let fixture = &baseline.package.corpus.fixtures[0];
-        let detector = foundation.drift_detector.as_mut().unwrap();
+        let detector = foundation.drift_detector.as_mut().expect("serde deserialization should succeed");
         let result = detector.check_trace_compliance(
             &fixture.id,
             &fixture.expected_trace_hash,
@@ -2627,7 +2627,7 @@ mod tests {
         let bad_hash = ContentHash::compute(b"diverged_trace");
         let alert = detector
             .check_trace_compliance(&fixture.id, &bad_hash, ConsumerLane::Runtime, 102)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(alert.kind, DriftKind::SemanticRegression);
         assert_eq!(alert.severity, ViolationSeverity::Fatal);
 
@@ -2645,7 +2645,7 @@ mod tests {
         foundation.register_package(make_full_package());
         foundation
             .freeze_baseline(0, "C0".to_string(), 10, vec![ConsumerLane::Compiler])
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Package v2
         foundation.register_package(make_full_package());
@@ -2656,10 +2656,10 @@ mod tests {
                 20,
                 vec![ConsumerLane::Compiler, ConsumerLane::Runtime],
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert_eq!(foundation.frozen_baselines.len(), 2);
-        assert_eq!(foundation.latest_baseline().unwrap().cut_line_id, "C1");
+        assert_eq!(foundation.latest_baseline().expect("serde deserialization should succeed").cut_line_id, "C1");
     }
 
     fn make_local_semantic_component(component_id: &str) -> ComponentDescriptor {
@@ -2821,8 +2821,8 @@ mod tests {
             FixtureCategory::RefEdgeCase,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: FixtureCategory = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: FixtureCategory = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, v);
         }
         assert_eq!(variants.len(), 12);
@@ -2843,8 +2843,8 @@ mod tests {
             HookKind::UseDebugValue,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: HookKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: HookKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, v);
         }
         assert_eq!(variants.len(), 10);
@@ -2860,8 +2860,8 @@ mod tests {
             InvocationRule::OrderPreservedAcrossRenders,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: InvocationRule = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: InvocationRule = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, v);
         }
         assert_eq!(variants.len(), 5);
@@ -2876,8 +2876,8 @@ mod tests {
             CleanupPolicy::ConditionalCleanup,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: CleanupPolicy = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: CleanupPolicy = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, v);
         }
     }
@@ -2893,8 +2893,8 @@ mod tests {
             EffectKind::CustomEffect,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: EffectKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: EffectKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, v);
         }
         assert_eq!(variants.len(), 6);
@@ -2909,8 +2909,8 @@ mod tests {
             EffectTiming::Deferred,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: EffectTiming = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: EffectTiming = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, v);
         }
     }
@@ -2926,8 +2926,8 @@ mod tests {
             ConsumerLane::Adoption,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: ConsumerLane = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: ConsumerLane = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, v);
         }
         assert_eq!(variants.len(), 6);
@@ -2945,8 +2945,8 @@ mod tests {
             DriftKind::VersionIncompatibility,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: DriftKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: DriftKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, v);
         }
         assert_eq!(variants.len(), 7);
@@ -3036,8 +3036,8 @@ mod tests {
             FoundationError::IncompatibleVersion,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: FoundationError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: FoundationError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, v);
         }
     }
@@ -3051,8 +3051,8 @@ mod tests {
             ViolationSeverity::Info,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: ViolationSeverity = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: ViolationSeverity = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, v);
         }
         assert_eq!(variants.len(), 4);
@@ -3068,8 +3068,8 @@ mod tests {
             AdjudicationCategory::SpecGap,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: AdjudicationCategory = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: AdjudicationCategory = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, v);
         }
         assert_eq!(variants.len(), 5);
@@ -3084,8 +3084,8 @@ mod tests {
             AdjudicationResolution::RequireExplicitFallback,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: AdjudicationResolution = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: AdjudicationResolution = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, v);
         }
         assert_eq!(variants.len(), 4);
@@ -3099,8 +3099,8 @@ mod tests {
             SideEffectBoundary::Unknown,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: SideEffectBoundary = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: SideEffectBoundary = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, v);
         }
         assert_eq!(variants.len(), 3);
@@ -3114,8 +3114,8 @@ mod tests {
             DeterminismLevel::Nondeterministic,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: DeterminismLevel = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: DeterminismLevel = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, v);
         }
         assert_eq!(variants.len(), 3);
@@ -3132,8 +3132,8 @@ mod tests {
             MutationKind::InsertBefore,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: MutationKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: MutationKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, v);
         }
         assert_eq!(variants.len(), 6);
@@ -3148,8 +3148,8 @@ mod tests {
             FixturePriority::Low,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: FixturePriority = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: FixturePriority = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, v);
         }
         assert_eq!(variants.len(), 4);
@@ -3172,12 +3172,12 @@ mod tests {
     #[test]
     fn frozen_baseline_serves_lane_present_and_absent() {
         let mut corpus = make_corpus_with_fixtures(3);
-        corpus.freeze().unwrap();
-        let mut pkg = ContractPackage::new(corpus).unwrap();
+        corpus.freeze().expect("serde deserialization should succeed");
+        let mut pkg = ContractPackage::new(corpus).expect("serde deserialization should succeed");
         pkg.add_hook_contract(HookSemanticContract::canonical_use_state())
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let lanes = vec![ConsumerLane::Compiler, ConsumerLane::Runtime];
-        let baseline = FrozenBaseline::create(pkg, "cut-1".into(), 10, lanes).unwrap();
+        let baseline = FrozenBaseline::create(pkg, "cut-1".into(), 10, lanes).expect("serde deserialization should succeed");
         assert!(baseline.serves_lane(&ConsumerLane::Compiler));
         assert!(baseline.serves_lane(&ConsumerLane::Runtime));
         assert!(!baseline.serves_lane(&ConsumerLane::Verification));

@@ -767,7 +767,7 @@ mod tests {
             0xBD, 0xBE, 0xBF, 0xC0,
         ])
         // SAFETY: Fixed 32-byte array is valid signing key format for test helper
-        .unwrap()
+        .expect("serde deserialization should succeed")
     }
 
     /// Derive a valid Ed25519 VerificationKey from a seed byte.
@@ -796,7 +796,7 @@ mod tests {
             target_bytes.as_slice(),
         )
         // SAFETY: Test helper uses valid domain, zone, schema, and bytes for ID derivation
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let mut rev = Revocation {
             revocation_id,
@@ -811,7 +811,7 @@ mod tests {
 
         let preimage = rev.preimage_bytes();
         // SAFETY: Test helper uses valid signing key and preimage for signature creation
-        let sig = sign_preimage(&sk, &preimage).unwrap();
+        let sig = sign_preimage(&sk, &preimage).expect("serde deserialization should succeed");
         rev.signature = sig;
         rev
     }
@@ -829,7 +829,7 @@ mod tests {
         let rev = make_revocation(target_type, RevocationReason::Compromised, target_bytes);
         let sk = revocation_key();
         // SAFETY: Test helper uses valid revocation and signing key for chain append
-        enforcer.chain_mut().append(rev, &sk, "t-revoke").unwrap();
+        enforcer.chain_mut().append(rev, &sk, "t-revoke").expect("serde deserialization should succeed");
     }
 
     // ---------------------------------------------------------------
@@ -1354,10 +1354,10 @@ mod tests {
         for p in &points {
             // SAFETY: EnforcementPoint derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json = serde_json::to_string(p).unwrap();
+            let json = serde_json::to_string(p).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by to_string of a valid EnforcementPoint,
             // so from_str back to EnforcementPoint cannot fail (valid format + matching schema).
-            let restored: EnforcementPoint = serde_json::from_str(&json).unwrap();
+            let restored: EnforcementPoint = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*p, restored);
         }
     }
@@ -1374,10 +1374,10 @@ mod tests {
         for c in &cats {
             // SAFETY: HighRiskCategory derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json = serde_json::to_string(c).unwrap();
+            let json = serde_json::to_string(c).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by to_string of a valid HighRiskCategory,
             // so from_str back to HighRiskCategory cannot fail (valid format + matching schema).
-            let restored: HighRiskCategory = serde_json::from_str(&json).unwrap();
+            let restored: HighRiskCategory = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*c, restored);
         }
     }
@@ -1391,8 +1391,8 @@ mod tests {
             transitive_root: Some(EngineObjectId([2; 32])),
             enforcement_point: EnforcementPoint::TokenAcceptance,
         };
-        let json = serde_json::to_string(&denial).unwrap();
-        let restored: RevocationDenial = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&denial).expect("serde deserialization should succeed");
+        let restored: RevocationDenial = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(denial, restored);
     }
 
@@ -1402,8 +1402,8 @@ mod tests {
             enforcement_point: EnforcementPoint::TokenAcceptance,
             checks_performed: 2,
         };
-        let json = serde_json::to_string(&cleared).unwrap();
-        let restored: EnforcementResult = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&cleared).expect("serde deserialization should succeed");
+        let restored: EnforcementResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cleared, restored);
 
         let denial = RevocationDenial {
@@ -1414,8 +1414,8 @@ mod tests {
             enforcement_point: EnforcementPoint::ExtensionActivation,
         };
         let denied = EnforcementResult::Denied(denial);
-        let json2 = serde_json::to_string(&denied).unwrap();
-        let restored2: EnforcementResult = serde_json::from_str(&json2).unwrap();
+        let json2 = serde_json::to_string(&denied).expect("serde deserialization should succeed");
+        let restored2: EnforcementResult = serde_json::from_str(&json2).expect("serde deserialization should succeed");
         assert_eq!(denied, restored2);
     }
 
@@ -1438,8 +1438,8 @@ mod tests {
             error_code: Some(REVOCATION_AUDIT_DIRECT_DENIAL_CODE.to_string()),
             checked_at: DeterministicTimestamp(5000),
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let restored: RevocationCheckEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let restored: RevocationCheckEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, restored);
     }
 
@@ -1455,8 +1455,8 @@ mod tests {
             denied: 2,
             transitive_denials: 1,
         };
-        let json = serde_json::to_string(&stats).unwrap();
-        let restored: EnforcementStats = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&stats).expect("serde deserialization should succeed");
+        let restored: EnforcementStats = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(stats, restored);
     }
 
@@ -1608,7 +1608,7 @@ mod tests {
             [1; 32],
         );
         let sk = revocation_key();
-        enforcer.chain_mut().append(rev, &sk, "t-mut").unwrap();
+        enforcer.chain_mut().append(rev, &sk, "t-mut").expect("serde deserialization should succeed");
         assert_eq!(enforcer.chain().len(), 1);
     }
 
@@ -2118,8 +2118,8 @@ mod tests {
             RevocationTargetType::Extension,
         ];
         for t in &types {
-            let json = serde_json::to_string(t).unwrap();
-            let restored: RevocationTargetType = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(t).expect("serde deserialization should succeed");
+            let restored: RevocationTargetType = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*t, restored);
         }
     }
@@ -2215,7 +2215,7 @@ mod tests {
             transitive_root: Some(EngineObjectId([10; 32])),
             enforcement_point: EnforcementPoint::ExtensionActivation,
         };
-        let json = serde_json::to_string(&denial).unwrap();
+        let json = serde_json::to_string(&denial).expect("serde deserialization should succeed");
         assert!(json.contains("\"target_type\""));
         assert!(json.contains("\"target_id\""));
         assert!(json.contains("\"transitive\""));
@@ -2242,7 +2242,7 @@ mod tests {
             error_code: None,
             checked_at: DeterministicTimestamp(9999),
         };
-        let json = serde_json::to_string(&event).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
         assert!(json.starts_with("{\"schema_version\":1,"));
         assert!(json.contains("\"schema_version\""));
         assert!(json.contains("\"enforcement_point\""));
@@ -2270,7 +2270,7 @@ mod tests {
             denied: 12,
             transitive_denials: 5,
         };
-        let json = serde_json::to_string(&stats).unwrap();
+        let json = serde_json::to_string(&stats).expect("serde deserialization should succeed");
         assert!(json.contains("\"checks\":42"));
         assert!(json.contains("\"cleared\":30"));
         assert!(json.contains("\"denied\":12"));
@@ -2324,9 +2324,9 @@ mod tests {
             transitive_root: None,
             enforcement_point: EnforcementPoint::TokenAcceptance,
         };
-        let json = serde_json::to_string(&denial).unwrap();
+        let json = serde_json::to_string(&denial).expect("serde deserialization should succeed");
         assert!(json.contains("\"transitive_root\":null"));
-        let restored: RevocationDenial = serde_json::from_str(&json).unwrap();
+        let restored: RevocationDenial = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(denial, restored);
         assert!(restored.transitive_root.is_none());
     }
@@ -2346,8 +2346,8 @@ mod tests {
                 enforcement_point: point,
                 checks_performed: 2,
             };
-            let json = serde_json::to_string(&result).unwrap();
-            let restored: EnforcementResult = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+            let restored: EnforcementResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(result, restored);
             assert!(restored.is_cleared());
         }

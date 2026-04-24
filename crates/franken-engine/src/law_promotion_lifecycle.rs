@@ -194,11 +194,11 @@ impl LifecycleEvent {
         let mut data = Vec::new();
         data.extend_from_slice(self.event_id.as_bytes());
         data.extend_from_slice(self.law_id.as_bytes());
-        data.extend_from_slice(serde_json::to_string(&self.kind).unwrap().as_bytes());
+        data.extend_from_slice(serde_json::to_string(&self.kind).expect("serde deserialization should succeed").as_bytes());
         let mut sorted_targets = self.affected_targets.clone();
         sorted_targets.sort();
         for target in &sorted_targets {
-            data.extend_from_slice(serde_json::to_string(target).unwrap().as_bytes());
+            data.extend_from_slice(serde_json::to_string(target).expect("serde deserialization should succeed").as_bytes());
         }
         data.extend_from_slice(self.rationale.as_bytes());
         if let Some(ref sid) = self.superseding_law_id {
@@ -281,13 +281,13 @@ impl RoutingDecision {
         data.extend_from_slice(self.law_id.as_bytes());
         data.extend_from_slice(
             serde_json::to_string(&self.candidate_kind)
-                .unwrap()
+                .expect("serde deserialization should succeed")
                 .as_bytes(),
         );
         let mut sorted_selected = self.selected_targets.clone();
         sorted_selected.sort();
         for target in &sorted_selected {
-            data.extend_from_slice(serde_json::to_string(target).unwrap().as_bytes());
+            data.extend_from_slice(serde_json::to_string(target).expect("serde deserialization should succeed").as_bytes());
         }
         data.extend_from_slice(&self.priority_millionths.to_le_bytes());
         self.decision_hash = ContentHash::compute(&data);
@@ -1023,7 +1023,7 @@ mod tests {
     #[test]
     fn event_kind_display_matches_serde() {
         for k in LifecycleEventKind::ALL {
-            let json = serde_json::to_string(k).unwrap();
+            let json = serde_json::to_string(k).expect("serde deserialization should succeed");
             let display = k.to_string();
             assert_eq!(json, format!("\"{display}\""));
         }
@@ -1080,8 +1080,8 @@ mod tests {
             },
         ];
         for r in &reasons {
-            let json = serde_json::to_string(r).unwrap();
-            let back: RefusalReason = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(r).expect("serde deserialization should succeed");
+            let back: RefusalReason = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*r, back);
         }
     }
@@ -1127,8 +1127,8 @@ mod tests {
                 detail: "z".to_string(),
             },
         ] {
-            let json = serde_json::to_string(&err).unwrap();
-            let back: LifecycleError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+            let back: LifecycleError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(err, back);
         }
     }
@@ -1222,8 +1222,8 @@ mod tests {
     #[test]
     fn config_serde_roundtrip() {
         let config = LifecycleConfig::default();
-        let json = serde_json::to_string(&config).unwrap();
-        let back: LifecycleConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let back: LifecycleConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, back);
     }
 
@@ -1322,7 +1322,7 @@ mod tests {
 
         let event = p.revoke_law("law-rev-1", "regression found");
         assert!(event.is_some());
-        let event = event.unwrap();
+        let event = event.expect("serde deserialization should succeed");
         assert_eq!(event.kind, LifecycleEventKind::Revoked);
         assert!(p.revoked_law_ids.contains("law-rev-1"));
         assert!(p.active_law_ids().is_empty());
@@ -1354,7 +1354,7 @@ mod tests {
 
         let event = p.supersede_law("law-sup-old", "law-sup-new", "stronger law");
         assert!(event.is_some());
-        let event = event.unwrap();
+        let event = event.expect("serde deserialization should succeed");
         assert_eq!(event.kind, LifecycleEventKind::Superseded);
         assert_eq!(event.superseding_law_id.as_deref(), Some("law-sup-new"));
         assert!(p.superseded_law_ids.contains("law-sup-old"));
@@ -1422,7 +1422,7 @@ mod tests {
 
         let routing = p.routing_for("law-rt-1");
         assert!(routing.is_some());
-        let routing = routing.unwrap();
+        let routing = routing.expect("serde deserialization should succeed");
         assert_eq!(routing.selected_targets.len(), 2);
     }
 
@@ -1457,8 +1457,8 @@ mod tests {
         let r = accepted_result("serde-1", CandidateKind::Invariant);
         p.promote_law(&c, &r);
 
-        let json = serde_json::to_string(&p).unwrap();
-        let back: LifecyclePipeline = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
+        let back: LifecyclePipeline = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(p.pipeline_hash, back.pipeline_hash);
     }
 

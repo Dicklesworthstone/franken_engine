@@ -809,8 +809,8 @@ mod tests {
             VerbosityLevel::Standard,
             VerbosityLevel::GalaxyBrain,
         ] {
-            let json = serde_json::to_string(&v).unwrap();
-            let back: VerbosityLevel = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let back: VerbosityLevel = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(v, back);
         }
     }
@@ -842,8 +842,8 @@ mod tests {
             DecisionDomain::Security,
             DecisionDomain::Governance,
         ] {
-            let json = serde_json::to_string(&d).unwrap();
-            let back: DecisionDomain = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
+            let back: DecisionDomain = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(d, back);
         }
     }
@@ -904,8 +904,8 @@ mod tests {
             threshold_millionths: Some(500),
             threshold_exceeded: false,
         };
-        let json = serde_json::to_string(&eq).unwrap();
-        let back: GoverningEquation = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&eq).expect("serde deserialization should succeed");
+        let back: GoverningEquation = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(eq, back);
     }
 
@@ -934,8 +934,8 @@ mod tests {
             RejectionReason::RegimeRestriction,
             RejectionReason::PolicyForbidden,
         ] {
-            let json = serde_json::to_string(&r).unwrap();
-            let back: RejectionReason = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+            let back: RejectionReason = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(r, back);
         }
     }
@@ -956,7 +956,7 @@ mod tests {
                 .chosen(LaneAction::RouteTo(test_lane("js")), 100_000)
                 .rationale("lowest loss".to_string())
                 .build()
-                .unwrap();
+                .expect("serde deserialization should succeed");
 
         assert_eq!(expl.decision_id, "d-2");
         assert_eq!(expl.domain, DecisionDomain::LaneRouting);
@@ -979,7 +979,7 @@ mod tests {
                 .alternative(alt)
                 .rationale("lowest loss".to_string())
                 .build()
-                .unwrap();
+                .expect("serde deserialization should succeed");
 
         assert_eq!(expl.alternatives.len(), 1);
         assert_eq!(expl.candidates_considered(), 2);
@@ -999,7 +999,7 @@ mod tests {
                 .constraint(constraint)
                 .rationale("budget exhausted".to_string())
                 .build()
-                .unwrap();
+                .expect("serde deserialization should succeed");
 
         assert!(expl.has_binding_constraint());
     }
@@ -1021,7 +1021,7 @@ mod tests {
         .risk(risk)
         .rationale("optimizing for latency".to_string())
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         assert_eq!(expl.total_risk_millionths(), 210_000);
     }
@@ -1044,7 +1044,7 @@ mod tests {
                 .confidence(850_000)
                 .rationale("accepted risk for optimization gains".to_string())
                 .build()
-                .unwrap();
+                .expect("serde deserialization should succeed");
 
         assert_eq!(expl.verbosity, VerbosityLevel::GalaxyBrain);
         assert_eq!(expl.counterfactuals.len(), 1);
@@ -1060,7 +1060,7 @@ mod tests {
                 .chosen(LaneAction::SuspendAdaptive, 0)
                 .rationale("attack regime detected".to_string())
                 .build()
-                .unwrap();
+                .expect("serde deserialization should succeed");
 
         assert_eq!(expl.regime, RegimeLabel::Attack);
     }
@@ -1093,7 +1093,7 @@ mod tests {
         .chosen(LaneAction::RouteTo(test_lane("js")), 100_000)
         .rationale("lowest loss lane".to_string())
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let summary = expl.one_line_summary();
         assert!(summary.contains("d-10"));
@@ -1111,10 +1111,10 @@ mod tests {
         .chosen(LaneAction::RouteTo(test_lane("wasm")), 200_000)
         .rationale("wasm optimized path".to_string())
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
-        let json = serde_json::to_string(&expl).unwrap();
-        let back: DecisionExplanation = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&expl).expect("serde deserialization should succeed");
+        let back: DecisionExplanation = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(expl, back);
     }
 
@@ -1128,7 +1128,7 @@ mod tests {
         .chosen(LaneAction::RouteTo(test_lane("js")), 100_000)
         .rationale("ok".to_string())
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         assert!(!expl.has_binding_constraint());
     }
@@ -1152,7 +1152,7 @@ mod tests {
                 })
                 .rationale("security assessment".to_string())
                 .build()
-                .unwrap();
+                .expect("serde deserialization should succeed");
 
         assert_eq!(expl.total_risk_millionths(), 500_000);
     }
@@ -1177,7 +1177,7 @@ mod tests {
         .chosen(LaneAction::RouteTo(test_lane("js")), 100_000)
         .rationale("test".to_string())
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let eid = expl.explanation_id.clone();
         idx.insert(expl);
@@ -1194,7 +1194,7 @@ mod tests {
                 .chosen(LaneAction::FallbackSafe, 0)
                 .rationale("test".to_string())
                 .build()
-                .unwrap();
+                .expect("serde deserialization should succeed");
 
         idx.insert(expl);
         assert!(idx.get_by_decision("d-21").is_some());
@@ -1216,7 +1216,7 @@ mod tests {
                 .chosen(LaneAction::FallbackSafe, 0)
                 .rationale("test".to_string())
                 .build()
-                .unwrap();
+                .expect("serde deserialization should succeed");
             idx.insert(expl);
         }
 
@@ -1240,7 +1240,7 @@ mod tests {
             .chosen(LaneAction::FallbackSafe, 0)
             .rationale("test".to_string())
             .build()
-            .unwrap();
+            .expect("serde deserialization should succeed");
             idx.insert(expl);
         }
 
@@ -1264,7 +1264,7 @@ mod tests {
                 })
                 .rationale("bound".to_string())
                 .build()
-                .unwrap();
+                .expect("serde deserialization should succeed");
 
         // One without.
         let expl2 = ExplanationBuilder::new(
@@ -1275,7 +1275,7 @@ mod tests {
         .chosen(LaneAction::RouteTo(test_lane("js")), 100_000)
         .rationale("free".to_string())
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         idx.insert(expl1);
         idx.insert(expl2);
@@ -1293,7 +1293,7 @@ mod tests {
                 .chosen(LaneAction::SuspendAdaptive, 0)
                 .rationale("attack".to_string())
                 .build()
-                .unwrap();
+                .expect("serde deserialization should succeed");
 
         let expl2 = ExplanationBuilder::new(
             "d-61".to_string(),
@@ -1304,7 +1304,7 @@ mod tests {
         .chosen(LaneAction::RouteTo(test_lane("js")), 100_000)
         .rationale("normal".to_string())
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         idx.insert(expl1);
         idx.insert(expl2);
@@ -1340,7 +1340,7 @@ mod tests {
                 .chosen(LaneAction::FallbackSafe, 0)
                 .rationale("test".to_string())
                 .build()
-                .unwrap();
+                .expect("serde deserialization should succeed");
             idx.insert(expl);
         }
 
@@ -1358,7 +1358,7 @@ mod tests {
                 .chosen(LaneAction::FallbackSafe, 0)
                 .rationale("test".to_string())
                 .build()
-                .unwrap();
+                .expect("serde deserialization should succeed");
         idx.insert(expl);
 
         let r1 = generate_report(&idx, &test_epoch());
@@ -1378,12 +1378,12 @@ mod tests {
         .confidence(900_000)
         .rationale("optimized".to_string())
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
         idx.insert(expl);
 
         let report = generate_report(&idx, &test_epoch());
-        let json = serde_json::to_string(&report).unwrap();
-        let back: ExplainabilityReport = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let back: ExplainabilityReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report, back);
     }
 
@@ -1400,7 +1400,7 @@ mod tests {
             .confidence(*conf)
             .rationale("test".to_string())
             .build()
-            .unwrap();
+            .expect("serde deserialization should succeed");
             idx.insert(expl);
         }
 
@@ -1418,7 +1418,7 @@ mod tests {
                 .chosen(LaneAction::SuspendAdaptive, 0)
                 .rationale("attack".to_string())
                 .build()
-                .unwrap();
+                .expect("serde deserialization should succeed");
 
         let expl2 = ExplanationBuilder::new(
             "d-101".to_string(),
@@ -1429,7 +1429,7 @@ mod tests {
         .chosen(LaneAction::RouteTo(test_lane("js")), 100_000)
         .rationale("normal".to_string())
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         idx.insert(expl1);
         idx.insert(expl2);
@@ -1457,7 +1457,7 @@ mod tests {
             equations: vec![],
             verbosity: VerbosityLevel::Standard,
         })
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         assert_eq!(expl.domain, DecisionDomain::LaneRouting);
         assert!(expl.rationale.contains("js"));
@@ -1488,7 +1488,7 @@ mod tests {
             }],
             verbosity: VerbosityLevel::GalaxyBrain,
         })
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         assert_eq!(expl.domain, DecisionDomain::Fallback);
         assert!(expl.rationale.contains("Demoted"));
@@ -1507,8 +1507,8 @@ mod tests {
             binding: true,
             slack_millionths: 0,
         };
-        let json = serde_json::to_string(&c).unwrap();
-        let back: ConstraintInteraction = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let back: ConstraintInteraction = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c, back);
     }
 
@@ -1522,8 +1522,8 @@ mod tests {
             belief_millionths: 700_000,
             contribution_millionths: 210_000,
         };
-        let json = serde_json::to_string(&r).unwrap();
-        let back: RiskBreakdown = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let back: RiskBreakdown = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 
@@ -1538,8 +1538,8 @@ mod tests {
             would_trigger_guardrail: false,
             narrative: "safe mode would avoid all risk".to_string(),
         };
-        let json = serde_json::to_string(&cf).unwrap();
-        let back: CounterfactualOutcome = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&cf).expect("serde deserialization should succeed");
+        let back: CounterfactualOutcome = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cf, back);
     }
 
@@ -1553,8 +1553,8 @@ mod tests {
             rejection_reason: RejectionReason::HigherLoss,
             detail: "wasm lane has higher loss".to_string(),
         };
-        let json = serde_json::to_string(&alt).unwrap();
-        let back: ExplainedAlternative = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&alt).expect("serde deserialization should succeed");
+        let back: ExplainedAlternative = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(alt, back);
     }
 
@@ -1572,7 +1572,7 @@ mod tests {
         .chosen(LaneAction::FallbackSafe, 0)
         .rationale("minimal explanation".to_string())
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         assert_eq!(expl.verbosity, VerbosityLevel::Minimal);
         assert_eq!(expl.confidence_millionths, MILLION);
@@ -1597,7 +1597,7 @@ mod tests {
             });
         }
 
-        let expl = builder.build().unwrap();
+        let expl = builder.build().expect("serde deserialization should succeed");
         assert_eq!(expl.candidates_considered(), 6);
     }
 
@@ -1626,7 +1626,7 @@ mod tests {
         })
         .rationale("test".to_string())
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         // 0 alternatives.
         let expl2 =
@@ -1634,7 +1634,7 @@ mod tests {
                 .chosen(LaneAction::FallbackSafe, 0)
                 .rationale("test".to_string())
                 .build()
-                .unwrap();
+                .expect("serde deserialization should succeed");
 
         idx.insert(expl1);
         idx.insert(expl2);
@@ -1679,7 +1679,7 @@ mod tests {
                 .chosen(LaneAction::FallbackSafe, 0)
                 .rationale("test rationale".to_string())
                 .build()
-                .unwrap();
+                .expect("serde deserialization should succeed");
         let eid = expl.explanation_id.clone();
         idx.insert(expl);
         assert_eq!(idx.len(), 1);
@@ -1698,8 +1698,8 @@ mod tests {
             threshold_millionths: Some(300_000),
             threshold_exceeded: false,
         };
-        let json = serde_json::to_string(&eq).unwrap();
-        let back: GoverningEquation = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&eq).expect("serde deserialization should succeed");
+        let back: GoverningEquation = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(eq, back);
     }
 
@@ -1794,8 +1794,8 @@ mod tests {
         .regime(RegimeLabel::Degraded)
         .confidence(750_000)
         .posterior("factor_a".to_string(), 400_000);
-        let json = serde_json::to_string(&builder).unwrap();
-        let back: ExplanationBuilder = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&builder).expect("serde deserialization should succeed");
+        let back: ExplanationBuilder = serde_json::from_str(&json).expect("serde deserialization should succeed");
         // Build both and compare: chosen_action not set so both return None.
         assert!(back.build().is_none());
     }
@@ -1811,11 +1811,11 @@ mod tests {
         .chosen(LaneAction::FallbackSafe, 0)
         .rationale("serde test".to_string())
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
         idx.insert(expl);
 
-        let json = serde_json::to_string(&idx).unwrap();
-        let back: ExplanationIndex = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&idx).expect("serde deserialization should succeed");
+        let back: ExplanationIndex = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.len(), 1);
         assert!(back.get_by_decision("d-idx-ser").is_some());
     }
@@ -1841,7 +1841,7 @@ mod tests {
             .chosen(LaneAction::FallbackSafe, 0)
             .rationale("test".to_string())
             .build()
-            .unwrap();
+            .expect("serde deserialization should succeed");
             idx.insert(expl);
         }
         let report = generate_report(&idx, &test_epoch());
@@ -1860,8 +1860,8 @@ mod tests {
             narrative: "risky lane would violate guardrail".to_string(),
         };
         assert!(cf.would_trigger_guardrail);
-        let json = serde_json::to_string(&cf).unwrap();
-        let back: CounterfactualOutcome = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&cf).expect("serde deserialization should succeed");
+        let back: CounterfactualOutcome = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert!(back.would_trigger_guardrail);
     }
 
@@ -1875,8 +1875,8 @@ mod tests {
         };
         assert!(!c.binding);
         assert_eq!(c.slack_millionths, 250_000);
-        let json = serde_json::to_string(&c).unwrap();
-        let back: ConstraintInteraction = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let back: ConstraintInteraction = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c, back);
     }
 
@@ -1903,7 +1903,7 @@ mod tests {
             equations: vec![eq],
             verbosity: VerbosityLevel::GalaxyBrain,
         })
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(expl.equations.len(), 1);
         assert_eq!(expl.equations[0].name, "expected_loss");
         assert_eq!(expl.verbosity, VerbosityLevel::GalaxyBrain);
@@ -1921,7 +1921,7 @@ mod tests {
             constraints: vec![],
             verbosity: VerbosityLevel::Minimal,
         })
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert!(!expl.has_binding_constraint());
         assert!(expl.constraints.is_empty());
     }
@@ -1937,7 +1937,7 @@ mod tests {
         .chosen(LaneAction::RouteTo(test_lane("js")), 100_000)
         .rationale("first".to_string())
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let expl2 = ExplanationBuilder::new(
             "d-ow".to_string(),
             test_epoch(),
@@ -1946,12 +1946,12 @@ mod tests {
         .chosen(LaneAction::RouteTo(test_lane("wasm")), 200_000)
         .rationale("second".to_string())
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
         idx.insert(expl1);
         idx.insert(expl2);
         // Same decision_id + epoch + domain → same explanation_id → overwrite.
         assert_eq!(idx.len(), 1);
-        let retrieved = idx.get_by_decision("d-ow").unwrap();
+        let retrieved = idx.get_by_decision("d-ow").expect("serde deserialization should succeed");
         assert_eq!(retrieved.rationale, "second");
     }
 
@@ -1966,7 +1966,7 @@ mod tests {
         .chosen(LaneAction::FallbackSafe, 0)
         .rationale("epoch 10".to_string())
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
         idx.insert(expl);
 
         let report = generate_report(&idx, &SecurityEpoch::from_raw(99));
@@ -2028,7 +2028,7 @@ mod tests {
         .posterior("latency".to_string(), 300_000)
         .confidence(850_000)
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         assert_eq!(expl.verbosity, VerbosityLevel::GalaxyBrain);
         assert_eq!(expl.regime, RegimeLabel::Degraded);
@@ -2076,7 +2076,7 @@ mod tests {
         .posterior("factor_b".to_string(), 400_000)
         .posterior("factor_c".to_string(), 200_000)
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         assert_eq!(expl.counterfactuals.len(), 3);
         assert_eq!(expl.posterior_millionths.len(), 3);
@@ -2110,7 +2110,7 @@ mod tests {
             contribution_millionths: 80_000,
         })
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         assert_eq!(expl.total_risk_millionths(), 320_000);
         assert_eq!(expl.risk_breakdown.len(), 3);
@@ -2126,7 +2126,7 @@ mod tests {
         .chosen(LaneAction::FallbackSafe, 0)
         .rationale("no risk".to_string())
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(expl.total_risk_millionths(), 0);
     }
 
@@ -2156,7 +2156,7 @@ mod tests {
                 })
                 .rationale("multiple constraints".to_string())
                 .build()
-                .unwrap();
+                .expect("serde deserialization should succeed");
         idx.insert(expl);
 
         let report = generate_report(&idx, &test_epoch());
@@ -2174,8 +2174,8 @@ mod tests {
             RejectionReason::PolicyForbidden,
         ];
         for r in &reasons {
-            let json = serde_json::to_string(r).unwrap();
-            let back: RejectionReason = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(r).expect("serde deserialization should succeed");
+            let back: RejectionReason = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*r, back);
         }
         // Ordering: HigherLoss < GuardrailViolation < ... < PolicyForbidden
@@ -2201,8 +2201,8 @@ mod tests {
                 rejection_reason: *reason,
                 detail: format!("rejected for {reason}"),
             };
-            let json = serde_json::to_string(&alt).unwrap();
-            let back: ExplainedAlternative = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&alt).expect("serde deserialization should succeed");
+            let back: ExplainedAlternative = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(alt, back);
         }
     }
@@ -2226,7 +2226,7 @@ mod tests {
         .chosen(LaneAction::FallbackSafe, 0)
         .rationale("test".to_string())
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
         idx.insert(expl);
 
         assert!(idx.by_epoch(&SecurityEpoch::from_raw(999)).is_empty());
@@ -2239,7 +2239,7 @@ mod tests {
                 .chosen(LaneAction::FallbackSafe, 42_000)
                 .rationale("for testing".to_string())
                 .build()
-                .unwrap();
+                .expect("serde deserialization should succeed");
         let summary = expl.one_line_summary();
         assert!(summary.contains("42000"));
         assert!(summary.contains("fallback"));
@@ -2292,10 +2292,10 @@ mod tests {
         .posterior("threat_level".to_string(), 900_000)
         .confidence(950_000)
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
-        let json = serde_json::to_string_pretty(&expl).unwrap();
-        let back: DecisionExplanation = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string_pretty(&expl).expect("serde deserialization should succeed");
+        let back: DecisionExplanation = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(expl, back);
     }
 
@@ -2314,8 +2314,8 @@ mod tests {
             threshold_exceeded: false,
         };
         assert_eq!(eq.parameters.len(), 10);
-        let json = serde_json::to_string(&eq).unwrap();
-        let back: GoverningEquation = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&eq).expect("serde deserialization should succeed");
+        let back: GoverningEquation = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(eq, back);
     }
 
@@ -2338,7 +2338,7 @@ mod tests {
         .chosen(LaneAction::FallbackSafe, 0)
         .rationale("one".to_string())
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
         idx1.insert(expl1);
 
         let mut idx2 = ExplanationIndex::new();
@@ -2347,7 +2347,7 @@ mod tests {
                 .chosen(LaneAction::FallbackSafe, 0)
                 .rationale("two".to_string())
                 .build()
-                .unwrap();
+                .expect("serde deserialization should succeed");
         idx2.insert(expl2);
 
         let r1 = generate_report(&idx1, &test_epoch());
@@ -2378,7 +2378,7 @@ mod tests {
                 .chosen(LaneAction::FallbackSafe, 0)
                 .rationale("cross test".to_string())
                 .build()
-                .unwrap();
+                .expect("serde deserialization should succeed");
             idx.insert(expl);
         }
 

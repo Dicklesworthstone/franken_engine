@@ -890,8 +890,8 @@ mod tests {
     #[test]
     fn lowering_gap_stage_serde_round_trip() {
         for stage in [LoweringGapStage::Ir0ToIr1, LoweringGapStage::Ir1ToIr3] {
-            let json = serde_json::to_string(&stage).unwrap();
-            let back: LoweringGapStage = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&stage).expect("serde deserialization should succeed");
+            let back: LoweringGapStage = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(back, stage);
             assert!(!stage.as_str().is_empty());
         }
@@ -904,8 +904,8 @@ mod tests {
             LoweringGapStatus::OpenPlaceholder,
             LoweringGapStatus::Resolved,
         ] {
-            let json = serde_json::to_string(&status).unwrap();
-            let back: LoweringGapStatus = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&status).expect("serde deserialization should succeed");
+            let back: LoweringGapStatus = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(back, status);
             assert!(!status.as_str().is_empty());
         }
@@ -947,8 +947,8 @@ mod tests {
     #[test]
     fn lowering_gap_site_id_serde_round_trip() {
         for site in LoweringGapSiteId::ALL {
-            let json = serde_json::to_string(&site).unwrap();
-            let back: LoweringGapSiteId = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&site).expect("serde deserialization should succeed");
+            let back: LoweringGapSiteId = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(back, site);
         }
     }
@@ -1006,8 +1006,8 @@ mod tests {
             diagnostic_code: Some("FE-TEST-0001".to_string()),
             detail: None,
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let back: LoweringGapInventoryEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let back: LoweringGapInventoryEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, event);
     }
 
@@ -1036,8 +1036,8 @@ mod tests {
                     .to_string(),
             },
         };
-        let json = serde_json::to_string(&manifest).unwrap();
-        let back: LoweringGapInventoryRunManifest = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&manifest).expect("serde deserialization should succeed");
+        let back: LoweringGapInventoryRunManifest = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, manifest);
     }
 
@@ -1224,8 +1224,8 @@ mod tests {
     fn lowering_gap_stage_as_str_matches_serde_name() {
         let ir0 = LoweringGapStage::Ir0ToIr1;
         let ir1 = LoweringGapStage::Ir1ToIr3;
-        let json0: String = serde_json::from_str(&serde_json::to_string(&ir0).unwrap()).unwrap();
-        let json1: String = serde_json::from_str(&serde_json::to_string(&ir1).unwrap()).unwrap();
+        let json0: String = serde_json::from_str(&serde_json::to_string(&ir0).expect("serde deserialization should succeed")).expect("serde deserialization should succeed");
+        let json1: String = serde_json::from_str(&serde_json::to_string(&ir1).expect("serde deserialization should succeed")).expect("serde deserialization should succeed");
         assert_eq!(json0, ir0.as_str());
         assert_eq!(json1, ir1.as_str());
     }
@@ -1238,7 +1238,7 @@ mod tests {
             LoweringGapStatus::Resolved,
         ] {
             let json: String =
-                serde_json::from_str(&serde_json::to_string(&status).unwrap()).unwrap();
+                serde_json::from_str(&serde_json::to_string(&status).expect("serde deserialization should succeed")).expect("serde deserialization should succeed");
             assert_eq!(json, status.as_str());
         }
     }
@@ -1309,11 +1309,11 @@ mod tests {
     fn inventory_content_hash_is_deterministic() {
         let artifacts_a = {
             let out_dir = unique_temp_dir("lowering-gap-hash-a");
-            write_lowering_gap_inventory_bundle(&out_dir, &[]).unwrap()
+            write_lowering_gap_inventory_bundle(&out_dir, &[]).expect("serde deserialization should succeed")
         };
         let artifacts_b = {
             let out_dir = unique_temp_dir("lowering-gap-hash-b");
-            write_lowering_gap_inventory_bundle(&out_dir, &[]).unwrap()
+            write_lowering_gap_inventory_bundle(&out_dir, &[]).expect("serde deserialization should succeed")
         };
         assert_eq!(artifacts_a.inventory_hash, artifacts_b.inventory_hash);
         assert_eq!(artifacts_a.site_count, artifacts_b.site_count);
@@ -1322,7 +1322,7 @@ mod tests {
     #[test]
     fn inventory_hash_is_64_hex_chars() {
         let out_dir = unique_temp_dir("lowering-gap-hash-len");
-        let artifacts = write_lowering_gap_inventory_bundle(&out_dir, &[]).unwrap();
+        let artifacts = write_lowering_gap_inventory_bundle(&out_dir, &[]).expect("serde deserialization should succeed");
         assert_eq!(artifacts.inventory_hash.len(), 64);
         assert!(
             artifacts
@@ -1338,8 +1338,8 @@ mod tests {
         let report = lowering_gap_truth_consumer_parity_report(&inventory, "t1", "d1");
         let events = build_inventory_events(&inventory, &report, "t1", "d1");
         assert_eq!(events.len(), inventory.sites.len() * 3 + 2);
-        assert_eq!(events.first().unwrap().event, "inventory_started");
-        assert_eq!(events.last().unwrap().event, "inventory_completed");
+        assert_eq!(events.first().expect("serde deserialization should succeed").event, "inventory_started");
+        assert_eq!(events.last().expect("serde deserialization should succeed").event, "inventory_completed");
         for event in &events[1..=inventory.sites.len()] {
             assert_eq!(event.event, "gap_site_recorded");
             assert!(event.site_id.is_some());
@@ -1365,8 +1365,8 @@ mod tests {
     fn descriptor_serde_roundtrip_preserves_all_fields() {
         for site in LoweringGapSiteId::ALL {
             let desc = LoweringGapSiteDescriptor::from_site(site);
-            let json = serde_json::to_string(&desc).unwrap();
-            let back: LoweringGapSiteDescriptor = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&desc).expect("serde deserialization should succeed");
+            let back: LoweringGapSiteDescriptor = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(back, desc);
         }
     }
@@ -1413,17 +1413,17 @@ mod tests {
     #[test]
     fn empty_commands_produce_empty_commands_txt() {
         let out_dir = unique_temp_dir("lowering-gap-empty-cmds");
-        let artifacts = write_lowering_gap_inventory_bundle(&out_dir, &[]).unwrap();
-        let commands_txt = fs::read_to_string(&artifacts.commands_path).unwrap();
+        let artifacts = write_lowering_gap_inventory_bundle(&out_dir, &[]).expect("serde deserialization should succeed");
+        let commands_txt = fs::read_to_string(&artifacts.commands_path).expect("serde deserialization should succeed");
         assert!(commands_txt.is_empty());
     }
 
     #[test]
     fn manifest_trace_id_embeds_inventory_hash_prefix() {
         let out_dir = unique_temp_dir("lowering-gap-trace-prefix");
-        let artifacts = write_lowering_gap_inventory_bundle(&out_dir, &[]).unwrap();
+        let artifacts = write_lowering_gap_inventory_bundle(&out_dir, &[]).expect("serde deserialization should succeed");
         let manifest: LoweringGapInventoryRunManifest =
-            serde_json::from_slice(&fs::read(&artifacts.run_manifest_path).unwrap()).unwrap();
+            serde_json::from_slice(&fs::read(&artifacts.run_manifest_path).expect("serde deserialization should succeed")).expect("serde deserialization should succeed");
         let short_hash = &artifacts.inventory_hash[..16];
         assert!(
             manifest.trace_id.contains(short_hash),
@@ -1438,9 +1438,9 @@ mod tests {
     #[test]
     fn artifact_paths_in_manifest_are_relative() {
         let out_dir = unique_temp_dir("lowering-gap-rel-paths");
-        let artifacts = write_lowering_gap_inventory_bundle(&out_dir, &[]).unwrap();
+        let artifacts = write_lowering_gap_inventory_bundle(&out_dir, &[]).expect("serde deserialization should succeed");
         let manifest: LoweringGapInventoryRunManifest =
-            serde_json::from_slice(&fs::read(&artifacts.run_manifest_path).unwrap()).unwrap();
+            serde_json::from_slice(&fs::read(&artifacts.run_manifest_path).expect("serde deserialization should succeed")).expect("serde deserialization should succeed");
         assert!(!manifest.artifact_paths.lowering_gap_inventory.contains('/'));
         assert!(!manifest.artifact_paths.run_manifest.contains('/'));
         assert!(!manifest.artifact_paths.events_jsonl.contains('/'));
@@ -1474,19 +1474,19 @@ mod tests {
 
     #[test]
     fn stage_deserializes_from_explicit_snake_case_json() {
-        let ir0: LoweringGapStage = serde_json::from_str("\"ir0_to_ir1\"").unwrap();
+        let ir0: LoweringGapStage = serde_json::from_str("\"ir0_to_ir1\"").expect("serde deserialization should succeed");
         assert_eq!(ir0, LoweringGapStage::Ir0ToIr1);
-        let ir1: LoweringGapStage = serde_json::from_str("\"ir1_to_ir3\"").unwrap();
+        let ir1: LoweringGapStage = serde_json::from_str("\"ir1_to_ir3\"").expect("serde deserialization should succeed");
         assert_eq!(ir1, LoweringGapStage::Ir1ToIr3);
     }
 
     #[test]
     fn status_deserializes_from_explicit_snake_case_json() {
-        let fc: LoweringGapStatus = serde_json::from_str("\"fail_closed\"").unwrap();
+        let fc: LoweringGapStatus = serde_json::from_str("\"fail_closed\"").expect("serde deserialization should succeed");
         assert_eq!(fc, LoweringGapStatus::FailClosed);
-        let op: LoweringGapStatus = serde_json::from_str("\"open_placeholder\"").unwrap();
+        let op: LoweringGapStatus = serde_json::from_str("\"open_placeholder\"").expect("serde deserialization should succeed");
         assert_eq!(op, LoweringGapStatus::OpenPlaceholder);
-        let res: LoweringGapStatus = serde_json::from_str("\"resolved\"").unwrap();
+        let res: LoweringGapStatus = serde_json::from_str("\"resolved\"").expect("serde deserialization should succeed");
         assert_eq!(res, LoweringGapStatus::Resolved);
     }
 
@@ -1629,7 +1629,7 @@ mod tests {
         // A path with no file_name component (e.g., root or empty)
         let target = Path::new("/");
         let temp = unique_temp_path(target);
-        let name = temp.file_name().unwrap().to_str().unwrap();
+        let name = temp.file_name().expect("serde deserialization should succeed").to_str().expect("serde deserialization should succeed");
         assert!(name.starts_with(".artifact"));
         assert!(name.ends_with(".tmp"));
     }
@@ -1638,14 +1638,14 @@ mod tests {
     fn unique_temp_path_preserves_parent_directory() {
         let target = Path::new("/some/deep/path/inventory.json");
         let temp = unique_temp_path(target);
-        assert_eq!(temp.parent().unwrap(), Path::new("/some/deep/path"));
+        assert_eq!(temp.parent().expect("serde deserialization should succeed"), Path::new("/some/deep/path"));
     }
 
     #[test]
     fn unique_temp_path_name_starts_with_dot_and_ends_with_tmp() {
         let target = Path::new("output/result.json");
         let temp = unique_temp_path(target);
-        let name = temp.file_name().unwrap().to_str().unwrap();
+        let name = temp.file_name().expect("serde deserialization should succeed").to_str().expect("serde deserialization should succeed");
         assert!(
             name.starts_with(".result.json."),
             "temp name should start with dot + original filename: {name}"
@@ -1672,7 +1672,7 @@ mod tests {
             diagnostic_code: None,
             detail: None,
         };
-        let json = serde_json::to_string(&event).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
         assert!(
             !json.contains("site_id"),
             "None site_id should be omitted from JSON"
@@ -1700,7 +1700,7 @@ mod tests {
             diagnostic_code: Some("DC-0001".to_string()),
             detail: Some("some detail".to_string()),
         };
-        let json = serde_json::to_string(&event).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
         assert!(json.contains("\"site_id\""));
         assert!(json.contains("\"diagnostic_code\""));
         assert!(json.contains("\"detail\""));
@@ -1709,7 +1709,7 @@ mod tests {
     #[test]
     fn event_deserialize_with_missing_optional_fields() {
         let json = r#"{"schema_version":"v","trace_id":"t","decision_id":"d","policy_id":"p","component":"c","event":"e","outcome":"o"}"#;
-        let event: LoweringGapInventoryEvent = serde_json::from_str(json).unwrap();
+        let event: LoweringGapInventoryEvent = serde_json::from_str(json).expect("serde deserialization should succeed");
         assert!(event.error_code.is_none());
         assert!(event.consumer_name.is_none());
         assert!(event.site_id.is_none());
@@ -1720,8 +1720,8 @@ mod tests {
     #[test]
     fn inventory_serde_roundtrip_preserves_all_sites() {
         let inventory = lowering_gap_inventory();
-        let json = serde_json::to_string(&inventory).unwrap();
-        let back: LoweringGapInventory = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&inventory).expect("serde deserialization should succeed");
+        let back: LoweringGapInventory = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, inventory);
         assert_eq!(back.sites.len(), LoweringGapSiteId::ALL.len());
         for (orig, rt) in inventory.sites.iter().zip(back.sites.iter()) {
@@ -1868,10 +1868,10 @@ mod tests {
         let inventory = lowering_gap_inventory();
         let report = lowering_gap_truth_consumer_parity_report(&inventory, "t", "d");
         let events = build_inventory_events(&inventory, &report, "t", "d");
-        let completed = events.last().unwrap();
+        let completed = events.last().expect("serde deserialization should succeed");
         assert_eq!(completed.event, "inventory_completed");
         assert_eq!(completed.outcome, "completed");
-        let detail = completed.detail.as_ref().unwrap();
+        let detail = completed.detail.as_ref().expect("serde deserialization should succeed");
         assert!(detail.contains("6 sites recorded"));
         assert!(detail.contains("0 fail-closed"));
         assert!(detail.contains("0 open placeholders"));
@@ -1888,11 +1888,11 @@ mod tests {
         assert_eq!(site_events.len(), inventory.sites.len());
         for (i, event) in site_events.iter().enumerate() {
             assert_eq!(
-                event.site_id.as_deref().unwrap(),
+                event.site_id.as_deref().expect("serde deserialization should succeed"),
                 inventory.sites[i].site_id,
             );
             assert_eq!(
-                event.diagnostic_code.as_deref().unwrap(),
+                event.diagnostic_code.as_deref().expect("serde deserialization should succeed"),
                 inventory.sites[i].diagnostic_code,
             );
             assert_eq!(event.outcome, inventory.sites[i].status.as_str());
@@ -1910,8 +1910,8 @@ mod tests {
             step_logs: "step_logs".to_string(),
             consumer_parity_report: "parity.json".to_string(),
         };
-        let json = serde_json::to_string(&paths).unwrap();
-        let back: LoweringGapInventoryArtifactPaths = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&paths).expect("serde deserialization should succeed");
+        let back: LoweringGapInventoryArtifactPaths = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, paths);
     }
 
@@ -1919,8 +1919,8 @@ mod tests {
     fn write_bundle_idempotent_on_second_call_same_dir() {
         let out_dir = unique_temp_dir("lowering-gap-idempotent");
         let commands = vec!["cmd1".to_string()];
-        let first = write_lowering_gap_inventory_bundle(&out_dir, &commands).unwrap();
-        let second = write_lowering_gap_inventory_bundle(&out_dir, &commands).unwrap();
+        let first = write_lowering_gap_inventory_bundle(&out_dir, &commands).expect("serde deserialization should succeed");
+        let second = write_lowering_gap_inventory_bundle(&out_dir, &commands).expect("serde deserialization should succeed");
         assert_eq!(first.inventory_hash, second.inventory_hash);
         assert_eq!(first.site_count, second.site_count);
     }
@@ -1933,8 +1933,8 @@ mod tests {
             "path/to/binary --arg=a&b".to_string(),
             "line-with-newline-in-arg\ttab".to_string(),
         ];
-        let artifacts = write_lowering_gap_inventory_bundle(&out_dir, &commands).unwrap();
-        let content = fs::read_to_string(&artifacts.commands_path).unwrap();
+        let artifacts = write_lowering_gap_inventory_bundle(&out_dir, &commands).expect("serde deserialization should succeed");
+        let content = fs::read_to_string(&artifacts.commands_path).expect("serde deserialization should succeed");
         let lines: Vec<&str> = content.lines().collect();
         assert_eq!(lines.len(), 3);
         assert_eq!(lines[0], commands[0]);

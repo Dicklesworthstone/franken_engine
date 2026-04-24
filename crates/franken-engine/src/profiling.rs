@@ -283,8 +283,8 @@ mod tests {
         profiler.record_instruction(&load_int);
 
         let report = profiler.generate_report("test".to_string());
-        assert_eq!(report.instruction_stats.get("LoadInt").unwrap().count, 2);
-        assert_eq!(report.instruction_stats.get("Add").unwrap().count, 1);
+        assert_eq!(report.instruction_stats.get("LoadInt").expect("serde deserialization should succeed").count, 2);
+        assert_eq!(report.instruction_stats.get("Add").expect("serde deserialization should succeed").count, 1);
     }
 
     #[test]

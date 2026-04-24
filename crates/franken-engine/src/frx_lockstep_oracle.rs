@@ -748,7 +748,7 @@ fn canonical_event_signature(event: &FrxTraceEvent) -> FrxTraceEventSignature {
 
 fn canonicalize_token(value: &str) -> String {
     let trimmed = value.trim().to_ascii_lowercase();
-    let first_segment = trimmed.split(':').next().unwrap();
+    let first_segment = trimmed.split(':').next().expect("serde deserialization should succeed");
 
     let mut normalized = String::with_capacity(first_segment.len());
     let mut previous_underscore = false;
@@ -1099,8 +1099,8 @@ mod tests {
             FrxDivergenceClass::SchemaViolation,
         ];
         for variant in &variants {
-            let json = serde_json::to_string(variant).unwrap();
-            let back: FrxDivergenceClass = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(variant).expect("serde deserialization should succeed");
+            let back: FrxDivergenceClass = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*variant, back);
         }
     }
@@ -1309,7 +1309,7 @@ mod tests {
     fn compare_traces_event_count_mismatch() {
         let react = mk_trace(vec![mk_event(1, 100)]);
         let franken = mk_trace(vec![mk_event(1, 100), mk_event(2, 200)]);
-        let div = compare_traces(&react, &franken).unwrap();
+        let div = compare_traces(&react, &franken).expect("serde deserialization should succeed");
         assert_eq!(div.class, FrxDivergenceClass::EventSequence);
         assert!(div.message.contains("event count mismatch"));
     }
@@ -1320,7 +1320,7 @@ mod tests {
         let mut franken_events = vec![mk_event(1, 100)];
         franken_events[0].outcome = "fail".to_string();
         let franken = mk_trace(franken_events);
-        let div = compare_traces(&react, &franken).unwrap();
+        let div = compare_traces(&react, &franken).expect("serde deserialization should succeed");
         assert!(div.event_index.is_some());
         assert_eq!(div.event_index, Some(0));
         assert!(div.react_signature.is_some());
@@ -1334,7 +1334,7 @@ mod tests {
         let mut franken = mk_trace(events);
         react.outcome = "pass".to_string();
         franken.outcome = "fail".to_string();
-        let div = compare_traces(&react, &franken).unwrap();
+        let div = compare_traces(&react, &franken).expect("serde deserialization should succeed");
         assert_eq!(div.class, FrxDivergenceClass::EventSequence);
         assert!(div.message.contains("outcome mismatch"));
     }
@@ -1346,7 +1346,7 @@ mod tests {
         let mut franken = mk_trace(events);
         react.error_code = Some("ERR-01".to_string());
         franken.error_code = None;
-        let div = compare_traces(&react, &franken).unwrap();
+        let div = compare_traces(&react, &franken).expect("serde deserialization should succeed");
         assert_eq!(div.class, FrxDivergenceClass::SchemaViolation);
         assert!(div.message.contains("error_code mismatch"));
     }
@@ -1358,7 +1358,7 @@ mod tests {
     #[test]
     fn evaluate_case_pass() {
         let input = mk_case_input();
-        let result = evaluate_case(input).unwrap();
+        let result = evaluate_case(input).expect("serde deserialization should succeed");
         assert!(result.pass);
         assert!(result.divergence.is_none());
         assert_eq!(result.fixture_ref, "fixture-a");
@@ -1417,7 +1417,7 @@ mod tests {
     fn evaluate_case_with_divergence() {
         let mut input = mk_case_input();
         input.franken_trace.events[0].outcome = "fail".to_string();
-        let result = evaluate_case(input).unwrap();
+        let result = evaluate_case(input).expect("serde deserialization should succeed");
         assert!(!result.pass);
         assert!(result.divergence.is_some());
     }
@@ -1426,7 +1426,7 @@ mod tests {
     fn evaluate_case_trims_fixture_ref() {
         let mut input = mk_case_input();
         input.fixture_ref = "  fixture-a  ".to_string();
-        let result = evaluate_case(input).unwrap();
+        let result = evaluate_case(input).expect("serde deserialization should succeed");
         assert_eq!(result.fixture_ref, "fixture-a");
     }
 
@@ -1616,7 +1616,7 @@ mod tests {
         assert_eq!(result.react_trace_id, "react-trace");
         assert_eq!(result.franken_trace_id, "franken-trace");
         assert!(result.replay_command.contains("rch cargo run"));
-        let div = result.divergence.unwrap();
+        let div = result.divergence.expect("serde deserialization should succeed");
         assert_eq!(div.class, FrxDivergenceClass::SchemaViolation);
         assert!(div.message.contains("bad"));
     }
@@ -1636,7 +1636,7 @@ mod tests {
         );
         assert!(!result.pass);
         assert_eq!(result.franken_trace_id, "missing");
-        let div = result.divergence.unwrap();
+        let div = result.divergence.expect("serde deserialization should succeed");
         assert_eq!(div.class, FrxDivergenceClass::SchemaViolation);
         assert!(div.message.contains("missing FrankenReact trace file"));
     }
@@ -1679,7 +1679,7 @@ mod tests {
     #[test]
     fn fixture_ref_from_valid_filename() {
         let path = PathBuf::from("/traces/my-fixture.trace.json");
-        let fixture = fixture_ref_from_trace_filename(&path).unwrap();
+        let fixture = fixture_ref_from_trace_filename(&path).expect("serde deserialization should succeed");
         assert_eq!(fixture, "my-fixture");
     }
 
@@ -1738,33 +1738,33 @@ mod tests {
     #[test]
     fn serde_roundtrip_observable_trace() {
         let trace = mk_trace(vec![mk_event(1, 100)]);
-        let json = serde_json::to_string(&trace).unwrap();
-        let back: FrxObservableTrace = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&trace).expect("serde deserialization should succeed");
+        let back: FrxObservableTrace = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(trace, back);
     }
 
     #[test]
     fn serde_roundtrip_trace_event() {
         let event = mk_event(5, 500);
-        let json = serde_json::to_string(&event).unwrap();
-        let back: FrxTraceEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let back: FrxTraceEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
     }
 
     #[test]
     fn serde_roundtrip_case_result() {
-        let result = evaluate_case(mk_case_input()).unwrap();
-        let json = serde_json::to_string(&result).unwrap();
-        let back: FrxLockstepCaseResult = serde_json::from_str(&json).unwrap();
+        let result = evaluate_case(mk_case_input()).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let back: FrxLockstepCaseResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, back);
     }
 
     #[test]
     fn serde_roundtrip_summary() {
-        let results = vec![evaluate_case(mk_case_input()).unwrap()];
+        let results = vec![evaluate_case(mk_case_input()).expect("serde deserialization should succeed")];
         let summary = summarize(&results);
-        let json = serde_json::to_string(&summary).unwrap();
-        let back: FrxLockstepSummary = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
+        let back: FrxLockstepSummary = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(summary, back);
     }
 
@@ -1783,14 +1783,14 @@ mod tests {
             }),
             franken_signature: None,
         };
-        let json = serde_json::to_string(&detail).unwrap();
-        let back: FrxDivergenceDetail = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&detail).expect("serde deserialization should succeed");
+        let back: FrxDivergenceDetail = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(detail, back);
     }
 
     #[test]
     fn serde_roundtrip_report() {
-        let results = vec![evaluate_case(mk_case_input()).unwrap()];
+        let results = vec![evaluate_case(mk_case_input()).expect("serde deserialization should succeed")];
         let summary = summarize(&results);
         let report = FrxLockstepReport {
             schema_version: FRX_LOCKSTEP_REPORT_SCHEMA_VERSION.to_string(),
@@ -1804,8 +1804,8 @@ mod tests {
             summary,
             case_results: results,
         };
-        let json = serde_json::to_string(&report).unwrap();
-        let back: FrxLockstepReport = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let back: FrxLockstepReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report, back);
     }
 
@@ -1816,12 +1816,12 @@ mod tests {
     #[test]
     fn load_trace_file_valid() {
         let trace = mk_trace(vec![mk_event(1, 0)]);
-        let json = serde_json::to_string(&trace).unwrap();
+        let json = serde_json::to_string(&trace).expect("serde deserialization should succeed");
         let dir = std::env::temp_dir().join("frx_lockstep_test_load");
         let _ = fs::create_dir_all(&dir);
         let path = dir.join("test.trace.json");
-        fs::write(&path, &json).unwrap();
-        let loaded = load_trace_file(&path).unwrap();
+        fs::write(&path, &json).expect("serde deserialization should succeed");
+        let loaded = load_trace_file(&path).expect("serde deserialization should succeed");
         assert_eq!(loaded.trace_id, "trace-1");
         let _ = fs::remove_dir_all(&dir);
     }
@@ -1838,7 +1838,7 @@ mod tests {
         let dir = std::env::temp_dir().join("frx_lockstep_test_badjson");
         let _ = fs::create_dir_all(&dir);
         let path = dir.join("bad.trace.json");
-        fs::write(&path, "not json").unwrap();
+        fs::write(&path, "not json").expect("serde deserialization should succeed");
         let err = load_trace_file(&path).unwrap_err();
         assert!(err.to_string().contains("failed to parse"));
         let _ = fs::remove_dir_all(&dir);
@@ -1892,8 +1892,8 @@ mod tests {
             decision_path: "fast-path".into(),
             outcome: "success".into(),
         };
-        let json = serde_json::to_string(&sig).unwrap();
-        let back: FrxTraceEventSignature = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&sig).expect("serde deserialization should succeed");
+        let back: FrxTraceEventSignature = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(sig, back);
     }
 }

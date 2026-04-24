@@ -1328,8 +1328,8 @@ mod tests {
             ExecutionTier::Specialized,
             ExecutionTier::Deoptimized,
         ] {
-            let json = serde_json::to_string(&tier).unwrap();
-            let restored: ExecutionTier = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&tier).expect("serde deserialization should succeed");
+            let restored: ExecutionTier = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(tier, restored);
         }
     }
@@ -1345,8 +1345,8 @@ mod tests {
             DeoptReason::MissingFeedback,
             DeoptReason::PolicyRejection,
         ] {
-            let json = serde_json::to_string(&reason).unwrap();
-            let restored: DeoptReason = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&reason).expect("serde deserialization should succeed");
+            let restored: DeoptReason = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(reason, restored);
         }
     }
@@ -1360,8 +1360,8 @@ mod tests {
             ProbeKind::CallFrequency,
             ProbeKind::InlineCacheState,
         ] {
-            let json = serde_json::to_string(&kind).unwrap();
-            let restored: ProbeKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
+            let restored: ProbeKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(kind, restored);
         }
     }
@@ -1378,8 +1378,8 @@ mod tests {
             &SecurityEpoch::from_raw(1),
         );
 
-        let json = serde_json::to_string(&profile).unwrap();
-        let restored: TierProfile = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&profile).expect("serde deserialization should succeed");
+        let restored: TierProfile = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(profile, restored);
     }
 
@@ -1389,16 +1389,16 @@ mod tests {
         let epoch = SecurityEpoch::from_raw(5);
         let report = build_eligibility_report(&[], &policy, &epoch);
 
-        let json = serde_json::to_string(&report).unwrap();
-        let restored: TierEligibilityReport = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let restored: TierEligibilityReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report, restored);
     }
 
     #[test]
     fn serde_roundtrip_policy() {
         let policy = TierEligibilityPolicy::default();
-        let json = serde_json::to_string(&policy).unwrap();
-        let restored: TierEligibilityPolicy = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
+        let restored: TierEligibilityPolicy = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(policy, restored);
     }
 
@@ -1677,8 +1677,8 @@ mod tests {
             TierTransitionReason::PolicyOverride,
             TierTransitionReason::ManualProbe,
         ] {
-            let json = serde_json::to_string(&reason).unwrap();
-            let restored: TierTransitionReason = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&reason).expect("serde deserialization should succeed");
+            let restored: TierTransitionReason = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(reason, restored);
         }
     }

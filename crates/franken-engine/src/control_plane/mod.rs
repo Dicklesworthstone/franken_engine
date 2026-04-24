@@ -2009,8 +2009,8 @@ mod tests {
             DecisionVerdict::Deny,
             DecisionVerdict::Timeout,
         ] {
-            let json = serde_json::to_string(&variant).unwrap();
-            let back: DecisionVerdict = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&variant).expect("serde deserialization should succeed");
+            let back: DecisionVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(variant, back);
         }
     }
@@ -2038,8 +2038,8 @@ mod tests {
     #[test]
     fn decision_request_serde_round_trip() {
         let req = request(42);
-        let json = serde_json::to_string(&req).unwrap();
-        let back: DecisionRequest = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&req).expect("serde deserialization should succeed");
+        let back: DecisionRequest = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(req, back);
     }
 
@@ -2125,7 +2125,7 @@ mod tests {
 
         emitter
             .emit(&req, evidence(req.ts_unix_ms, "allow"))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(emitter.entries().len(), 1);
         assert_eq!(emitter.events().len(), 1);
         assert_eq!(emitter.events()[0].event, "evidence_emit");
@@ -2146,8 +2146,8 @@ mod tests {
             outcome: "ok".to_string(),
             error_code: None,
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let back: AdapterEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let back: AdapterEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
     }
 
@@ -2157,9 +2157,9 @@ mod tests {
     fn mock_decision_contract_defaults_to_timeout_when_exhausted() {
         let req = request(40);
         let mut decision = MockDecisionContract::new([DecisionVerdict::Allow]);
-        assert_eq!(decision.evaluate(&req).unwrap(), DecisionVerdict::Allow);
+        assert_eq!(decision.evaluate(&req).expect("serde deserialization should succeed"), DecisionVerdict::Allow);
         // Second call exhausts the queue, should default to Timeout
-        assert_eq!(decision.evaluate(&req).unwrap(), DecisionVerdict::Timeout);
+        assert_eq!(decision.evaluate(&req).expect("serde deserialization should succeed"), DecisionVerdict::Timeout);
     }
 
     // -- Enrichment: error trait --
@@ -2216,8 +2216,8 @@ mod tests {
             outcome: "fail".to_string(),
             error_code: Some("DG_TIMEOUT".to_string()),
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let back: AdapterEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let back: AdapterEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
         assert_eq!(back.error_code.as_deref(), Some("DG_TIMEOUT"));
     }
@@ -2236,8 +2236,8 @@ mod tests {
     #[test]
     fn mock_budget_tracks_cumulative_consumption() {
         let mut b = MockBudget::new(100);
-        b.consume(30).unwrap();
-        b.consume(20).unwrap();
+        b.consume(30).expect("serde deserialization should succeed");
+        b.consume(20).expect("serde deserialization should succeed");
         assert_eq!(b.remaining_ms(), 50);
         assert_eq!(b.consumed_ms(), 50);
     }
@@ -2412,7 +2412,7 @@ mod tests {
             let req = request(seed);
             emitter
                 .emit(&req, evidence(req.ts_unix_ms, "allow"))
-                .unwrap();
+                .expect("serde deserialization should succeed");
         }
         assert_eq!(emitter.entries().len(), 5);
         assert_eq!(emitter.events().len(), 5);
@@ -2513,7 +2513,7 @@ mod tests {
     #[test]
     fn decision_request_json_field_presence() {
         let req = request(300);
-        let json = serde_json::to_string(&req).unwrap();
+        let json = serde_json::to_string(&req).expect("serde deserialization should succeed");
         assert!(json.contains("\"decision_id\""));
         assert!(json.contains("\"policy_id\""));
         assert!(json.contains("\"trace_id\""));
@@ -2534,7 +2534,7 @@ mod tests {
             outcome: "o_fp".to_string(),
             error_code: Some("ec_fp".to_string()),
         };
-        let json = serde_json::to_string(&event).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
         assert!(json.contains("\"trace_id\""));
         assert!(json.contains("\"decision_id\""));
         assert!(json.contains("\"policy_id\""));
@@ -2546,9 +2546,9 @@ mod tests {
 
     #[test]
     fn decision_verdict_json_values_are_quoted_strings() {
-        let allow_json = serde_json::to_string(&DecisionVerdict::Allow).unwrap();
-        let deny_json = serde_json::to_string(&DecisionVerdict::Deny).unwrap();
-        let timeout_json = serde_json::to_string(&DecisionVerdict::Timeout).unwrap();
+        let allow_json = serde_json::to_string(&DecisionVerdict::Allow).expect("serde deserialization should succeed");
+        let deny_json = serde_json::to_string(&DecisionVerdict::Deny).expect("serde deserialization should succeed");
+        let timeout_json = serde_json::to_string(&DecisionVerdict::Timeout).expect("serde deserialization should succeed");
         assert!(allow_json.contains("Allow"));
         assert!(deny_json.contains("Deny"));
         assert!(timeout_json.contains("Timeout"));
@@ -2571,8 +2571,8 @@ mod tests {
             outcome: "o_rt".to_string(),
             error_code: None,
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let back: AdapterEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let back: AdapterEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
         assert!(back.error_code.is_none());
     }
@@ -2727,7 +2727,7 @@ mod tests {
             DecisionVerdict::Timeout,
         ]
         .iter()
-        .map(|v| serde_json::to_string(v).unwrap())
+        .map(|v| serde_json::to_string(v).expect("serde deserialization should succeed"))
         .collect();
         let set: std::collections::BTreeSet<&str> = jsons.iter().map(|s| s.as_str()).collect();
         assert_eq!(
@@ -2740,16 +2740,16 @@ mod tests {
     #[test]
     fn decision_verdict_serde_roundtrip_deny() {
         let v = DecisionVerdict::Deny;
-        let json = serde_json::to_string(&v).unwrap();
-        let back: DecisionVerdict = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let back: DecisionVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, back);
     }
 
     #[test]
     fn decision_verdict_serde_roundtrip_timeout() {
         let v = DecisionVerdict::Timeout;
-        let json = serde_json::to_string(&v).unwrap();
-        let back: DecisionVerdict = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let back: DecisionVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, back);
     }
 
@@ -2797,12 +2797,12 @@ mod tests {
         let mut original = InMemoryEvidenceEmitter::new();
         original
             .emit(&req, evidence(req.ts_unix_ms, "allow"))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let cloned = original.clone();
         // After clone, emitting into original doesn't affect clone
         original
             .emit(&req, evidence(req.ts_unix_ms + 1, "deny"))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(original.entries().len(), 2);
         assert_eq!(cloned.entries().len(), 1);
     }
@@ -2820,7 +2820,7 @@ mod tests {
             outcome: "fs_out".to_string(),
             error_code: Some("fs_ec".to_string()),
         };
-        let json = serde_json::to_string(&event).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
         // All six mandatory fields must appear by name
         for field in &[
             "trace_id",
@@ -2841,9 +2841,9 @@ mod tests {
     #[test]
     fn decision_request_json_field_names_stable_keys() {
         let req = request(800);
-        let json = serde_json::to_string(&req).unwrap();
-        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
-        let obj = value.as_object().unwrap();
+        let json = serde_json::to_string(&req).expect("serde deserialization should succeed");
+        let value: serde_json::Value = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let obj = value.as_object().expect("serde deserialization should succeed");
         for key in &[
             "decision_id",
             "policy_id",
@@ -2904,18 +2904,18 @@ mod tests {
     #[test]
     fn decision_verdict_json_consistent_allow() {
         // Serializing the same variant twice must produce identical JSON.
-        let j1 = serde_json::to_string(&DecisionVerdict::Allow).unwrap();
-        let j2 = serde_json::to_string(&DecisionVerdict::Allow).unwrap();
+        let j1 = serde_json::to_string(&DecisionVerdict::Allow).expect("serde deserialization should succeed");
+        let j2 = serde_json::to_string(&DecisionVerdict::Allow).expect("serde deserialization should succeed");
         assert_eq!(j1, j2);
     }
 
     #[test]
     fn decision_verdict_json_consistent_deny_and_timeout() {
-        let j_deny_1 = serde_json::to_string(&DecisionVerdict::Deny).unwrap();
-        let j_deny_2 = serde_json::to_string(&DecisionVerdict::Deny).unwrap();
+        let j_deny_1 = serde_json::to_string(&DecisionVerdict::Deny).expect("serde deserialization should succeed");
+        let j_deny_2 = serde_json::to_string(&DecisionVerdict::Deny).expect("serde deserialization should succeed");
         assert_eq!(j_deny_1, j_deny_2);
-        let j_t1 = serde_json::to_string(&DecisionVerdict::Timeout).unwrap();
-        let j_t2 = serde_json::to_string(&DecisionVerdict::Timeout).unwrap();
+        let j_t1 = serde_json::to_string(&DecisionVerdict::Timeout).expect("serde deserialization should succeed");
+        let j_t2 = serde_json::to_string(&DecisionVerdict::Timeout).expect("serde deserialization should succeed");
         assert_eq!(j_t1, j_t2);
     }
 
@@ -2932,8 +2932,8 @@ mod tests {
             e_process_milli: 1,
             ci_width_milli: 1,
         };
-        let json = serde_json::to_string(&req).unwrap();
-        let back: DecisionRequest = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&req).expect("serde deserialization should succeed");
+        let back: DecisionRequest = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(req, back);
     }
 
@@ -2967,7 +2967,7 @@ mod tests {
             let req = request(seed * 1000);
             emitter
                 .emit(&req, evidence(req.ts_unix_ms, "deny"))
-                .unwrap();
+                .expect("serde deserialization should succeed");
         }
         assert_eq!(emitter.entries().len(), emitter.events().len());
     }
@@ -2993,16 +2993,16 @@ mod tests {
     #[test]
     fn decision_request_roundtrip_seed_zero() {
         let req = request(0);
-        let json = serde_json::to_string(&req).unwrap();
-        let back: DecisionRequest = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&req).expect("serde deserialization should succeed");
+        let back: DecisionRequest = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(req, back);
     }
 
     #[test]
     fn decision_request_roundtrip_large_seed() {
         let req = request(u64::MAX / 2);
-        let json = serde_json::to_string(&req).unwrap();
-        let back: DecisionRequest = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&req).expect("serde deserialization should succeed");
+        let back: DecisionRequest = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(req, back);
     }
 
@@ -3017,8 +3017,8 @@ mod tests {
             outcome: "rt_out".to_string(),
             error_code: Some("rt_ec".to_string()),
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let back: AdapterEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let back: AdapterEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
     }
 
@@ -3055,11 +3055,11 @@ mod tests {
             DecisionVerdict::Timeout,
         ]);
         assert!(contract.events().is_empty());
-        contract.evaluate(&req).unwrap();
+        contract.evaluate(&req).expect("serde deserialization should succeed");
         assert_eq!(contract.events().len(), 1);
-        contract.evaluate(&req).unwrap();
+        contract.evaluate(&req).expect("serde deserialization should succeed");
         assert_eq!(contract.events().len(), 2);
-        contract.evaluate(&req).unwrap();
+        contract.evaluate(&req).expect("serde deserialization should succeed");
         assert_eq!(contract.events().len(), 3);
     }
 
@@ -3067,7 +3067,7 @@ mod tests {
     fn mock_decision_contract_event_outcome_matches_verdict() {
         let req = request(950);
         let mut contract = MockDecisionContract::new([DecisionVerdict::Deny]);
-        contract.evaluate(&req).unwrap();
+        contract.evaluate(&req).expect("serde deserialization should succeed");
         assert_eq!(contract.events()[0].outcome, "deny");
     }
 
@@ -3088,7 +3088,7 @@ mod tests {
         let mut emitter = MockEvidenceEmitter::new();
         emitter
             .emit(&req, evidence(req.ts_unix_ms, "allow"))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(emitter.events()[0].component, ADAPTER_COMPONENT);
     }
 

@@ -1284,28 +1284,28 @@ pub fn hsp_corpus() -> Vec<HspSpecimen> {
                 TransitionTrigger::HandshakeInitiated,
                 1,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         state
             .transition(
                 SessionPhaseTag::Established,
                 TransitionTrigger::HandshakeCompleted,
                 2,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         state
             .transition(
                 SessionPhaseTag::Closing,
                 TransitionTrigger::CloseInitiated,
                 3,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         state
             .transition(
                 SessionPhaseTag::Closed,
                 TransitionTrigger::DrainCompleted,
                 4,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let tc = state.transition_history.len();
         corpus.push(HspSpecimen {
             name: "happy_path_full".into(),
@@ -1338,14 +1338,14 @@ pub fn hsp_corpus() -> Vec<HspSpecimen> {
                 TransitionTrigger::HandshakeInitiated,
                 1,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         state
             .transition(
                 SessionPhaseTag::Closed,
                 TransitionTrigger::HandshakeRejected,
                 2,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let tc = state.transition_history.len();
         corpus.push(HspSpecimen {
             name: "handshake_rejected".into(),
@@ -1378,24 +1378,24 @@ pub fn hsp_corpus() -> Vec<HspSpecimen> {
                 TransitionTrigger::HandshakeInitiated,
                 1,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         state
             .transition(
                 SessionPhaseTag::Established,
                 TransitionTrigger::HandshakeCompleted,
                 2,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         state
             .enter_degraded(DegradedSeverity::StaleKey, "epoch_advanced".into(), 3)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         state
             .transition(
                 SessionPhaseTag::Established,
                 TransitionTrigger::DegradedRecovery,
                 4,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let tc = state.transition_history.len();
         corpus.push(HspSpecimen {
             name: "degraded_recovery".into(),
@@ -1428,17 +1428,17 @@ pub fn hsp_corpus() -> Vec<HspSpecimen> {
                 TransitionTrigger::HandshakeInitiated,
                 1,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         state
             .transition(
                 SessionPhaseTag::Established,
                 TransitionTrigger::HandshakeCompleted,
                 2,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         state
             .enter_degraded(DegradedSeverity::PartialMacFailure, "mac_fail".into(), 3)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let limit = state
             .degraded_policy
             .as_ref()
@@ -1476,7 +1476,7 @@ pub fn hsp_corpus() -> Vec<HspSpecimen> {
             50,
         );
         for seq in 1..=10 {
-            state.check_replay(seq, seq * 10, None).unwrap();
+            state.check_replay(seq, seq * 10, None).expect("serde deserialization should succeed");
         }
         let replay_err = state.check_replay(5, 110, None).is_err();
         let tc = state.transition_history.len();
@@ -1544,7 +1544,7 @@ pub fn hsp_corpus() -> Vec<HspSpecimen> {
                 ContentHash::compute(purpose.domain_label().as_bytes()),
             );
         }
-        state.attach_key_schedule(ks).unwrap();
+        state.attach_key_schedule(ks).expect("serde deserialization should succeed");
         let mismatch = state.validate_epoch(SecurityEpoch::from_raw(99)).is_err();
         let tc = state.transition_history.len();
         corpus.push(HspSpecimen {
@@ -1607,14 +1607,14 @@ pub fn hsp_corpus() -> Vec<HspSpecimen> {
                 TransitionTrigger::HandshakeInitiated,
                 1,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         state
             .transition(
                 SessionPhaseTag::Established,
                 TransitionTrigger::HandshakeCompleted,
                 2,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let mut ks = SessionKeySchedule::new(
             epoch,
             "spec-full".into(),
@@ -1628,33 +1628,33 @@ pub fn hsp_corpus() -> Vec<HspSpecimen> {
                 ContentHash::compute(purpose.domain_label().as_bytes()),
             );
         }
-        state.attach_key_schedule(ks).unwrap();
-        state.check_replay(1, 10, None).unwrap();
-        state.check_replay(2, 20, None).unwrap();
+        state.attach_key_schedule(ks).expect("serde deserialization should succeed");
+        state.check_replay(1, 10, None).expect("serde deserialization should succeed");
+        state.check_replay(2, 20, None).expect("serde deserialization should succeed");
         state
             .enter_degraded(DegradedSeverity::StaleKey, "rekey".into(), 30)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         state
             .transition(
                 SessionPhaseTag::Established,
                 TransitionTrigger::DegradedRecovery,
                 40,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         state
             .transition(
                 SessionPhaseTag::Closing,
                 TransitionTrigger::CloseInitiated,
                 50,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         state
             .transition(
                 SessionPhaseTag::Closed,
                 TransitionTrigger::DrainCompleted,
                 60,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let tc = state.transition_history.len();
         corpus.push(HspSpecimen {
             name: "full_lifecycle".into(),
@@ -1687,14 +1687,14 @@ pub fn hsp_corpus() -> Vec<HspSpecimen> {
                 TransitionTrigger::HandshakeInitiated,
                 1,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         state
             .transition(
                 SessionPhaseTag::Established,
                 TransitionTrigger::HandshakeCompleted,
                 2,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         state
             .transition(
                 SessionPhaseTag::Closed,
@@ -1703,7 +1703,7 @@ pub fn hsp_corpus() -> Vec<HspSpecimen> {
                 },
                 3,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let tc = state.transition_history.len();
         corpus.push(HspSpecimen {
             name: "session_expiry".into(),
@@ -1736,35 +1736,35 @@ pub fn hsp_corpus() -> Vec<HspSpecimen> {
                 TransitionTrigger::HandshakeInitiated,
                 1,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         state
             .transition(
                 SessionPhaseTag::Established,
                 TransitionTrigger::HandshakeCompleted,
                 2,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         state
             .enter_degraded(
                 DegradedSeverity::IdentityCompromised,
                 "compromised".into(),
                 3,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         state
             .transition(
                 SessionPhaseTag::Closing,
                 TransitionTrigger::CloseInitiated,
                 4,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         state
             .transition(
                 SessionPhaseTag::Closed,
                 TransitionTrigger::DrainCompleted,
                 5,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let tc = state.transition_history.len();
         corpus.push(HspSpecimen {
             name: "degraded_close".into(),
@@ -1797,14 +1797,14 @@ pub fn hsp_corpus() -> Vec<HspSpecimen> {
                 TransitionTrigger::HandshakeInitiated,
                 1,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         state
             .transition(
                 SessionPhaseTag::Established,
                 TransitionTrigger::HandshakeCompleted,
                 2,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         state
             .transition(
                 SessionPhaseTag::Closed,
@@ -1814,7 +1814,7 @@ pub fn hsp_corpus() -> Vec<HspSpecimen> {
                 },
                 3,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let tc = state.transition_history.len();
         corpus.push(HspSpecimen {
             name: "replay_threshold_breach".into(),
@@ -2017,8 +2017,8 @@ mod tests {
     #[test]
     fn phase_tag_serde_roundtrip() {
         for tag in SessionPhaseTag::ALL {
-            let json = serde_json::to_string(tag).unwrap();
-            let back: SessionPhaseTag = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(tag).expect("serde deserialization should succeed");
+            let back: SessionPhaseTag = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*tag, back);
         }
     }
@@ -2145,8 +2145,8 @@ mod tests {
             TransitionTrigger::DrainCompleted,
         ];
         for t in &triggers {
-            let json = serde_json::to_string(t).unwrap();
-            let back: TransitionTrigger = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(t).expect("serde deserialization should succeed");
+            let back: TransitionTrigger = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*t, back);
         }
     }
@@ -2214,8 +2214,8 @@ mod tests {
     #[test]
     fn key_schedule_serde_roundtrip() {
         let ks = make_key_schedule();
-        let json = serde_json::to_string(&ks).unwrap();
-        let back: SessionKeySchedule = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&ks).expect("serde deserialization should succeed");
+        let back: SessionKeySchedule = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ks.session_id, back.session_id);
         assert_eq!(ks.derived_stages.len(), back.derived_stages.len());
     }
@@ -2335,8 +2335,8 @@ mod tests {
         let mut ledger = AntiReplayLedger::new("sess".into(), 64, 100);
         ledger.check_and_record(1, 1, None);
         ledger.check_and_record(2, 2, None);
-        let json = serde_json::to_string(&ledger).unwrap();
-        let back: AntiReplayLedger = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&ledger).expect("serde deserialization should succeed");
+        let back: AntiReplayLedger = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.total_accepted(), 2);
         assert_eq!(back.session_id(), "sess");
     }
@@ -2369,8 +2369,8 @@ mod tests {
             ReplayVerdict::BelowFloor,
             ReplayVerdict::AboveCeiling,
         ] {
-            let json = serde_json::to_string(v).unwrap();
-            let back: ReplayVerdict = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: ReplayVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -2428,8 +2428,8 @@ mod tests {
     #[test]
     fn degraded_policy_serde_roundtrip() {
         let p = DegradedModePolicy::permissive(DegradedSeverity::PartialMacFailure);
-        let json = serde_json::to_string(&p).unwrap();
-        let back: DegradedModePolicy = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
+        let back: DegradedModePolicy = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(p.severity, back.severity);
         assert_eq!(p.allow_readonly_hostcalls, back.allow_readonly_hostcalls);
     }
@@ -2469,8 +2469,8 @@ mod tests {
             },
         ];
         for e in &errors {
-            let json = serde_json::to_string(e).unwrap();
-            let back: ProtocolError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(e).expect("serde deserialization should succeed");
+            let back: ProtocolError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*e, back);
         }
     }
@@ -2492,7 +2492,7 @@ mod tests {
                 TransitionTrigger::HandshakeInitiated,
                 1,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(state.phase, SessionPhaseTag::Negotiating);
 
         state
@@ -2501,7 +2501,7 @@ mod tests {
                 TransitionTrigger::HandshakeCompleted,
                 2,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(state.phase, SessionPhaseTag::Established);
     }
 
@@ -2526,17 +2526,17 @@ mod tests {
                 TransitionTrigger::HandshakeInitiated,
                 1,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         state
             .transition(
                 SessionPhaseTag::Established,
                 TransitionTrigger::HandshakeCompleted,
                 2,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         state
             .enter_degraded(DegradedSeverity::StaleKey, "epoch_advanced".into(), 3)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(state.phase, SessionPhaseTag::DegradedOpen);
         assert!(state.degraded_policy.is_some());
 
@@ -2547,7 +2547,7 @@ mod tests {
                 TransitionTrigger::DegradedRecovery,
                 4,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(state.phase, SessionPhaseTag::Established);
         assert!(state.degraded_policy.is_none());
     }
@@ -2561,14 +2561,14 @@ mod tests {
                 TransitionTrigger::HandshakeInitiated,
                 1,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         state
             .transition(
                 SessionPhaseTag::Established,
                 TransitionTrigger::HandshakeCompleted,
                 2,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(state.transition_history.len(), 2);
         assert_eq!(state.transition_history[0].from, SessionPhaseTag::Uninit);
         assert_eq!(state.transition_history[1].to, SessionPhaseTag::Established);
@@ -2578,7 +2578,7 @@ mod tests {
     fn state_machine_attach_key_schedule() {
         let mut state = make_state();
         let ks = make_key_schedule();
-        state.attach_key_schedule(ks).unwrap();
+        state.attach_key_schedule(ks).expect("serde deserialization should succeed");
         assert!(state.key_schedule.is_some());
     }
 
@@ -2600,7 +2600,7 @@ mod tests {
     fn state_machine_epoch_validation() {
         let mut state = make_state();
         let ks = make_key_schedule();
-        state.attach_key_schedule(ks).unwrap();
+        state.attach_key_schedule(ks).expect("serde deserialization should succeed");
 
         assert!(state.validate_epoch(test_epoch()).is_ok());
         assert!(state.validate_epoch(SecurityEpoch::from_raw(99)).is_err());
@@ -2615,14 +2615,14 @@ mod tests {
                 TransitionTrigger::HandshakeInitiated,
                 1,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         state
             .transition(
                 SessionPhaseTag::Established,
                 TransitionTrigger::HandshakeCompleted,
                 2,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(
             state
                 .check_operation(DegradedOperationKind::WriteHostcall, 3)
@@ -2639,21 +2639,21 @@ mod tests {
                 TransitionTrigger::HandshakeInitiated,
                 1,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         state
             .transition(
                 SessionPhaseTag::Established,
                 TransitionTrigger::HandshakeCompleted,
                 2,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         state
             .enter_degraded(
                 DegradedSeverity::IdentityCompromised,
                 "compromised".into(),
                 3,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let result = state.check_operation(DegradedOperationKind::ReadHostcall, 4);
         assert!(result.is_err());
     }
@@ -2667,17 +2667,17 @@ mod tests {
                 TransitionTrigger::HandshakeInitiated,
                 1,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         state
             .transition(
                 SessionPhaseTag::Established,
                 TransitionTrigger::HandshakeCompleted,
                 2,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         state
             .enter_degraded(DegradedSeverity::StaleKey, "stale".into(), 3)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(
             state
                 .check_operation(DegradedOperationKind::ReadHostcall, 4)
@@ -2707,20 +2707,20 @@ mod tests {
                 TransitionTrigger::HandshakeInitiated,
                 1,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         state
             .transition(
                 SessionPhaseTag::Established,
                 TransitionTrigger::HandshakeCompleted,
                 2,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         state
             .enter_degraded(DegradedSeverity::PartialMacFailure, "mac_fail".into(), 3)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Exhaust the budget.
-        let policy = state.degraded_policy.as_ref().unwrap();
+        let policy = state.degraded_policy.as_ref().expect("serde deserialization should succeed");
         let limit = policy.max_degraded_messages;
         for _ in 0..limit {
             state.record_degraded_message();
@@ -2739,9 +2739,9 @@ mod tests {
                 TransitionTrigger::HandshakeInitiated,
                 1,
             )
-            .unwrap();
-        let json = serde_json::to_string(&state).unwrap();
-        let back: SessionProtocolState = serde_json::from_str(&json).unwrap();
+            .expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&state).expect("serde deserialization should succeed");
+        let back: SessionProtocolState = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.phase, SessionPhaseTag::Negotiating);
         assert_eq!(back.session_id, "sess-001");
     }
@@ -2755,28 +2755,28 @@ mod tests {
                 TransitionTrigger::HandshakeInitiated,
                 1,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         state
             .transition(
                 SessionPhaseTag::Established,
                 TransitionTrigger::HandshakeCompleted,
                 2,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         state
             .transition(
                 SessionPhaseTag::Closing,
                 TransitionTrigger::CloseInitiated,
                 3,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         state
             .transition(
                 SessionPhaseTag::Closed,
                 TransitionTrigger::DrainCompleted,
                 4,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(state.phase.is_terminal());
     }
 
@@ -2789,14 +2789,14 @@ mod tests {
                 TransitionTrigger::HandshakeInitiated,
                 1,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         state
             .transition(
                 SessionPhaseTag::Closed,
                 TransitionTrigger::HandshakeRejected,
                 2,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let result = state.transition(
             SessionPhaseTag::Negotiating,
             TransitionTrigger::HandshakeInitiated,
@@ -2814,19 +2814,19 @@ mod tests {
                 TransitionTrigger::HandshakeInitiated,
                 1,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         state
             .transition(
                 SessionPhaseTag::Established,
                 TransitionTrigger::HandshakeCompleted,
                 2,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         state
             .enter_degraded(DegradedSeverity::StaleKey, "stale".into(), 100)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
-        let policy = state.degraded_policy.as_ref().unwrap();
+        let policy = state.degraded_policy.as_ref().expect("serde deserialization should succeed");
         let max_ticks = policy.max_degraded_ticks;
 
         // Within budget.

@@ -672,10 +672,10 @@ mod tests {
         ] {
             // SAFETY: BoundaryOutcome derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json = serde_json::to_string(&outcome).unwrap();
+            let json = serde_json::to_string(&outcome).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by to_string of a valid BoundaryOutcome,
             // so from_str back to BoundaryOutcome cannot fail (valid format + matching schema).
-            let round: BoundaryOutcome = serde_json::from_str(&json).unwrap();
+            let round: BoundaryOutcome = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(outcome, round);
         }
     }
@@ -957,7 +957,7 @@ mod tests {
         assert_eq!(propagated, BoundaryOutcome::Failure);
 
         // Check the transition was updated
-        let last = validator.transitions().last().unwrap();
+        let last = validator.transitions().last().expect("serde deserialization should succeed");
         assert_eq!(last.child_outcome, Some(BoundaryOutcome::Failure));
         assert_eq!(last.propagated_outcome, Some(BoundaryOutcome::Failure));
 
@@ -1014,8 +1014,8 @@ mod tests {
         validator.validate_narrowing("p", "c", "test", &parent, &child);
         let report = validator.build_report();
 
-        let json = serde_json::to_string(&report).unwrap();
-        let round: NarrowingReport = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let round: NarrowingReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report, round);
     }
 
@@ -1027,8 +1027,8 @@ mod tests {
             CapabilityGrant::compute_only(),
             CapabilityGrant::sandbox(),
         ] {
-            let json = serde_json::to_string(&grant).unwrap();
-            let round: CapabilityGrant = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&grant).expect("serde deserialization should succeed");
+            let round: CapabilityGrant = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(grant, round);
         }
     }
@@ -1066,8 +1066,8 @@ mod tests {
             propagated_outcome: Some(BoundaryOutcome::Success),
             sequence: 1,
         };
-        let json = serde_json::to_string(&t).unwrap();
-        let round: BoundaryTransition = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&t).expect("serde deserialization should succeed");
+        let round: BoundaryTransition = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(t, round);
     }
 
@@ -1122,8 +1122,8 @@ mod tests {
     #[test]
     fn test_capability_token_serde_roundtrip_all_variants() {
         for token in CapabilityToken::all() {
-            let json = serde_json::to_string(token).unwrap();
-            let round: CapabilityToken = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(token).expect("serde deserialization should succeed");
+            let round: CapabilityToken = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*token, round, "serde roundtrip failed for {:?}", token);
         }
     }
@@ -1135,8 +1135,8 @@ mod tests {
             NarrowingDirection::Preserved,
             NarrowingDirection::Widened,
         ] {
-            let json = serde_json::to_string(&dir).unwrap();
-            let round: NarrowingDirection = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&dir).expect("serde deserialization should succeed");
+            let round: NarrowingDirection = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(dir, round, "serde roundtrip failed for {:?}", dir);
         }
     }
@@ -1151,8 +1151,8 @@ mod tests {
             OutcomePropagationRule::EscalateToMostSevere,
         ];
         for rule in &rules {
-            let json = serde_json::to_string(rule).unwrap();
-            let round: OutcomePropagationRule = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(rule).expect("serde deserialization should succeed");
+            let round: OutcomePropagationRule = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*rule, round, "serde roundtrip failed for {:?}", rule);
         }
     }
@@ -1179,8 +1179,8 @@ mod tests {
             },
         ];
         for v in &violations {
-            let json = serde_json::to_string(v).unwrap();
-            let round: NarrowingViolation = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let round: NarrowingViolation = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, round, "serde roundtrip failed for {:?}", v);
         }
     }
@@ -1550,8 +1550,8 @@ mod tests {
         // Also trigger a widening violation
         validator.validate_narrowing("c1", "c2", "b2", &child, &parent);
 
-        let json = serde_json::to_string(&validator).unwrap();
-        let round: CapabilityNarrowingValidator = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&validator).expect("serde deserialization should succeed");
+        let round: CapabilityNarrowingValidator = serde_json::from_str(&json).expect("serde deserialization should succeed");
 
         assert_eq!(round.transitions().len(), 2);
         assert_eq!(round.violations().len(), 1);

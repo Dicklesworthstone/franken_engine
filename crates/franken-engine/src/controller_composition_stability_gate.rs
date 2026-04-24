@@ -921,8 +921,8 @@ mod tests {
     #[test]
     fn claim_category_serde_roundtrip() {
         for cat in ClaimCategory::ALL {
-            let json = serde_json::to_string(cat).unwrap();
-            let back: ClaimCategory = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(cat).expect("serde deserialization should succeed");
+            let back: ClaimCategory = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*cat, back);
         }
     }
@@ -943,8 +943,8 @@ mod tests {
             SignalSeverity::Warning,
             SignalSeverity::Critical,
         ] {
-            let json = serde_json::to_string(&sev).unwrap();
-            let back: SignalSeverity = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&sev).expect("serde deserialization should succeed");
+            let back: SignalSeverity = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(sev, back);
         }
     }
@@ -1053,8 +1053,8 @@ mod tests {
             },
         ];
         for r in &reasons {
-            let json = serde_json::to_string(r).unwrap();
-            let back: RejectionReason = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(r).expect("serde deserialization should succeed");
+            let back: RejectionReason = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*r, back);
         }
     }
@@ -1117,8 +1117,8 @@ mod tests {
             composition_id: "comp1".to_string(),
             reasons: vec![RejectionReason::NoEvidence],
         };
-        let json = serde_json::to_string(&v).unwrap();
-        let back: GateVerdict = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let back: GateVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, back);
     }
 
@@ -1142,8 +1142,8 @@ mod tests {
     #[test]
     fn config_serde_roundtrip() {
         let c = GateConfig::default();
-        let json = serde_json::to_string(&c).unwrap();
-        let back: GateConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let back: GateConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c, back);
     }
 
@@ -1402,8 +1402,8 @@ mod tests {
     #[test]
     fn report_serde_roundtrip() {
         let report = GateReport::new(test_epoch(), vec![]);
-        let json = serde_json::to_string(&report).unwrap();
-        let back: GateReport = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let back: GateReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report, back);
     }
 

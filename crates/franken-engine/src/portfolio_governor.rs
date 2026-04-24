@@ -621,7 +621,7 @@ impl PortfolioGovernor {
         )?;
 
         // Apply the promotion.
-        let state = self.moonshots.get_mut(moonshot_id).unwrap();
+        let state = self.moonshots.get_mut(moonshot_id).expect("serde deserialization should succeed");
         state.contract.current_stage = next_stage;
 
         // If promoted to Production, mark completed.
@@ -681,7 +681,7 @@ impl PortfolioGovernor {
         )?;
 
         // Apply the kill.
-        let state = self.moonshots.get_mut(moonshot_id).unwrap();
+        let state = self.moonshots.get_mut(moonshot_id).expect("serde deserialization should succeed");
         state.status = MoonshotStatus::Killed {
             reason: rationale,
             killed_at_ns: now_ns,
@@ -1102,7 +1102,7 @@ mod tests {
 
     fn register_test_moonshot(gov: &mut PortfolioGovernor) {
         gov.register_moonshot(test_contract(), 1_000_000_000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
     }
 
     // -- Registration tests --
@@ -1147,7 +1147,7 @@ mod tests {
             submitted_at_ns: 2_000_000_000,
             content_hash: "hash-abc".into(),
         };
-        gov.submit_artifact("mc-test-001", evidence).unwrap();
+        gov.submit_artifact("mc-test-001", evidence).expect("serde deserialization should succeed");
         assert_eq!(gov.moonshots["mc-test-001"].completed_artifacts.len(), 1);
     }
 
@@ -1176,7 +1176,7 @@ mod tests {
             value_millionths: 200_000_000,
             observed_at_ns: 3_000_000_000,
         };
-        gov.record_metric("mc-test-001", obs).unwrap();
+        gov.record_metric("mc-test-001", obs).expect("serde deserialization should succeed");
         assert_eq!(gov.moonshots["mc-test-001"].metric_history.len(), 1);
     }
 
@@ -1184,7 +1184,7 @@ mod tests {
     fn record_metric_not_active() {
         let mut gov = test_governor();
         register_test_moonshot(&mut gov);
-        gov.moonshots.get_mut("mc-test-001").unwrap().status = MoonshotStatus::Killed {
+        gov.moonshots.get_mut("mc-test-001").expect("serde deserialization should succeed").status = MoonshotStatus::Killed {
             reason: "test".into(),
             killed_at_ns: 0,
         };
@@ -1203,7 +1203,7 @@ mod tests {
     fn compute_scorecard_ok() {
         let mut gov = test_governor();
         register_test_moonshot(&mut gov);
-        let sc = gov.compute_scorecard("mc-test-001", 5_000_000_000).unwrap();
+        let sc = gov.compute_scorecard("mc-test-001", 5_000_000_000).expect("serde deserialization should succeed");
         assert_eq!(sc.moonshot_id, "mc-test-001");
         assert!(sc.ev_millionths > 0);
         assert_eq!(sc.confidence_millionths, 0); // no metrics yet
@@ -1223,11 +1223,11 @@ mod tests {
                     observed_at_ns: (i + 1) * 1_000_000_000,
                 },
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         }
         let sc = gov
             .compute_scorecard("mc-test-001", 11_000_000_000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(sc.confidence_millionths, 1_000_000); // 10 * 100_000 = 1M
     }
 
@@ -1273,9 +1273,9 @@ mod tests {
                     observed_at_ns: (i + 1) * 1_000_000_000,
                 },
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         }
-        let decision = gov.evaluate_gate("mc-test-001", 11_000_000_000).unwrap();
+        let decision = gov.evaluate_gate("mc-test-001", 11_000_000_000).expect("serde deserialization should succeed");
         assert!(matches!(decision.kind, GovernorDecisionKind::Hold { .. }));
         assert!(decision.rationale.contains("obligation"));
     }
@@ -1295,7 +1295,7 @@ mod tests {
                 content_hash: "hash-1".into(),
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         // Only 2 metrics = 200_000 confidence (below 500K hold threshold).
         for i in 0..2 {
             gov.record_metric(
@@ -1306,9 +1306,9 @@ mod tests {
                     observed_at_ns: (i + 1) * 1_000_000_000,
                 },
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         }
-        let decision = gov.evaluate_gate("mc-test-001", 3_000_000_000).unwrap();
+        let decision = gov.evaluate_gate("mc-test-001", 3_000_000_000).expect("serde deserialization should succeed");
         assert!(matches!(decision.kind, GovernorDecisionKind::Hold { .. }));
         assert!(decision.rationale.contains("Confidence"));
     }
@@ -1328,7 +1328,7 @@ mod tests {
                 content_hash: "hash-1".into(),
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         // Add 8 metrics for high confidence (800K > 750K threshold).
         for i in 0..8 {
             gov.record_metric(
@@ -1339,9 +1339,9 @@ mod tests {
                     observed_at_ns: (i + 1) * 1_000_000_000,
                 },
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         }
-        let decision = gov.evaluate_gate("mc-test-001", 9_000_000_000).unwrap();
+        let decision = gov.evaluate_gate("mc-test-001", 9_000_000_000).expect("serde deserialization should succeed");
         assert!(matches!(
             decision.kind,
             GovernorDecisionKind::Promote {
@@ -1362,10 +1362,10 @@ mod tests {
         register_test_moonshot(&mut gov);
         gov.moonshots
             .get_mut("mc-test-001")
-            .unwrap()
+            .expect("serde deserialization should succeed")
             .contract
             .current_stage = MoonshotStage::Production;
-        let decision = gov.evaluate_gate("mc-test-001", 1_000_000_000).unwrap();
+        let decision = gov.evaluate_gate("mc-test-001", 1_000_000_000).expect("serde deserialization should succeed");
         assert!(matches!(decision.kind, GovernorDecisionKind::Hold { .. }));
         assert!(decision.rationale.contains("production"));
     }
@@ -1381,7 +1381,7 @@ mod tests {
         let now = gov.moonshots["mc-test-001"].started_at_ns + elapsed;
         let decision = gov
             .check_kill_criteria("mc-test-001", now)
-            .unwrap()
+            .expect("serde deserialization should succeed")
             .expect("should trigger kill");
         assert!(matches!(decision.kind, GovernorDecisionKind::Kill { .. }));
         assert!(matches!(
@@ -1395,7 +1395,7 @@ mod tests {
         let mut gov = test_governor();
         register_test_moonshot(&mut gov);
         // Set high budget consumption with metrics above threshold (bad).
-        gov.update_budget("mc-test-001", 950_000).unwrap();
+        gov.update_budget("mc-test-001", 950_000).expect("serde deserialization should succeed");
         gov.record_metric(
             "mc-test-001",
             MetricObservation {
@@ -1404,10 +1404,10 @@ mod tests {
                 observed_at_ns: 2_000_000_000,
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let decision = gov
             .check_kill_criteria("mc-test-001", 3_000_000_000)
-            .unwrap()
+            .expect("serde deserialization should succeed")
             .expect("should trigger kill");
         assert!(matches!(decision.kind, GovernorDecisionKind::Kill { .. }));
     }
@@ -1418,7 +1418,7 @@ mod tests {
         register_test_moonshot(&mut gov);
         let result = gov
             .check_kill_criteria("mc-test-001", 2_000_000_000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(result.is_none());
     }
 
@@ -1430,14 +1430,14 @@ mod tests {
         register_test_moonshot(&mut gov);
         let pd = gov
             .pause_moonshot("mc-test-001", "resource reallocation", 2_000_000_000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(matches!(pd.kind, GovernorDecisionKind::Pause { .. }));
         assert!(matches!(
             gov.moonshots["mc-test-001"].status,
             MoonshotStatus::Paused { .. }
         ));
 
-        let rd = gov.resume_moonshot("mc-test-001", 3_000_000_000).unwrap();
+        let rd = gov.resume_moonshot("mc-test-001", 3_000_000_000).expect("serde deserialization should succeed");
         assert!(matches!(rd.kind, GovernorDecisionKind::Resume));
         assert!(gov.moonshots["mc-test-001"].is_active());
     }
@@ -1446,7 +1446,7 @@ mod tests {
     fn pause_not_active_fails() {
         let mut gov = test_governor();
         register_test_moonshot(&mut gov);
-        gov.moonshots.get_mut("mc-test-001").unwrap().status = MoonshotStatus::Killed {
+        gov.moonshots.get_mut("mc-test-001").expect("serde deserialization should succeed").status = MoonshotStatus::Killed {
             reason: "test".into(),
             killed_at_ns: 0,
         };
@@ -1482,7 +1482,7 @@ mod tests {
         let mut c2 = test_contract();
         c2.contract_id = "mc-test-002".into();
         c2.ev_model.benefit_on_success_millionths = 10_000_000; // higher benefit
-        gov.register_moonshot(c2, 1_000_000_000).unwrap();
+        gov.register_moonshot(c2, 1_000_000_000).expect("serde deserialization should succeed");
 
         // Add metrics to both so confidence is non-zero (EV * conf / 1M).
         for id in ["mc-test-001", "mc-test-002"] {
@@ -1495,7 +1495,7 @@ mod tests {
                         observed_at_ns: (i + 1) * 1_000_000_000,
                     },
                 )
-                .unwrap();
+                .expect("serde deserialization should succeed");
             }
         }
 
@@ -1510,7 +1510,7 @@ mod tests {
     fn rank_portfolio_excludes_killed() {
         let mut gov = test_governor();
         register_test_moonshot(&mut gov);
-        gov.moonshots.get_mut("mc-test-001").unwrap().status = MoonshotStatus::Killed {
+        gov.moonshots.get_mut("mc-test-001").expect("serde deserialization should succeed").status = MoonshotStatus::Killed {
             reason: "test".into(),
             killed_at_ns: 0,
         };
@@ -1524,7 +1524,7 @@ mod tests {
     fn update_budget_ok() {
         let mut gov = test_governor();
         register_test_moonshot(&mut gov);
-        gov.update_budget("mc-test-001", 500_000).unwrap();
+        gov.update_budget("mc-test-001", 500_000).expect("serde deserialization should succeed");
         assert_eq!(
             gov.moonshots["mc-test-001"].budget_spent_fraction_millionths,
             500_000
@@ -1544,8 +1544,8 @@ mod tests {
     fn decisions_tracked() {
         let mut gov = test_governor();
         register_test_moonshot(&mut gov);
-        gov.evaluate_gate("mc-test-001", 2_000_000_000).unwrap();
-        let decisions = gov.decisions("mc-test-001").unwrap();
+        gov.evaluate_gate("mc-test-001", 2_000_000_000).expect("serde deserialization should succeed");
+        let decisions = gov.decisions("mc-test-001").expect("serde deserialization should succeed");
         assert_eq!(decisions.len(), 1);
         assert_eq!(decisions[0].decision_id, "gov-1");
     }
@@ -1564,7 +1564,7 @@ mod tests {
         .expect("enable ledger");
         register_test_moonshot(&mut gov);
 
-        gov.evaluate_gate("mc-test-001", 2_000_000_000).unwrap();
+        gov.evaluate_gate("mc-test-001", 2_000_000_000).expect("serde deserialization should succeed");
         let ledger = gov.governance_audit_ledger().expect("ledger configured");
         assert_eq!(ledger.entries().len(), 1);
         assert_eq!(ledger.entries()[0].decision_id, "gov-1");
@@ -1610,7 +1610,7 @@ mod tests {
                 content_hash: "hash-proof".into(),
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         // Step 2: Record enough metrics with good values.
         for i in 0..8 {
@@ -1622,11 +1622,11 @@ mod tests {
                     observed_at_ns: (i + 3) * 1_000_000_000,
                 },
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         }
 
         // Step 3: Evaluate gate — should promote.
-        let decision = gov.evaluate_gate("mc-test-001", 12_000_000_000).unwrap();
+        let decision = gov.evaluate_gate("mc-test-001", 12_000_000_000).expect("serde deserialization should succeed");
         assert!(matches!(
             decision.kind,
             GovernorDecisionKind::Promote {
@@ -1649,8 +1649,8 @@ mod tests {
     fn governor_serde_round_trip() {
         let mut gov = test_governor();
         register_test_moonshot(&mut gov);
-        let json = serde_json::to_string(&gov).unwrap();
-        let decoded: PortfolioGovernor = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&gov).expect("serde deserialization should succeed");
+        let decoded: PortfolioGovernor = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(gov, decoded);
     }
 
@@ -1667,8 +1667,8 @@ mod tests {
             computed_at_ns: 1_000_000_000,
             epoch: SecurityEpoch::from_raw(1),
         };
-        let json = serde_json::to_string(&sc).unwrap();
-        let decoded: Scorecard = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&sc).expect("serde deserialization should succeed");
+        let decoded: Scorecard = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(sc, decoded);
     }
 
@@ -1696,8 +1696,8 @@ mod tests {
             epoch: SecurityEpoch::from_raw(1),
             rationale: "All criteria met".into(),
         };
-        let json = serde_json::to_string(&d).unwrap();
-        let decoded: GovernorDecision = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
+        let decoded: GovernorDecision = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(d, decoded);
     }
 
@@ -1724,8 +1724,8 @@ mod tests {
         let err = GovernorError::InvalidContract {
             reason: "test".into(),
         };
-        let json = serde_json::to_string(&err).unwrap();
-        let decoded: GovernorError = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let decoded: GovernorError = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, decoded);
     }
 
@@ -1798,8 +1798,8 @@ mod tests {
         let mut g2 = test_governor();
         register_test_moonshot(&mut g2);
         assert_eq!(
-            serde_json::to_string(&g1).unwrap(),
-            serde_json::to_string(&g2).unwrap()
+            serde_json::to_string(&g1).expect("serde deserialization should succeed"),
+            serde_json::to_string(&g2).expect("serde deserialization should succeed")
         );
     }
 
@@ -1816,8 +1816,8 @@ mod tests {
     fn latest_scorecard_after_evaluation() {
         let mut gov = test_governor();
         register_test_moonshot(&mut gov);
-        gov.evaluate_gate("mc-test-001", 2_000_000_000).unwrap();
-        let sc = gov.latest_scorecard("mc-test-001").unwrap();
+        gov.evaluate_gate("mc-test-001", 2_000_000_000).expect("serde deserialization should succeed");
+        let sc = gov.latest_scorecard("mc-test-001").expect("serde deserialization should succeed");
         assert_eq!(sc.moonshot_id, "mc-test-001");
     }
 
@@ -1835,7 +1835,7 @@ mod tests {
                 observed_at_ns: 1_000_000_000,
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         gov.record_metric(
             "mc-test-001",
             MetricObservation {
@@ -1844,10 +1844,10 @@ mod tests {
                 observed_at_ns: 2_000_000_000,
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let latest = gov.moonshots["mc-test-001"]
             .latest_metric("latency_p50")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(latest.value_millionths, 180_000_000);
     }
 
@@ -1857,7 +1857,7 @@ mod tests {
     fn friction_decreases_with_artifacts() {
         let mut gov = test_governor();
         register_test_moonshot(&mut gov);
-        let sc1 = gov.compute_scorecard("mc-test-001", 1_000_000_000).unwrap();
+        let sc1 = gov.compute_scorecard("mc-test-001", 1_000_000_000).expect("serde deserialization should succeed");
         // Submit one of two obligations.
         gov.submit_artifact(
             "mc-test-001",
@@ -1869,8 +1869,8 @@ mod tests {
                 content_hash: "hash".into(),
             },
         )
-        .unwrap();
-        let sc2 = gov.compute_scorecard("mc-test-001", 3_000_000_000).unwrap();
+        .expect("serde deserialization should succeed");
+        let sc2 = gov.compute_scorecard("mc-test-001", 3_000_000_000).expect("serde deserialization should succeed");
         assert!(sc2.implementation_friction_millionths < sc1.implementation_friction_millionths);
     }
 
@@ -1911,8 +1911,8 @@ mod tests {
             submitted_at_ns: 1_000_000_000,
             content_hash: "sha256:abc".to_string(),
         };
-        let json = serde_json::to_string(&ae).unwrap();
-        let restored: ArtifactEvidence = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&ae).expect("serde deserialization should succeed");
+        let restored: ArtifactEvidence = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ae, restored);
     }
 
@@ -1923,16 +1923,16 @@ mod tests {
             value_millionths: 500_000,
             observed_at_ns: 2_000_000_000,
         };
-        let json = serde_json::to_string(&mo).unwrap();
-        let restored: MetricObservation = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&mo).expect("serde deserialization should succeed");
+        let restored: MetricObservation = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(mo, restored);
     }
 
     #[test]
     fn governor_config_serde_roundtrip() {
         let cfg = GovernorConfig::default();
-        let json = serde_json::to_string(&cfg).unwrap();
-        let restored: GovernorConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
+        let restored: GovernorConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cfg, restored);
     }
 
@@ -1953,8 +1953,8 @@ mod tests {
             },
         ];
         for s in &statuses {
-            let json = serde_json::to_string(s).unwrap();
-            let restored: MoonshotStatus = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(s).expect("serde deserialization should succeed");
+            let restored: MoonshotStatus = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*s, restored);
         }
     }
@@ -1978,8 +1978,8 @@ mod tests {
             GovernorDecisionKind::Resume,
         ];
         for k in &kinds {
-            let json = serde_json::to_string(k).unwrap();
-            let restored: GovernorDecisionKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(k).expect("serde deserialization should succeed");
+            let restored: GovernorDecisionKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*k, restored);
         }
     }
@@ -2053,7 +2053,7 @@ mod tests {
                 content_hash: "h".into(),
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let ids = gov.moonshots["mc-test-001"].completed_obligation_ids();
         assert_eq!(ids, vec!["proof-research".to_string()]);
     }
@@ -2070,7 +2070,7 @@ mod tests {
                 observed_at_ns: 1_000,
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         gov.record_metric(
             "mc-test-001",
             MetricObservation {
@@ -2079,7 +2079,7 @@ mod tests {
                 observed_at_ns: 2_000,
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let snapshot = gov.moonshots["mc-test-001"].metric_snapshot();
         assert_eq!(snapshot.len(), 2);
         assert_eq!(snapshot["throughput"], 500_000);
@@ -2091,19 +2091,19 @@ mod tests {
         register_test_moonshot(&mut gov);
         assert!(gov.moonshots["mc-test-001"].is_active());
 
-        gov.moonshots.get_mut("mc-test-001").unwrap().status = MoonshotStatus::Paused {
+        gov.moonshots.get_mut("mc-test-001").expect("serde deserialization should succeed").status = MoonshotStatus::Paused {
             reason: "test".into(),
             paused_at_ns: 0,
         };
         assert!(!gov.moonshots["mc-test-001"].is_active());
 
-        gov.moonshots.get_mut("mc-test-001").unwrap().status = MoonshotStatus::Killed {
+        gov.moonshots.get_mut("mc-test-001").expect("serde deserialization should succeed").status = MoonshotStatus::Killed {
             reason: "test".into(),
             killed_at_ns: 0,
         };
         assert!(!gov.moonshots["mc-test-001"].is_active());
 
-        gov.moonshots.get_mut("mc-test-001").unwrap().status =
+        gov.moonshots.get_mut("mc-test-001").expect("serde deserialization should succeed").status =
             MoonshotStatus::Completed { completed_at_ns: 0 };
         assert!(!gov.moonshots["mc-test-001"].is_active());
     }
@@ -2132,8 +2132,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap();
-            let back: GovernorError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let back: GovernorError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, back);
         }
     }
@@ -2198,7 +2198,7 @@ mod tests {
     fn submit_artifact_not_active_fails() {
         let mut gov = test_governor();
         register_test_moonshot(&mut gov);
-        gov.moonshots.get_mut("mc-test-001").unwrap().status = MoonshotStatus::Killed {
+        gov.moonshots.get_mut("mc-test-001").expect("serde deserialization should succeed").status = MoonshotStatus::Killed {
             reason: "test".into(),
             killed_at_ns: 0,
         };
@@ -2221,7 +2221,7 @@ mod tests {
     fn record_metric_not_active_fails() {
         let mut gov = test_governor();
         register_test_moonshot(&mut gov);
-        gov.moonshots.get_mut("mc-test-001").unwrap().status = MoonshotStatus::Killed {
+        gov.moonshots.get_mut("mc-test-001").expect("serde deserialization should succeed").status = MoonshotStatus::Killed {
             reason: "test".into(),
             killed_at_ns: 0,
         };
@@ -2244,7 +2244,7 @@ mod tests {
     fn update_budget_not_active_fails() {
         let mut gov = test_governor();
         register_test_moonshot(&mut gov);
-        gov.moonshots.get_mut("mc-test-001").unwrap().status = MoonshotStatus::Killed {
+        gov.moonshots.get_mut("mc-test-001").expect("serde deserialization should succeed").status = MoonshotStatus::Killed {
             reason: "test".into(),
             killed_at_ns: 0,
         };
@@ -2279,8 +2279,8 @@ mod tests {
         let mut gov = test_governor();
         register_test_moonshot(&mut gov);
         let state = &gov.moonshots["mc-test-001"];
-        let json = serde_json::to_string(state).unwrap();
-        let back: MoonshotState = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(state).expect("serde deserialization should succeed");
+        let back: MoonshotState = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(*state, back);
     }
 
@@ -2289,8 +2289,8 @@ mod tests {
     #[test]
     fn governor_config_serde_roundtrip_default() {
         let cfg = GovernorConfig::default();
-        let json = serde_json::to_string(&cfg).unwrap();
-        let back: GovernorConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
+        let back: GovernorConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, cfg);
     }
 
@@ -2302,8 +2302,8 @@ mod tests {
             hold_confidence_below_millionths: 400_000,
             scoring_cadence_ns: 1_000_000_000,
         };
-        let json = serde_json::to_string(&cfg).unwrap();
-        let back: GovernorConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
+        let back: GovernorConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, cfg);
     }
 
@@ -2316,8 +2316,8 @@ mod tests {
             submitted_at_ns: 1_000_000,
             content_hash: "abc123".to_string(),
         };
-        let json = serde_json::to_string(&ev).unwrap();
-        let back: ArtifactEvidence = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
+        let back: ArtifactEvidence = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, ev);
     }
 
@@ -2328,8 +2328,8 @@ mod tests {
             value_millionths: 950_000,
             observed_at_ns: 2_000_000,
         };
-        let json = serde_json::to_string(&obs).unwrap();
-        let back: MetricObservation = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&obs).expect("serde deserialization should succeed");
+        let back: MetricObservation = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, obs);
     }
 
@@ -2348,8 +2348,8 @@ mod tests {
             computed_at_ns: 500_000,
             epoch: SecurityEpoch::from_raw(1),
         };
-        let json = serde_json::to_string(&scorecard).unwrap();
-        let back: Scorecard = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&scorecard).expect("serde deserialization should succeed");
+        let back: Scorecard = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, scorecard);
         assert_eq!(back.confidence_millionths, 0);
     }

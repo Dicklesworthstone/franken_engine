@@ -861,8 +861,8 @@ mod tests {
     #[test]
     fn quality_dimension_serde_roundtrip() {
         for dim in &QualityDimension::ALL {
-            let json = serde_json::to_string(dim).unwrap();
-            let back: QualityDimension = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(dim).expect("serde deserialization should succeed");
+            let back: QualityDimension = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*dim, back);
         }
     }
@@ -898,8 +898,8 @@ mod tests {
 
     #[test]
     fn degradation_regime_serde_roundtrip() {
-        let json = serde_json::to_string(&DegradationRegime::Emergency).unwrap();
-        let back: DegradationRegime = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&DegradationRegime::Emergency).expect("serde deserialization should succeed");
+        let back: DegradationRegime = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, DegradationRegime::Emergency);
     }
 
@@ -925,8 +925,8 @@ mod tests {
 
     #[test]
     fn demotion_target_serde_roundtrip() {
-        let json = serde_json::to_string(&DemotionTarget::UncompressedEvidence).unwrap();
-        let back: DemotionTarget = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&DemotionTarget::UncompressedEvidence).expect("serde deserialization should succeed");
+        let back: DemotionTarget = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, DemotionTarget::UncompressedEvidence);
     }
 
@@ -1083,7 +1083,7 @@ mod tests {
     #[test]
     fn policy_max_demotion_severity() {
         let policy = make_policy();
-        let max = policy.max_demotion_severity().unwrap();
+        let max = policy.max_demotion_severity().expect("serde deserialization should succeed");
         assert_eq!(max, DemotionTarget::FullReplayCapture);
     }
 
@@ -1344,8 +1344,8 @@ mod tests {
     fn report_serde_roundtrip() {
         let sentinel = make_sentinel();
         let report = generate_report(&sentinel);
-        let json = serde_json::to_string(&report).unwrap();
-        let back: SentinelReport = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let back: SentinelReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.epoch.as_u64(), report.epoch.as_u64());
         assert_eq!(back.gate_pass, report.gate_pass);
     }
@@ -1453,8 +1453,8 @@ mod tests {
     #[test]
     fn quality_dimension_serde_all_variants() {
         for v in &QualityDimension::ALL {
-            let json = serde_json::to_string(v).unwrap();
-            let back: QualityDimension = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: QualityDimension = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -1477,8 +1477,8 @@ mod tests {
             DegradationRegime::Emergency,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: DegradationRegime = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: DegradationRegime = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -1504,8 +1504,8 @@ mod tests {
             DemotionTarget::EmergencyRingBuffer,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: DemotionTarget = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: DemotionTarget = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -1616,8 +1616,8 @@ mod tests {
     #[test]
     fn enrichment_quality_observation_serde_roundtrip() {
         let obs = qobs(QualityDimension::TailUndercoverage, 123_456, 9999);
-        let json = serde_json::to_string(&obs).unwrap();
-        let back: QualityObservation = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&obs).expect("serde deserialization should succeed");
+        let back: QualityObservation = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.dimension, QualityDimension::TailUndercoverage);
         assert_eq!(back.value_millionths, 123_456);
         assert_eq!(back.timestamp_ns, 9999);
@@ -1627,7 +1627,7 @@ mod tests {
     #[test]
     fn enrichment_quality_observation_json_field_names() {
         let obs = qobs(QualityDimension::SignalFidelity, 500_000, 42);
-        let json = serde_json::to_string(&obs).unwrap();
+        let json = serde_json::to_string(&obs).expect("serde deserialization should succeed");
         assert!(json.contains("\"dimension\""));
         assert!(json.contains("\"value_millionths\""));
         assert!(json.contains("\"timestamp_ns\""));
@@ -1641,8 +1641,8 @@ mod tests {
             limit_millionths: 200_000,
             warning_millionths: 150_000,
         };
-        let json = serde_json::to_string(&t).unwrap();
-        let back: QualityThreshold = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&t).expect("serde deserialization should succeed");
+        let back: QualityThreshold = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.dimension, QualityDimension::EvidenceStaleness);
         assert_eq!(back.limit_millionths, 200_000);
         assert_eq!(back.warning_millionths, 150_000);
@@ -1692,8 +1692,8 @@ mod tests {
             cooldown_epochs: 5,
             rationale: "test rationale".into(),
         };
-        let json = serde_json::to_string(&rule).unwrap();
-        let back: DemotionRule = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&rule).expect("serde deserialization should succeed");
+        let back: DemotionRule = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.rule_id, "test-rule-42");
         assert_eq!(
             back.trigger_dimension,
@@ -1708,8 +1708,8 @@ mod tests {
     #[test]
     fn enrichment_demotion_policy_serde_roundtrip() {
         let policy = make_policy();
-        let json = serde_json::to_string(&policy).unwrap();
-        let back: DemotionPolicy = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
+        let back: DemotionPolicy = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.policy_id, policy.policy_id);
         assert_eq!(back.epoch.as_u64(), policy.epoch.as_u64());
         assert_eq!(back.thresholds.len(), policy.thresholds.len());
@@ -1802,8 +1802,8 @@ mod tests {
         let mut sentinel = make_sentinel();
         sentinel.observe(&qobs(QualityDimension::SignalFidelity, 700_000, 100));
         sentinel.observe(&qobs(QualityDimension::BlindSpotRatio, 60_000, 200));
-        let json = serde_json::to_string(&sentinel).unwrap();
-        let back: ObservabilityQualitySentinel = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&sentinel).expect("serde deserialization should succeed");
+        let back: ObservabilityQualitySentinel = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.epoch.as_u64(), sentinel.epoch.as_u64());
         assert_eq!(back.total_observations, sentinel.total_observations);
         assert_eq!(
@@ -1821,7 +1821,7 @@ mod tests {
     fn enrichment_dimension_summary_json_field_names() {
         let sentinel = make_sentinel();
         let report = generate_report(&sentinel);
-        let json = serde_json::to_string(&report.dimensions[0]).unwrap();
+        let json = serde_json::to_string(&report.dimensions[0]).expect("serde deserialization should succeed");
         assert!(json.contains("\"dimension\""));
         assert!(json.contains("\"current_regime\""));
         assert!(json.contains("\"last_value_millionths\""));

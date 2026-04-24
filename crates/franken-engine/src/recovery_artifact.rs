@@ -787,7 +787,7 @@ mod tests {
         let artifact = build_valid_artifact();
         // SAFETY: Test uses valid artifact from build_valid_artifact helper.
         // verify() only fails on malformed artifacts or signature errors (both impossible here).
-        let verdict = store.verify(&artifact, "t1").unwrap();
+        let verdict = store.verify(&artifact, "t1").expect("serde deserialization should succeed");
         assert!(verdict.is_valid());
     }
 
@@ -861,7 +861,7 @@ mod tests {
         .build();
 
         // SAFETY: verify cannot fail with valid artifact from builder
-        let verdict = store.verify(&artifact, "t1").unwrap();
+        let verdict = store.verify(&artifact, "t1").expect("serde deserialization should succeed");
         assert!(!verdict.is_valid());
         if let RecoveryVerdict::Invalid { reasons } = &verdict {
             assert!(reasons[0].contains("hash chain"));
@@ -891,7 +891,7 @@ mod tests {
         .build();
 
         // SAFETY: verify cannot fail with valid artifact from builder
-        let verdict = store.verify(&artifact, "t1").unwrap();
+        let verdict = store.verify(&artifact, "t1").expect("serde deserialization should succeed");
         assert!(!verdict.is_valid());
         if let RecoveryVerdict::Invalid { reasons } = &verdict {
             assert!(reasons[0].contains("quorum not met"));
@@ -910,7 +910,7 @@ mod tests {
         assert_eq!(store.len(), 1);
         assert!(!store.is_empty());
         // SAFETY: get cannot fail for artifact ID we just recorded
-        assert_eq!(store.get(&hex_id).unwrap().epoch_id, 1);
+        assert_eq!(store.get(&hex_id).expect("serde deserialization should succeed").epoch_id, 1);
     }
 
     #[test]
@@ -923,9 +923,9 @@ mod tests {
 
         // Verify exported artifact can be serialized.
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(exported[0]).unwrap();
+        let json = serde_json::to_string(exported[0]).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let restored: RecoveryArtifact = serde_json::from_str(&json).unwrap();
+        let restored: RecoveryArtifact = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(restored.artifact_type, ArtifactType::ForcedReconciliation);
     }
 
@@ -935,7 +935,7 @@ mod tests {
         let artifact = build_valid_artifact();
         store.record(artifact.clone(), "t1");
         // SAFETY: verify cannot fail with valid artifact from helper
-        store.verify(&artifact, "t1").unwrap();
+        store.verify(&artifact, "t1").expect("serde deserialization should succeed");
 
         let events = store.drain_events();
         assert_eq!(events.len(), 2);
@@ -970,9 +970,9 @@ mod tests {
         ];
         for t in &types {
             // SAFETY: to_string cannot fail on derived Serialize enum
-            let json = serde_json::to_string(t).unwrap();
+            let json = serde_json::to_string(t).expect("serde deserialization should succeed");
             // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-            let restored: ArtifactType = serde_json::from_str(&json).unwrap();
+            let restored: ArtifactType = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*t, restored);
         }
     }
@@ -1004,9 +1004,9 @@ mod tests {
         ];
         for t in &triggers {
             // SAFETY: to_string cannot fail on derived Serialize enum
-            let json = serde_json::to_string(t).unwrap();
+            let json = serde_json::to_string(t).expect("serde deserialization should succeed");
             // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-            let restored: RecoveryTrigger = serde_json::from_str(&json).unwrap();
+            let restored: RecoveryTrigger = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*t, restored);
         }
     }
@@ -1036,8 +1036,8 @@ mod tests {
             },
         ];
         for e in &elements {
-            let json = serde_json::to_string(e).unwrap();
-            let restored: ProofElement = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(e).expect("serde deserialization should succeed");
+            let restored: ProofElement = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*e, restored);
         }
     }
@@ -1045,8 +1045,8 @@ mod tests {
     #[test]
     fn recovery_artifact_serialization_round_trip() {
         let artifact = build_valid_artifact();
-        let json = serde_json::to_string(&artifact).unwrap();
-        let restored: RecoveryArtifact = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&artifact).expect("serde deserialization should succeed");
+        let restored: RecoveryArtifact = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(artifact, restored);
     }
 
@@ -1062,8 +1062,8 @@ mod tests {
             },
         ];
         for e in &errors {
-            let json = serde_json::to_string(e).unwrap();
-            let restored: VerificationError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(e).expect("serde deserialization should succeed");
+            let restored: VerificationError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*e, restored);
         }
     }
@@ -1077,8 +1077,8 @@ mod tests {
             },
         ];
         for v in &verdicts {
-            let json = serde_json::to_string(v).unwrap();
-            let restored: RecoveryVerdict = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let restored: RecoveryVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, restored);
         }
     }
@@ -1166,11 +1166,11 @@ mod tests {
         };
         // SAFETY: OperatorAction derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&action).unwrap();
+        let json = serde_json::to_string(&action).expect("serde deserialization should succeed");
 
         // SAFETY: JSON was just produced by to_string of a valid OperatorAction,
         // so from_str back to OperatorAction cannot fail (valid format + matching schema).
-        let restored: OperatorAction = serde_json::from_str(&json).unwrap();
+        let restored: OperatorAction = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(action, restored);
     }
 
@@ -1185,8 +1185,8 @@ mod tests {
             epoch_id: 1,
             event: "artifact_created".to_string(),
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let restored: RecoveryEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let restored: RecoveryEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, restored);
     }
 
@@ -1196,8 +1196,8 @@ mod tests {
             expected: ContentHash::compute(b"expected"),
             computed: ContentHash::compute(b"computed"),
         };
-        let json = serde_json::to_string(&err).unwrap();
-        let restored: VerificationError = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let restored: VerificationError = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, restored);
     }
 
@@ -1464,7 +1464,7 @@ mod tests {
         let a2 = build_valid_artifact();
         store.record(a1.clone(), "t1");
         store.record(a2, "t2");
-        store.verify(&a1, "t1").unwrap();
+        store.verify(&a1, "t1").expect("serde deserialization should succeed");
 
         let counts = store.event_counts();
         assert_eq!(counts.get("artifact_recorded"), Some(&2));
@@ -1745,7 +1745,7 @@ mod tests {
         })
         .build();
 
-        let verdict = store.verify(&artifact, "t1").unwrap();
+        let verdict = store.verify(&artifact, "t1").expect("serde deserialization should succeed");
         assert!(!verdict.is_valid());
         if let RecoveryVerdict::Invalid { reasons } = &verdict {
             assert_eq!(reasons.len(), 2);
@@ -1998,7 +1998,7 @@ mod tests {
     fn store_verify_emits_event_with_verdict() {
         let mut store = RecoveryArtifactStore::new(test_epoch(), &test_key());
         let artifact = build_valid_artifact();
-        store.verify(&artifact, "trace-v").unwrap();
+        store.verify(&artifact, "trace-v").expect("serde deserialization should succeed");
         let events = store.drain_events();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].event, "artifact_verified");
@@ -2020,7 +2020,7 @@ mod tests {
     fn recovery_event_all_fields_populated_after_verify() {
         let mut store = RecoveryArtifactStore::new(test_epoch(), &test_key());
         let artifact = build_valid_artifact();
-        store.verify(&artifact, "t-full").unwrap();
+        store.verify(&artifact, "t-full").expect("serde deserialization should succeed");
         let events = store.drain_events();
         let ev = &events[0];
         assert!(!ev.artifact_id.is_empty());

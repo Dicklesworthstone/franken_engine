@@ -925,7 +925,7 @@ pub fn write_security_evidence(
     });
     fs::write(
         &manifest_path,
-        serde_json::to_string_pretty(&manifest).unwrap(),
+        serde_json::to_string_pretty(&manifest).expect("serde deserialization should succeed"),
     )?;
 
     let evidence_path = output_dir.join("security_evidence.jsonl");
@@ -941,7 +941,7 @@ pub fn write_security_evidence(
             "invariant_violations": s.invariant_violations,
             "security_events": s.security_events,
         });
-        lines.push(serde_json::to_string(&entry).unwrap());
+        lines.push(serde_json::to_string(&entry).expect("serde deserialization should succeed"));
     }
     for evt in &result.events {
         let entry = serde_json::json!({
@@ -952,7 +952,7 @@ pub fn write_security_evidence(
             "scenario": evt.scenario,
             "trace_id": evt.trace_id,
         });
-        lines.push(serde_json::to_string(&entry).unwrap());
+        lines.push(serde_json::to_string(&entry).expect("serde deserialization should succeed"));
     }
     fs::write(&evidence_path, lines.join("\n") + "\n")?;
 
@@ -986,7 +986,7 @@ pub fn write_security_evidence(
     });
     fs::write(
         &summary_path,
-        serde_json::to_string_pretty(&summary).unwrap(),
+        serde_json::to_string_pretty(&summary).expect("serde deserialization should succeed"),
     )?;
 
     Ok(SecurityEvidenceArtifacts {
@@ -1406,7 +1406,7 @@ mod tests {
         let result = run_security_suite(&config);
         let dir = std::env::temp_dir().join("franken_sec_e2e_test_evidence");
         let _ = fs::remove_dir_all(&dir);
-        let artifacts = write_security_evidence(&result, &dir).unwrap();
+        let artifacts = write_security_evidence(&result, &dir).expect("serde deserialization should succeed");
 
         assert!(artifacts.run_manifest_path.exists());
         assert!(artifacts.evidence_path.exists());
@@ -1414,21 +1414,21 @@ mod tests {
 
         // Verify manifest
         let manifest: serde_json::Value =
-            serde_json::from_str(&fs::read_to_string(&artifacts.run_manifest_path).unwrap())
-                .unwrap();
+            serde_json::from_str(&fs::read_to_string(&artifacts.run_manifest_path).expect("serde deserialization should succeed"))
+                .expect("serde deserialization should succeed");
         assert_eq!(manifest["schema_version"], SECURITY_E2E_SCHEMA_VERSION);
 
         // Verify evidence JSONL
-        let evidence = fs::read_to_string(&artifacts.evidence_path).unwrap();
+        let evidence = fs::read_to_string(&artifacts.evidence_path).expect("serde deserialization should succeed");
         let lines: Vec<&str> = evidence.lines().collect();
         assert!(!lines.is_empty());
         for line in &lines {
-            let _: serde_json::Value = serde_json::from_str(line).unwrap();
+            let _: serde_json::Value = serde_json::from_str(line).expect("serde deserialization should succeed");
         }
 
         // Verify summary
         let summary: serde_json::Value =
-            serde_json::from_str(&fs::read_to_string(&artifacts.summary_path).unwrap()).unwrap();
+            serde_json::from_str(&fs::read_to_string(&artifacts.summary_path).expect("serde deserialization should succeed")).expect("serde deserialization should succeed");
         assert_eq!(summary["schema_version"], SECURITY_E2E_SCHEMA_VERSION);
         assert!(summary["categories"].is_array());
 
@@ -1526,8 +1526,8 @@ mod tests {
     fn safe_mode_fallback_activation_and_recovery_counts() {
         let results = run_safe_mode_fallback(42);
         for r in &results {
-            let act: u64 = r.details["activation_count"].parse().unwrap();
-            let rec: u64 = r.details["recovery_count"].parse().unwrap();
+            let act: u64 = r.details["activation_count"].parse().expect("serde deserialization should succeed");
+            let rec: u64 = r.details["recovery_count"].parse().expect("serde deserialization should succeed");
             assert!(
                 act >= 1,
                 "activation_count should be >= 1 for {}",
@@ -2046,11 +2046,11 @@ mod tests {
         let result = run_security_suite(&config);
         let dir = std::env::temp_dir().join("franken_sec_e2e_enrichment_fields");
         let _ = fs::remove_dir_all(&dir);
-        let artifacts = write_security_evidence(&result, &dir).unwrap();
+        let artifacts = write_security_evidence(&result, &dir).expect("serde deserialization should succeed");
 
         let manifest: serde_json::Value =
-            serde_json::from_str(&fs::read_to_string(&artifacts.run_manifest_path).unwrap())
-                .unwrap();
+            serde_json::from_str(&fs::read_to_string(&artifacts.run_manifest_path).expect("serde deserialization should succeed"))
+                .expect("serde deserialization should succeed");
         // Check all expected fields are present
         assert!(manifest.get("schema_version").is_some());
         assert!(manifest.get("scenario_count").is_some());
@@ -2060,7 +2060,7 @@ mod tests {
 
         // scenario_count matches actual count
         assert_eq!(
-            manifest["scenario_count"].as_u64().unwrap(),
+            manifest["scenario_count"].as_u64().expect("serde deserialization should succeed"),
             result.scenarios.len() as u64
         );
 

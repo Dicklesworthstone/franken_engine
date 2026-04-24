@@ -1337,8 +1337,8 @@ mod tests {
         let r1 = test_receipt();
         let r2 = test_receipt();
         assert_eq!(
-            r1.object_id("zone-a").unwrap(),
-            r2.object_id("zone-a").unwrap()
+            r1.object_id("zone-a").expect("serde deserialization should succeed"),
+            r2.object_id("zone-a").expect("serde deserialization should succeed")
         );
     }
 
@@ -1346,8 +1346,8 @@ mod tests {
     fn receipt_object_id_differs_by_zone() {
         let receipt = test_receipt();
         assert_ne!(
-            receipt.object_id("zone-a").unwrap(),
-            receipt.object_id("zone-b").unwrap()
+            receipt.object_id("zone-a").expect("serde deserialization should succeed"),
+            receipt.object_id("zone-b").expect("serde deserialization should succeed")
         );
     }
 
@@ -1356,8 +1356,8 @@ mod tests {
         let t1 = test_rollback();
         let t2 = test_rollback();
         assert_eq!(
-            t1.object_id("zone-a").unwrap(),
-            t2.object_id("zone-a").unwrap()
+            t1.object_id("zone-a").expect("serde deserialization should succeed"),
+            t2.object_id("zone-a").expect("serde deserialization should succeed")
         );
     }
 
@@ -1366,8 +1366,8 @@ mod tests {
     #[test]
     fn receipt_serialization_round_trip() {
         let receipt = test_receipt();
-        let json = serde_json::to_string(&receipt).unwrap();
-        let restored: OptReceipt = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
+        let restored: OptReceipt = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(receipt, restored);
     }
 
@@ -1377,10 +1377,10 @@ mod tests {
         receipt.decision_impact = DecisionImpact::HighImpact;
         receipt.attestation_bindings = Some(test_attestation_bindings());
         let receipt = receipt.sign(TEST_KEY);
-        let encoded = serde_json::to_vec(&receipt).unwrap();
-        let restored: OptReceipt = serde_json::from_slice(&encoded).unwrap();
+        let encoded = serde_json::to_vec(&receipt).expect("serde deserialization should succeed");
+        let restored: OptReceipt = serde_json::from_slice(&encoded).expect("serde deserialization should succeed");
         assert_eq!(receipt, restored);
-        assert_eq!(serde_json::to_vec(&restored).unwrap(), encoded);
+        assert_eq!(serde_json::to_vec(&restored).expect("serde deserialization should succeed"), encoded);
     }
 
     #[test]
@@ -1400,16 +1400,16 @@ mod tests {
     #[test]
     fn rollback_serialization_round_trip() {
         let token = test_rollback();
-        let json = serde_json::to_string(&token).unwrap();
-        let restored: RollbackToken = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&token).expect("serde deserialization should succeed");
+        let restored: RollbackToken = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(token, restored);
     }
 
     #[test]
     fn invariance_digest_serialization_round_trip() {
         let digest = test_invariance_digest();
-        let json = serde_json::to_string(&digest).unwrap();
-        let restored: InvarianceDigest = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&digest).expect("serde deserialization should succeed");
+        let restored: InvarianceDigest = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(digest, restored);
     }
 
@@ -1429,8 +1429,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap();
-            let restored: ProofSchemaError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let restored: ProofSchemaError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, restored);
         }
     }
@@ -1593,8 +1593,8 @@ mod tests {
             start_timestamp_ticks: 100,
             end_timestamp_ticks: 200,
         };
-        let json = serde_json::to_string(&window).unwrap();
-        let restored: AttestationValidityWindow = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&window).expect("serde deserialization should succeed");
+        let restored: AttestationValidityWindow = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(window, restored);
     }
 
@@ -1610,8 +1610,8 @@ mod tests {
         registry
             .check_and_record(&key_id, [42u8; 32])
             .expect("first record");
-        let json = serde_json::to_string(&registry).unwrap();
-        let restored: ReceiptNonceRegistry = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&registry).expect("serde deserialization should succeed");
+        let restored: ReceiptNonceRegistry = serde_json::from_str(&json).expect("serde deserialization should succeed");
         // The restored registry should detect replay of the same nonce.
         let mut restored = restored;
         assert!(restored.check_and_record(&key_id, [42u8; 32]).is_err());
@@ -1624,8 +1624,8 @@ mod tests {
     #[test]
     fn attestation_requirement_policy_default_roundtrip() {
         let policy = AttestationRequirementPolicy::default();
-        let json = serde_json::to_string(&policy).unwrap();
-        let restored: AttestationRequirementPolicy = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
+        let restored: AttestationRequirementPolicy = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(policy, restored);
     }
 
@@ -1655,7 +1655,7 @@ mod tests {
         ];
         let jsons: Vec<String> = variants
             .iter()
-            .map(|v| serde_json::to_string(v).unwrap())
+            .map(|v| serde_json::to_string(v).expect("serde deserialization should succeed"))
             .collect();
         for (i, a) in jsons.iter().enumerate() {
             for (j, b) in jsons.iter().enumerate() {
@@ -1676,7 +1676,7 @@ mod tests {
         ];
         let jsons: Vec<String> = variants
             .iter()
-            .map(|v| serde_json::to_string(v).unwrap())
+            .map(|v| serde_json::to_string(v).expect("serde deserialization should succeed"))
             .collect();
         for (i, a) in jsons.iter().enumerate() {
             for (j, b) in jsons.iter().enumerate() {
@@ -1700,7 +1700,7 @@ mod tests {
         ];
         let jsons: Vec<String> = variants
             .iter()
-            .map(|v| serde_json::to_string(v).unwrap())
+            .map(|v| serde_json::to_string(v).expect("serde deserialization should succeed"))
             .collect();
         for (i, a) in jsons.iter().enumerate() {
             for (j, b) in jsons.iter().enumerate() {
@@ -1720,7 +1720,7 @@ mod tests {
         ];
         let jsons: Vec<String> = variants
             .iter()
-            .map(|v| serde_json::to_string(v).unwrap())
+            .map(|v| serde_json::to_string(v).expect("serde deserialization should succeed"))
             .collect();
         for (i, a) in jsons.iter().enumerate() {
             for (j, b) in jsons.iter().enumerate() {
@@ -1740,7 +1740,7 @@ mod tests {
         ];
         let jsons: Vec<String> = variants
             .iter()
-            .map(|v| serde_json::to_string(v).unwrap())
+            .map(|v| serde_json::to_string(v).expect("serde deserialization should succeed"))
             .collect();
         for (i, a) in jsons.iter().enumerate() {
             for (j, b) in jsons.iter().enumerate() {
@@ -1837,7 +1837,7 @@ mod tests {
     #[test]
     fn invariance_digest_json_field_names() {
         let d = test_invariance_digest();
-        let j = serde_json::to_string(&d).unwrap();
+        let j = serde_json::to_string(&d).expect("serde deserialization should succeed");
         for field in &[
             "schema_version",
             "golden_corpus_hash",
@@ -1852,7 +1852,7 @@ mod tests {
     #[test]
     fn opt_receipt_json_field_names() {
         let r = test_receipt();
-        let j = serde_json::to_string(&r).unwrap();
+        let j = serde_json::to_string(&r).expect("serde deserialization should succeed");
         for field in &[
             "schema_version",
             "optimization_id",
@@ -1872,7 +1872,7 @@ mod tests {
     #[test]
     fn rollback_token_json_field_names() {
         let t = test_rollback();
-        let j = serde_json::to_string(&t).unwrap();
+        let j = serde_json::to_string(&t).expect("serde deserialization should succeed");
         for field in &[
             "schema_version",
             "token_id",
@@ -1893,7 +1893,7 @@ mod tests {
             role: SignerRole::OptimizerSubsystem,
             bound_epoch: test_epoch(),
         };
-        let j = serde_json::to_string(&s).unwrap();
+        let j = serde_json::to_string(&s).expect("serde deserialization should succeed");
         for field in &["key_id", "role", "bound_epoch"] {
             assert!(j.contains(field), "missing: {field}");
         }
@@ -1905,7 +1905,7 @@ mod tests {
             start_timestamp_ticks: 100,
             end_timestamp_ticks: 200,
         };
-        let j = serde_json::to_string(&w).unwrap();
+        let j = serde_json::to_string(&w).expect("serde deserialization should succeed");
         assert!(j.contains("start_timestamp_ticks"));
         assert!(j.contains("end_timestamp_ticks"));
     }
@@ -1973,7 +1973,7 @@ mod tests {
     #[test]
     fn receipt_nonce_registry_starts_empty() {
         let r = ReceiptNonceRegistry::new();
-        let j = serde_json::to_string(&r).unwrap();
+        let j = serde_json::to_string(&r).expect("serde deserialization should succeed");
         assert!(j.contains("seen"));
     }
 
@@ -2028,7 +2028,7 @@ mod tests {
     #[test]
     fn receipt_attestation_bindings_json_field_names() {
         let b = test_attestation_bindings();
-        let j = serde_json::to_string(&b).unwrap();
+        let j = serde_json::to_string(&b).expect("serde deserialization should succeed");
         for field in &[
             "quote_digest",
             "measurement_id",
@@ -2057,7 +2057,7 @@ mod tests {
     #[test]
     fn attestation_requirement_policy_json_field_names() {
         let p = AttestationRequirementPolicy::default();
-        let j = serde_json::to_string(&p).unwrap();
+        let j = serde_json::to_string(&p).expect("serde deserialization should succeed");
         assert!(j.contains("require_at_or_above"));
         assert!(j.contains("allow_legacy_receipts_without_attestation"));
     }
@@ -2069,8 +2069,8 @@ mod tests {
             role: SignerRole::AttestationCell,
             bound_epoch: test_epoch(),
         };
-        let j = serde_json::to_string(&s).unwrap();
-        let restored: SignerKeyId = serde_json::from_str(&j).unwrap();
+        let j = serde_json::to_string(&s).expect("serde deserialization should succeed");
+        let restored: SignerKeyId = serde_json::from_str(&j).expect("serde deserialization should succeed");
         assert_eq!(s, restored);
     }
 
@@ -2092,8 +2092,8 @@ mod tests {
     #[test]
     fn receipt_attestation_bindings_serde_roundtrip() {
         let b = test_attestation_bindings();
-        let j = serde_json::to_string(&b).unwrap();
-        let restored: ReceiptAttestationBindings = serde_json::from_str(&j).unwrap();
+        let j = serde_json::to_string(&b).expect("serde deserialization should succeed");
+        let restored: ReceiptAttestationBindings = serde_json::from_str(&j).expect("serde deserialization should succeed");
         assert_eq!(b, restored);
     }
 }

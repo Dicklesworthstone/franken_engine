@@ -445,7 +445,7 @@ mod tests {
         let bytes = fs::read(path).expect("read supremacy cell matrix fixture");
         // SAFETY: Test fixture file is guaranteed to contain valid JSON for SupremacyCellMatrix.
         // from_slice only fails on malformed JSON or schema mismatch (impossible with controlled test fixture).
-        serde_json::from_slice(&bytes).unwrap()
+        serde_json::from_slice(&bytes).expect("serde deserialization should succeed")
     }
 
     #[test]
@@ -578,8 +578,8 @@ mod tests {
             WorkloadFamily::MemoryPressure,
         ];
         for family in families {
-            let json = serde_json::to_string(&family).unwrap();
-            let back: WorkloadFamily = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&family).expect("serde deserialization should succeed");
+            let back: WorkloadFamily = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(family, back);
         }
     }
@@ -593,8 +593,8 @@ mod tests {
             MeasurementFamily::Memory,
             MeasurementFamily::TailLatency,
         ] {
-            let json = serde_json::to_string(&mf).unwrap();
-            let back: MeasurementFamily = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&mf).expect("serde deserialization should succeed");
+            let back: MeasurementFamily = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(mf, back);
         }
     }
@@ -609,8 +609,8 @@ mod tests {
             EntryMode::NativeReactClient,
             EntryMode::MixedPackage,
         ] {
-            let json = serde_json::to_string(&em).unwrap();
-            let back: EntryMode = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&em).expect("serde deserialization should succeed");
+            let back: EntryMode = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(em, back);
         }
     }
@@ -618,8 +618,8 @@ mod tests {
     #[test]
     fn warm_state_serde_round_trip() {
         for ws in [WarmState::Cold, WarmState::Warm, WarmState::Mixed] {
-            let json = serde_json::to_string(&ws).unwrap();
-            let back: WarmState = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&ws).expect("serde deserialization should succeed");
+            let back: WarmState = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(ws, back);
         }
     }
@@ -634,8 +634,8 @@ mod tests {
             InterferenceProfile::TailStress,
             InterferenceProfile::MemoryContention,
         ] {
-            let json = serde_json::to_string(&ip).unwrap();
-            let back: InterferenceProfile = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&ip).expect("serde deserialization should succeed");
+            let back: InterferenceProfile = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(ip, back);
         }
     }
@@ -650,8 +650,8 @@ mod tests {
             SharedResource::MemoryBandwidth,
             SharedResource::WorkerThreads,
         ] {
-            let json = serde_json::to_string(&sr).unwrap();
-            let back: SharedResource = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&sr).expect("serde deserialization should succeed");
+            let back: SharedResource = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(sr, back);
         }
     }
@@ -667,8 +667,8 @@ mod tests {
             TailAxis::HydrationNs,
             TailAxis::GcPauseNs,
         ] {
-            let json = serde_json::to_string(&ta).unwrap();
-            let back: TailAxis = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&ta).expect("serde deserialization should succeed");
+            let back: TailAxis = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(ta, back);
         }
     }
@@ -877,7 +877,7 @@ mod tests {
     #[test]
     fn interference_index_is_symmetric() {
         let art = load_fixture();
-        let index = build_interference_index(&art).unwrap();
+        let index = build_interference_index(&art).expect("serde deserialization should succeed");
         for (family, related) in &index {
             for other in related {
                 let reverse = index.get(other).expect("symmetric entry must exist");
@@ -892,7 +892,7 @@ mod tests {
     #[test]
     fn interference_index_keys_are_subset_of_rule_families() {
         let art = load_fixture();
-        let index = build_interference_index(&art).unwrap();
+        let index = build_interference_index(&art).expect("serde deserialization should succeed");
         let rule_families: std::collections::BTreeSet<WorkloadFamily> = art
             .interference_rules
             .iter()
@@ -908,16 +908,16 @@ mod tests {
     #[test]
     fn artifact_hash_changes_with_content() {
         let mut art = load_fixture();
-        let h1 = artifact_hash(&art).unwrap();
+        let h1 = artifact_hash(&art).expect("serde deserialization should succeed");
         art.contract_version = "changed".to_string();
-        let h2 = artifact_hash(&art).unwrap();
+        let h2 = artifact_hash(&art).expect("serde deserialization should succeed");
         assert_ne!(h1, h2);
     }
 
     #[test]
     fn artifact_hash_is_hex_encoded_sha256() {
         let art = load_fixture();
-        let hash = artifact_hash(&art).unwrap();
+        let hash = artifact_hash(&art).expect("serde deserialization should succeed");
         assert_eq!(hash.len(), 64);
         assert!(hash.chars().all(|c| c.is_ascii_hexdigit()));
     }
@@ -927,8 +927,8 @@ mod tests {
     #[test]
     fn artifact_serde_round_trip() {
         let art = load_fixture();
-        let json = serde_json::to_string(&art).unwrap();
-        let back: SupremacyCellMatrixArtifact = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&art).expect("serde deserialization should succeed");
+        let back: SupremacyCellMatrixArtifact = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(art, back);
     }
 
@@ -941,8 +941,8 @@ mod tests {
             compatibility_notes: "n/a".to_string(),
             changed_at_utc: "2026-01-01T00:00:00Z".to_string(),
         };
-        let json = serde_json::to_string(&entry).unwrap();
-        let back: ChangelogEntry = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let back: ChangelogEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, back);
     }
 

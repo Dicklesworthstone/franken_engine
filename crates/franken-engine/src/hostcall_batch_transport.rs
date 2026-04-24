@@ -1260,14 +1260,14 @@ fn make_established_protocol_state() -> SessionProtocolState {
             TransitionTrigger::HandshakeInitiated,
             1,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
     state
         .transition(
             SessionPhaseTag::Established,
             TransitionTrigger::HandshakeCompleted,
             2,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
     state
 }
 
@@ -1295,7 +1295,7 @@ pub fn batch_transport_corpus() -> Vec<BatchTransportSpecimen> {
         let mut ts = BatchTransportState::new("s1".into(), config, epoch);
         let mut protocol = make_established_protocol_state();
         let entries = vec![make_entry(1, b"hello"), make_entry(2, b"world")];
-        let batch = ts.build_batch(entries, &session_key, epoch, 100).unwrap();
+        let batch = ts.build_batch(entries, &session_key, epoch, 100).expect("serde deserialization should succeed");
         let result = ts.submit_batch(batch, &mut protocol, &session_key, 100);
         let v = if result.is_ok() {
             BatchTransportVerdict::Pass
@@ -1320,7 +1320,7 @@ pub fn batch_transport_corpus() -> Vec<BatchTransportSpecimen> {
         let mut ts = BatchTransportState::new("s2".into(), config, epoch);
         let mut protocol = make_established_protocol_state();
         let entries = vec![make_entry(1, b"a"), make_entry(2, b"b")];
-        let batch = ts.build_batch(entries, &session_key, epoch, 100).unwrap();
+        let batch = ts.build_batch(entries, &session_key, epoch, 100).expect("serde deserialization should succeed");
         let result = ts.submit_batch(batch, &mut protocol, &[0; 32], 100);
         let v = if result.is_err() {
             BatchTransportVerdict::Pass
@@ -1361,9 +1361,9 @@ pub fn batch_transport_corpus() -> Vec<BatchTransportSpecimen> {
     {
         let config = BatchTransportConfig::default();
         let mut ts = BatchTransportState::new("s4".into(), config, epoch);
-        let rid = ts.allocate_region(1024, 10).unwrap();
-        let hash = ts.seal_region(rid, 100, 20).unwrap();
-        ts.release_region(rid).unwrap();
+        let rid = ts.allocate_region(1024, 10).expect("serde deserialization should succeed");
+        let hash = ts.seal_region(rid, 100, 20).expect("serde deserialization should succeed");
+        ts.release_region(rid).expect("serde deserialization should succeed");
         let region = &ts.regions[&rid];
         let v = if region.state == RegionState::Released
             && region.content_hash.as_ref() == Some(&hash)
@@ -1387,7 +1387,7 @@ pub fn batch_transport_corpus() -> Vec<BatchTransportSpecimen> {
         let mut protocol =
             SessionProtocolState::new("s5".into(), "ext".into(), "host".into(), 64, 50); // Uninit phase
         let entries = vec![make_entry(1, b"data")];
-        let batch = ts.build_batch(entries, &session_key, epoch, 100).unwrap();
+        let batch = ts.build_batch(entries, &session_key, epoch, 100).expect("serde deserialization should succeed");
         let result = ts.submit_batch(batch, &mut protocol, &[0; 32], 100);
         let v = if result.is_err() {
             BatchTransportVerdict::Pass
@@ -1408,9 +1408,9 @@ pub fn batch_transport_corpus() -> Vec<BatchTransportSpecimen> {
         let mut ts = BatchTransportState::new("s6".into(), config, epoch);
         let mut protocol = make_established_protocol_state();
         let entries1 = vec![make_entry(1, b"a")];
-        let batch1 = ts.build_batch(entries1, &session_key, epoch, 100).unwrap();
+        let batch1 = ts.build_batch(entries1, &session_key, epoch, 100).expect("serde deserialization should succeed");
         // Pre-register sequence 1 in protocol replay ledger
-        protocol.check_replay(1, 100, None).unwrap();
+        protocol.check_replay(1, 100, None).expect("serde deserialization should succeed");
         let result = ts.submit_batch(batch1, &mut protocol, &session_key, 100);
         // Membrane calls check_replay, which detects the duplicate sequence,
         // so the submit should be rejected with ReplayDetected.
@@ -1435,9 +1435,9 @@ pub fn batch_transport_corpus() -> Vec<BatchTransportSpecimen> {
         let mut protocol = make_established_protocol_state();
         protocol
             .enter_degraded(DegradedSeverity::IdentityCompromised, "bad".into(), 50)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let entries = vec![make_entry(1, b"data")];
-        let batch = ts.build_batch(entries, &session_key, epoch, 100).unwrap();
+        let batch = ts.build_batch(entries, &session_key, epoch, 100).expect("serde deserialization should succeed");
         let result = ts.submit_batch(batch, &mut protocol, &[0; 32], 100);
         let v = if result.is_err() {
             BatchTransportVerdict::Pass
@@ -1520,9 +1520,9 @@ pub fn batch_transport_corpus() -> Vec<BatchTransportSpecimen> {
         let mut ts = BatchTransportState::new("s11".into(), config, epoch);
         let mut protocol = make_established_protocol_state();
         let entries = vec![make_entry(1, b"a"), make_entry(2, b"b")];
-        let batch = ts.build_batch(entries, &session_key, epoch, 100).unwrap();
+        let batch = ts.build_batch(entries, &session_key, epoch, 100).expect("serde deserialization should succeed");
         ts.submit_batch(batch, &mut protocol, &session_key, 100)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let before = ts.credit_pool.available();
         ts.grant_credits(5);
         let after = ts.credit_pool.available();
@@ -1700,8 +1700,8 @@ mod tests {
     #[test]
     fn config_serde_roundtrip() {
         let c = BatchTransportConfig::default();
-        let json = serde_json::to_string(&c).unwrap();
-        let back: BatchTransportConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let back: BatchTransportConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c, back);
     }
 
@@ -1717,7 +1717,7 @@ mod tests {
     #[test]
     fn credit_pool_consume_success() {
         let mut pool = CreditPool::new("s".into(), 100, 200);
-        pool.try_consume(50).unwrap();
+        pool.try_consume(50).expect("serde deserialization should succeed");
         assert_eq!(pool.available(), 50);
         assert_eq!(pool.total_consumed(), 50);
     }
@@ -1754,8 +1754,8 @@ mod tests {
     #[test]
     fn credit_pool_serde_roundtrip() {
         let pool = CreditPool::new("s".into(), 100, 200);
-        let json = serde_json::to_string(&pool).unwrap();
-        let back: CreditPool = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&pool).expect("serde deserialization should succeed");
+        let back: CreditPool = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(pool.available(), back.available());
         assert_eq!(pool.session_id(), back.session_id());
     }
@@ -1765,7 +1765,7 @@ mod tests {
     #[test]
     fn region_allocate_success() {
         let mut ts = default_state();
-        let rid = ts.allocate_region(1024, 10).unwrap();
+        let rid = ts.allocate_region(1024, 10).expect("serde deserialization should succeed");
         assert_eq!(rid, 1);
         assert_eq!(ts.regions[&rid].state, RegionState::Allocated);
     }
@@ -1777,7 +1777,7 @@ mod tests {
             ..Default::default()
         };
         let mut ts = BatchTransportState::new("s".into(), config, test_epoch());
-        ts.allocate_region(100, 10).unwrap();
+        ts.allocate_region(100, 10).expect("serde deserialization should succeed");
         let err = ts.allocate_region(100, 20);
         assert!(err.is_err());
     }
@@ -1785,8 +1785,8 @@ mod tests {
     #[test]
     fn region_seal_success() {
         let mut ts = default_state();
-        let rid = ts.allocate_region(1024, 10).unwrap();
-        let hash = ts.seal_region(rid, 500, 20).unwrap();
+        let rid = ts.allocate_region(1024, 10).expect("serde deserialization should succeed");
+        let hash = ts.seal_region(rid, 500, 20).expect("serde deserialization should succeed");
         assert_eq!(ts.regions[&rid].state, RegionState::Sealed);
         assert_eq!(ts.regions[&rid].content_hash, Some(hash));
     }
@@ -1794,8 +1794,8 @@ mod tests {
     #[test]
     fn region_seal_wrong_state() {
         let mut ts = default_state();
-        let rid = ts.allocate_region(1024, 10).unwrap();
-        ts.seal_region(rid, 500, 20).unwrap();
+        let rid = ts.allocate_region(1024, 10).expect("serde deserialization should succeed");
+        ts.seal_region(rid, 500, 20).expect("serde deserialization should succeed");
         let err = ts.seal_region(rid, 500, 30);
         assert!(err.is_err());
     }
@@ -1803,17 +1803,17 @@ mod tests {
     #[test]
     fn region_release_success() {
         let mut ts = default_state();
-        let rid = ts.allocate_region(1024, 10).unwrap();
-        ts.seal_region(rid, 500, 20).unwrap();
-        ts.release_region(rid).unwrap();
+        let rid = ts.allocate_region(1024, 10).expect("serde deserialization should succeed");
+        ts.seal_region(rid, 500, 20).expect("serde deserialization should succeed");
+        ts.release_region(rid).expect("serde deserialization should succeed");
         assert_eq!(ts.regions[&rid].state, RegionState::Released);
     }
 
     #[test]
     fn region_revoke() {
         let mut ts = default_state();
-        let rid = ts.allocate_region(1024, 10).unwrap();
-        ts.revoke_region(rid).unwrap();
+        let rid = ts.allocate_region(1024, 10).expect("serde deserialization should succeed");
+        ts.revoke_region(rid).expect("serde deserialization should succeed");
         assert_eq!(ts.regions[&rid].state, RegionState::Revoked);
     }
 
@@ -1836,8 +1836,8 @@ mod tests {
             allocated_at_tick: 10,
             sealed_at_tick: None,
         };
-        let json = serde_json::to_string(&r).unwrap();
-        let back: SharedMemoryRegion = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let back: SharedMemoryRegion = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r.region_id, back.region_id);
     }
 
@@ -1849,7 +1849,7 @@ mod tests {
         let entries = vec![make_entry(1, b"hello"), make_entry(2, b"world")];
         let batch = ts
             .build_batch(entries, &session_key(), test_epoch(), 100)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(batch.batch_id, 1);
         assert_eq!(batch.sequence_start, 1);
         assert_eq!(batch.sequence_end, 2);
@@ -1918,10 +1918,10 @@ mod tests {
         let entries = vec![make_entry(1, b"data")];
         let batch = ts
             .build_batch(entries, &session_key(), test_epoch(), 100)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let receipt = ts
             .submit_batch(batch, &mut protocol, &session_key(), 100)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(receipt.envelope_count, 1);
         assert_eq!(ts.accepted_batches.len(), 1);
     }
@@ -1934,9 +1934,9 @@ mod tests {
         let entries = vec![make_entry(1, b"a"), make_entry(2, b"b")];
         let batch = ts
             .build_batch(entries, &session_key(), test_epoch(), 100)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         ts.submit_batch(batch, &mut protocol, &session_key(), 100)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(ts.credit_pool.available(), before - 2);
     }
 
@@ -1947,7 +1947,7 @@ mod tests {
         let entries = vec![make_entry(1, b"data")];
         let batch = ts
             .build_batch(entries, &session_key(), test_epoch(), 100)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let err = ts.submit_batch(batch, &mut protocol, &[0; 32], 100);
         assert!(err.is_err());
     }
@@ -1976,8 +1976,8 @@ mod tests {
     #[test]
     fn membrane_rejection_reason_serde() {
         for r in MembraneRejectionReason::ALL {
-            let json = serde_json::to_string(r).unwrap();
-            let back: MembraneRejectionReason = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(r).expect("serde deserialization should succeed");
+            let back: MembraneRejectionReason = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*r, back);
         }
     }
@@ -2003,8 +2003,8 @@ mod tests {
             BatchTransportError::RegionNotFound { region_id: 42 },
         ];
         for e in &errors {
-            let json = serde_json::to_string(e).unwrap();
-            let back: BatchTransportError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(e).expect("serde deserialization should succeed");
+            let back: BatchTransportError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*e, back);
         }
     }
@@ -2077,9 +2077,9 @@ mod tests {
         let entries = vec![make_entry(1, b"a")];
         let batch = ts
             .build_batch(entries, &session_key(), test_epoch(), 100)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         ts.submit_batch(batch, &mut protocol, &session_key(), 100)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let before = ts.credit_pool.available();
         ts.grant_credits(10);
         assert_eq!(ts.credit_pool.available(), before + 10);
@@ -2094,8 +2094,8 @@ mod tests {
     #[test]
     fn region_state_serde_roundtrip_all_variants() {
         for variant in RegionState::ALL {
-            let json = serde_json::to_string(variant).unwrap();
-            let back: RegionState = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(variant).expect("serde deserialization should succeed");
+            let back: RegionState = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(
                 *variant, back,
                 "RegionState serde roundtrip failed for {variant}"
@@ -2122,8 +2122,8 @@ mod tests {
     #[test]
     fn batch_transport_specimen_family_serde_roundtrip_all() {
         for family in BatchTransportSpecimenFamily::ALL {
-            let json = serde_json::to_string(family).unwrap();
-            let back: BatchTransportSpecimenFamily = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(family).expect("serde deserialization should succeed");
+            let back: BatchTransportSpecimenFamily = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*family, back, "Family serde roundtrip failed for {family}");
         }
     }
@@ -2215,14 +2215,14 @@ mod tests {
     fn batch_transport_verdict_serde_roundtrip() {
         let pass = BatchTransportVerdict::Pass;
         let fail = BatchTransportVerdict::Fail;
-        let pass_json = serde_json::to_string(&pass).unwrap();
-        let fail_json = serde_json::to_string(&fail).unwrap();
+        let pass_json = serde_json::to_string(&pass).expect("serde deserialization should succeed");
+        let fail_json = serde_json::to_string(&fail).expect("serde deserialization should succeed");
         assert_eq!(
-            serde_json::from_str::<BatchTransportVerdict>(&pass_json).unwrap(),
+            serde_json::from_str::<BatchTransportVerdict>(&pass_json).expect("serde deserialization should succeed"),
             pass
         );
         assert_eq!(
-            serde_json::from_str::<BatchTransportVerdict>(&fail_json).unwrap(),
+            serde_json::from_str::<BatchTransportVerdict>(&fail_json).expect("serde deserialization should succeed"),
             fail
         );
         // Different serialized forms
@@ -2342,8 +2342,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap();
-            let back: BatchTransportError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let back: BatchTransportError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, back, "serde roundtrip failed for {err:?}");
         }
     }
@@ -2398,8 +2398,8 @@ mod tests {
             }),
         ];
         for p in &payloads {
-            let json = serde_json::to_string(p).unwrap();
-            let back: BatchPayload = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(p).expect("serde deserialization should succeed");
+            let back: BatchPayload = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*p, back);
         }
     }
@@ -2407,7 +2407,7 @@ mod tests {
     #[test]
     fn credit_pool_consume_exact_amount_exhausts() {
         let mut pool = CreditPool::new("s".into(), 10, 100);
-        pool.try_consume(10).unwrap();
+        pool.try_consume(10).expect("serde deserialization should succeed");
         assert!(pool.is_exhausted());
         assert_eq!(pool.available(), 0);
         assert_eq!(pool.total_consumed(), 10);
@@ -2416,7 +2416,7 @@ mod tests {
     #[test]
     fn credit_pool_consume_zero_is_noop() {
         let mut pool = CreditPool::new("s".into(), 50, 100);
-        pool.try_consume(0).unwrap();
+        pool.try_consume(0).expect("serde deserialization should succeed");
         assert_eq!(pool.available(), 50);
         assert_eq!(pool.total_consumed(), 0);
     }
@@ -2427,7 +2427,7 @@ mod tests {
         assert_eq!(pool.high_water_mark(), 10);
         pool.grant(20);
         assert_eq!(pool.high_water_mark(), 30);
-        pool.try_consume(25).unwrap();
+        pool.try_consume(25).expect("serde deserialization should succeed");
         assert_eq!(pool.high_water_mark(), 30); // stays at previous high
         pool.grant(50);
         assert_eq!(pool.high_water_mark(), 55);
@@ -2451,7 +2451,7 @@ mod tests {
     fn credit_pool_state_hash_differs_after_mutation() {
         let mut pool = CreditPool::new("s".into(), 100, 200);
         let hash_before = pool.state_hash();
-        pool.try_consume(1).unwrap();
+        pool.try_consume(1).expect("serde deserialization should succeed");
         let hash_after = pool.state_hash();
         assert_ne!(hash_before, hash_after);
     }
@@ -2466,15 +2466,15 @@ mod tests {
     #[test]
     fn region_full_lifecycle_allocated_to_revoked() {
         let mut ts = default_state();
-        let rid = ts.allocate_region(512, 10).unwrap();
+        let rid = ts.allocate_region(512, 10).expect("serde deserialization should succeed");
         assert_eq!(ts.regions[&rid].state, RegionState::Allocated);
 
-        ts.seal_region(rid, 256, 20).unwrap();
+        ts.seal_region(rid, 256, 20).expect("serde deserialization should succeed");
         assert_eq!(ts.regions[&rid].state, RegionState::Sealed);
         assert!(ts.regions[&rid].sealed_at_tick.is_some());
         assert_eq!(ts.regions[&rid].occupied_bytes, 256);
 
-        ts.release_region(rid).unwrap();
+        ts.release_region(rid).expect("serde deserialization should succeed");
         assert_eq!(ts.regions[&rid].state, RegionState::Released);
 
         // Cannot release again (already released, not sealed)
@@ -2485,8 +2485,8 @@ mod tests {
     #[test]
     fn region_seal_with_zero_bytes() {
         let mut ts = default_state();
-        let rid = ts.allocate_region(1024, 10).unwrap();
-        let hash = ts.seal_region(rid, 0, 20).unwrap();
+        let rid = ts.allocate_region(1024, 10).expect("serde deserialization should succeed");
+        let hash = ts.seal_region(rid, 0, 20).expect("serde deserialization should succeed");
         assert_eq!(ts.regions[&rid].occupied_bytes, 0);
         assert_eq!(ts.regions[&rid].content_hash, Some(hash));
     }
@@ -2494,16 +2494,16 @@ mod tests {
     #[test]
     fn region_seal_at_capacity_boundary() {
         let mut ts = default_state();
-        let rid = ts.allocate_region(100, 10).unwrap();
+        let rid = ts.allocate_region(100, 10).expect("serde deserialization should succeed");
         // Exact capacity should succeed
-        ts.seal_region(rid, 100, 20).unwrap();
+        ts.seal_region(rid, 100, 20).expect("serde deserialization should succeed");
         assert_eq!(ts.regions[&rid].occupied_bytes, 100);
     }
 
     #[test]
     fn region_seal_exceeds_capacity() {
         let mut ts = default_state();
-        let rid = ts.allocate_region(100, 10).unwrap();
+        let rid = ts.allocate_region(100, 10).expect("serde deserialization should succeed");
         let err = ts.seal_region(rid, 101, 20);
         assert!(matches!(
             err,
@@ -2532,13 +2532,13 @@ mod tests {
     fn region_revoke_from_any_state() {
         // Revoke should work from any state, not just Sealed
         let mut ts = default_state();
-        let r1 = ts.allocate_region(100, 10).unwrap();
-        ts.revoke_region(r1).unwrap();
+        let r1 = ts.allocate_region(100, 10).expect("serde deserialization should succeed");
+        ts.revoke_region(r1).expect("serde deserialization should succeed");
         assert_eq!(ts.regions[&r1].state, RegionState::Revoked);
 
-        let r2 = ts.allocate_region(100, 20).unwrap();
-        ts.seal_region(r2, 50, 30).unwrap();
-        ts.revoke_region(r2).unwrap();
+        let r2 = ts.allocate_region(100, 20).expect("serde deserialization should succeed");
+        ts.seal_region(r2, 50, 30).expect("serde deserialization should succeed");
+        ts.revoke_region(r2).expect("serde deserialization should succeed");
         assert_eq!(ts.regions[&r2].state, RegionState::Revoked);
     }
 
@@ -2753,10 +2753,10 @@ mod tests {
         let mut ts = default_state();
         let b1 = ts
             .build_batch(vec![make_entry(1, b"a")], &session_key(), test_epoch(), 100)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let b2 = ts
             .build_batch(vec![make_entry(2, b"b")], &session_key(), test_epoch(), 200)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(b1.batch_id, 1);
         assert_eq!(b2.batch_id, 2);
     }
@@ -2769,9 +2769,9 @@ mod tests {
         let entries = vec![make_entry(1, b"data")];
         let batch = ts
             .build_batch(entries, &session_key(), test_epoch(), 100)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         ts.submit_batch(batch, &mut protocol, &session_key(), 100)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let hash_after = ts.state_hash();
         assert_ne!(hash_before, hash_after);
     }
@@ -2807,8 +2807,8 @@ mod tests {
             tick: 999,
             envelope_count: 3,
         };
-        let json = serde_json::to_string(&entry).unwrap();
-        let back: MembraneAuditEntry = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let back: MembraneAuditEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, back);
 
         let entry_reject = MembraneAuditEntry {
@@ -2818,8 +2818,8 @@ mod tests {
             tick: 500,
             envelope_count: 1,
         };
-        let json2 = serde_json::to_string(&entry_reject).unwrap();
-        let back2: MembraneAuditEntry = serde_json::from_str(&json2).unwrap();
+        let json2 = serde_json::to_string(&entry_reject).expect("serde deserialization should succeed");
+        let back2: MembraneAuditEntry = serde_json::from_str(&json2).expect("serde deserialization should succeed");
         assert_eq!(entry_reject, back2);
     }
 
@@ -2831,8 +2831,8 @@ mod tests {
             detail: "bad mac".into(),
         };
         for v in [&accept, &reject] {
-            let json = serde_json::to_string(v).unwrap();
-            let back: MembraneVerdict = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: MembraneVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -2849,8 +2849,8 @@ mod tests {
             batch_content_hash: ContentHash::compute(b"receipt"),
             accepted_at_tick: 300,
         };
-        let json = serde_json::to_string(&receipt).unwrap();
-        let back: BatchReceipt = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
+        let back: BatchReceipt = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(receipt, back);
     }
 
@@ -2870,16 +2870,16 @@ mod tests {
             sealed_at_tick: 100,
             epoch: test_epoch(),
         };
-        let json = serde_json::to_string(&envelope).unwrap();
-        let back: BatchEnvelope = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&envelope).expect("serde deserialization should succeed");
+        let back: BatchEnvelope = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(envelope, back);
     }
 
     #[test]
     fn batch_entry_serde_roundtrip() {
         let entry = make_entry(42, b"serde-check");
-        let json = serde_json::to_string(&entry).unwrap();
-        let back: BatchEntry = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let back: BatchEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, back);
     }
 
@@ -2903,9 +2903,9 @@ mod tests {
             ..Default::default()
         };
         let mut ts = BatchTransportState::new("s".into(), config, test_epoch());
-        let r1 = ts.allocate_region(100, 10).unwrap();
-        ts.seal_region(r1, 50, 20).unwrap();
-        ts.release_region(r1).unwrap();
+        let r1 = ts.allocate_region(100, 10).expect("serde deserialization should succeed");
+        ts.seal_region(r1, 50, 20).expect("serde deserialization should succeed");
+        ts.release_region(r1).expect("serde deserialization should succeed");
         // Released region should not count as active, so we can allocate another
         let r2 = ts.allocate_region(100, 30);
         assert!(r2.is_ok());
@@ -2918,8 +2918,8 @@ mod tests {
             ..Default::default()
         };
         let mut ts = BatchTransportState::new("s".into(), config, test_epoch());
-        let r1 = ts.allocate_region(100, 10).unwrap();
-        ts.revoke_region(r1).unwrap();
+        let r1 = ts.allocate_region(100, 10).expect("serde deserialization should succeed");
+        ts.revoke_region(r1).expect("serde deserialization should succeed");
         let r2 = ts.allocate_region(100, 20);
         assert!(r2.is_ok());
     }

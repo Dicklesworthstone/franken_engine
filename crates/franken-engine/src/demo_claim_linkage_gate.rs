@@ -617,7 +617,7 @@ impl DemoClaimLinkageGate {
             config: &self.config,
             claim_results: canonical_claim_results,
         })
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let decision_id = format!(
             "linkage-{}-{}-{}",
@@ -803,7 +803,7 @@ mod tests {
     }
 
     fn default_gate() -> DemoClaimLinkageGate {
-        DemoClaimLinkageGate::new(LinkageGateConfig::default()).unwrap()
+        DemoClaimLinkageGate::new(LinkageGateConfig::default()).expect("serde deserialization should succeed")
     }
 
     // ── Constructor Tests ───────────────────────────────────────────
@@ -928,7 +928,7 @@ mod tests {
             vec!["d1"],
             vec!["e1"],
         )];
-        let decision = gate.evaluate("m1", &claims, &demos).unwrap();
+        let decision = gate.evaluate("m1", &claims, &demos).expect("serde deserialization should succeed");
         assert_eq!(decision.verdict, LinkageVerdict::Pass);
         assert!(decision.is_pass());
         assert_eq!(decision.linked_claims, 1);
@@ -945,7 +945,7 @@ mod tests {
             vec!["d1"],
             vec![], // No evidence
         )];
-        let decision = gate.evaluate("m1", &claims, &demos).unwrap();
+        let decision = gate.evaluate("m1", &claims, &demos).expect("serde deserialization should succeed");
         assert_eq!(decision.verdict, LinkageVerdict::Fail);
         assert!(!decision.is_pass());
     }
@@ -960,7 +960,7 @@ mod tests {
             vec![], // No demos
             vec!["e1"],
         )];
-        let decision = gate.evaluate("m1", &claims, &demos).unwrap();
+        let decision = gate.evaluate("m1", &claims, &demos).expect("serde deserialization should succeed");
         assert_eq!(decision.verdict, LinkageVerdict::Fail);
     }
 
@@ -974,7 +974,7 @@ mod tests {
             vec!["d1"],
             vec!["e1"],
         )];
-        let decision = gate.evaluate("m1", &claims, &demos).unwrap();
+        let decision = gate.evaluate("m1", &claims, &demos).expect("serde deserialization should succeed");
         assert_eq!(decision.verdict, LinkageVerdict::Fail);
     }
 
@@ -1006,7 +1006,7 @@ mod tests {
             vec!["d1"],
             vec!["e1"],
         )];
-        let decision = gate.evaluate("m1", &claims, &demos).unwrap();
+        let decision = gate.evaluate("m1", &claims, &demos).expect("serde deserialization should succeed");
         assert_eq!(decision.aggregate_completeness_millionths, MILLION);
     }
 
@@ -1020,7 +1020,7 @@ mod tests {
             vec!["d1"],
             vec![], // Missing evidence → 75% complete
         )];
-        let decision = gate.evaluate("m1", &claims, &demos).unwrap();
+        let decision = gate.evaluate("m1", &claims, &demos).expect("serde deserialization should succeed");
         assert!(decision.aggregate_completeness_millionths > 0);
         assert!(decision.aggregate_completeness_millionths < MILLION);
     }
@@ -1033,7 +1033,7 @@ mod tests {
             make_claim("c1", ClaimCategory::Performance, vec!["d1"], vec!["e1"]),
             make_claim("c2", ClaimCategory::Security, vec![], vec![]),
         ];
-        let decision = gate.evaluate("m1", &claims, &demos).unwrap();
+        let decision = gate.evaluate("m1", &claims, &demos).expect("serde deserialization should succeed");
         assert_eq!(decision.linkage_rate_millionths(), 500_000); // 1/2
     }
 
@@ -1047,7 +1047,7 @@ mod tests {
             make_claim("c1", ClaimCategory::Performance, vec!["d1"], vec!["e1"]),
             make_claim("c2", ClaimCategory::Security, vec!["d2"], vec!["e2"]),
         ];
-        let decision = gate.evaluate("m1", &claims, &demos).unwrap();
+        let decision = gate.evaluate("m1", &claims, &demos).expect("serde deserialization should succeed");
         assert_eq!(decision.verdict, LinkageVerdict::Pass);
         assert_eq!(decision.linked_claims, 2);
     }
@@ -1060,7 +1060,7 @@ mod tests {
             make_claim("c1", ClaimCategory::Performance, vec!["d1"], vec!["e1"]),
             make_claim("c2", ClaimCategory::Security, vec![], vec![]), // Incomplete
         ];
-        let decision = gate.evaluate("m1", &claims, &demos).unwrap();
+        let decision = gate.evaluate("m1", &claims, &demos).expect("serde deserialization should succeed");
         assert_eq!(decision.verdict, LinkageVerdict::Fail);
         assert_eq!(decision.linked_claims, 1);
         assert_eq!(decision.unlinked_claims, 1);
@@ -1074,7 +1074,7 @@ mod tests {
             require_evidence: false,
             ..Default::default()
         };
-        let mut gate = DemoClaimLinkageGate::new(config).unwrap();
+        let mut gate = DemoClaimLinkageGate::new(config).expect("serde deserialization should succeed");
 
         let demos = vec![make_demo("d1", true)];
         let claims = vec![make_claim(
@@ -1083,7 +1083,7 @@ mod tests {
             vec!["d1"],
             vec![],
         )];
-        let decision = gate.evaluate("m1", &claims, &demos).unwrap();
+        let decision = gate.evaluate("m1", &claims, &demos).expect("serde deserialization should succeed");
         assert_eq!(decision.verdict, LinkageVerdict::Pass);
     }
 
@@ -1095,7 +1095,7 @@ mod tests {
         };
         config.require_expected_outputs = false;
         config.require_verification_commands = false;
-        let mut gate = DemoClaimLinkageGate::new(config).unwrap();
+        let mut gate = DemoClaimLinkageGate::new(config).expect("serde deserialization should succeed");
 
         let claims = vec![make_claim(
             "c1",
@@ -1103,7 +1103,7 @@ mod tests {
             vec![],
             vec!["e1"],
         )];
-        let decision = gate.evaluate("m1", &claims, &[]).unwrap();
+        let decision = gate.evaluate("m1", &claims, &[]).expect("serde deserialization should succeed");
         assert_eq!(decision.verdict, LinkageVerdict::Pass);
     }
 
@@ -1179,7 +1179,7 @@ mod tests {
             vec!["d1"],
             vec!["e1"],
         )];
-        let decision = gate.evaluate("m1", &claims, &demos).unwrap();
+        let decision = gate.evaluate("m1", &claims, &demos).expect("serde deserialization should succeed");
         let display = format!("{}", decision);
         assert!(display.contains("m1"));
         assert!(display.contains("pass"));
@@ -1236,16 +1236,16 @@ mod tests {
     #[test]
     fn serde_roundtrip_claim() {
         let claim = make_claim("c1", ClaimCategory::Performance, vec!["d1"], vec!["e1"]);
-        let json = serde_json::to_string(&claim).unwrap();
-        let back: MilestoneClaim = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&claim).expect("serde deserialization should succeed");
+        let back: MilestoneClaim = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(claim, back);
     }
 
     #[test]
     fn serde_roundtrip_demo() {
         let demo = make_demo("d1", true);
-        let json = serde_json::to_string(&demo).unwrap();
-        let back: DemoSpecification = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&demo).expect("serde deserialization should succeed");
+        let back: DemoSpecification = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(demo, back);
     }
 
@@ -1259,17 +1259,17 @@ mod tests {
             vec!["d1"],
             vec!["e1"],
         )];
-        let decision = gate.evaluate("m1", &claims, &demos).unwrap();
-        let json = serde_json::to_string(&decision).unwrap();
-        let back: LinkageGateDecision = serde_json::from_str(&json).unwrap();
+        let decision = gate.evaluate("m1", &claims, &demos).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&decision).expect("serde deserialization should succeed");
+        let back: LinkageGateDecision = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(decision, back);
     }
 
     #[test]
     fn serde_roundtrip_config() {
         let config = LinkageGateConfig::default();
-        let json = serde_json::to_string(&config).unwrap();
-        let back: LinkageGateConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let back: LinkageGateConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, back);
     }
 
@@ -1286,10 +1286,10 @@ mod tests {
         )];
 
         let mut g1 = default_gate();
-        let d1 = g1.evaluate("m1", &claims, &demos).unwrap();
+        let d1 = g1.evaluate("m1", &claims, &demos).expect("serde deserialization should succeed");
 
         let mut g2 = default_gate();
-        let d2 = g2.evaluate("m1", &claims, &demos).unwrap();
+        let d2 = g2.evaluate("m1", &claims, &demos).expect("serde deserialization should succeed");
 
         assert_eq!(d1.artifact_hash, d2.artifact_hash);
     }
@@ -1315,15 +1315,15 @@ mod tests {
             vec!["e1"],
         )];
 
-        let mut gate_missing_evidence = DemoClaimLinkageGate::new(config.clone()).unwrap();
+        let mut gate_missing_evidence = DemoClaimLinkageGate::new(config.clone()).expect("serde deserialization should succeed");
         let decision_missing_evidence = gate_missing_evidence
             .evaluate("m1", &claims_missing_evidence, &demos)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
-        let mut gate_missing_demo = DemoClaimLinkageGate::new(config).unwrap();
+        let mut gate_missing_demo = DemoClaimLinkageGate::new(config).expect("serde deserialization should succeed");
         let decision_missing_demo = gate_missing_demo
             .evaluate("m1", &claims_missing_demo, &demos)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert_eq!(
             decision_missing_evidence.claim_results[0].completeness_millionths,
@@ -1352,10 +1352,10 @@ mod tests {
         ];
 
         let mut gate_a = default_gate();
-        let decision_a = gate_a.evaluate("m1", &claims_a, &demos).unwrap();
+        let decision_a = gate_a.evaluate("m1", &claims_a, &demos).expect("serde deserialization should succeed");
 
         let mut gate_b = default_gate();
-        let decision_b = gate_b.evaluate("m1", &claims_b, &demos).unwrap();
+        let decision_b = gate_b.evaluate("m1", &claims_b, &demos).expect("serde deserialization should succeed");
 
         assert_eq!(decision_a.artifact_hash, decision_b.artifact_hash);
     }
@@ -1421,7 +1421,7 @@ mod tests {
             vec!["d1", "d2"],
             vec!["e1"],
         )];
-        let decision = gate.evaluate("m1", &claims, &demos).unwrap();
+        let decision = gate.evaluate("m1", &claims, &demos).expect("serde deserialization should succeed");
         assert_eq!(decision.verdict, LinkageVerdict::Pass);
     }
 
@@ -1433,7 +1433,7 @@ mod tests {
             make_claim("c1", ClaimCategory::Performance, vec!["d1"], vec!["e1"]),
             make_claim("c2", ClaimCategory::Security, vec![], vec![]),
         ];
-        let decision = gate.evaluate("m1", &claims, &demos).unwrap();
+        let decision = gate.evaluate("m1", &claims, &demos).expect("serde deserialization should succeed");
         assert!(decision.rationale.contains("c2"));
     }
 
@@ -1447,7 +1447,7 @@ mod tests {
             vec!["d1"],
             vec!["e1"],
         )];
-        let decision = gate.evaluate("m1", &claims, &demos).unwrap();
+        let decision = gate.evaluate("m1", &claims, &demos).expect("serde deserialization should succeed");
         assert!(decision.rationale.contains("All"));
     }
 
@@ -1502,7 +1502,7 @@ mod tests {
     #[test]
     fn json_fields_demo_specification() {
         let demo = make_demo("d1", true);
-        let json = serde_json::to_string(&demo).unwrap();
+        let json = serde_json::to_string(&demo).expect("serde deserialization should succeed");
         assert!(json.contains("\"demo_id\""));
         assert!(json.contains("\"title\""));
         assert!(json.contains("\"description\""));
@@ -1523,8 +1523,8 @@ mod tests {
             vec!["d1"],
             vec!["e1"],
         )];
-        let decision = gate.evaluate("m1", &claims, &demos).unwrap();
-        let json = serde_json::to_string(&decision).unwrap();
+        let decision = gate.evaluate("m1", &claims, &demos).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&decision).expect("serde deserialization should succeed");
         assert!(json.contains("\"decision_id\""));
         assert!(json.contains("\"milestone_id\""));
         assert!(json.contains("\"epoch\""));
@@ -1541,7 +1541,7 @@ mod tests {
     #[test]
     fn json_fields_linkage_gate_config() {
         let config = LinkageGateConfig::default();
-        let json = serde_json::to_string(&config).unwrap();
+        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
         assert!(json.contains("\"epoch\""));
         assert!(json.contains("\"min_completeness_millionths\""));
         assert!(json.contains("\"require_runnable_demo\""));
@@ -1559,8 +1559,8 @@ mod tests {
             count: 100,
             max: 64,
         };
-        let json = serde_json::to_string(&err).unwrap();
-        let back: LinkageGateError = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let back: LinkageGateError = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, back);
     }
 
@@ -1588,9 +1588,9 @@ mod tests {
         config.require_evidence = false;
         config.require_expected_outputs = false;
         config.require_verification_commands = false;
-        let mut gate = DemoClaimLinkageGate::new(config).unwrap();
+        let mut gate = DemoClaimLinkageGate::new(config).expect("serde deserialization should succeed");
         let claims = vec![make_claim("c1", ClaimCategory::Reliability, vec![], vec![])];
-        let decision = gate.evaluate("m1", &claims, &[]).unwrap();
+        let decision = gate.evaluate("m1", &claims, &[]).expect("serde deserialization should succeed");
         assert_eq!(decision.verdict, LinkageVerdict::Pass);
         assert_eq!(decision.aggregate_completeness_millionths, MILLION);
     }
@@ -1781,7 +1781,7 @@ mod tests {
         ];
         let jsons: BTreeSet<String> = variants
             .iter()
-            .map(|v| serde_json::to_string(v).unwrap())
+            .map(|v| serde_json::to_string(v).expect("serde deserialization should succeed"))
             .collect();
         assert_eq!(jsons.len(), 6);
     }
@@ -1799,7 +1799,7 @@ mod tests {
         ];
         let jsons: BTreeSet<String> = variants
             .iter()
-            .map(|v| serde_json::to_string(v).unwrap())
+            .map(|v| serde_json::to_string(v).expect("serde deserialization should succeed"))
             .collect();
         assert_eq!(jsons.len(), 7);
     }
@@ -1813,7 +1813,7 @@ mod tests {
         ];
         let jsons: BTreeSet<String> = variants
             .iter()
-            .map(|v| serde_json::to_string(v).unwrap())
+            .map(|v| serde_json::to_string(v).expect("serde deserialization should succeed"))
             .collect();
         assert_eq!(jsons.len(), 3);
     }
@@ -1847,7 +1847,7 @@ mod tests {
         ];
         let jsons: BTreeSet<String> = variants
             .iter()
-            .map(|v| serde_json::to_string(v).unwrap())
+            .map(|v| serde_json::to_string(v).expect("serde deserialization should succeed"))
             .collect();
         assert_eq!(jsons.len(), 8);
     }
@@ -1947,7 +1947,7 @@ mod tests {
             vec!["d1"],
             vec!["e1"],
         )];
-        let decision = gate.evaluate("m1", &claims, &demos).unwrap();
+        let decision = gate.evaluate("m1", &claims, &demos).expect("serde deserialization should succeed");
         let mut cloned = decision.clone();
         cloned.milestone_id = "m2".to_string();
         cloned.verdict = LinkageVerdict::Fail;
@@ -1994,7 +1994,7 @@ mod tests {
     #[test]
     fn json_field_names_verification_command() {
         let cmd = make_command("cmd1");
-        let json = serde_json::to_string(&cmd).unwrap();
+        let json = serde_json::to_string(&cmd).expect("serde deserialization should succeed");
         assert!(json.contains("\"command_id\""));
         assert!(json.contains("\"command\""));
         assert!(json.contains("\"expected_exit_code\""));
@@ -2005,7 +2005,7 @@ mod tests {
     #[test]
     fn json_field_names_expected_output() {
         let out = make_output("out1");
-        let json = serde_json::to_string(&out).unwrap();
+        let json = serde_json::to_string(&out).expect("serde deserialization should succeed");
         assert!(json.contains("\"name\""));
         assert!(json.contains("\"expected_hash\""));
         assert!(json.contains("\"exact_match\""));
@@ -2015,7 +2015,7 @@ mod tests {
     #[test]
     fn json_field_names_milestone_claim() {
         let claim = make_claim("c1", ClaimCategory::Performance, vec!["d1"], vec!["e1"]);
-        let json = serde_json::to_string(&claim).unwrap();
+        let json = serde_json::to_string(&claim).expect("serde deserialization should succeed");
         assert!(json.contains("\"claim_id\""));
         assert!(json.contains("\"statement\""));
         assert!(json.contains("\"milestone_id\""));
@@ -2027,7 +2027,7 @@ mod tests {
     #[test]
     fn json_field_names_evidence_link() {
         let ev = make_evidence("e1");
-        let json = serde_json::to_string(&ev).unwrap();
+        let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
         assert!(json.contains("\"evidence_id\""));
         assert!(json.contains("\"kind\""));
         assert!(json.contains("\"artifact_hash\""));
@@ -2046,7 +2046,7 @@ mod tests {
             missing: Vec::new(),
             completeness_millionths: MILLION,
         };
-        let json = serde_json::to_string(&result).unwrap();
+        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
         assert!(json.contains("\"claim_id\""));
         assert!(json.contains("\"linked\""));
         assert!(json.contains("\"has_runnable_demo\""));
@@ -2194,15 +2194,15 @@ mod tests {
     #[test]
     fn hash_consistency_claim_category() {
         // ClaimCategory does not derive Hash, so we test serde stability instead
-        let a = serde_json::to_string(&ClaimCategory::Security).unwrap();
-        let b = serde_json::to_string(&ClaimCategory::Security).unwrap();
+        let a = serde_json::to_string(&ClaimCategory::Security).expect("serde deserialization should succeed");
+        let b = serde_json::to_string(&ClaimCategory::Security).expect("serde deserialization should succeed");
         assert_eq!(a, b);
     }
 
     #[test]
     fn hash_consistency_evidence_kind() {
-        let a = serde_json::to_string(&EvidenceKind::CodeReview).unwrap();
-        let b = serde_json::to_string(&EvidenceKind::CodeReview).unwrap();
+        let a = serde_json::to_string(&EvidenceKind::CodeReview).expect("serde deserialization should succeed");
+        let b = serde_json::to_string(&EvidenceKind::CodeReview).expect("serde deserialization should succeed");
         assert_eq!(a, b);
     }
 
@@ -2216,9 +2216,9 @@ mod tests {
             vec!["e1"],
         )];
         let mut g1 = default_gate();
-        let d1 = g1.evaluate("m1", &claims, &demos).unwrap();
+        let d1 = g1.evaluate("m1", &claims, &demos).expect("serde deserialization should succeed");
         let mut g2 = default_gate();
-        let d2 = g2.evaluate("m2", &claims, &demos).unwrap();
+        let d2 = g2.evaluate("m2", &claims, &demos).expect("serde deserialization should succeed");
         assert_ne!(d1.artifact_hash, d2.artifact_hash);
     }
 
@@ -2238,9 +2238,9 @@ mod tests {
             vec!["e2"],
         )];
         let mut g1 = default_gate();
-        let d1 = g1.evaluate("m1", &claims_a, &demos).unwrap();
+        let d1 = g1.evaluate("m1", &claims_a, &demos).expect("serde deserialization should succeed");
         let mut g2 = default_gate();
-        let d2 = g2.evaluate("m1", &claims_b, &demos).unwrap();
+        let d2 = g2.evaluate("m1", &claims_b, &demos).expect("serde deserialization should succeed");
         assert_ne!(d1.artifact_hash, d2.artifact_hash);
     }
 
@@ -2255,8 +2255,8 @@ mod tests {
             timeout_ms: u64::MAX,
             deterministic: true,
         };
-        let json = serde_json::to_string(&cmd).unwrap();
-        let back: VerificationCommand = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&cmd).expect("serde deserialization should succeed");
+        let back: VerificationCommand = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.timeout_ms, u64::MAX);
     }
 
@@ -2268,8 +2268,8 @@ mod tests {
             exact_match: false,
             tolerance_millionths: i64::MAX,
         };
-        let json = serde_json::to_string(&out).unwrap();
-        let back: ExpectedOutput = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&out).expect("serde deserialization should succeed");
+        let back: ExpectedOutput = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.tolerance_millionths, i64::MAX);
     }
 
@@ -2281,8 +2281,8 @@ mod tests {
             exact_match: false,
             tolerance_millionths: i64::MIN,
         };
-        let json = serde_json::to_string(&out).unwrap();
-        let back: ExpectedOutput = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&out).expect("serde deserialization should succeed");
+        let back: ExpectedOutput = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.tolerance_millionths, i64::MIN);
     }
 
@@ -2298,8 +2298,8 @@ mod tests {
             expected_outputs: BTreeMap::new(),
             tags: BTreeSet::new(),
         };
-        let json = serde_json::to_string(&demo).unwrap();
-        let back: DemoSpecification = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&demo).expect("serde deserialization should succeed");
+        let back: DemoSpecification = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(demo, back);
     }
 
@@ -2313,8 +2313,8 @@ mod tests {
             evidence_links: Vec::new(),
             demos: Vec::new(),
         };
-        let json = serde_json::to_string(&claim).unwrap();
-        let back: MilestoneClaim = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&claim).expect("serde deserialization should succeed");
+        let back: MilestoneClaim = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(claim, back);
     }
 
@@ -2330,7 +2330,7 @@ mod tests {
             missing: Vec::new(),
             completeness_millionths: MILLION,
         };
-        let json = serde_json::to_string(&result).unwrap();
+        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
         assert!(json.contains("\"missing\":[]"));
     }
 
@@ -2342,9 +2342,9 @@ mod tests {
             exact_match: false,
             tolerance_millionths: 500_000,
         };
-        let json = serde_json::to_string(&out).unwrap();
+        let json = serde_json::to_string(&out).expect("serde deserialization should succeed");
         assert!(json.contains("\"expected_hash\":null"));
-        let back: ExpectedOutput = serde_json::from_str(&json).unwrap();
+        let back: ExpectedOutput = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(out, back);
     }
 
@@ -2384,7 +2384,7 @@ mod tests {
             .collect();
         let result = gate.evaluate("m1", &claims, &[demo]);
         assert!(result.is_ok());
-        assert_eq!(result.unwrap().total_claims, 256);
+        assert_eq!(result.expect("serde deserialization should succeed").total_claims, 256);
     }
 
     #[test]
@@ -2393,8 +2393,8 @@ mod tests {
             epoch: SecurityEpoch::from_raw(u64::MAX),
             ..Default::default()
         };
-        let json = serde_json::to_string(&config).unwrap();
-        let back: LinkageGateConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let back: LinkageGateConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.epoch, SecurityEpoch::from_raw(u64::MAX));
     }
 
@@ -2417,8 +2417,8 @@ mod tests {
             timeout_ms: 0,
             deterministic: false,
         };
-        let json = serde_json::to_string(&cmd).unwrap();
-        let back: VerificationCommand = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&cmd).expect("serde deserialization should succeed");
+        let back: VerificationCommand = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.expected_exit_code, -1);
     }
 
@@ -2442,8 +2442,8 @@ mod tests {
             },
             tags,
         };
-        let json = serde_json::to_string(&demo).unwrap();
-        let back: DemoSpecification = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&demo).expect("serde deserialization should succeed");
+        let back: DemoSpecification = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.tags.len(), 100);
     }
 
@@ -2457,8 +2457,8 @@ mod tests {
             artifact_hash: ContentHash::compute(b"complex-data"),
             description: "Complex evidence with special chars: <>&\"".to_string(),
         };
-        let json = serde_json::to_string(&ev).unwrap();
-        let back: EvidenceLink = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
+        let back: EvidenceLink = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ev, back);
     }
 
@@ -2471,8 +2471,8 @@ mod tests {
             timeout_ms: 999_999,
             deterministic: false,
         };
-        let json = serde_json::to_string(&cmd).unwrap();
-        let back: VerificationCommand = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&cmd).expect("serde deserialization should succeed");
+        let back: VerificationCommand = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cmd, back);
     }
 
@@ -2484,8 +2484,8 @@ mod tests {
             exact_match: true,
             tolerance_millionths: 100,
         };
-        let json = serde_json::to_string(&out).unwrap();
-        let back: ExpectedOutput = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&out).expect("serde deserialization should succeed");
+        let back: ExpectedOutput = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(out, back);
     }
 
@@ -2501,8 +2501,8 @@ mod tests {
             missing: vec!["no demo".to_string(), "no outputs".to_string()],
             completeness_millionths: 250_000,
         };
-        let json = serde_json::to_string(&result).unwrap();
-        let back: ClaimLinkageResult = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let back: ClaimLinkageResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, back);
     }
 
@@ -2539,8 +2539,8 @@ mod tests {
             },
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: LinkageGateError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: LinkageGateError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -2548,8 +2548,8 @@ mod tests {
     #[test]
     fn serde_roundtrip_gate_struct() {
         let gate = default_gate();
-        let json = serde_json::to_string(&gate).unwrap();
-        let back: DemoClaimLinkageGate = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&gate).expect("serde deserialization should succeed");
+        let back: DemoClaimLinkageGate = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.evaluation_count(), 0);
     }
 
@@ -2558,10 +2558,10 @@ mod tests {
         let mut gate = default_gate();
         let demos = vec![make_demo("d1", true)];
         let claims = vec![make_claim("c1", ClaimCategory::Security, vec![], vec![])];
-        let decision = gate.evaluate("m1", &claims, &demos).unwrap();
+        let decision = gate.evaluate("m1", &claims, &demos).expect("serde deserialization should succeed");
         assert_eq!(decision.verdict, LinkageVerdict::Fail);
-        let json = serde_json::to_string(&decision).unwrap();
-        let back: LinkageGateDecision = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&decision).expect("serde deserialization should succeed");
+        let back: LinkageGateDecision = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(decision, back);
     }
 
@@ -2576,8 +2576,8 @@ mod tests {
             ClaimCategory::DeveloperExperience,
         ];
         for cat in &categories {
-            let json = serde_json::to_string(cat).unwrap();
-            let back: ClaimCategory = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(cat).expect("serde deserialization should succeed");
+            let back: ClaimCategory = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*cat, back);
         }
     }
@@ -2594,8 +2594,8 @@ mod tests {
             EvidenceKind::ThirdPartyVerification,
         ];
         for k in &kinds {
-            let json = serde_json::to_string(k).unwrap();
-            let back: EvidenceKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(k).expect("serde deserialization should succeed");
+            let back: EvidenceKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*k, back);
         }
     }
@@ -2608,8 +2608,8 @@ mod tests {
             LinkageVerdict::Empty,
         ];
         for v in &verdicts {
-            let json = serde_json::to_string(v).unwrap();
-            let back: LinkageVerdict = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: LinkageVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -2636,7 +2636,7 @@ mod tests {
             vec!["d1"],
             vec!["e1"],
         )];
-        let decision = gate.evaluate("m1", &claims, &demos).unwrap();
+        let decision = gate.evaluate("m1", &claims, &demos).expect("serde deserialization should succeed");
         assert!(decision.decision_id.starts_with("linkage-m1-1-"));
     }
 
@@ -2650,8 +2650,8 @@ mod tests {
             vec!["d1"],
             vec!["e1"],
         )];
-        let d1 = gate.evaluate("m1", &claims, &demos).unwrap();
-        let d2 = gate.evaluate("m1", &claims, &demos).unwrap();
+        let d1 = gate.evaluate("m1", &claims, &demos).expect("serde deserialization should succeed");
+        let d2 = gate.evaluate("m1", &claims, &demos).expect("serde deserialization should succeed");
         assert_ne!(d1.decision_id, d2.decision_id);
         assert!(d1.decision_id.ends_with("-1"));
         assert!(d2.decision_id.ends_with("-2"));
@@ -2668,14 +2668,14 @@ mod tests {
             require_verification_commands: false,
             ..Default::default()
         };
-        let mut gate = DemoClaimLinkageGate::new(config).unwrap();
+        let mut gate = DemoClaimLinkageGate::new(config).expect("serde deserialization should succeed");
         let claims = vec![make_claim(
             "c1",
             ClaimCategory::DeveloperExperience,
             vec![],
             vec![],
         )];
-        let decision = gate.evaluate("m1", &claims, &[]).unwrap();
+        let decision = gate.evaluate("m1", &claims, &[]).expect("serde deserialization should succeed");
         assert_eq!(decision.verdict, LinkageVerdict::Pass);
     }
 
@@ -2688,14 +2688,14 @@ mod tests {
             require_verification_commands: false,
             ..Default::default()
         };
-        let mut gate = DemoClaimLinkageGate::new(config).unwrap();
+        let mut gate = DemoClaimLinkageGate::new(config).expect("serde deserialization should succeed");
         let claims = vec![make_claim(
             "c1",
             ClaimCategory::Correctness,
             vec![],
             vec!["e1"],
         )];
-        let decision = gate.evaluate("m1", &claims, &[]).unwrap();
+        let decision = gate.evaluate("m1", &claims, &[]).expect("serde deserialization should succeed");
         assert_eq!(decision.verdict, LinkageVerdict::Pass);
     }
 
@@ -2705,7 +2705,7 @@ mod tests {
     fn missing_reasons_fully_incomplete() {
         let mut gate = default_gate();
         let claims = vec![make_claim("c1", ClaimCategory::Performance, vec![], vec![])];
-        let decision = gate.evaluate("m1", &claims, &[]).unwrap();
+        let decision = gate.evaluate("m1", &claims, &[]).expect("serde deserialization should succeed");
         let r = &decision.claim_results[0];
         assert!(!r.linked);
         assert!(!r.has_evidence);
@@ -2725,7 +2725,7 @@ mod tests {
             vec!["d1"],
             vec![], // no evidence
         )];
-        let decision = gate.evaluate("m1", &claims, &demos).unwrap();
+        let decision = gate.evaluate("m1", &claims, &demos).expect("serde deserialization should succeed");
         let r = &decision.claim_results[0];
         assert!(!r.linked);
         assert!(r.has_runnable_demo);

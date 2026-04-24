@@ -432,7 +432,7 @@ impl CanonicalGuard {
             });
         }
 
-        let schema_bytes: [u8; 32] = bytes[..32].try_into().unwrap();
+        let schema_bytes: [u8; 32] = bytes[..32].try_into().expect("serde deserialization should succeed");
         let schema_hash = SchemaHash(schema_bytes);
 
         // Find the domain for this schema.
@@ -648,7 +648,7 @@ mod tests {
         let bytes = make_canonical_payload(&schema, &value);
         let result = guard.validate(ObjectDomain::PolicyObject, &bytes, "t-001");
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), value);
+        assert_eq!(result.expect("serde deserialization should succeed"), value);
         assert_eq!(guard.acceptance_count(), 1);
         assert_eq!(guard.rejection_count(), 0);
     }
@@ -973,7 +973,7 @@ mod tests {
             let bytes = make_canonical_payload(&schema, value);
             let result = guard.validate(ObjectDomain::PolicyObject, &bytes, "t-round");
             assert!(result.is_ok(), "failed for value: {value:?}");
-            let decoded = result.unwrap();
+            let decoded = result.expect("serde deserialization should succeed");
             assert_eq!(&decoded, value);
 
             // Re-serialize must match exactly.
@@ -990,7 +990,7 @@ mod tests {
         let bytes = make_canonical_payload(&schema, &CanonicalValue::Null);
         guard
             .validate(ObjectDomain::PolicyObject, &bytes, "t-evt-1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let events = guard.drain_events();
         assert_eq!(events.len(), 1);
         assert!(matches!(events[0].event_type, GuardEventType::Accepted));
@@ -1021,7 +1021,7 @@ mod tests {
         let bytes = make_canonical_payload(&schema, &CanonicalValue::Null);
         guard
             .validate(ObjectDomain::PolicyObject, &bytes, "t-cnt-1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // One failure.
         let mut bad = make_canonical_payload(&schema, &CanonicalValue::Null);
@@ -1041,7 +1041,7 @@ mod tests {
         let bytes = make_canonical_payload(&schema, &CanonicalValue::Null);
         guard
             .validate(ObjectDomain::PolicyObject, &bytes, "t-drain")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(guard.drain_events().len(), 1);
         assert_eq!(guard.drain_events().len(), 0); // second drain is empty
     }
@@ -1116,7 +1116,7 @@ mod tests {
             b"revocation-schema",
         );
         let bytes = make_canonical_payload(&schema, &CanonicalValue::Bool(false));
-        let (domain, value) = guard.validate_from_registry(&bytes, "t-reg-1").unwrap();
+        let (domain, value) = guard.validate_from_registry(&bytes, "t-reg-1").expect("serde deserialization should succeed");
         assert_eq!(domain, ObjectDomain::Revocation);
         assert_eq!(value, CanonicalValue::Bool(false));
     }
@@ -1204,8 +1204,8 @@ mod tests {
             },
         ];
         for v in &violations {
-            let json = serde_json::to_string(v).unwrap();
-            let restored: CanonicalViolation = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let restored: CanonicalViolation = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, restored);
         }
     }
@@ -1218,8 +1218,8 @@ mod tests {
             violation: CanonicalViolation::TrailingBytes { count: 1 },
             trace_id: "t-serde".to_string(),
         };
-        let json = serde_json::to_string(&err).unwrap();
-        let restored: NonCanonicalError = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let restored: NonCanonicalError = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, restored);
     }
 
@@ -1236,8 +1236,8 @@ mod tests {
             trace_id: "t-ser".to_string(),
             input_hash: [0x01; 32],
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let restored: GuardEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let restored: GuardEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, restored);
     }
 
@@ -1351,7 +1351,7 @@ mod tests {
             let bytes = make_canonical_payload(&schema, &CanonicalValue::U64(i));
             guard
                 .validate(ObjectDomain::PolicyObject, &bytes, &format!("t-ac-{i}"))
-                .unwrap();
+                .expect("serde deserialization should succeed");
         }
         // One invalid
         let mut bad = make_canonical_payload(&schema, &CanonicalValue::Null);
@@ -1383,7 +1383,7 @@ mod tests {
         let bytes = make_canonical_payload(&schema, &value);
         let result = guard
             .validate(ObjectDomain::PolicyObject, &bytes, "t-nested")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(result, value);
     }
 
@@ -1399,7 +1399,7 @@ mod tests {
         let bytes = make_canonical_payload(&schema, &value);
         let result = guard
             .validate(ObjectDomain::PolicyObject, &bytes, "t-arr")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(result, value);
     }
 
@@ -1460,7 +1460,7 @@ mod tests {
         let bytes = make_canonical_payload(&schema, &CanonicalValue::U64(42));
         guard
             .validate(ObjectDomain::PolicyObject, &bytes, "t-drain")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let events = guard.drain_events();
         assert!(!events.is_empty());
         let events2 = guard.drain_events();
@@ -1481,7 +1481,7 @@ mod tests {
         let bytes = make_canonical_payload(&schema, &value);
         let result = guard
             .validate(ObjectDomain::PolicyObject, &bytes, "t-empty-str")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(result, value);
     }
 
@@ -1492,7 +1492,7 @@ mod tests {
         let bytes = make_canonical_payload(&schema, &value);
         let result = guard
             .validate(ObjectDomain::PolicyObject, &bytes, "t-empty-bytes")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(result, value);
     }
 
@@ -1503,7 +1503,7 @@ mod tests {
         let bytes = make_canonical_payload(&schema, &value);
         let result = guard
             .validate(ObjectDomain::PolicyObject, &bytes, "t-empty-arr")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(result, value);
     }
 
@@ -1514,7 +1514,7 @@ mod tests {
         let bytes = make_canonical_payload(&schema, &value);
         let result = guard
             .validate(ObjectDomain::PolicyObject, &bytes, "t-empty-map")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(result, value);
     }
 
@@ -1525,7 +1525,7 @@ mod tests {
         let bytes = make_canonical_payload(&schema, &value);
         let result = guard
             .validate(ObjectDomain::PolicyObject, &bytes, "t-large-u64")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(result, value);
     }
 
@@ -1536,7 +1536,7 @@ mod tests {
         let bytes = make_canonical_payload(&schema, &value);
         let result = guard
             .validate(ObjectDomain::PolicyObject, &bytes, "t-neg-i64")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(result, value);
     }
 
@@ -1570,7 +1570,7 @@ mod tests {
             let bytes = make_canonical_payload(&schema, &CanonicalValue::U64(42));
             guard
                 .validate(ObjectDomain::PolicyObject, &bytes, "t-det")
-                .unwrap()
+                .expect("serde deserialization should succeed")
         };
         assert_eq!(run(), run());
     }
@@ -1752,7 +1752,7 @@ mod tests {
         ];
         let mut serialized = std::collections::BTreeSet::new();
         for v in &violations {
-            let s = serde_json::to_string(v).unwrap();
+            let s = serde_json::to_string(v).expect("serde deserialization should succeed");
             serialized.insert(s);
         }
         assert_eq!(
@@ -1773,7 +1773,7 @@ mod tests {
         ];
         let mut serialized = std::collections::BTreeSet::new();
         for t in &types {
-            serialized.insert(serde_json::to_string(t).unwrap());
+            serialized.insert(serde_json::to_string(t).expect("serde deserialization should succeed"));
         }
         assert_eq!(serialized.len(), 3);
     }
@@ -1783,7 +1783,7 @@ mod tests {
     #[test]
     fn canonical_violation_trailing_bytes_field_names() {
         let v = CanonicalViolation::TrailingBytes { count: 7 };
-        let json = serde_json::to_string(&v).unwrap();
+        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
         assert!(
             json.contains("TrailingBytes"),
             "variant key must be present"
@@ -1794,7 +1794,7 @@ mod tests {
     #[test]
     fn canonical_violation_leading_padding_field_names() {
         let v = CanonicalViolation::LeadingPadding { byte_count: 3 };
-        let json = serde_json::to_string(&v).unwrap();
+        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
         assert!(json.contains("LeadingPadding"));
         assert!(json.contains("byte_count"));
     }
@@ -1806,7 +1806,7 @@ mod tests {
             expected: 0xAB,
             actual: 0xCD,
         };
-        let json = serde_json::to_string(&v).unwrap();
+        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
         assert!(json.contains("RoundTripMismatch"));
         assert!(json.contains("first_diff_offset"));
         assert!(json.contains("expected"));
@@ -1819,7 +1819,7 @@ mod tests {
             input_len: 100,
             canonical_len: 99,
         };
-        let json = serde_json::to_string(&v).unwrap();
+        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
         assert!(json.contains("LengthMismatch"));
         assert!(json.contains("input_len"));
         assert!(json.contains("canonical_len"));
@@ -1831,7 +1831,7 @@ mod tests {
             tag: 0xFF,
             offset: 5,
         };
-        let json = serde_json::to_string(&v).unwrap();
+        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
         assert!(json.contains("InvalidTag"));
         assert!(json.contains("tag"));
         assert!(json.contains("offset"));
@@ -1845,7 +1845,7 @@ mod tests {
             violation: CanonicalViolation::TrailingBytes { count: 1 },
             trace_id: "t".to_string(),
         };
-        let json = serde_json::to_string(&err).unwrap();
+        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
         assert!(json.contains("object_class"));
         assert!(json.contains("input_hash"));
         assert!(json.contains("violation"));
@@ -1860,7 +1860,7 @@ mod tests {
             trace_id: "t".to_string(),
             input_hash: [0u8; 32],
         };
-        let json = serde_json::to_string(&event).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
         assert!(json.contains("event_type"));
         assert!(json.contains("object_class"));
         assert!(json.contains("trace_id"));
@@ -1964,16 +1964,16 @@ mod tests {
     #[test]
     fn violation_trailing_bytes_zero_count_serde_roundtrip() {
         let v = CanonicalViolation::TrailingBytes { count: 0 };
-        let json = serde_json::to_string(&v).unwrap();
-        let restored: CanonicalViolation = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let restored: CanonicalViolation = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, restored);
     }
 
     #[test]
     fn violation_leading_padding_zero_bytes_serde_roundtrip() {
         let v = CanonicalViolation::LeadingPadding { byte_count: 0 };
-        let json = serde_json::to_string(&v).unwrap();
-        let restored: CanonicalViolation = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let restored: CanonicalViolation = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, restored);
     }
 
@@ -1984,8 +1984,8 @@ mod tests {
             expected: 0,
             actual: 255,
         };
-        let json = serde_json::to_string(&v).unwrap();
-        let restored: CanonicalViolation = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let restored: CanonicalViolation = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, restored);
     }
 
@@ -1997,8 +1997,8 @@ mod tests {
             input_len: 100,
             canonical_len: 100,
         };
-        let json = serde_json::to_string(&v).unwrap();
-        let restored: CanonicalViolation = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let restored: CanonicalViolation = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, restored);
     }
 
@@ -2008,16 +2008,16 @@ mod tests {
             tag: 0xFF,
             offset: 0,
         };
-        let json = serde_json::to_string(&v).unwrap();
-        let restored: CanonicalViolation = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let restored: CanonicalViolation = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, restored);
     }
 
     #[test]
     fn violation_empty_key_strings_serde_roundtrip() {
         let v = CanonicalViolation::DuplicateKey { key: String::new() };
-        let json = serde_json::to_string(&v).unwrap();
-        let restored: CanonicalViolation = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let restored: CanonicalViolation = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, restored);
     }
 
@@ -2029,8 +2029,8 @@ mod tests {
             violation: CanonicalViolation::InvalidTag { tag: 0, offset: 0 },
             trace_id: String::new(),
         };
-        let json = serde_json::to_string(&err).unwrap();
-        let restored: NonCanonicalError = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let restored: NonCanonicalError = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, restored);
     }
 
@@ -2042,8 +2042,8 @@ mod tests {
             violation: CanonicalViolation::TrailingBytes { count: usize::MAX },
             trace_id: "max".to_string(),
         };
-        let json = serde_json::to_string(&err).unwrap();
-        let restored: NonCanonicalError = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let restored: NonCanonicalError = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, restored);
     }
 
@@ -2136,7 +2136,7 @@ mod tests {
         let expected_hash = compute_input_hash(&bytes);
         guard
             .validate(ObjectDomain::PolicyObject, &bytes, "t-hash-evt")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let events = guard.drain_events();
         assert_eq!(events[0].input_hash, expected_hash);
     }
@@ -2237,7 +2237,7 @@ mod tests {
         assert_eq!(
             guard
                 .validate(ObjectDomain::PolicyObject, &bytes, "t-i64-zero")
-                .unwrap(),
+                .expect("serde deserialization should succeed"),
             value
         );
     }
@@ -2250,7 +2250,7 @@ mod tests {
         assert_eq!(
             guard
                 .validate(ObjectDomain::PolicyObject, &bytes, "t-i64-max")
-                .unwrap(),
+                .expect("serde deserialization should succeed"),
             value
         );
     }
@@ -2264,13 +2264,13 @@ mod tests {
         assert_eq!(
             guard
                 .validate(ObjectDomain::PolicyObject, &t_bytes, "t-bool-t")
-                .unwrap(),
+                .expect("serde deserialization should succeed"),
             CanonicalValue::Bool(true)
         );
         assert_eq!(
             guard
                 .validate(ObjectDomain::PolicyObject, &f_bytes, "t-bool-f")
-                .unwrap(),
+                .expect("serde deserialization should succeed"),
             CanonicalValue::Bool(false)
         );
     }
@@ -2284,7 +2284,7 @@ mod tests {
         assert_eq!(
             guard
                 .validate(ObjectDomain::PolicyObject, &bytes, "t-large-bytes")
-                .unwrap(),
+                .expect("serde deserialization should succeed"),
             value
         );
     }
@@ -2297,7 +2297,7 @@ mod tests {
         assert_eq!(
             guard
                 .validate(ObjectDomain::PolicyObject, &bytes, "t-unicode")
-                .unwrap(),
+                .expect("serde deserialization should succeed"),
             value
         );
     }
@@ -2313,7 +2313,7 @@ mod tests {
         assert_eq!(
             guard
                 .validate(ObjectDomain::PolicyObject, &bytes, "t-deep-arr")
-                .unwrap(),
+                .expect("serde deserialization should succeed"),
             value
         );
     }
@@ -2334,7 +2334,7 @@ mod tests {
         assert_eq!(
             guard
                 .validate(ObjectDomain::PolicyObject, &bytes, "t-all-types-map")
-                .unwrap(),
+                .expect("serde deserialization should succeed"),
             value
         );
     }

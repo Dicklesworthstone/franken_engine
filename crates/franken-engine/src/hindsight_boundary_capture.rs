@@ -1506,8 +1506,8 @@ mod tests {
     #[test]
     fn boundary_class_serde_round_trip() {
         for class in &BoundaryClass::ALL {
-            let json = serde_json::to_string(class).unwrap();
-            let back: BoundaryClass = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(class).expect("serde deserialization should succeed");
+            let back: BoundaryClass = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*class, back);
         }
     }
@@ -1521,8 +1521,8 @@ mod tests {
             PrivacyClass::PathDigest,
             PrivacyClass::SecretDigest,
         ] {
-            let json = serde_json::to_string(&pc).unwrap();
-            let back: PrivacyClass = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&pc).expect("serde deserialization should succeed");
+            let back: PrivacyClass = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(pc, back);
         }
     }
@@ -1534,8 +1534,8 @@ mod tests {
             RedactionTreatment::DigestOnly,
             RedactionTreatment::Omit,
         ] {
-            let json = serde_json::to_string(&rt).unwrap();
-            let back: RedactionTreatment = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&rt).expect("serde deserialization should succeed");
+            let back: RedactionTreatment = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(rt, back);
         }
     }
@@ -1546,8 +1546,8 @@ mod tests {
             ReplaySufficiency::Sufficient,
             ReplaySufficiency::NeedsEscalation,
         ] {
-            let json = serde_json::to_string(&rs).unwrap();
-            let back: ReplaySufficiency = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&rs).expect("serde deserialization should succeed");
+            let back: ReplaySufficiency = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(rs, back);
         }
     }
@@ -1677,8 +1677,8 @@ mod tests {
     #[test]
     fn boundary_capture_contract_serde_round_trip() {
         let contract = BoundaryCaptureContract::default_v1();
-        let json = serde_json::to_string(&contract).unwrap();
-        let back: BoundaryCaptureContract = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&contract).expect("serde deserialization should succeed");
+        let back: BoundaryCaptureContract = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(contract, back);
     }
 
@@ -1697,8 +1697,8 @@ mod tests {
     #[test]
     fn boundary_class_serde_roundtrip() {
         for class in BoundaryClass::ALL {
-            let json = serde_json::to_string(&class).unwrap();
-            let back: BoundaryClass = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&class).expect("serde deserialization should succeed");
+            let back: BoundaryClass = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(class, back);
         }
     }
@@ -1822,8 +1822,8 @@ mod tests {
         };
         let s1 = make_session();
         let s2 = make_session();
-        let p1 = s1.minimal_replay_plans().unwrap();
-        let p2 = s2.minimal_replay_plans().unwrap();
+        let p1 = s1.minimal_replay_plans().expect("serde deserialization should succeed");
+        let p2 = s2.minimal_replay_plans().expect("serde deserialization should succeed");
         assert_eq!(p1.len(), p2.len());
     }
 
@@ -1883,7 +1883,7 @@ mod tests {
         for class in BoundaryClass::ALL {
             let rule = catalog.rule_for(class);
             assert!(rule.is_some(), "rule_for({:?}) should return Some", class);
-            assert_eq!(rule.unwrap().boundary_class, class);
+            assert_eq!(rule.expect("serde deserialization should succeed").boundary_class, class);
         }
     }
 
@@ -1967,7 +1967,7 @@ mod tests {
         let ctx = BoundaryContext::new("t", "d", "p", "hw", 1);
         let record = session
             .capture_hardware_surface_read(&ctx, "gpu", "meas-digest", "drv-digest", None)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(record.schema_version, BOUNDARY_CAPTURE_EVENT_SCHEMA_VERSION);
     }
 
@@ -1977,7 +1977,7 @@ mod tests {
         let ctx = BoundaryContext::new("t", "d", "p", "rng", 1);
         let record = session
             .capture_randomness_draw(&ctx, "gen-1", 0, "sample-hash", None)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(record.nondeterminism_tag, "randomness_draw");
     }
 
@@ -1987,13 +1987,13 @@ mod tests {
         let ctx = BoundaryContext::new("t", "d", "p", "rng", 1);
         let record = session
             .capture_randomness_draw(&ctx, "gen-1", 0, "sample-hash", None)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         // randomness_draw has sample_digest as SecretDigest/DigestOnly
-        let sample_redaction = record.redaction.get("sample_digest").unwrap();
+        let sample_redaction = record.redaction.get("sample_digest").expect("serde deserialization should succeed");
         assert_eq!(sample_redaction.privacy_class, PrivacyClass::SecretDigest);
         assert_eq!(sample_redaction.treatment, RedactionTreatment::DigestOnly);
         // generator_id is PublicMetadata/Plaintext
-        let gen_redaction = record.redaction.get("generator_id").unwrap();
+        let gen_redaction = record.redaction.get("generator_id").expect("serde deserialization should succeed");
         assert_eq!(gen_redaction.privacy_class, PrivacyClass::PublicMetadata);
         assert_eq!(gen_redaction.treatment, RedactionTreatment::Plaintext);
     }
@@ -2004,9 +2004,9 @@ mod tests {
         let ctx = BoundaryContext::new("t-rt", "d-rt", "p-rt", "policy", 42);
         let record = session
             .capture_external_policy_read(&ctx, "risk-router", "digest-policy", 7, None)
-            .unwrap();
-        let json = serde_json::to_string(&record).unwrap();
-        let back: BoundaryCaptureRecord = serde_json::from_str(&json).unwrap();
+            .expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&record).expect("serde deserialization should succeed");
+        let back: BoundaryCaptureRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(record, back);
     }
 
@@ -2025,9 +2025,9 @@ mod tests {
                 ("observed_tick", "100".to_string()),
             ],
         );
-        log.append(&catalog, request).unwrap();
-        let json = serde_json::to_string(&log).unwrap();
-        let back: BoundaryCaptureLog = serde_json::from_str(&json).unwrap();
+        log.append(&catalog, request).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&log).expect("serde deserialization should succeed");
+        let back: BoundaryCaptureLog = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(log.records, back.records);
         assert_eq!(log.next_sequence, back.next_sequence);
     }
@@ -2042,7 +2042,7 @@ mod tests {
     #[test]
     fn render_jsonl_empty_log_produces_empty_string() {
         let log = BoundaryCaptureLog::new();
-        let rendered = log.render_jsonl().unwrap();
+        let rendered = log.render_jsonl().expect("serde deserialization should succeed");
         assert!(rendered.is_empty());
     }
 
@@ -2055,14 +2055,14 @@ mod tests {
             let ctx = BoundaryContext::new(&trace, &decision, "p", "clock", i);
             session
                 .capture_clock_read(&ctx, "mono", "monotonic", i, None)
-                .unwrap();
+                .expect("serde deserialization should succeed");
         }
-        let rendered = session.log().render_jsonl().unwrap();
+        let rendered = session.log().render_jsonl().expect("serde deserialization should succeed");
         let lines: Vec<&str> = rendered.split('\n').collect();
         assert_eq!(lines.len(), 3);
         for line in &lines {
             // Each line must be valid JSON
-            let _: serde_json::Value = serde_json::from_str(line).unwrap();
+            let _: serde_json::Value = serde_json::from_str(line).expect("serde deserialization should succeed");
         }
     }
 
@@ -2141,23 +2141,23 @@ mod tests {
         let ctx1 = BoundaryContext::new("t", "d", "p", "clock", 1);
         session
             .capture_clock_read(&ctx1, "mono", "monotonic", 1, None)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let ctx2 = BoundaryContext::new("t", "d", "p", "rng", 2);
         session
             .capture_randomness_draw(&ctx2, "gen-1", 0, "sample", None)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         // One capture with a different trace
         let ctx3 = BoundaryContext::new("t-other", "d", "p", "clock", 3);
         session
             .capture_clock_read(&ctx3, "mono", "monotonic", 3, None)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
-        let plans = session.minimal_replay_plans().unwrap();
+        let plans = session.minimal_replay_plans().expect("serde deserialization should succeed");
         assert_eq!(plans.len(), 2);
         // Find the plan for trace "t"
-        let plan_t = plans.iter().find(|p| p.trace_id == "t").unwrap();
+        let plan_t = plans.iter().find(|p| p.trace_id == "t").expect("serde deserialization should succeed");
         assert_eq!(plan_t.inputs.len(), 2);
-        let plan_other = plans.iter().find(|p| p.trace_id == "t-other").unwrap();
+        let plan_other = plans.iter().find(|p| p.trace_id == "t-other").expect("serde deserialization should succeed");
         assert_eq!(plan_other.inputs.len(), 1);
     }
 
@@ -2167,8 +2167,8 @@ mod tests {
         let ctx = BoundaryContext::new("t", "d", "p", "scheduler", 999);
         session
             .capture_scheduling_decision(&ctx, "ready", "task-1", "digest", None)
-            .unwrap();
-        let plans = session.minimal_replay_plans().unwrap();
+            .expect("serde deserialization should succeed");
+        let plans = session.minimal_replay_plans().expect("serde deserialization should succeed");
         assert_eq!(plans[0].inputs[0].virtual_ts, 999);
     }
 
@@ -2258,8 +2258,8 @@ mod tests {
             PrivacyClass::PolicyDigest,
             PrivacyClass::HardwareFingerprint,
         ] {
-            let json = serde_json::to_string(&pc).unwrap();
-            let back: PrivacyClass = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&pc).expect("serde deserialization should succeed");
+            let back: PrivacyClass = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(pc, back);
         }
     }
@@ -2270,8 +2270,8 @@ mod tests {
             privacy_class: PrivacyClass::HardwareFingerprint,
             treatment: RedactionTreatment::Omit,
         };
-        let json = serde_json::to_string(&val).unwrap();
-        let back: FieldRedactionValue = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&val).expect("serde deserialization should succeed");
+        let back: FieldRedactionValue = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(val, back);
     }
 
@@ -2306,7 +2306,7 @@ mod tests {
                 "content-digest",
                 Some("filesystem-path-explanation"),
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(record.sufficiency, ReplaySufficiency::NeedsEscalation);
         assert_eq!(
             record.escalation_reason.as_deref(),
@@ -2320,7 +2320,7 @@ mod tests {
         let ctx = BoundaryContext::new("t", "d", "p", "fs", 1);
         let record = session
             .capture_filesystem_input(&ctx, "read", "path-digest", "content-digest", None)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(record.sufficiency, ReplaySufficiency::Sufficient);
         assert!(record.escalation_reason.is_none());
     }
@@ -2341,7 +2341,7 @@ mod tests {
                 ("observed_tick", "1".to_string()),
             ],
         );
-        log.append(&catalog, req).unwrap();
+        log.append(&catalog, req).expect("serde deserialization should succeed");
         assert_eq!(log.next_sequence, 1);
         let ctx2 = BoundaryContext::new("t", "d", "p", "clock", 2);
         let req2 = build_request(
@@ -2354,7 +2354,7 @@ mod tests {
                 ("observed_tick", "2".to_string()),
             ],
         );
-        log.append(&catalog, req2).unwrap();
+        log.append(&catalog, req2).expect("serde deserialization should succeed");
         assert_eq!(log.next_sequence, 2);
     }
 
@@ -2389,7 +2389,7 @@ mod tests {
     #[test]
     fn minimal_replay_plan_on_empty_log_returns_empty_vec() {
         let session = BoundaryCaptureSession::default_v1();
-        let plans = session.minimal_replay_plans().unwrap();
+        let plans = session.minimal_replay_plans().expect("serde deserialization should succeed");
         assert!(plans.is_empty());
     }
 
@@ -2422,8 +2422,8 @@ mod tests {
                 .collect(),
             }],
         };
-        let json = serde_json::to_string(&plan).unwrap();
-        let back: MinimalReplayPlan = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&plan).expect("serde deserialization should succeed");
+        let back: MinimalReplayPlan = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(plan, back);
     }
 
@@ -2431,8 +2431,8 @@ mod tests {
     fn boundary_redaction_map_serde_round_trip() {
         let catalog = BoundaryCatalog::default_v1();
         let redaction_map = BoundaryRedactionMap::from_catalog(&catalog);
-        let json = serde_json::to_string(&redaction_map).unwrap();
-        let back: BoundaryRedactionMap = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&redaction_map).expect("serde deserialization should succeed");
+        let back: BoundaryRedactionMap = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(redaction_map, back);
     }
 
@@ -2441,12 +2441,12 @@ mod tests {
         let catalog = BoundaryCatalog::default_v1();
         let rule = catalog
             .rule_for(BoundaryClass::HardwareSurfaceRead)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let driver_fp_entry = rule
             .redaction_rules
             .iter()
             .find(|e| e.field == "driver_fingerprint")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(
             driver_fp_entry.privacy_class,
             PrivacyClass::HardwareFingerprint
@@ -2456,7 +2456,7 @@ mod tests {
             .redaction_rules
             .iter()
             .find(|e| e.field == "measurement_digest")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(
             measurement_entry.privacy_class,
             PrivacyClass::HardwareFingerprint
@@ -2466,12 +2466,12 @@ mod tests {
     #[test]
     fn external_policy_read_has_policy_digest_privacy_class() {
         let catalog = BoundaryCatalog::default_v1();
-        let rule = catalog.rule_for(BoundaryClass::ExternalPolicyRead).unwrap();
+        let rule = catalog.rule_for(BoundaryClass::ExternalPolicyRead).expect("serde deserialization should succeed");
         let policy_digest_entry = rule
             .redaction_rules
             .iter()
             .find(|e| e.field == "policy_digest")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(
             policy_digest_entry.privacy_class,
             PrivacyClass::PolicyDigest

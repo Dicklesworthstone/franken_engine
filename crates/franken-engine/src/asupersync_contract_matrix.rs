@@ -519,7 +519,7 @@ pub fn build_asupersync_contract_matrix_with_generated_at(
         .map(|release| release.release_id.clone())
         .or_else(|| releases.first().map(|release| release.release_id.clone()))
         // SAFETY: load_upstream_release_identifiers guarantees at least one release
-        .unwrap();
+        .expect("serde deserialization should succeed");
     let release_index = release_index(&releases);
 
     let compatibility_cells = vec![
@@ -1490,9 +1490,9 @@ mod tests {
     fn surface_serde_roundtrip() {
         for surface in AsupersyncSurface::all() {
             // SAFETY: Test-only unwrap for serde serialization of known valid enum variants
-            let json = serde_json::to_string(surface).unwrap();
+            let json = serde_json::to_string(surface).expect("serde deserialization should succeed");
             // SAFETY: Test-only unwrap for serde deserialization of valid JSON roundtrip
-            let back: AsupersyncSurface = serde_json::from_str(&json).unwrap();
+            let back: AsupersyncSurface = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(back, *surface);
         }
     }
@@ -1500,7 +1500,7 @@ mod tests {
     #[test]
     fn surface_serde_is_snake_case() {
         // SAFETY: to_string cannot fail on derived Serialize enum
-        let json = serde_json::to_string(&AsupersyncSurface::KernelContext).unwrap();
+        let json = serde_json::to_string(&AsupersyncSurface::KernelContext).expect("serde deserialization should succeed");
         assert_eq!(json, "\"kernel_context\"");
     }
 
@@ -1613,9 +1613,9 @@ mod tests {
             CompatibilityDisposition::BridgeIncompatible,
         ] {
             // SAFETY: to_string cannot fail on derived Serialize enum
-            let json = serde_json::to_string(&disp).unwrap();
+            let json = serde_json::to_string(&disp).expect("serde deserialization should succeed");
             // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-            let back: CompatibilityDisposition = serde_json::from_str(&json).unwrap();
+            let back: CompatibilityDisposition = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(back, disp);
         }
     }
@@ -1700,9 +1700,9 @@ mod tests {
     fn failure_code_serde_roundtrip() {
         for code in ContractFailureCode::all() {
             // SAFETY: to_string cannot fail on derived Serialize enum
-            let json = serde_json::to_string(code).unwrap();
+            let json = serde_json::to_string(code).expect("serde deserialization should succeed");
             // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-            let back: ContractFailureCode = serde_json::from_str(&json).unwrap();
+            let back: ContractFailureCode = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(back, *code);
         }
     }
@@ -1790,9 +1790,9 @@ mod tests {
     fn canonical_catalog_serde_roundtrip() {
         let catalog = canonical_failure_code_catalog();
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&catalog).unwrap();
+        let json = serde_json::to_string(&catalog).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let back: VersionDriftFailureCatalog = serde_json::from_str(&json).unwrap();
+        let back: VersionDriftFailureCatalog = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.failure_codes.len(), catalog.failure_codes.len());
     }
 
@@ -1843,9 +1843,9 @@ mod tests {
             dependency_versions: BTreeMap::new(),
         };
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&release).unwrap();
+        let json = serde_json::to_string(&release).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let back: UpstreamReleaseIdentifier = serde_json::from_str(&json).unwrap();
+        let back: UpstreamReleaseIdentifier = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.surface, AsupersyncSurface::KernelContext);
         assert_eq!(back.package_name, "franken-kernel");
     }
@@ -1876,9 +1876,9 @@ mod tests {
             dependency_versions: BTreeMap::new(),
         };
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&cell).unwrap();
+        let json = serde_json::to_string(&cell).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let back: CompatibilityCell = serde_json::from_str(&json).unwrap();
+        let back: CompatibilityCell = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.disposition, CompatibilityDisposition::Compatible);
     }
 
@@ -1895,8 +1895,8 @@ mod tests {
             description: "CLI missing".to_string(),
             remediation: "restore the CLI".to_string(),
         };
-        let json = serde_json::to_string(&descriptor).unwrap();
-        let back: FailureCodeDescriptor = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&descriptor).expect("serde deserialization should succeed");
+        let back: FailureCodeDescriptor = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.code, ContractFailureCode::FrankenlabCliMissing);
     }
 
@@ -1922,8 +1922,8 @@ mod tests {
             version_cell: "0.1.0".to_string(),
             upstream_revision: "abc123".to_string(),
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let back: ContractEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let back: ContractEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.event, "surface_probed");
     }
 }

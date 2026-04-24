@@ -1552,8 +1552,8 @@ mod tests {
             ProvenanceSourceKind::Counterexample,
             ProvenanceSourceKind::EvidenceEntry,
         ] {
-            let json = serde_json::to_string(&kind).unwrap();
-            let back: ProvenanceSourceKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
+            let back: ProvenanceSourceKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(back, kind);
         }
     }
@@ -1806,8 +1806,8 @@ mod tests {
             CandidateKind::SideCondition,
             CandidateKind::NormalForm,
         ] {
-            let json = serde_json::to_string(&kind).unwrap();
-            let back: CandidateKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
+            let back: CandidateKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(kind, back);
         }
     }
@@ -1942,8 +1942,8 @@ mod tests {
             &["m-a"],
         );
         let catalog = LawMiningCatalog::from_sources(9, &[cx], &[]);
-        let json = serde_json::to_string(&catalog).unwrap();
-        let back: LawMiningCatalog = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&catalog).expect("serde deserialization should succeed");
+        let back: LawMiningCatalog = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(catalog, back);
     }
 
@@ -2051,8 +2051,8 @@ mod tests {
             scope_count: 2,
             warnings: vec!["test warning".to_string()],
         };
-        let json = serde_json::to_string(&validation).unwrap();
-        let back: LawMiningValidation = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&validation).expect("serde deserialization should succeed");
+        let back: LawMiningValidation = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(validation, back);
     }
 
@@ -2071,8 +2071,8 @@ mod tests {
             error_code: None,
             detail: "test detail".to_string(),
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let back: LawMiningEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let back: LawMiningEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
     }
 
@@ -2089,8 +2089,8 @@ mod tests {
             error_code: Some("E_HASH_MISMATCH".to_string()),
             detail: "hash did not match".to_string(),
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let back: LawMiningEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let back: LawMiningEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.error_code, Some("E_HASH_MISMATCH".to_string()));
     }
 
@@ -2105,8 +2105,8 @@ mod tests {
             policy_id: "policy-42".to_string(),
             run_id: "run-42".to_string(),
         };
-        let json = serde_json::to_string(&trace_ids).unwrap();
-        let back: TraceIdsArtifact = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&trace_ids).expect("serde deserialization should succeed");
+        let back: TraceIdsArtifact = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(trace_ids, back);
     }
 
@@ -2121,8 +2121,8 @@ mod tests {
             source_commit: "abc123".to_string(),
             toolchain: "nightly-2026-01-01".to_string(),
         };
-        let json = serde_json::to_string(&env_artifact).unwrap();
-        let back: LawMiningEnvArtifact = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&env_artifact).expect("serde deserialization should succeed");
+        let back: LawMiningEnvArtifact = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(env_artifact, back);
     }
 
@@ -2134,8 +2134,8 @@ mod tests {
             path: "candidate_law_catalog.json".to_string(),
             sha256: "deadbeef".to_string(),
         };
-        let json = serde_json::to_string(&record).unwrap();
-        let back: ArtifactHashRecord = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&record).expect("serde deserialization should succeed");
+        let back: ArtifactHashRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(record, back);
     }
 
@@ -2191,8 +2191,8 @@ mod tests {
         assert!(!nfh.canonical_form.is_empty());
         assert!(!nfh.merge_shapes.is_empty());
         // Round-trip the hypothesis
-        let json = serde_json::to_string(&nfh).unwrap();
-        let back: NormalFormHypothesis = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&nfh).expect("serde deserialization should succeed");
+        let back: NormalFormHypothesis = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(*nfh, back);
     }
 
@@ -2215,8 +2215,8 @@ mod tests {
         let seed = &catalog.invariant_seed_ledger[0];
         assert!(!seed.statement.is_empty());
         // Round-trip the seed
-        let json = serde_json::to_string(&seed).unwrap();
-        let back: InvariantSeed = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&seed).expect("serde deserialization should succeed");
+        let back: InvariantSeed = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(*seed, back);
     }
 
@@ -2344,8 +2344,8 @@ mod tests {
             repro_lock_path: PathBuf::from("/tmp/test/repro.lock"),
             summary_path: PathBuf::from("/tmp/test/summary.md"),
         };
-        let json = serde_json::to_string(&report).unwrap();
-        let back: BundleWriteReport = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let back: BundleWriteReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report, back);
     }
 
@@ -2368,8 +2368,8 @@ mod tests {
                 },
             ],
         };
-        let json = serde_json::to_string(&index).unwrap();
-        let back: LawMiningArtifactIndex = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&index).expect("serde deserialization should succeed");
+        let back: LawMiningArtifactIndex = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(index, back);
     }
 
@@ -2405,8 +2405,8 @@ mod tests {
         );
         let catalog = LawMiningCatalog::from_sources(17, &[cx], &[]);
         for candidate in &catalog.candidates {
-            let json = serde_json::to_string(candidate).unwrap();
-            let back: LawCandidate = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(candidate).expect("serde deserialization should succeed");
+            let back: LawCandidate = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*candidate, back);
         }
     }
@@ -2424,8 +2424,8 @@ mod tests {
         );
         let catalog = LawMiningCatalog::from_sources(19, &[cx], &[]);
         for record in &catalog.provenance_index {
-            let json = serde_json::to_string(record).unwrap();
-            let back: LawProvenanceRecord = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(record).expect("serde deserialization should succeed");
+            let back: LawProvenanceRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*record, back);
         }
     }
@@ -2443,8 +2443,8 @@ mod tests {
         );
         let catalog = LawMiningCatalog::from_sources(21, &[cx], &[]);
         for scope in &catalog.scope_hypotheses {
-            let json = serde_json::to_string(scope).unwrap();
-            let back: CandidateScopeHypothesis = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(scope).expect("serde deserialization should succeed");
+            let back: CandidateScopeHypothesis = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*scope, back);
         }
     }

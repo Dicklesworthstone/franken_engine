@@ -2292,13 +2292,13 @@ mod tests {
         // SAFETY: Test setup with valid property descriptor and key should succeed
         let result = obj
             .define_own_property(str_key("x"), PropertyDescriptor::data(int_val(42)))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(result);
         assert!(obj.has_own_property(&str_key("x")));
         assert_eq!(
             // SAFETY: Test just verified has_own_property("x") is true,
             // so get_own_property("x") must return Some (property exists).
-            obj.get_own_property(&str_key("x")).unwrap().value(),
+            obj.get_own_property(&str_key("x")).expect("serde deserialization should succeed").value(),
             Some(&int_val(42))
         );
     }
@@ -2313,7 +2313,7 @@ mod tests {
         // define_own_property only fails on invariant violations (none expected here).
         let result = obj
             .define_own_property(str_key("x"), PropertyDescriptor::data(int_val(1)))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(!result);
     }
 
@@ -2329,12 +2329,12 @@ mod tests {
                 configurable: false,
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         // Try to make it configurable again — rejected.
         let result = obj
             .define_own_property(str_key("x"), PropertyDescriptor::data(int_val(2)))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(!result);
     }
 
@@ -2350,7 +2350,7 @@ mod tests {
                 configurable: false,
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         // Same value, same attributes — allowed.
         let result = obj
@@ -2363,7 +2363,7 @@ mod tests {
                     configurable: false,
                 },
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(result);
     }
 
@@ -2375,7 +2375,7 @@ mod tests {
     fn delete_configurable_property() {
         let mut obj = OrdinaryObject::default();
         obj.define_own_property(str_key("x"), PropertyDescriptor::data(int_val(1)))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(obj.delete(&str_key("x")));
         assert!(!obj.has_own_property(&str_key("x")));
     }
@@ -2392,7 +2392,7 @@ mod tests {
                 configurable: false,
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert!(!obj.delete(&str_key("x")));
         assert!(obj.has_own_property(&str_key("x")));
     }
@@ -2411,20 +2411,20 @@ mod tests {
     fn own_property_keys_order() {
         let mut obj = OrdinaryObject::default();
         obj.define_own_property(str_key("b"), PropertyDescriptor::data(int_val(1)))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         obj.define_own_property(str_key("2"), PropertyDescriptor::data(int_val(2)))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         obj.define_own_property(str_key("0"), PropertyDescriptor::data(int_val(3)))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         obj.define_own_property(str_key("a"), PropertyDescriptor::data(int_val(4)))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         obj.define_own_property(
             PropertyKey::Symbol(SymbolId(100)),
             PropertyDescriptor::data(int_val(5)),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         obj.define_own_property(str_key("10"), PropertyDescriptor::data(int_val(6)))
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let keys = obj.own_property_keys();
         // Integer indices first (sorted numerically), then strings, then symbols.
@@ -2444,13 +2444,13 @@ mod tests {
     fn freeze_makes_non_writable_non_configurable() {
         let mut obj = OrdinaryObject::default();
         obj.define_own_property(str_key("x"), PropertyDescriptor::data(int_val(1)))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         obj.freeze();
         assert!(!obj.extensible);
         assert!(obj.is_frozen());
         assert!(obj.is_sealed());
         // SAFETY: Property "x" was defined above, so get_own_property("x") must return Some
-        let d = obj.get_own_property(&str_key("x")).unwrap();
+        let d = obj.get_own_property(&str_key("x")).expect("serde deserialization should succeed");
         assert!(!d.is_configurable());
         assert!(!d.is_writable());
     }
@@ -2459,12 +2459,12 @@ mod tests {
     fn seal_makes_non_configurable_keeps_writable() {
         let mut obj = OrdinaryObject::default();
         obj.define_own_property(str_key("x"), PropertyDescriptor::data(int_val(1)))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         obj.seal();
         assert!(!obj.extensible);
         assert!(obj.is_sealed());
         assert!(!obj.is_frozen()); // writable data property remains writable
-        let d = obj.get_own_property(&str_key("x")).unwrap();
+        let d = obj.get_own_property(&str_key("x")).expect("serde deserialization should succeed");
         assert!(!d.is_configurable());
         assert!(d.is_writable());
     }
@@ -2493,9 +2493,9 @@ mod tests {
         let mut heap = ObjectHeap::new();
         let h = heap.alloc_plain();
         // SAFETY: Test-only unwrap with valid heap object and property
-        heap.set_property(h, str_key("x"), int_val(42)).unwrap();
+        heap.set_property(h, str_key("x"), int_val(42)).expect("serde deserialization should succeed");
         // SAFETY: Test-only unwrap with valid heap object and existing property
-        let val = heap.get_property(h, &str_key("x")).unwrap();
+        let val = heap.get_property(h, &str_key("x")).expect("serde deserialization should succeed");
         assert_eq!(val, int_val(42));
     }
 
@@ -2509,11 +2509,11 @@ mod tests {
         let proto = heap.alloc_plain();
         // SAFETY: Test-only unwrap with valid heap object and property
         heap.set_property(proto, str_key("inherited"), int_val(99))
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let child = heap.alloc(Some(proto));
         // SAFETY: Test-only unwrap with valid heap object and inherited property
-        let val = heap.get_property(child, &str_key("inherited")).unwrap();
+        let val = heap.get_property(child, &str_key("inherited")).expect("serde deserialization should succeed");
         assert_eq!(val, int_val(99));
     }
 
@@ -2522,14 +2522,14 @@ mod tests {
         let mut heap = ObjectHeap::new();
         let proto = heap.alloc_plain();
         // SAFETY: Test-only unwrap with valid heap object and property
-        heap.set_property(proto, str_key("x"), int_val(1)).unwrap();
+        heap.set_property(proto, str_key("x"), int_val(1)).expect("serde deserialization should succeed");
 
         let child = heap.alloc(Some(proto));
         // SAFETY: Test-only unwrap with valid heap object and property
-        heap.set_property(child, str_key("x"), int_val(2)).unwrap();
+        heap.set_property(child, str_key("x"), int_val(2)).expect("serde deserialization should succeed");
 
         // SAFETY: Test-only unwrap with valid heap object and existing property
-        let val = heap.get_property(child, &str_key("x")).unwrap();
+        let val = heap.get_property(child, &str_key("x")).expect("serde deserialization should succeed");
         assert_eq!(val, int_val(2)); // own shadows prototype
     }
 
@@ -2538,7 +2538,7 @@ mod tests {
         let mut heap = ObjectHeap::new();
         let h = heap.alloc_plain();
         // SAFETY: Test-only unwrap with valid heap object (returns Undefined for nonexistent)
-        let val = heap.get_property(h, &str_key("nonexistent")).unwrap();
+        let val = heap.get_property(h, &str_key("nonexistent")).expect("serde deserialization should succeed");
         assert_eq!(val, JsValue::Undefined);
     }
 
@@ -2546,11 +2546,11 @@ mod tests {
     fn prototype_chain_has_property() {
         let mut heap = ObjectHeap::new();
         let proto = heap.alloc_plain();
-        heap.set_property(proto, str_key("y"), int_val(1)).unwrap();
+        heap.set_property(proto, str_key("y"), int_val(1)).expect("serde deserialization should succeed");
         let child = heap.alloc(Some(proto));
 
-        assert!(heap.has_property(child, &str_key("y")).unwrap());
-        assert!(!heap.has_property(child, &str_key("z")).unwrap());
+        assert!(heap.has_property(child, &str_key("y")).expect("serde deserialization should succeed"));
+        assert!(!heap.has_property(child, &str_key("z")).expect("serde deserialization should succeed"));
     }
 
     // -----------------------------------------------------------------------
@@ -2572,8 +2572,8 @@ mod tests {
         let mut heap = ObjectHeap::new();
         let a = heap.alloc_plain();
         let b = heap.alloc_plain();
-        heap.prevent_extensions(a).unwrap();
-        let result = heap.set_prototype_of(a, Some(b)).unwrap();
+        heap.prevent_extensions(a).expect("serde deserialization should succeed");
+        let result = heap.set_prototype_of(a, Some(b)).expect("serde deserialization should succeed");
         assert!(!result); // non-extensible, different prototype
     }
 
@@ -2582,8 +2582,8 @@ mod tests {
         let mut heap = ObjectHeap::new();
         let proto = heap.alloc_plain();
         let obj = heap.alloc(Some(proto));
-        heap.prevent_extensions(obj).unwrap();
-        let result = heap.set_prototype_of(obj, Some(proto)).unwrap();
+        heap.prevent_extensions(obj).expect("serde deserialization should succeed");
+        let result = heap.set_prototype_of(obj, Some(proto)).expect("serde deserialization should succeed");
         assert!(result); // same prototype is ok
     }
 
@@ -2595,7 +2595,7 @@ mod tests {
     fn object_keys_only_enumerable_strings() {
         let mut heap = ObjectHeap::new();
         let h = heap.alloc_plain();
-        heap.set_property(h, str_key("a"), int_val(1)).unwrap();
+        heap.set_property(h, str_key("a"), int_val(1)).expect("serde deserialization should succeed");
         heap.define_property(
             h,
             str_key("hidden"),
@@ -2606,15 +2606,15 @@ mod tests {
                 configurable: true,
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         heap.define_property(
             h,
             PropertyKey::Symbol(SymbolId(100)),
             PropertyDescriptor::data(int_val(3)),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
-        let keys = heap.keys(h).unwrap();
+        let keys = heap.keys(h).expect("serde deserialization should succeed");
         assert_eq!(keys, vec!["a".to_string()]);
     }
 
@@ -2627,19 +2627,19 @@ mod tests {
         let mut heap = ObjectHeap::new();
         let h = heap.alloc_plain();
         // SAFETY: Test-only unwrap with valid heap object and property
-        heap.set_property(h, str_key("x"), int_val(1)).unwrap();
+        heap.set_property(h, str_key("x"), int_val(1)).expect("serde deserialization should succeed");
         // SAFETY: Test-only unwrap with valid heap object
-        heap.freeze(h).unwrap();
+        heap.freeze(h).expect("serde deserialization should succeed");
 
         // SAFETY: Test-only unwrap with valid heap object
-        assert!(heap.is_frozen(h).unwrap());
+        assert!(heap.is_frozen(h).expect("serde deserialization should succeed"));
         // Cannot modify frozen property.
         // SAFETY: Test-only unwrap with valid heap object and property (returns false)
-        let result = heap.set_property(h, str_key("x"), int_val(2)).unwrap();
+        let result = heap.set_property(h, str_key("x"), int_val(2)).expect("serde deserialization should succeed");
         assert!(!result);
         // Cannot add new property.
         // SAFETY: Test-only unwrap with valid heap object and property (returns false)
-        let result = heap.set_property(h, str_key("y"), int_val(3)).unwrap();
+        let result = heap.set_property(h, str_key("y"), int_val(3)).expect("serde deserialization should succeed");
         assert!(!result);
     }
 
@@ -2648,21 +2648,21 @@ mod tests {
         let mut heap = ObjectHeap::new();
         let h = heap.alloc_plain();
         // SAFETY: Test-only unwrap with valid heap object and property
-        heap.set_property(h, str_key("x"), int_val(1)).unwrap();
+        heap.set_property(h, str_key("x"), int_val(1)).expect("serde deserialization should succeed");
         // SAFETY: Test-only unwrap with valid heap object
-        heap.seal(h).unwrap();
+        heap.seal(h).expect("serde deserialization should succeed");
 
         // SAFETY: Test-only unwrap with valid heap object
-        assert!(heap.is_sealed(h).unwrap());
+        assert!(heap.is_sealed(h).expect("serde deserialization should succeed"));
         // SAFETY: Test-only unwrap with valid heap object
-        assert!(!heap.is_frozen(h).unwrap());
+        assert!(!heap.is_frozen(h).expect("serde deserialization should succeed"));
         // Can modify value of writable property on sealed object.
         // SAFETY: Test-only unwrap with valid heap object and property (returns true)
-        let result = heap.set_property(h, str_key("x"), int_val(2)).unwrap();
+        let result = heap.set_property(h, str_key("x"), int_val(2)).expect("serde deserialization should succeed");
         assert!(result);
         // Cannot add new property.
         // SAFETY: Test-only unwrap with valid heap object and property (returns false)
-        let result = heap.set_property(h, str_key("y"), int_val(3)).unwrap();
+        let result = heap.set_property(h, str_key("y"), int_val(3)).expect("serde deserialization should succeed");
         assert!(!result);
     }
 
@@ -2674,18 +2674,18 @@ mod tests {
     fn object_assign_copies_enumerable() {
         let mut heap = ObjectHeap::new();
         let src = heap.alloc_plain();
-        heap.set_property(src, str_key("a"), int_val(1)).unwrap();
-        heap.set_property(src, str_key("b"), int_val(2)).unwrap();
+        heap.set_property(src, str_key("a"), int_val(1)).expect("serde deserialization should succeed");
+        heap.set_property(src, str_key("b"), int_val(2)).expect("serde deserialization should succeed");
 
         let target = heap.alloc_plain();
-        heap.assign(target, &[src]).unwrap();
+        heap.assign(target, &[src]).expect("serde deserialization should succeed");
 
         assert_eq!(
-            heap.get_property(target, &str_key("a")).unwrap(),
+            heap.get_property(target, &str_key("a")).expect("serde deserialization should succeed"),
             int_val(1)
         );
         assert_eq!(
-            heap.get_property(target, &str_key("b")).unwrap(),
+            heap.get_property(target, &str_key("b")).expect("serde deserialization should succeed"),
             int_val(2)
         );
     }
@@ -2702,17 +2702,17 @@ mod tests {
         let proxy = heap.alloc_proxy(target, handler);
 
         // SAFETY: proxy just allocated on heap, get() succeeds for valid ID
-        let obj = heap.get(proxy).unwrap();
+        let obj = heap.get(proxy).expect("serde deserialization should succeed");
         assert!(obj.as_proxy().is_some());
         // SAFETY: test just verified obj.as_proxy().is_some(), unwrap() succeeds
-        assert!(!obj.as_proxy().unwrap().is_revoked());
+        assert!(!obj.as_proxy().expect("serde deserialization should succeed").is_revoked());
 
         // SAFETY: proxy is valid and not yet revoked, revoke_proxy() succeeds
-        heap.revoke_proxy(proxy).unwrap();
+        heap.revoke_proxy(proxy).expect("serde deserialization should succeed");
         // SAFETY: proxy still exists after revocation (object remains on heap)
-        let obj = heap.get(proxy).unwrap();
+        let obj = heap.get(proxy).expect("serde deserialization should succeed");
         // SAFETY: object is confirmed proxy from test setup, as_proxy() returns Some
-        assert!(obj.as_proxy().unwrap().is_revoked());
+        assert!(obj.as_proxy().expect("serde deserialization should succeed").is_revoked());
     }
 
     #[test]
@@ -2721,9 +2721,9 @@ mod tests {
         let target = heap.alloc_plain();
         let handler = heap.alloc_plain();
         let proxy = heap.alloc_proxy(target, handler);
-        heap.revoke_proxy(proxy).unwrap();
+        heap.revoke_proxy(proxy).expect("serde deserialization should succeed");
 
-        let p = heap.get(proxy).unwrap().as_proxy().unwrap();
+        let p = heap.get(proxy).expect("serde deserialization should succeed").as_proxy().expect("serde deserialization should succeed");
         assert_eq!(p.target(), Err(ObjectError::ProxyRevoked));
         assert_eq!(p.handler(), Err(ObjectError::ProxyRevoked));
     }
@@ -2744,7 +2744,7 @@ mod tests {
                 configurable: false,
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         // Trap returns correct value — ok.
         assert!(ProxyInvariantChecker::check_get(&obj, &str_key("x"), &int_val(42)).is_ok());
@@ -2769,7 +2769,7 @@ mod tests {
                 configurable: false,
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         // Cannot report non-configurable as non-existent.
         assert!(ProxyInvariantChecker::check_has(&obj, &str_key("x"), false).is_err());
@@ -2792,7 +2792,7 @@ mod tests {
                 configurable: false,
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         assert!(ProxyInvariantChecker::check_delete(&obj, &str_key("x"), true).is_err());
         assert!(ProxyInvariantChecker::check_delete(&obj, &str_key("x"), false).is_ok());
@@ -2814,7 +2814,7 @@ mod tests {
                 configurable: false,
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         // Missing non-configurable key — error.
         assert!(ProxyInvariantChecker::check_own_keys(&obj, &[]).is_err());
@@ -2975,10 +2975,10 @@ mod tests {
     fn heap_delete_property() {
         let mut heap = ObjectHeap::new();
         let h = heap.alloc_plain();
-        heap.set_property(h, str_key("x"), int_val(1)).unwrap();
-        assert!(heap.delete_property(h, &str_key("x")).unwrap());
+        heap.set_property(h, str_key("x"), int_val(1)).expect("serde deserialization should succeed");
+        assert!(heap.delete_property(h, &str_key("x")).expect("serde deserialization should succeed"));
         assert_eq!(
-            heap.get_property(h, &str_key("x")).unwrap(),
+            heap.get_property(h, &str_key("x")).expect("serde deserialization should succeed"),
             JsValue::Undefined
         );
     }
@@ -2992,17 +2992,17 @@ mod tests {
         let mut heap = ObjectHeap::new();
         let grandparent = heap.alloc_plain();
         heap.set_property(grandparent, str_key("g"), int_val(1))
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let parent = heap.alloc(Some(grandparent));
-        heap.set_property(parent, str_key("p"), int_val(2)).unwrap();
+        heap.set_property(parent, str_key("p"), int_val(2)).expect("serde deserialization should succeed");
 
         let child = heap.alloc(Some(parent));
-        heap.set_property(child, str_key("c"), int_val(3)).unwrap();
+        heap.set_property(child, str_key("c"), int_val(3)).expect("serde deserialization should succeed");
 
-        assert_eq!(heap.get_property(child, &str_key("g")).unwrap(), int_val(1));
-        assert_eq!(heap.get_property(child, &str_key("p")).unwrap(), int_val(2));
-        assert_eq!(heap.get_property(child, &str_key("c")).unwrap(), int_val(3));
+        assert_eq!(heap.get_property(child, &str_key("g")).expect("serde deserialization should succeed"), int_val(1));
+        assert_eq!(heap.get_property(child, &str_key("p")).expect("serde deserialization should succeed"), int_val(2));
+        assert_eq!(heap.get_property(child, &str_key("c")).expect("serde deserialization should succeed"), int_val(3));
     }
 
     // -----------------------------------------------------------------------
@@ -3012,8 +3012,8 @@ mod tests {
     #[test]
     fn property_key_serde_roundtrip() {
         for key in [str_key("foo"), PropertyKey::Symbol(SymbolId(42))] {
-            let json = serde_json::to_string(&key).unwrap();
-            let deser: PropertyKey = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&key).expect("serde deserialization should succeed");
+            let deser: PropertyKey = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(key, deser);
         }
     }
@@ -3030,8 +3030,8 @@ mod tests {
             JsValue::Object(ObjectHandle(3)),
             JsValue::Function(5),
         ] {
-            let json = serde_json::to_string(&val).unwrap();
-            let deser: JsValue = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&val).expect("serde deserialization should succeed");
+            let deser: JsValue = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(val, deser);
         }
     }
@@ -3049,8 +3049,8 @@ mod tests {
             },
         ];
         for desc in descs {
-            let json = serde_json::to_string(&desc).unwrap();
-            let deser: PropertyDescriptor = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&desc).expect("serde deserialization should succeed");
+            let deser: PropertyDescriptor = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(desc, deser);
         }
     }
@@ -3065,8 +3065,8 @@ mod tests {
             ObjectError::PrototypeChainTooDeep { depth: 10, max: 5 },
         ];
         for err in errors {
-            let json = serde_json::to_string(&err).unwrap();
-            let deser: ObjectError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+            let deser: ObjectError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(err, deser);
         }
     }
@@ -3099,14 +3099,14 @@ mod tests {
         let mut heap = ObjectHeap::new();
         let proto = heap.alloc_plain();
         heap.set_property(proto, str_key("shared"), int_val(100))
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let child = heap.create(Some(proto));
         assert_eq!(
-            heap.get_property(child, &str_key("shared")).unwrap(),
+            heap.get_property(child, &str_key("shared")).expect("serde deserialization should succeed"),
             int_val(100)
         );
-        assert_eq!(heap.get_prototype_of(child).unwrap(), Some(proto));
+        assert_eq!(heap.get_prototype_of(child).expect("serde deserialization should succeed"), Some(proto));
     }
 
     // -----------------------------------------------------------------------
@@ -3125,7 +3125,7 @@ mod tests {
                 configurable: false,
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         // Cannot set to different value.
         assert!(ProxyInvariantChecker::check_set(&obj, &str_key("x"), &int_val(99), true).is_err());
@@ -3149,7 +3149,7 @@ mod tests {
                 configurable: false,
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         assert!(ProxyInvariantChecker::check_set(&obj, &str_key("x"), &int_val(1), true).is_err());
     }
@@ -3163,9 +3163,9 @@ mod tests {
     fn proxy_invariant_own_keys_non_extensible_exact() {
         let mut obj = OrdinaryObject::default();
         obj.define_own_property(str_key("a"), PropertyDescriptor::data(int_val(1)))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         obj.define_own_property(str_key("b"), PropertyDescriptor::data(int_val(2)))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         obj.extensible = false;
 
         // Exact permutation — ok.
@@ -3218,7 +3218,7 @@ mod tests {
     fn proxy_invariant_get_own_property_non_extensible() {
         let mut obj = OrdinaryObject::default();
         obj.define_own_property(str_key("x"), PropertyDescriptor::data(int_val(1)))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         obj.extensible = false;
 
         // Cannot report existing property as non-existent.
@@ -3297,10 +3297,10 @@ mod tests {
                 configurable: true,
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         // get_property returns the getter handle as an Object value.
-        let val = heap.get_property(h, &str_key("x")).unwrap();
+        let val = heap.get_property(h, &str_key("x")).expect("serde deserialization should succeed");
         assert_eq!(val, JsValue::Object(getter_handle));
     }
 
@@ -3322,9 +3322,9 @@ mod tests {
                 configurable: true,
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
-        let val = heap.get_property(h, &str_key("x")).unwrap();
+        let val = heap.get_property(h, &str_key("x")).expect("serde deserialization should succeed");
         assert_eq!(val, JsValue::Undefined);
     }
 
@@ -3344,7 +3344,7 @@ mod tests {
                 configurable: false,
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         // Must return undefined.
         assert!(ProxyInvariantChecker::check_get(&obj, &str_key("x"), &JsValue::Undefined).is_ok());
@@ -3414,7 +3414,7 @@ mod tests {
                 configurable: false,
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         // Cannot change to accessor.
         let result = obj
@@ -3427,7 +3427,7 @@ mod tests {
                     configurable: false,
                 },
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(!result);
     }
 
@@ -3447,7 +3447,7 @@ mod tests {
                 configurable: false,
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let result = obj
             .define_own_property(
@@ -3459,7 +3459,7 @@ mod tests {
                     configurable: false,
                 },
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(!result);
     }
 
@@ -3479,7 +3479,7 @@ mod tests {
                 configurable: false,
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         // Change getter — rejected.
         let result = obj
@@ -3492,7 +3492,7 @@ mod tests {
                     configurable: false,
                 },
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(!result);
     }
 
@@ -3504,7 +3504,7 @@ mod tests {
     fn configurable_property_can_change_type() {
         let mut obj = OrdinaryObject::default();
         obj.define_own_property(str_key("x"), PropertyDescriptor::data(int_val(1)))
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let result = obj
             .define_own_property(
@@ -3516,9 +3516,9 @@ mod tests {
                     configurable: true,
                 },
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(result);
-        assert!(obj.get_own_property(&str_key("x")).unwrap().is_accessor());
+        assert!(obj.get_own_property(&str_key("x")).expect("serde deserialization should succeed").is_accessor());
     }
 
     // -----------------------------------------------------------------------
@@ -3562,20 +3562,20 @@ mod tests {
     fn object_assign_multiple_sources() {
         let mut heap = ObjectHeap::new();
         let s1 = heap.alloc_plain();
-        heap.set_property(s1, str_key("a"), int_val(1)).unwrap();
+        heap.set_property(s1, str_key("a"), int_val(1)).expect("serde deserialization should succeed");
         let s2 = heap.alloc_plain();
-        heap.set_property(s2, str_key("b"), int_val(2)).unwrap();
-        heap.set_property(s2, str_key("a"), int_val(3)).unwrap(); // overrides s1.a
+        heap.set_property(s2, str_key("b"), int_val(2)).expect("serde deserialization should succeed");
+        heap.set_property(s2, str_key("a"), int_val(3)).expect("serde deserialization should succeed"); // overrides s1.a
 
         let target = heap.alloc_plain();
-        heap.assign(target, &[s1, s2]).unwrap();
+        heap.assign(target, &[s1, s2]).expect("serde deserialization should succeed");
 
         assert_eq!(
-            heap.get_property(target, &str_key("a")).unwrap(),
+            heap.get_property(target, &str_key("a")).expect("serde deserialization should succeed"),
             int_val(3)
         );
         assert_eq!(
-            heap.get_property(target, &str_key("b")).unwrap(),
+            heap.get_property(target, &str_key("b")).expect("serde deserialization should succeed"),
             int_val(2)
         );
     }
@@ -3588,8 +3588,8 @@ mod tests {
     fn object_values_enumerable_only() {
         let mut heap = ObjectHeap::new();
         let h = heap.alloc_plain();
-        heap.set_property(h, str_key("a"), int_val(1)).unwrap();
-        heap.set_property(h, str_key("b"), int_val(2)).unwrap();
+        heap.set_property(h, str_key("a"), int_val(1)).expect("serde deserialization should succeed");
+        heap.set_property(h, str_key("b"), int_val(2)).expect("serde deserialization should succeed");
         heap.define_property(
             h,
             str_key("hidden"),
@@ -3600,16 +3600,16 @@ mod tests {
                 configurable: true,
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         // Symbol keys excluded from values.
         heap.define_property(
             h,
             PropertyKey::Symbol(SymbolId(100)),
             PropertyDescriptor::data(int_val(4)),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
-        let vals = heap.values(h).unwrap();
+        let vals = heap.values(h).expect("serde deserialization should succeed");
         assert_eq!(vals, vec![int_val(1), int_val(2)]);
     }
 
@@ -3621,8 +3621,8 @@ mod tests {
     fn object_entries_enumerable_string_keys_only() {
         let mut heap = ObjectHeap::new();
         let h = heap.alloc_plain();
-        heap.set_property(h, str_key("x"), int_val(10)).unwrap();
-        heap.set_property(h, str_key("y"), int_val(20)).unwrap();
+        heap.set_property(h, str_key("x"), int_val(10)).expect("serde deserialization should succeed");
+        heap.set_property(h, str_key("y"), int_val(20)).expect("serde deserialization should succeed");
         heap.define_property(
             h,
             str_key("secret"),
@@ -3633,9 +3633,9 @@ mod tests {
                 configurable: true,
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
-        let entries = heap.entries(h).unwrap();
+        let entries = heap.entries(h).expect("serde deserialization should succeed");
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0], ("x".to_string(), int_val(10)));
         assert_eq!(entries[1], ("y".to_string(), int_val(20)));
@@ -3654,19 +3654,19 @@ mod tests {
             (str_key("b"), PropertyDescriptor::data(int_val(2))),
             (str_key("c"), PropertyDescriptor::data(int_val(3))),
         ];
-        assert!(heap.define_properties(h, props).unwrap());
-        assert_eq!(heap.get_property(h, &str_key("a")).unwrap(), int_val(1));
-        assert_eq!(heap.get_property(h, &str_key("b")).unwrap(), int_val(2));
-        assert_eq!(heap.get_property(h, &str_key("c")).unwrap(), int_val(3));
+        assert!(heap.define_properties(h, props).expect("serde deserialization should succeed"));
+        assert_eq!(heap.get_property(h, &str_key("a")).expect("serde deserialization should succeed"), int_val(1));
+        assert_eq!(heap.get_property(h, &str_key("b")).expect("serde deserialization should succeed"), int_val(2));
+        assert_eq!(heap.get_property(h, &str_key("c")).expect("serde deserialization should succeed"), int_val(3));
     }
 
     #[test]
     fn define_properties_fails_on_non_extensible() {
         let mut heap = ObjectHeap::new();
         let h = heap.alloc_plain();
-        heap.prevent_extensions(h).unwrap();
+        heap.prevent_extensions(h).expect("serde deserialization should succeed");
         let props = vec![(str_key("a"), PropertyDescriptor::data(int_val(1)))];
-        assert!(!heap.define_properties(h, props).unwrap());
+        assert!(!heap.define_properties(h, props).expect("serde deserialization should succeed"));
     }
 
     // -----------------------------------------------------------------------
@@ -3677,10 +3677,10 @@ mod tests {
     fn get_own_property_descriptors() {
         let mut heap = ObjectHeap::new();
         let h = heap.alloc_plain();
-        heap.set_property(h, str_key("x"), int_val(1)).unwrap();
-        heap.set_property(h, str_key("y"), int_val(2)).unwrap();
+        heap.set_property(h, str_key("x"), int_val(1)).expect("serde deserialization should succeed");
+        heap.set_property(h, str_key("y"), int_val(2)).expect("serde deserialization should succeed");
 
-        let descs = heap.get_own_property_descriptors(h).unwrap();
+        let descs = heap.get_own_property_descriptors(h).expect("serde deserialization should succeed");
         assert_eq!(descs.len(), 2);
         // Keys are in own_property_keys order.
         assert_eq!(descs[0].0, str_key("x"));
@@ -3696,13 +3696,13 @@ mod tests {
         let mut heap = ObjectHeap::new();
         let proto = heap.alloc_plain();
         heap.set_property(proto, str_key("inherited"), int_val(1))
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let child = heap.alloc(Some(proto));
         heap.set_property(child, str_key("own"), int_val(2))
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
-        let keys = heap.for_in_keys(child).unwrap();
+        let keys = heap.for_in_keys(child).expect("serde deserialization should succeed");
         assert_eq!(keys, vec!["own".to_string(), "inherited".to_string()]);
     }
 
@@ -3710,13 +3710,13 @@ mod tests {
     fn for_in_keys_shadows_inherited() {
         let mut heap = ObjectHeap::new();
         let proto = heap.alloc_plain();
-        heap.set_property(proto, str_key("x"), int_val(1)).unwrap();
-        heap.set_property(proto, str_key("y"), int_val(2)).unwrap();
+        heap.set_property(proto, str_key("x"), int_val(1)).expect("serde deserialization should succeed");
+        heap.set_property(proto, str_key("y"), int_val(2)).expect("serde deserialization should succeed");
 
         let child = heap.alloc(Some(proto));
-        heap.set_property(child, str_key("x"), int_val(3)).unwrap();
+        heap.set_property(child, str_key("x"), int_val(3)).expect("serde deserialization should succeed");
 
-        let keys = heap.for_in_keys(child).unwrap();
+        let keys = heap.for_in_keys(child).expect("serde deserialization should succeed");
         // "x" from child shadows proto's "x"; "y" is inherited
         assert_eq!(keys, vec!["x".to_string(), "y".to_string()]);
     }
@@ -3735,12 +3735,12 @@ mod tests {
                 configurable: true,
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         heap.set_property(proto, str_key("visible"), int_val(2))
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let child = heap.alloc(Some(proto));
-        let keys = heap.for_in_keys(child).unwrap();
+        let keys = heap.for_in_keys(child).expect("serde deserialization should succeed");
         assert_eq!(keys, vec!["visible".to_string()]);
     }
 
@@ -3748,15 +3748,15 @@ mod tests {
     fn for_in_keys_skips_symbols() {
         let mut heap = ObjectHeap::new();
         let h = heap.alloc_plain();
-        heap.set_property(h, str_key("a"), int_val(1)).unwrap();
+        heap.set_property(h, str_key("a"), int_val(1)).expect("serde deserialization should succeed");
         heap.define_property(
             h,
             PropertyKey::Symbol(SymbolId(100)),
             PropertyDescriptor::data(int_val(2)),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
-        let keys = heap.for_in_keys(h).unwrap();
+        let keys = heap.for_in_keys(h).expect("serde deserialization should succeed");
         assert_eq!(keys, vec!["a".to_string()]);
     }
 
@@ -3764,13 +3764,13 @@ mod tests {
     fn for_in_keys_three_level_chain() {
         let mut heap = ObjectHeap::new();
         let gp = heap.alloc_plain();
-        heap.set_property(gp, str_key("g"), int_val(1)).unwrap();
+        heap.set_property(gp, str_key("g"), int_val(1)).expect("serde deserialization should succeed");
         let parent = heap.alloc(Some(gp));
-        heap.set_property(parent, str_key("p"), int_val(2)).unwrap();
+        heap.set_property(parent, str_key("p"), int_val(2)).expect("serde deserialization should succeed");
         let child = heap.alloc(Some(parent));
-        heap.set_property(child, str_key("c"), int_val(3)).unwrap();
+        heap.set_property(child, str_key("c"), int_val(3)).expect("serde deserialization should succeed");
 
-        let keys = heap.for_in_keys(child).unwrap();
+        let keys = heap.for_in_keys(child).expect("serde deserialization should succeed");
         assert_eq!(
             keys,
             vec!["c".to_string(), "p".to_string(), "g".to_string()]
@@ -3785,35 +3785,35 @@ mod tests {
     fn reflect_get_set() {
         let mut heap = ObjectHeap::new();
         let h = heap.alloc_plain();
-        assert!(Reflect::set(&mut heap, h, str_key("x"), int_val(42)).unwrap());
-        assert_eq!(Reflect::get(&heap, h, &str_key("x")).unwrap(), int_val(42));
+        assert!(Reflect::set(&mut heap, h, str_key("x"), int_val(42)).expect("serde deserialization should succeed"));
+        assert_eq!(Reflect::get(&heap, h, &str_key("x")).expect("serde deserialization should succeed"), int_val(42));
     }
 
     #[test]
     fn reflect_has() {
         let mut heap = ObjectHeap::new();
         let h = heap.alloc_plain();
-        Reflect::set(&mut heap, h, str_key("x"), int_val(1)).unwrap();
-        assert!(Reflect::has(&heap, h, &str_key("x")).unwrap());
-        assert!(!Reflect::has(&heap, h, &str_key("y")).unwrap());
+        Reflect::set(&mut heap, h, str_key("x"), int_val(1)).expect("serde deserialization should succeed");
+        assert!(Reflect::has(&heap, h, &str_key("x")).expect("serde deserialization should succeed"));
+        assert!(!Reflect::has(&heap, h, &str_key("y")).expect("serde deserialization should succeed"));
     }
 
     #[test]
     fn reflect_delete_property() {
         let mut heap = ObjectHeap::new();
         let h = heap.alloc_plain();
-        Reflect::set(&mut heap, h, str_key("x"), int_val(1)).unwrap();
-        assert!(Reflect::delete_property(&mut heap, h, &str_key("x")).unwrap());
-        assert!(!Reflect::has(&heap, h, &str_key("x")).unwrap());
+        Reflect::set(&mut heap, h, str_key("x"), int_val(1)).expect("serde deserialization should succeed");
+        assert!(Reflect::delete_property(&mut heap, h, &str_key("x")).expect("serde deserialization should succeed"));
+        assert!(!Reflect::has(&heap, h, &str_key("x")).expect("serde deserialization should succeed"));
     }
 
     #[test]
     fn reflect_own_keys() {
         let mut heap = ObjectHeap::new();
         let h = heap.alloc_plain();
-        Reflect::set(&mut heap, h, str_key("a"), int_val(1)).unwrap();
-        Reflect::set(&mut heap, h, str_key("b"), int_val(2)).unwrap();
-        let keys = Reflect::own_keys(&heap, h).unwrap();
+        Reflect::set(&mut heap, h, str_key("a"), int_val(1)).expect("serde deserialization should succeed");
+        Reflect::set(&mut heap, h, str_key("b"), int_val(2)).expect("serde deserialization should succeed");
+        let keys = Reflect::own_keys(&heap, h).expect("serde deserialization should succeed");
         assert_eq!(keys, vec![str_key("a"), str_key("b")]);
     }
 
@@ -3822,7 +3822,7 @@ mod tests {
         let mut heap = ObjectHeap::new();
         let proto = heap.alloc_plain();
         let obj = heap.alloc(Some(proto));
-        assert_eq!(Reflect::get_prototype_of(&heap, obj).unwrap(), Some(proto));
+        assert_eq!(Reflect::get_prototype_of(&heap, obj).expect("serde deserialization should succeed"), Some(proto));
     }
 
     #[test]
@@ -3830,9 +3830,9 @@ mod tests {
         let mut heap = ObjectHeap::new();
         let h = heap.alloc_plain();
         let new_proto = heap.alloc_plain();
-        assert!(Reflect::set_prototype_of(&mut heap, h, Some(new_proto)).unwrap());
+        assert!(Reflect::set_prototype_of(&mut heap, h, Some(new_proto)).expect("serde deserialization should succeed"));
         assert_eq!(
-            Reflect::get_prototype_of(&heap, h).unwrap(),
+            Reflect::get_prototype_of(&heap, h).expect("serde deserialization should succeed"),
             Some(new_proto)
         );
     }
@@ -3841,9 +3841,9 @@ mod tests {
     fn reflect_is_extensible_and_prevent() {
         let mut heap = ObjectHeap::new();
         let h = heap.alloc_plain();
-        assert!(Reflect::is_extensible(&heap, h).unwrap());
-        assert!(Reflect::prevent_extensions(&mut heap, h).unwrap());
-        assert!(!Reflect::is_extensible(&heap, h).unwrap());
+        assert!(Reflect::is_extensible(&heap, h).expect("serde deserialization should succeed"));
+        assert!(Reflect::prevent_extensions(&mut heap, h).expect("serde deserialization should succeed"));
+        assert!(!Reflect::is_extensible(&heap, h).expect("serde deserialization should succeed"));
     }
 
     #[test]
@@ -3851,8 +3851,8 @@ mod tests {
         let mut heap = ObjectHeap::new();
         let h = heap.alloc_plain();
         let desc = PropertyDescriptor::data(int_val(42));
-        assert!(Reflect::define_property(&mut heap, h, str_key("x"), desc.clone()).unwrap());
-        let got = Reflect::get_own_property_descriptor(&heap, h, &str_key("x")).unwrap();
+        assert!(Reflect::define_property(&mut heap, h, str_key("x"), desc.clone()).expect("serde deserialization should succeed"));
+        let got = Reflect::get_own_property_descriptor(&heap, h, &str_key("x")).expect("serde deserialization should succeed");
         assert_eq!(got, Some(desc));
     }
 
@@ -3864,10 +3864,10 @@ mod tests {
     fn empty_object_values_entries_keys() {
         let mut heap = ObjectHeap::new();
         let h = heap.alloc_plain();
-        assert!(heap.keys(h).unwrap().is_empty());
-        assert!(heap.values(h).unwrap().is_empty());
-        assert!(heap.entries(h).unwrap().is_empty());
-        assert!(heap.for_in_keys(h).unwrap().is_empty());
+        assert!(heap.keys(h).expect("serde deserialization should succeed").is_empty());
+        assert!(heap.values(h).expect("serde deserialization should succeed").is_empty());
+        assert!(heap.entries(h).expect("serde deserialization should succeed").is_empty());
+        assert!(heap.for_in_keys(h).expect("serde deserialization should succeed").is_empty());
     }
 
     // -----------------------------------------------------------------------
@@ -3878,10 +3878,10 @@ mod tests {
     fn object_assign_empty_sources() {
         let mut heap = ObjectHeap::new();
         let target = heap.alloc_plain();
-        heap.set_property(target, str_key("x"), int_val(1)).unwrap();
-        heap.assign(target, &[]).unwrap();
+        heap.set_property(target, str_key("x"), int_val(1)).expect("serde deserialization should succeed");
+        heap.assign(target, &[]).expect("serde deserialization should succeed");
         assert_eq!(
-            heap.get_property(target, &str_key("x")).unwrap(),
+            heap.get_property(target, &str_key("x")).expect("serde deserialization should succeed"),
             int_val(1)
         );
     }
@@ -3894,8 +3894,8 @@ mod tests {
     fn frozen_object_rejects_define() {
         let mut heap = ObjectHeap::new();
         let h = heap.alloc_plain();
-        heap.set_property(h, str_key("x"), int_val(1)).unwrap();
-        heap.freeze(h).unwrap();
+        heap.set_property(h, str_key("x"), int_val(1)).expect("serde deserialization should succeed");
+        heap.freeze(h).expect("serde deserialization should succeed");
 
         // Cannot redefine existing frozen property to different value.
         let result = heap
@@ -3909,13 +3909,13 @@ mod tests {
                     configurable: false,
                 },
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(!result);
 
         // Cannot add new property.
         let result = heap
             .define_property(h, str_key("y"), PropertyDescriptor::data(int_val(3)))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(!result);
     }
 
@@ -3927,8 +3927,8 @@ mod tests {
     fn sealed_object_allows_value_change() {
         let mut heap = ObjectHeap::new();
         let h = heap.alloc_plain();
-        heap.set_property(h, str_key("x"), int_val(1)).unwrap();
-        heap.seal(h).unwrap();
+        heap.set_property(h, str_key("x"), int_val(1)).expect("serde deserialization should succeed");
+        heap.seal(h).expect("serde deserialization should succeed");
 
         // Data property is sealed (non-configurable) but writable.
         // Define with same attributes but different value should succeed.
@@ -3943,7 +3943,7 @@ mod tests {
                     configurable: false,
                 },
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(result);
     }
 
@@ -3955,10 +3955,10 @@ mod tests {
     fn object_create_null_prototype() {
         let mut heap = ObjectHeap::new();
         let h = heap.create(None);
-        assert_eq!(heap.get_prototype_of(h).unwrap(), None);
+        assert_eq!(heap.get_prototype_of(h).expect("serde deserialization should succeed"), None);
         // Property lookup with no prototype returns undefined.
         assert_eq!(
-            heap.get_property(h, &str_key("anything")).unwrap(),
+            heap.get_property(h, &str_key("anything")).expect("serde deserialization should succeed"),
             JsValue::Undefined
         );
     }
@@ -3978,14 +3978,14 @@ mod tests {
         let outer_proxy = heap.alloc_proxy(inner_proxy, handler2);
 
         // Outer is a proxy wrapping inner proxy.
-        let outer = heap.get(outer_proxy).unwrap();
-        let proxy = outer.as_proxy().unwrap();
-        assert_eq!(proxy.target().unwrap(), inner_proxy);
+        let outer = heap.get(outer_proxy).expect("serde deserialization should succeed");
+        let proxy = outer.as_proxy().expect("serde deserialization should succeed");
+        assert_eq!(proxy.target().expect("serde deserialization should succeed"), inner_proxy);
 
         // Inner is a proxy wrapping target.
-        let inner = heap.get(inner_proxy).unwrap();
-        let inner_p = inner.as_proxy().unwrap();
-        assert_eq!(inner_p.target().unwrap(), target);
+        let inner = heap.get(inner_proxy).expect("serde deserialization should succeed");
+        let inner_p = inner.as_proxy().expect("serde deserialization should succeed");
+        assert_eq!(inner_p.target().expect("serde deserialization should succeed"), target);
     }
 
     // -----------------------------------------------------------------------
@@ -3999,10 +3999,10 @@ mod tests {
         let handler = heap.alloc_plain();
         let proxy = heap.alloc_proxy(target, handler);
 
-        heap.revoke_proxy(proxy).unwrap();
-        heap.revoke_proxy(proxy).unwrap(); // second revoke succeeds
+        heap.revoke_proxy(proxy).expect("serde deserialization should succeed");
+        heap.revoke_proxy(proxy).expect("serde deserialization should succeed"); // second revoke succeeds
 
-        let p = heap.get(proxy).unwrap().as_proxy().unwrap();
+        let p = heap.get(proxy).expect("serde deserialization should succeed").as_proxy().expect("serde deserialization should succeed");
         assert!(p.is_revoked());
     }
 
@@ -4022,7 +4022,7 @@ mod tests {
                 configurable: false,
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         // Trap returns non-configurable with different value — error.
         let bad_desc = Some(PropertyDescriptor::Data {
@@ -4063,7 +4063,7 @@ mod tests {
                 configurable: false,
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         // Trap defines non-configurable non-writable with different value.
         let desc = PropertyDescriptor::Data {
@@ -4087,7 +4087,7 @@ mod tests {
     fn proxy_invariant_delete_non_extensible_own_property() {
         let mut obj = OrdinaryObject::default();
         obj.define_own_property(str_key("x"), PropertyDescriptor::data_frozen(int_val(1)))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         obj.extensible = false;
 
         // Cannot delete non-configurable own property on non-extensible target.
@@ -4104,7 +4104,7 @@ mod tests {
         // Insert in non-sorted order.
         for key in ["100", "3", "10", "1", "0"] {
             obj.define_own_property(str_key(key), PropertyDescriptor::data(int_val(0)))
-                .unwrap();
+                .expect("serde deserialization should succeed");
         }
         let keys = obj.own_property_keys();
         let strs: Vec<&str> = keys
@@ -4133,7 +4133,7 @@ mod tests {
                 configurable: false,
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         // Try to change enumerable — rejected.
         let result = obj
@@ -4146,7 +4146,7 @@ mod tests {
                     configurable: false,
                 },
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(!result);
     }
 
@@ -4160,11 +4160,11 @@ mod tests {
         let h = heap.alloc_plain();
         let iter_key = WellKnownSymbol::Iterator.key();
         heap.define_property(h, iter_key.clone(), PropertyDescriptor::data(int_val(1)))
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
-        let desc = heap.get_own_property_descriptor(h, &iter_key).unwrap();
+        let desc = heap.get_own_property_descriptor(h, &iter_key).expect("serde deserialization should succeed");
         assert!(desc.is_some());
-        assert_eq!(desc.unwrap().value(), Some(&int_val(1)));
+        assert_eq!(desc.expect("serde deserialization should succeed").value(), Some(&int_val(1)));
     }
 
     // -----------------------------------------------------------------------
@@ -4195,12 +4195,12 @@ mod tests {
     fn ordinary_object_serde_roundtrip() {
         let mut obj = OrdinaryObject::default();
         obj.define_own_property(str_key("x"), PropertyDescriptor::data(int_val(42)))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         obj.prototype = Some(ObjectHandle(5));
         obj.class_tag = Some("TestObj".to_string());
 
-        let json = serde_json::to_string(&obj).unwrap();
-        let deser: OrdinaryObject = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&obj).expect("serde deserialization should succeed");
+        let deser: OrdinaryObject = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(deser.prototype, Some(ObjectHandle(5)));
         assert_eq!(deser.class_tag.as_deref(), Some("TestObj"));
         assert!(deser.has_own_property(&str_key("x")));
@@ -4215,15 +4215,15 @@ mod tests {
         let mut heap = ObjectHeap::new();
         let h = heap.alloc_plain();
         heap.set_property(h, str_key("key"), str_val("value"))
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
-        let json = serde_json::to_string(&heap).unwrap();
-        let deser: ObjectHeap = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&heap).expect("serde deserialization should succeed");
+        let deser: ObjectHeap = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(deser.len(), 1);
         assert_eq!(
             deser
                 .get_property(ObjectHandle(0), &str_key("key"))
-                .unwrap(),
+                .expect("serde deserialization should succeed"),
             str_val("value")
         );
     }
@@ -4238,8 +4238,8 @@ mod tests {
         let mut reg = SymbolRegistry::new();
         let sym = reg.symbol_for("test_key", &mut heap);
 
-        let json = serde_json::to_string(&reg).unwrap();
-        let deser: SymbolRegistry = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&reg).expect("serde deserialization should succeed");
+        let deser: SymbolRegistry = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(deser.key_for(sym), Some("test_key"));
     }
 
@@ -4252,7 +4252,7 @@ mod tests {
     fn proxy_invariant_has_non_extensible_existing() {
         let mut obj = OrdinaryObject::default();
         obj.define_own_property(str_key("x"), PropertyDescriptor::data(int_val(1)))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         obj.extensible = false;
 
         // Cannot report existing property as non-existent on non-extensible.
@@ -4268,7 +4268,7 @@ mod tests {
     fn proxy_invariant_get_own_property_non_config_on_config_target() {
         let mut obj = OrdinaryObject::default();
         obj.define_own_property(str_key("x"), PropertyDescriptor::data(int_val(1)))
-            .unwrap(); // configurable=true
+            .expect("serde deserialization should succeed"); // configurable=true
 
         // Trap returns non-configurable — error because target's property is configurable.
         let trap_desc = Some(PropertyDescriptor::Data {
@@ -4290,22 +4290,22 @@ mod tests {
     fn reflect_matches_heap_semantics() {
         let mut heap = ObjectHeap::new();
         let proto = heap.alloc_plain();
-        Reflect::set(&mut heap, proto, str_key("inherited"), int_val(100)).unwrap();
+        Reflect::set(&mut heap, proto, str_key("inherited"), int_val(100)).expect("serde deserialization should succeed");
 
         let child = heap.alloc(Some(proto));
 
         // Reflect.get walks prototype chain just like heap.get_property.
         assert_eq!(
-            Reflect::get(&heap, child, &str_key("inherited")).unwrap(),
+            Reflect::get(&heap, child, &str_key("inherited")).expect("serde deserialization should succeed"),
             int_val(100)
         );
 
         // Reflect.has walks prototype chain.
-        assert!(Reflect::has(&heap, child, &str_key("inherited")).unwrap());
+        assert!(Reflect::has(&heap, child, &str_key("inherited")).expect("serde deserialization should succeed"));
 
         // Reflect.getOwnPropertyDescriptor does NOT walk prototype chain.
         assert_eq!(
-            Reflect::get_own_property_descriptor(&heap, child, &str_key("inherited")).unwrap(),
+            Reflect::get_own_property_descriptor(&heap, child, &str_key("inherited")).expect("serde deserialization should succeed"),
             None
         );
     }
@@ -4318,7 +4318,7 @@ mod tests {
     fn proxy_invariant_set_configurable_writable_allows_different() {
         let mut obj = OrdinaryObject::default();
         obj.define_own_property(str_key("x"), PropertyDescriptor::data(int_val(1)))
-            .unwrap(); // configurable=true, writable=true
+            .expect("serde deserialization should succeed"); // configurable=true, writable=true
 
         // Setting different value should be allowed.
         assert!(ProxyInvariantChecker::check_set(&obj, &str_key("x"), &int_val(99), true).is_ok());
@@ -4342,13 +4342,13 @@ mod tests {
                 configurable: true,
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let child = heap.alloc(Some(proto));
         heap.set_property(child, str_key("own"), int_val(2))
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
-        let keys = heap.for_in_keys(child).unwrap();
+        let keys = heap.for_in_keys(child).expect("serde deserialization should succeed");
         assert_eq!(keys, vec!["own".to_string()]);
     }
 
@@ -4360,16 +4360,16 @@ mod tests {
     fn values_on_frozen_object() {
         let mut heap = ObjectHeap::new();
         let h = heap.alloc_plain();
-        heap.set_property(h, str_key("a"), int_val(1)).unwrap();
-        heap.set_property(h, str_key("b"), int_val(2)).unwrap();
-        heap.freeze(h).unwrap();
+        heap.set_property(h, str_key("a"), int_val(1)).expect("serde deserialization should succeed");
+        heap.set_property(h, str_key("b"), int_val(2)).expect("serde deserialization should succeed");
+        heap.freeze(h).expect("serde deserialization should succeed");
 
         // Frozen properties are non-enumerable per our freeze impl? No — freeze only
         // sets non-configurable and non-writable but keeps enumerable unchanged.
         // freeze() only makes properties non-configurable and non-writable.
         // It does not affect the enumerable flag.
         // So frozen values are still enumerable and should appear.
-        let vals = heap.values(h).unwrap();
+        let vals = heap.values(h).expect("serde deserialization should succeed");
         assert_eq!(vals, vec![int_val(1), int_val(2)]);
     }
 
@@ -4381,13 +4381,13 @@ mod tests {
     fn reflect_set_frozen_returns_false() {
         let mut heap = ObjectHeap::new();
         let h = heap.alloc_plain();
-        Reflect::set(&mut heap, h, str_key("x"), int_val(1)).unwrap();
-        heap.freeze(h).unwrap();
+        Reflect::set(&mut heap, h, str_key("x"), int_val(1)).expect("serde deserialization should succeed");
+        heap.freeze(h).expect("serde deserialization should succeed");
 
-        let result = Reflect::set(&mut heap, h, str_key("x"), int_val(2)).unwrap();
+        let result = Reflect::set(&mut heap, h, str_key("x"), int_val(2)).expect("serde deserialization should succeed");
         assert!(!result);
         // Value unchanged.
-        assert_eq!(Reflect::get(&heap, h, &str_key("x")).unwrap(), int_val(1));
+        assert_eq!(Reflect::get(&heap, h, &str_key("x")).expect("serde deserialization should succeed"), int_val(1));
     }
 
     // -----------------------------------------------------------------------
@@ -4399,7 +4399,7 @@ mod tests {
         let mut heap = ObjectHeap::new();
         let h = heap.alloc_plain();
         heap.set_property(h, str_key("visible"), int_val(1))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         heap.define_property(
             h,
             str_key("hidden"),
@@ -4410,9 +4410,9 @@ mod tests {
                 configurable: true,
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
-        let names = heap.get_own_property_names(h).unwrap();
+        let names = heap.get_own_property_names(h).expect("serde deserialization should succeed");
         assert!(names.contains(&"visible".to_string()));
         assert!(names.contains(&"hidden".to_string()));
         assert_eq!(names.len(), 2);
@@ -4426,15 +4426,15 @@ mod tests {
     fn get_own_property_names_excludes_symbols() {
         let mut heap = ObjectHeap::new();
         let h = heap.alloc_plain();
-        heap.set_property(h, str_key("a"), int_val(1)).unwrap();
+        heap.set_property(h, str_key("a"), int_val(1)).expect("serde deserialization should succeed");
         heap.define_property(
             h,
             WellKnownSymbol::Iterator.key(),
             PropertyDescriptor::data(int_val(99)),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
-        let names = heap.get_own_property_names(h).unwrap();
+        let names = heap.get_own_property_names(h).expect("serde deserialization should succeed");
         assert_eq!(names, vec!["a".to_string()]);
     }
 
@@ -4446,16 +4446,16 @@ mod tests {
     fn get_own_property_symbols_basic() {
         let mut heap = ObjectHeap::new();
         let h = heap.alloc_plain();
-        heap.set_property(h, str_key("a"), int_val(1)).unwrap();
+        heap.set_property(h, str_key("a"), int_val(1)).expect("serde deserialization should succeed");
         let sym = WellKnownSymbol::ToStringTag.id();
         heap.define_property(
             h,
             PropertyKey::Symbol(sym),
             PropertyDescriptor::data(str_val("MyClass")),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
-        let syms = heap.get_own_property_symbols(h).unwrap();
+        let syms = heap.get_own_property_symbols(h).expect("serde deserialization should succeed");
         assert_eq!(syms, vec![sym]);
     }
 
@@ -4469,8 +4469,8 @@ mod tests {
         let entries = vec![("x".to_string(), int_val(1)), ("y".to_string(), int_val(2))];
         let h = heap.from_entries(entries);
 
-        assert_eq!(heap.get_property(h, &str_key("x")).unwrap(), int_val(1));
-        assert_eq!(heap.get_property(h, &str_key("y")).unwrap(), int_val(2));
+        assert_eq!(heap.get_property(h, &str_key("x")).expect("serde deserialization should succeed"), int_val(1));
+        assert_eq!(heap.get_property(h, &str_key("y")).expect("serde deserialization should succeed"), int_val(2));
     }
 
     // -----------------------------------------------------------------------
@@ -4485,7 +4485,7 @@ mod tests {
             ("x".to_string(), int_val(99)),
         ];
         let h = heap.from_entries(entries);
-        assert_eq!(heap.get_property(h, &str_key("x")).unwrap(), int_val(99));
+        assert_eq!(heap.get_property(h, &str_key("x")).expect("serde deserialization should succeed"), int_val(99));
     }
 
     // -----------------------------------------------------------------------
@@ -4496,7 +4496,7 @@ mod tests {
     fn from_entries_empty() {
         let mut heap = ObjectHeap::new();
         let h = heap.from_entries(vec![]);
-        assert_eq!(heap.keys(h).unwrap().len(), 0);
+        assert_eq!(heap.keys(h).expect("serde deserialization should succeed").len(), 0);
     }
 
     // -----------------------------------------------------------------------
@@ -4507,8 +4507,8 @@ mod tests {
     fn has_own_true_for_own_property() {
         let mut heap = ObjectHeap::new();
         let h = heap.alloc_plain();
-        heap.set_property(h, str_key("x"), int_val(1)).unwrap();
-        assert!(heap.has_own(h, &str_key("x")).unwrap());
+        heap.set_property(h, str_key("x"), int_val(1)).expect("serde deserialization should succeed");
+        assert!(heap.has_own(h, &str_key("x")).expect("serde deserialization should succeed"));
     }
 
     #[test]
@@ -4516,11 +4516,11 @@ mod tests {
         let mut heap = ObjectHeap::new();
         let proto = heap.alloc_plain();
         heap.set_property(proto, str_key("inherited"), int_val(1))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let child = heap.alloc(Some(proto));
-        assert!(!heap.has_own(child, &str_key("inherited")).unwrap());
+        assert!(!heap.has_own(child, &str_key("inherited")).expect("serde deserialization should succeed"));
         // But has_property should find it.
-        assert!(heap.has_property(child, &str_key("inherited")).unwrap());
+        assert!(heap.has_property(child, &str_key("inherited")).expect("serde deserialization should succeed"));
     }
 
     // -----------------------------------------------------------------------
@@ -4540,13 +4540,13 @@ mod tests {
         let proxy3 = heap.alloc_proxy(proxy2, h3);
 
         // All three should be proxy objects.
-        assert!(heap.get(proxy1).unwrap().as_proxy().is_some());
-        assert!(heap.get(proxy2).unwrap().as_proxy().is_some());
-        assert!(heap.get(proxy3).unwrap().as_proxy().is_some());
+        assert!(heap.get(proxy1).expect("serde deserialization should succeed").as_proxy().is_some());
+        assert!(heap.get(proxy2).expect("serde deserialization should succeed").as_proxy().is_some());
+        assert!(heap.get(proxy3).expect("serde deserialization should succeed").as_proxy().is_some());
 
         // Outermost proxy's target is proxy2.
-        let p3 = heap.get(proxy3).unwrap().as_proxy().unwrap();
-        assert_eq!(p3.target().unwrap(), proxy2);
+        let p3 = heap.get(proxy3).expect("serde deserialization should succeed").as_proxy().expect("serde deserialization should succeed");
+        assert_eq!(p3.target().expect("serde deserialization should succeed"), proxy2);
     }
 
     // -----------------------------------------------------------------------
@@ -4560,11 +4560,11 @@ mod tests {
         let handler = heap.alloc_plain();
         let proxy = heap.alloc_proxy(target, handler);
 
-        heap.revoke_proxy(proxy).unwrap();
+        heap.revoke_proxy(proxy).expect("serde deserialization should succeed");
         // Second revoke should also succeed.
-        heap.revoke_proxy(proxy).unwrap();
+        heap.revoke_proxy(proxy).expect("serde deserialization should succeed");
 
-        let p = heap.get(proxy).unwrap().as_proxy().unwrap();
+        let p = heap.get(proxy).expect("serde deserialization should succeed").as_proxy().expect("serde deserialization should succeed");
         assert!(p.is_revoked());
     }
 
@@ -4578,9 +4578,9 @@ mod tests {
         let target = heap.alloc_plain();
         let handler = heap.alloc_plain();
         let proxy = heap.alloc_proxy(target, handler);
-        heap.revoke_proxy(proxy).unwrap();
+        heap.revoke_proxy(proxy).expect("serde deserialization should succeed");
 
-        let p = heap.get(proxy).unwrap().as_proxy().unwrap();
+        let p = heap.get(proxy).expect("serde deserialization should succeed").as_proxy().expect("serde deserialization should succeed");
         assert_eq!(p.target().unwrap_err(), ObjectError::ProxyRevoked);
         assert_eq!(p.handler().unwrap_err(), ObjectError::ProxyRevoked);
     }
@@ -4602,7 +4602,7 @@ mod tests {
                     configurable: false,
                 },
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Must return undefined.
         assert!(
@@ -4622,7 +4622,7 @@ mod tests {
         let mut target = OrdinaryObject::default();
         target
             .define_own_property(str_key("x"), PropertyDescriptor::data_frozen(int_val(1)))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         target.prevent_extensions();
 
         // Non-extensible target: cannot delete non-configurable own property.
@@ -4649,10 +4649,10 @@ mod tests {
         let mut target = OrdinaryObject::default();
         target
             .define_own_property(str_key("a"), PropertyDescriptor::data(int_val(1)))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         target
             .define_own_property(str_key("b"), PropertyDescriptor::data(int_val(2)))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         target.prevent_extensions();
 
         // Exact set: ok.
@@ -4767,7 +4767,7 @@ mod tests {
                 configurable: false,
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         // Try to redefine as accessor → rejected.
         let result = obj
@@ -4780,7 +4780,7 @@ mod tests {
                     configurable: false,
                 },
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(!result);
     }
 
@@ -4798,18 +4798,18 @@ mod tests {
             PropertyKey::Symbol(sym),
             PropertyDescriptor::data(str_val("Source")),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let target = heap.alloc_plain();
         // Object.assign copies ALL enumerable own properties including symbols.
-        heap.assign(target, &[src]).unwrap();
+        heap.assign(target, &[src]).expect("serde deserialization should succeed");
 
         // Verify via get_own_property_descriptor.
         let desc = heap
             .get_own_property_descriptor(target, &PropertyKey::Symbol(sym))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(desc.is_some());
-        assert_eq!(desc.unwrap().value(), Some(&str_val("Source")));
+        assert_eq!(desc.expect("serde deserialization should succeed").value(), Some(&str_val("Source")));
     }
 
     // -----------------------------------------------------------------------
@@ -4820,18 +4820,18 @@ mod tests {
     fn sealed_object_writable_but_not_deletable() {
         let mut heap = ObjectHeap::new();
         let h = heap.alloc_plain();
-        heap.set_property(h, str_key("x"), int_val(1)).unwrap();
-        heap.seal(h).unwrap();
+        heap.set_property(h, str_key("x"), int_val(1)).expect("serde deserialization should succeed");
+        heap.seal(h).expect("serde deserialization should succeed");
 
         // Can update existing property.
-        assert!(heap.set_property(h, str_key("x"), int_val(2)).unwrap());
-        assert_eq!(heap.get_property(h, &str_key("x")).unwrap(), int_val(2));
+        assert!(heap.set_property(h, str_key("x"), int_val(2)).expect("serde deserialization should succeed"));
+        assert_eq!(heap.get_property(h, &str_key("x")).expect("serde deserialization should succeed"), int_val(2));
 
         // Cannot add new property.
-        assert!(!heap.set_property(h, str_key("new"), int_val(3)).unwrap());
+        assert!(!heap.set_property(h, str_key("new"), int_val(3)).expect("serde deserialization should succeed"));
 
         // Cannot delete.
-        assert!(!heap.delete_property(h, &str_key("x")).unwrap());
+        assert!(!heap.delete_property(h, &str_key("x")).expect("serde deserialization should succeed"));
     }
 
     // -----------------------------------------------------------------------
@@ -4853,7 +4853,7 @@ mod tests {
                 configurable: true,
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let child = heap.alloc(Some(proto));
         // Child shadows with data property (must use define_property, not set_property, because inherited accessors intercept sets).
@@ -4867,11 +4867,11 @@ mod tests {
                 configurable: true,
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         // Child's own property takes precedence.
         assert_eq!(
-            heap.get_property(child, &str_key("x")).unwrap(),
+            heap.get_property(child, &str_key("x")).expect("serde deserialization should succeed"),
             int_val(42)
         );
     }
@@ -4885,13 +4885,13 @@ mod tests {
         let mut obj = OrdinaryObject::default();
         // Insert in non-numeric order.
         obj.define_own_property(str_key("10"), PropertyDescriptor::data(int_val(10)))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         obj.define_own_property(str_key("2"), PropertyDescriptor::data(int_val(2)))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         obj.define_own_property(str_key("1"), PropertyDescriptor::data(int_val(1)))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         obj.define_own_property(str_key("foo"), PropertyDescriptor::data(str_val("bar")))
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let keys = obj.own_property_keys();
         // Integer keys sorted numerically first, then string keys.
@@ -4978,7 +4978,7 @@ mod tests {
         let mut target = OrdinaryObject::default();
         target
             .define_own_property(str_key("x"), PropertyDescriptor::data(int_val(1)))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         target.prevent_extensions();
 
         // Property is configurable, target is non-extensible, trap says false → error.
@@ -4994,21 +4994,21 @@ mod tests {
         let mut heap = ObjectHeap::new();
         let grandparent = heap.alloc_plain();
         heap.set_property(grandparent, str_key("gp_prop"), int_val(1))
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let parent = heap.alloc(Some(grandparent));
         heap.set_property(parent, str_key("p_prop"), int_val(2))
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let child = heap.alloc(Some(parent));
         heap.set_property(child, str_key("c_prop"), int_val(3))
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // has_property traverses entire chain.
-        assert!(heap.has_property(child, &str_key("gp_prop")).unwrap());
-        assert!(heap.has_property(child, &str_key("p_prop")).unwrap());
-        assert!(heap.has_property(child, &str_key("c_prop")).unwrap());
-        assert!(!heap.has_property(child, &str_key("missing")).unwrap());
+        assert!(heap.has_property(child, &str_key("gp_prop")).expect("serde deserialization should succeed"));
+        assert!(heap.has_property(child, &str_key("p_prop")).expect("serde deserialization should succeed"));
+        assert!(heap.has_property(child, &str_key("c_prop")).expect("serde deserialization should succeed"));
+        assert!(!heap.has_property(child, &str_key("missing")).expect("serde deserialization should succeed"));
     }
 
     // -----------------------------------------------------------------------
@@ -5027,7 +5027,7 @@ mod tests {
                 configurable: false,
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         // Try to make writable → rejected.
         let result = obj
@@ -5040,7 +5040,7 @@ mod tests {
                     configurable: false,
                 },
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(!result);
     }
 
@@ -5055,7 +5055,7 @@ mod tests {
 
         let result = obj
             .define_own_property(str_key("x"), PropertyDescriptor::data(int_val(1)))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(!result);
     }
 
@@ -5068,7 +5068,7 @@ mod tests {
         let mut heap = ObjectHeap::new();
         let h = heap.alloc_plain();
         heap.define_property(h, str_key("data"), PropertyDescriptor::data(int_val(1)))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         heap.define_property(
             h,
             str_key("accessor"),
@@ -5079,15 +5079,15 @@ mod tests {
                 configurable: true,
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
-        let descs = heap.get_own_property_descriptors(h).unwrap();
+        let descs = heap.get_own_property_descriptors(h).expect("serde deserialization should succeed");
         assert_eq!(descs.len(), 2);
         // Find the accessor.
         let accessor = descs
             .iter()
             .find(|(k, _)| *k == str_key("accessor"))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(accessor.1.is_accessor());
     }
 
@@ -5129,7 +5129,7 @@ mod tests {
                     configurable: false,
                 },
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Cannot set on non-configurable accessor with undefined setter.
         assert!(
@@ -5145,11 +5145,11 @@ mod tests {
     fn for_in_keys_integer_keys_first() {
         let mut heap = ObjectHeap::new();
         let h = heap.alloc_plain();
-        heap.set_property(h, str_key("b"), str_val("b")).unwrap();
-        heap.set_property(h, str_key("2"), str_val("two")).unwrap();
-        heap.set_property(h, str_key("0"), str_val("zero")).unwrap();
+        heap.set_property(h, str_key("b"), str_val("b")).expect("serde deserialization should succeed");
+        heap.set_property(h, str_key("2"), str_val("two")).expect("serde deserialization should succeed");
+        heap.set_property(h, str_key("0"), str_val("zero")).expect("serde deserialization should succeed");
 
-        let keys = heap.for_in_keys(h).unwrap();
+        let keys = heap.for_in_keys(h).expect("serde deserialization should succeed");
         // Integer indices first (0, 2), then string keys.
         assert_eq!(keys[0], "0");
         assert_eq!(keys[1], "2");
@@ -5164,26 +5164,26 @@ mod tests {
     fn assign_multiple_sources_later_wins() {
         let mut heap = ObjectHeap::new();
         let s1 = heap.alloc_plain();
-        heap.set_property(s1, str_key("x"), int_val(1)).unwrap();
-        heap.set_property(s1, str_key("y"), int_val(2)).unwrap();
+        heap.set_property(s1, str_key("x"), int_val(1)).expect("serde deserialization should succeed");
+        heap.set_property(s1, str_key("y"), int_val(2)).expect("serde deserialization should succeed");
 
         let s2 = heap.alloc_plain();
-        heap.set_property(s2, str_key("x"), int_val(10)).unwrap();
-        heap.set_property(s2, str_key("z"), int_val(3)).unwrap();
+        heap.set_property(s2, str_key("x"), int_val(10)).expect("serde deserialization should succeed");
+        heap.set_property(s2, str_key("z"), int_val(3)).expect("serde deserialization should succeed");
 
         let target = heap.alloc_plain();
-        heap.assign(target, &[s1, s2]).unwrap();
+        heap.assign(target, &[s1, s2]).expect("serde deserialization should succeed");
 
         assert_eq!(
-            heap.get_property(target, &str_key("x")).unwrap(),
+            heap.get_property(target, &str_key("x")).expect("serde deserialization should succeed"),
             int_val(10)
         );
         assert_eq!(
-            heap.get_property(target, &str_key("y")).unwrap(),
+            heap.get_property(target, &str_key("y")).expect("serde deserialization should succeed"),
             int_val(2)
         );
         assert_eq!(
-            heap.get_property(target, &str_key("z")).unwrap(),
+            heap.get_property(target, &str_key("z")).expect("serde deserialization should succeed"),
             int_val(3)
         );
     }
@@ -5200,10 +5200,10 @@ mod tests {
         let handler = heap.alloc_plain();
         let prx = heap.alloc_proxy(target, handler);
 
-        assert!(heap.get(ord).unwrap().as_ordinary().is_some());
-        assert!(heap.get(ord).unwrap().as_proxy().is_none());
-        assert!(heap.get(prx).unwrap().as_proxy().is_some());
-        assert!(heap.get(prx).unwrap().as_ordinary().is_none());
+        assert!(heap.get(ord).expect("serde deserialization should succeed").as_ordinary().is_some());
+        assert!(heap.get(ord).expect("serde deserialization should succeed").as_proxy().is_none());
+        assert!(heap.get(prx).expect("serde deserialization should succeed").as_proxy().is_some());
+        assert!(heap.get(prx).expect("serde deserialization should succeed").as_ordinary().is_none());
     }
 
     // -----------------------------------------------------------------------
@@ -5215,7 +5215,7 @@ mod tests {
         let mut heap = ObjectHeap::new();
         let h = heap.alloc_plain();
         heap.set_property(h, str_key("visible"), int_val(1))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         heap.define_property(
             h,
             str_key("hidden"),
@@ -5226,15 +5226,15 @@ mod tests {
                 configurable: true,
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         heap.define_property(
             h,
             WellKnownSymbol::Iterator.key(),
             PropertyDescriptor::data(int_val(99)),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
-        let entries = heap.entries(h).unwrap();
+        let entries = heap.entries(h).expect("serde deserialization should succeed");
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0], ("visible".to_string(), int_val(1)));
     }
@@ -5247,12 +5247,12 @@ mod tests {
     fn serde_roundtrip_heap_with_proxy() {
         let mut heap = ObjectHeap::new();
         let target = heap.alloc_plain();
-        heap.set_property(target, str_key("a"), int_val(1)).unwrap();
+        heap.set_property(target, str_key("a"), int_val(1)).expect("serde deserialization should succeed");
         let handler = heap.alloc_plain();
         let _proxy = heap.alloc_proxy(target, handler);
 
-        let json = serde_json::to_string(&heap).unwrap();
-        let restored: ObjectHeap = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&heap).expect("serde deserialization should succeed");
+        let restored: ObjectHeap = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(restored.len(), heap.len());
     }
 
@@ -5302,11 +5302,11 @@ mod tests {
     fn get_own_property_names_integer_ordering() {
         let mut heap = ObjectHeap::new();
         let h = heap.alloc_plain();
-        heap.set_property(h, str_key("10"), int_val(10)).unwrap();
-        heap.set_property(h, str_key("2"), int_val(2)).unwrap();
-        heap.set_property(h, str_key("abc"), int_val(0)).unwrap();
+        heap.set_property(h, str_key("10"), int_val(10)).expect("serde deserialization should succeed");
+        heap.set_property(h, str_key("2"), int_val(2)).expect("serde deserialization should succeed");
+        heap.set_property(h, str_key("abc"), int_val(0)).expect("serde deserialization should succeed");
 
-        let names = heap.get_own_property_names(h).unwrap();
+        let names = heap.get_own_property_names(h).expect("serde deserialization should succeed");
         // Integer indices first (sorted), then strings.
         assert_eq!(names[0], "2");
         assert_eq!(names[1], "10");
@@ -5331,7 +5331,7 @@ mod tests {
                     configurable: false,
                 },
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Trap tries to define with different value → error.
         assert!(
@@ -5383,10 +5383,10 @@ mod tests {
                     configurable: false,
                 },
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         target
             .define_own_property(str_key("open"), PropertyDescriptor::data(int_val(2)))
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Trap returns only "open" — missing non-configurable "locked" → error.
         assert!(ProxyInvariantChecker::check_own_keys(&target, &[str_key("open")]).is_err());
@@ -5408,8 +5408,8 @@ mod tests {
         let mut reg = SymbolRegistry::new();
         let _sym = reg.symbol_for("my.symbol", &mut heap);
 
-        let json = serde_json::to_string(&reg).unwrap();
-        let restored: SymbolRegistry = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&reg).expect("serde deserialization should succeed");
+        let restored: SymbolRegistry = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(
             restored.key_for(reg.by_description["my.symbol"]),
             Some("my.symbol")
@@ -5469,11 +5469,11 @@ mod tests {
             (str_key("b"), PropertyDescriptor::data(int_val(2))),
             (str_key("c"), PropertyDescriptor::data(int_val(3))),
         ];
-        assert!(heap.define_properties(h, props).unwrap());
+        assert!(heap.define_properties(h, props).expect("serde deserialization should succeed"));
 
-        assert_eq!(heap.get_property(h, &str_key("a")).unwrap(), int_val(1));
-        assert_eq!(heap.get_property(h, &str_key("b")).unwrap(), int_val(2));
-        assert_eq!(heap.get_property(h, &str_key("c")).unwrap(), int_val(3));
+        assert_eq!(heap.get_property(h, &str_key("a")).expect("serde deserialization should succeed"), int_val(1));
+        assert_eq!(heap.get_property(h, &str_key("b")).expect("serde deserialization should succeed"), int_val(2));
+        assert_eq!(heap.get_property(h, &str_key("c")).expect("serde deserialization should succeed"), int_val(3));
     }
 
     // -----------------------------------------------------------------------
@@ -5485,13 +5485,13 @@ mod tests {
         let mut heap = ObjectHeap::new();
         let proto = heap.alloc_plain();
         let h = heap.alloc(Some(proto));
-        heap.prevent_extensions(h).unwrap();
+        heap.prevent_extensions(h).expect("serde deserialization should succeed");
 
         // Setting to same prototype → ok.
-        assert!(heap.set_prototype_of(h, Some(proto)).unwrap());
+        assert!(heap.set_prototype_of(h, Some(proto)).expect("serde deserialization should succeed"));
         // Setting to different → rejected.
         let other = heap.alloc_plain();
-        assert!(!heap.set_prototype_of(h, Some(other)).unwrap());
+        assert!(!heap.set_prototype_of(h, Some(other)).expect("serde deserialization should succeed"));
     }
 
     // -----------------------------------------------------------------------
@@ -5522,7 +5522,7 @@ mod tests {
                     configurable: false,
                 },
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Same value → ok.
         assert!(ProxyInvariantChecker::check_get(&target, &str_key("x"), &int_val(42)).is_ok());
@@ -5535,8 +5535,8 @@ mod tests {
     #[test]
     fn symbol_id_serde_roundtrip() {
         let id = SymbolId(42);
-        let json = serde_json::to_string(&id).unwrap();
-        let back: SymbolId = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&id).expect("serde deserialization should succeed");
+        let back: SymbolId = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(id, back);
     }
 
@@ -5558,8 +5558,8 @@ mod tests {
             WellKnownSymbol::Split,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: WellKnownSymbol = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: WellKnownSymbol = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
         assert_eq!(variants.len(), 13);
@@ -5568,16 +5568,16 @@ mod tests {
     #[test]
     fn object_handle_serde_roundtrip() {
         let h = ObjectHandle(99);
-        let json = serde_json::to_string(&h).unwrap();
-        let back: ObjectHandle = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&h).expect("serde deserialization should succeed");
+        let back: ObjectHandle = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(h, back);
     }
 
     #[test]
     fn proxy_object_serde_roundtrip() {
         let p = ProxyObject::new(ObjectHandle(1), ObjectHandle(2));
-        let json = serde_json::to_string(&p).unwrap();
-        let back: ProxyObject = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
+        let back: ProxyObject = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.target, Some(ObjectHandle(1)));
         assert_eq!(back.handler, Some(ObjectHandle(2)));
     }
@@ -5586,8 +5586,8 @@ mod tests {
     fn proxy_object_revoked_serde_roundtrip() {
         let mut p = ProxyObject::new(ObjectHandle(1), ObjectHandle(2));
         p.revoke();
-        let json = serde_json::to_string(&p).unwrap();
-        let back: ProxyObject = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
+        let back: ProxyObject = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert!(back.is_revoked());
         assert_eq!(back.target, None);
     }
@@ -5596,8 +5596,8 @@ mod tests {
     fn managed_object_ordinary_serde_roundtrip() {
         let obj = OrdinaryObject::default();
         let m = ManagedObject::Ordinary(obj);
-        let json = serde_json::to_string(&m).unwrap();
-        let back: ManagedObject = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
+        let back: ManagedObject = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert!(back.as_ordinary().is_some());
     }
 
@@ -5605,8 +5605,8 @@ mod tests {
     fn managed_object_proxy_serde_roundtrip() {
         let p = ProxyObject::new(ObjectHandle(5), ObjectHandle(6));
         let m = ManagedObject::Proxy(p);
-        let json = serde_json::to_string(&m).unwrap();
-        let back: ManagedObject = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
+        let back: ManagedObject = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert!(back.as_ordinary().is_none());
     }
 
@@ -5624,7 +5624,7 @@ mod tests {
             JsValue::Undefined,
             vec![int_val(1), int_val(2)],
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(req.target, func);
         assert_eq!(req.this_arg, JsValue::Undefined);
         assert_eq!(req.arguments.len(), 2);
@@ -5650,7 +5650,7 @@ mod tests {
             JsValue::Object(this_obj),
             vec![str_val("hello")],
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(req.this_arg, JsValue::Object(this_obj));
         assert_eq!(req.arguments, vec![str_val("hello")]);
     }
@@ -5662,7 +5662,7 @@ mod tests {
         let handler = heap.alloc_plain();
         let proxy = heap.alloc_proxy(target, handler);
         // Proxy apply should succeed (interpreter handles the trap).
-        let req = Reflect::apply(&heap, proxy, JsValue::Undefined, vec![]).unwrap();
+        let req = Reflect::apply(&heap, proxy, JsValue::Undefined, vec![]).expect("serde deserialization should succeed");
         assert_eq!(req.target, proxy);
     }
 
@@ -5670,7 +5670,7 @@ mod tests {
     fn reflect_apply_empty_args() {
         let mut heap = ObjectHeap::new();
         let func = heap.alloc_callable(None);
-        let req = Reflect::apply(&heap, func, JsValue::Undefined, vec![]).unwrap();
+        let req = Reflect::apply(&heap, func, JsValue::Undefined, vec![]).expect("serde deserialization should succeed");
         assert!(req.arguments.is_empty());
     }
 
@@ -5681,8 +5681,8 @@ mod tests {
             this_arg: JsValue::Int(42),
             arguments: vec![JsValue::Bool(true), JsValue::Str("x".into())],
         };
-        let json = serde_json::to_string(&req).unwrap();
-        let back: ReflectApplyRequest = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&req).expect("serde deserialization should succeed");
+        let back: ReflectApplyRequest = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.target, ObjectHandle(1));
         assert_eq!(back.this_arg, JsValue::Int(42));
         assert_eq!(back.arguments.len(), 2);
@@ -5696,7 +5696,7 @@ mod tests {
     fn reflect_construct_basic() {
         let mut heap = ObjectHeap::new();
         let ctor = heap.alloc_constructor(None);
-        let req = Reflect::construct(&heap, ctor, vec![int_val(10)], None).unwrap();
+        let req = Reflect::construct(&heap, ctor, vec![int_val(10)], None).expect("serde deserialization should succeed");
         assert_eq!(req.target, ctor);
         assert_eq!(req.new_target, ctor); // defaults to target
         assert_eq!(req.arguments, vec![int_val(10)]);
@@ -5707,7 +5707,7 @@ mod tests {
         let mut heap = ObjectHeap::new();
         let ctor = heap.alloc_constructor(None);
         let new_target = heap.alloc_constructor(None);
-        let req = Reflect::construct(&heap, ctor, vec![], Some(new_target)).unwrap();
+        let req = Reflect::construct(&heap, ctor, vec![], Some(new_target)).expect("serde deserialization should succeed");
         assert_eq!(req.target, ctor);
         assert_eq!(req.new_target, new_target);
     }
@@ -5737,7 +5737,7 @@ mod tests {
         let target = heap.alloc_constructor(None);
         let handler = heap.alloc_plain();
         let proxy = heap.alloc_proxy(target, handler);
-        let req = Reflect::construct(&heap, proxy, vec![int_val(1)], None).unwrap();
+        let req = Reflect::construct(&heap, proxy, vec![int_val(1)], None).expect("serde deserialization should succeed");
         assert_eq!(req.target, proxy);
     }
 
@@ -5748,8 +5748,8 @@ mod tests {
             arguments: vec![JsValue::Null],
             new_target: ObjectHandle(5),
         };
-        let json = serde_json::to_string(&req).unwrap();
-        let back: ReflectConstructRequest = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&req).expect("serde deserialization should succeed");
+        let back: ReflectConstructRequest = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.target, ObjectHandle(5));
         assert_eq!(back.arguments, vec![JsValue::Null]);
         assert_eq!(back.new_target, ObjectHandle(5));
@@ -5770,13 +5770,13 @@ mod tests {
                     (str_key("b"), PropertyDescriptor::data(int_val(2))),
                 ],
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(
-            heap.get_property(handle, &str_key("a")).unwrap(),
+            heap.get_property(handle, &str_key("a")).expect("serde deserialization should succeed"),
             int_val(1)
         );
         assert_eq!(
-            heap.get_property(handle, &str_key("b")).unwrap(),
+            heap.get_property(handle, &str_key("b")).expect("serde deserialization should succeed"),
             int_val(2)
         );
     }
@@ -5786,19 +5786,19 @@ mod tests {
         let mut heap = ObjectHeap::new();
         let proto = heap.alloc_plain();
         heap.set_property(proto, str_key("inherited"), int_val(99))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let child = heap
             .create_with_properties(
                 Some(proto),
                 vec![(str_key("own"), PropertyDescriptor::data(int_val(1)))],
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(
-            heap.get_property(child, &str_key("own")).unwrap(),
+            heap.get_property(child, &str_key("own")).expect("serde deserialization should succeed"),
             int_val(1)
         );
         assert_eq!(
-            heap.get_property(child, &str_key("inherited")).unwrap(),
+            heap.get_property(child, &str_key("inherited")).expect("serde deserialization should succeed"),
             int_val(99)
         );
     }
@@ -5820,11 +5820,11 @@ mod tests {
                     },
                 )],
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let desc = heap
             .get_own_property_descriptor(handle, &str_key("x"))
-            .unwrap()
-            .unwrap();
+            .expect("serde deserialization should succeed")
+            .expect("serde deserialization should succeed");
         assert!(desc.is_accessor());
     }
 
@@ -5836,7 +5836,7 @@ mod tests {
     fn alloc_callable_creates_callable() {
         let mut heap = ObjectHeap::new();
         let func = heap.alloc_callable(None);
-        let obj = heap.get(func).unwrap().as_ordinary().unwrap();
+        let obj = heap.get(func).expect("serde deserialization should succeed").as_ordinary().expect("serde deserialization should succeed");
         assert!(obj.callable);
         assert!(!obj.constructable);
     }
@@ -5845,7 +5845,7 @@ mod tests {
     fn alloc_constructor_creates_constructor() {
         let mut heap = ObjectHeap::new();
         let ctor = heap.alloc_constructor(None);
-        let obj = heap.get(ctor).unwrap().as_ordinary().unwrap();
+        let obj = heap.get(ctor).expect("serde deserialization should succeed").as_ordinary().expect("serde deserialization should succeed");
         assert!(obj.callable);
         assert!(obj.constructable);
     }
@@ -5855,7 +5855,7 @@ mod tests {
         let mut heap = ObjectHeap::new();
         let proto = heap.alloc_plain();
         let func = heap.alloc_callable(Some(proto));
-        let obj = heap.get(func).unwrap().as_ordinary().unwrap();
+        let obj = heap.get(func).expect("serde deserialization should succeed").as_ordinary().expect("serde deserialization should succeed");
         assert_eq!(obj.prototype, Some(proto));
         assert!(obj.callable);
     }
@@ -5869,7 +5869,7 @@ mod tests {
         let mut heap = ObjectHeap::new();
         let proto = heap.alloc_plain();
         let obj = heap.alloc(Some(proto));
-        assert!(heap.instance_of(obj, proto).unwrap());
+        assert!(heap.instance_of(obj, proto).expect("serde deserialization should succeed"));
     }
 
     #[test]
@@ -5878,8 +5878,8 @@ mod tests {
         let grandproto = heap.alloc_plain();
         let proto = heap.alloc(Some(grandproto));
         let obj = heap.alloc(Some(proto));
-        assert!(heap.instance_of(obj, grandproto).unwrap());
-        assert!(heap.instance_of(obj, proto).unwrap());
+        assert!(heap.instance_of(obj, grandproto).expect("serde deserialization should succeed"));
+        assert!(heap.instance_of(obj, proto).expect("serde deserialization should succeed"));
     }
 
     #[test]
@@ -5888,7 +5888,7 @@ mod tests {
         let proto = heap.alloc_plain();
         let other = heap.alloc_plain();
         let obj = heap.alloc(Some(proto));
-        assert!(!heap.instance_of(obj, other).unwrap());
+        assert!(!heap.instance_of(obj, other).expect("serde deserialization should succeed"));
     }
 
     #[test]
@@ -5896,7 +5896,7 @@ mod tests {
         let mut heap = ObjectHeap::new();
         let target = heap.alloc_plain();
         let obj = heap.alloc(None); // null prototype
-        assert!(!heap.instance_of(obj, target).unwrap());
+        assert!(!heap.instance_of(obj, target).expect("serde deserialization should succeed"));
     }
 
     // -----------------------------------------------------------------------
@@ -5907,14 +5907,14 @@ mod tests {
     fn spread_into_copies_enumerable() {
         let mut heap = ObjectHeap::new();
         let src = heap.alloc_plain();
-        heap.set_property(src, str_key("a"), int_val(1)).unwrap();
-        heap.set_property(src, str_key("b"), int_val(2)).unwrap();
+        heap.set_property(src, str_key("a"), int_val(1)).expect("serde deserialization should succeed");
+        heap.set_property(src, str_key("b"), int_val(2)).expect("serde deserialization should succeed");
 
         let dst = heap.alloc_plain();
-        heap.spread_into(dst, src).unwrap();
+        heap.spread_into(dst, src).expect("serde deserialization should succeed");
 
-        assert_eq!(heap.get_property(dst, &str_key("a")).unwrap(), int_val(1));
-        assert_eq!(heap.get_property(dst, &str_key("b")).unwrap(), int_val(2));
+        assert_eq!(heap.get_property(dst, &str_key("a")).expect("serde deserialization should succeed"), int_val(1));
+        assert_eq!(heap.get_property(dst, &str_key("b")).expect("serde deserialization should succeed"), int_val(2));
     }
 
     #[test]
@@ -5926,7 +5926,7 @@ mod tests {
             str_key("visible"),
             PropertyDescriptor::data(int_val(1)),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         heap.define_property(
             src,
             str_key("hidden"),
@@ -5937,17 +5937,17 @@ mod tests {
                 configurable: true,
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let dst = heap.alloc_plain();
-        heap.spread_into(dst, src).unwrap();
+        heap.spread_into(dst, src).expect("serde deserialization should succeed");
 
         assert_eq!(
-            heap.get_property(dst, &str_key("visible")).unwrap(),
+            heap.get_property(dst, &str_key("visible")).expect("serde deserialization should succeed"),
             int_val(1)
         );
         assert_eq!(
-            heap.get_property(dst, &str_key("hidden")).unwrap(),
+            heap.get_property(dst, &str_key("hidden")).expect("serde deserialization should succeed"),
             JsValue::Undefined
         );
     }
@@ -5956,13 +5956,13 @@ mod tests {
     fn spread_into_overwrites_target() {
         let mut heap = ObjectHeap::new();
         let src = heap.alloc_plain();
-        heap.set_property(src, str_key("x"), int_val(99)).unwrap();
+        heap.set_property(src, str_key("x"), int_val(99)).expect("serde deserialization should succeed");
 
         let dst = heap.alloc_plain();
-        heap.set_property(dst, str_key("x"), int_val(1)).unwrap();
-        heap.spread_into(dst, src).unwrap();
+        heap.set_property(dst, str_key("x"), int_val(1)).expect("serde deserialization should succeed");
+        heap.spread_into(dst, src).expect("serde deserialization should succeed");
 
-        assert_eq!(heap.get_property(dst, &str_key("x")).unwrap(), int_val(99));
+        assert_eq!(heap.get_property(dst, &str_key("x")).expect("serde deserialization should succeed"), int_val(99));
     }
 
     #[test]

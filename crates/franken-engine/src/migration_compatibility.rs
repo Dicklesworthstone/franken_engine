@@ -155,11 +155,17 @@ impl GoldenLedger {
         entries: Vec<CanonicalEvidenceEntry>,
         frozen_at_ms: u64,
     ) -> Self {
-        let payload = serde_json::to_vec(&entries).unwrap();
-        let corpus_hash = ContentHash::compute(&payload);
+        let name = name.into();
+        let schema_version = schema_version.into();
+        let corpus_hash = match serde_json::to_vec(&entries) {
+            Ok(payload) => ContentHash::compute(&payload),
+            Err(err) => ContentHash::compute(
+                format!("migration_compatibility:golden_ledger_serde_error:{err}").as_bytes(),
+            ),
+        };
         Self {
-            name: name.into(),
-            schema_version: schema_version.into(),
+            name,
+            schema_version,
             entries,
             corpus_hash,
             frozen_at_ms,
@@ -327,6 +333,7 @@ impl MigrationTestResult {
     pub fn passed(&self) -> bool {
         self.errors.is_empty()
             && self.replay_violations == 0
+            && self.determinism_verified
             && self.outcome != MigrationOutcome::Failed
     }
 }
@@ -507,20 +514,32 @@ impl MigrationCompatibilityChecker {
         let replay_result = self.replay_entries(&migrated_entries);
         let violations = replay_result.violations.len();
 
-        let outcome = if violations > 0 {
+        let mut result_errors = Vec::new();
+        if !determinism_ok {
+            result_errors.push(MigrationError {
+                from_version: func.from_version.clone(),
+                to_version: func.to_version.clone(),
+                error_code: MigrationErrorCode::NonDeterministicMigration,
+                incompatible_fields: Vec::new(),
+                message: "migration transform did not replay deterministically".to_string(),
+            });
+        }
+
+        let outcome = if !determinism_ok || violations > 0 {
             MigrationOutcome::Failed
         } else if func.lossy {
             MigrationOutcome::LossyMigration
         } else {
             MigrationOutcome::MigratedSuccessfully
         };
+        let migration_passed = determinism_ok && violations == 0;
 
         self.push_event(
             &func.from_version,
             &func.to_version,
             "migration_complete",
-            if violations == 0 { "pass" } else { "fail" },
-            None,
+            if migration_passed { "pass" } else { "fail" },
+            (!determinism_ok).then_some("non_deterministic_migration"),
         );
 
         MigrationTestResult {
@@ -530,7 +549,7 @@ impl MigrationCompatibilityChecker {
             outcome,
             entries_processed: ledger.entries.len(),
             entries_replayed_ok: migrated_entries.len().saturating_sub(violations),
-            errors: Vec::new(),
+            errors: result_errors,
             replay_violations: violations,
             schema_migrations_detected: replay_result.diagnostics.schema_migrations.clone(),
             determinism_verified: determinism_ok,
@@ -577,16 +596,19 @@ impl MigrationCompatibilityChecker {
         ledger: &GoldenLedger,
         transform: MigrationTransformFn,
     ) -> bool {
-        let run = |entries: &[CanonicalEvidenceEntry]| -> Vec<Vec<u8>> {
+        let run = |entries: &[CanonicalEvidenceEntry]| -> Result<Vec<Vec<u8>>, String> {
             entries
                 .iter()
-                .filter_map(|e| transform(e).ok().map(|m| serde_json::to_vec(&m).unwrap()))
+                .map(|entry| {
+                    let migrated = transform(entry).map_err(|err| err.to_string())?;
+                    serde_json::to_vec(&migrated).map_err(|err| err.to_string())
+                })
                 .collect()
         };
 
         let r1 = run(&ledger.entries);
         let r2 = run(&ledger.entries);
-        let ok = r1 == r2;
+        let ok = matches!((&r1, &r2), (Ok(first), Ok(second)) if first == second);
 
         if !ok {
             self.push_event(
@@ -1658,6 +1680,7 @@ mod tests {
         ActionCategory, CanonicalEvidenceEmitter, EmitterConfig, EvidenceEmissionRequest,
     };
     use std::collections::BTreeMap;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     // -------------------------------------------------------------------
     // Helpers
@@ -1741,10 +1764,22 @@ mod tests {
             .metadata
             .insert("migrated_from".to_string(), "evidence-v1".to_string());
         // Recompute artifact_hash to reflect content changes (metadata added).
-        let mut payload = serde_json::to_vec(&migrated.ledger_entry).unwrap();
-        if let Ok(meta_bytes) = serde_json::to_vec(&migrated.metadata) {
-            payload.extend_from_slice(&meta_bytes);
-        }
+        let mut payload =
+            serde_json::to_vec(&migrated.ledger_entry).map_err(|err| MigrationError {
+                from_version: entry.schema_version.clone(),
+                to_version: "evidence-v2".to_string(),
+                error_code: MigrationErrorCode::MigrationFunctionFailed,
+                incompatible_fields: Vec::new(),
+                message: format!("failed to serialize migrated ledger entry: {err}"),
+            })?;
+        let meta_bytes = serde_json::to_vec(&migrated.metadata).map_err(|err| MigrationError {
+            from_version: entry.schema_version.clone(),
+            to_version: "evidence-v2".to_string(),
+            error_code: MigrationErrorCode::MigrationFunctionFailed,
+            incompatible_fields: Vec::new(),
+            message: format!("failed to serialize migrated metadata: {err}"),
+        })?;
+        payload.extend_from_slice(&meta_bytes);
         migrated.artifact_hash = ContentHash::compute(&payload);
         Ok(migrated)
     }
@@ -1762,6 +1797,24 @@ mod tests {
                 reason: "field required in v2 but absent in v1".to_string(),
             }],
             message: "cannot migrate: required field missing".to_string(),
+        })
+    }
+
+    static FAIL_AFTER_FIRST_MIGRATION_CALL: AtomicUsize = AtomicUsize::new(0);
+
+    fn succeeds_once_then_fails_migration(
+        entry: &CanonicalEvidenceEntry,
+    ) -> Result<CanonicalEvidenceEntry, MigrationError> {
+        if FAIL_AFTER_FIRST_MIGRATION_CALL.fetch_add(1, Ordering::SeqCst) == 0 {
+            return v1_to_v2_migration(entry);
+        }
+
+        Err(MigrationError {
+            from_version: entry.schema_version.clone(),
+            to_version: "evidence-v2".to_string(),
+            error_code: MigrationErrorCode::MigrationFunctionFailed,
+            incompatible_fields: Vec::new(),
+            message: "stateful migration failed after initial success".to_string(),
         })
     }
 
@@ -1793,7 +1846,7 @@ mod tests {
     }
 
     #[test]
-    fn migration_error_code_serde_roundtrip() {
+    fn migration_error_code_serde_roundtrip() -> Result<(), serde_json::Error> {
         for code in [
             MigrationErrorCode::MajorVersionIncompatible,
             MigrationErrorCode::RequiredFieldMissing,
@@ -1804,10 +1857,11 @@ mod tests {
             MigrationErrorCode::NoMigrationPath,
             MigrationErrorCode::LossyMigration,
         ] {
-            let json = serde_json::to_string(&code).unwrap();
-            let restored: MigrationErrorCode = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&code)?;
+            let restored: MigrationErrorCode = serde_json::from_str(&json)?;
             assert_eq!(code, restored);
         }
+        Ok(())
     }
 
     // -------------------------------------------------------------------
@@ -1833,7 +1887,7 @@ mod tests {
     }
 
     #[test]
-    fn migration_error_serde_roundtrip() {
+    fn migration_error_serde_roundtrip() -> Result<(), serde_json::Error> {
         let err = MigrationError {
             from_version: "evidence-v1".to_string(),
             to_version: "evidence-v2".to_string(),
@@ -1850,9 +1904,10 @@ mod tests {
             ],
             message: "two fields incompatible".to_string(),
         };
-        let json = serde_json::to_string(&err).unwrap();
-        let restored: MigrationError = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&err)?;
+        let restored: MigrationError = serde_json::from_str(&json)?;
         assert_eq!(err, restored);
+        Ok(())
     }
 
     // -------------------------------------------------------------------
@@ -1880,11 +1935,12 @@ mod tests {
     }
 
     #[test]
-    fn golden_ledger_serde_roundtrip() {
+    fn golden_ledger_serde_roundtrip() -> Result<(), serde_json::Error> {
         let ledger = build_golden_ledger("test-v1", "evidence-v1", 3);
-        let json = serde_json::to_string(&ledger).unwrap();
-        let restored: GoldenLedger = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&ledger)?;
+        let restored: GoldenLedger = serde_json::from_str(&json)?;
         assert_eq!(ledger, restored);
+        Ok(())
     }
 
     #[test]
@@ -1917,17 +1973,18 @@ mod tests {
     }
 
     #[test]
-    fn migration_outcome_serde_roundtrip() {
+    fn migration_outcome_serde_roundtrip() -> Result<(), serde_json::Error> {
         for outcome in [
             MigrationOutcome::BackwardCompatible,
             MigrationOutcome::MigratedSuccessfully,
             MigrationOutcome::LossyMigration,
             MigrationOutcome::Failed,
         ] {
-            let json = serde_json::to_string(&outcome).unwrap();
-            let restored: MigrationOutcome = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&outcome)?;
+            let restored: MigrationOutcome = serde_json::from_str(&json)?;
             assert_eq!(outcome, restored);
         }
+        Ok(())
     }
 
     // -------------------------------------------------------------------
@@ -2167,6 +2224,43 @@ mod tests {
         assert!(results[0].determinism_verified);
     }
 
+    #[test]
+    fn checker_determinism_fails_closed_when_verification_transform_errors() {
+        FAIL_AFTER_FIRST_MIGRATION_CALL.store(0, Ordering::SeqCst);
+        let ledger = build_golden_ledger("test-v1", "evidence-v1", 1);
+
+        let mut registry = MigrationRegistry::new();
+        registry.register(
+            MigrationFunction {
+                from_version: "evidence-v1".to_string(),
+                to_version: "evidence-v2".to_string(),
+                lossy: false,
+                description: "stateful failing migration".to_string(),
+            },
+            succeeds_once_then_fails_migration,
+        );
+
+        let mut checker = MigrationCompatibilityChecker::new("evidence-v2", registry);
+        checker.add_golden_ledger(ledger);
+
+        let results = checker.run_all();
+
+        assert_eq!(results.len(), 1);
+        assert!(!results[0].passed());
+        assert_eq!(results[0].outcome, MigrationOutcome::Failed);
+        assert_eq!(results[0].errors.len(), 1);
+        assert_eq!(
+            results[0].errors[0].error_code,
+            MigrationErrorCode::NonDeterministicMigration
+        );
+        assert!(!results[0].determinism_verified);
+        assert!(checker.events().iter().any(|event| {
+            event.event == "determinism_check"
+                && event.outcome == "fail"
+                && event.error_code.as_deref() == Some("non_deterministic_migration")
+        }));
+    }
+
     // -------------------------------------------------------------------
     // MigrationCompatibilityChecker — structured events
     // -------------------------------------------------------------------
@@ -2207,7 +2301,7 @@ mod tests {
     // -------------------------------------------------------------------
 
     #[test]
-    fn migration_event_serde_roundtrip() {
+    fn migration_event_serde_roundtrip() -> Result<(), serde_json::Error> {
         let event = MigrationCompatibilityEvent {
             trace_id: "t-1".to_string(),
             decision_id: "d-1".to_string(),
@@ -2219,9 +2313,10 @@ mod tests {
             from_version: "evidence-v1".to_string(),
             to_version: "evidence-v2".to_string(),
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let restored: MigrationCompatibilityEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event)?;
+        let restored: MigrationCompatibilityEvent = serde_json::from_str(&json)?;
         assert_eq!(event, restored);
+        Ok(())
     }
 
     // -------------------------------------------------------------------
@@ -2301,7 +2396,7 @@ mod tests {
     }
 
     #[test]
-    fn manifest_tampered_ledger_fails_verify() {
+    fn manifest_tampered_ledger_fails_verify() -> Result<(), serde_json::Error> {
         let ledger = build_golden_ledger("test-v1", "evidence-v1", 3);
         let mut manifest = GoldenLedgerManifest::new();
         manifest.add(&ledger);
@@ -2310,21 +2405,23 @@ mod tests {
         let mut tampered = ledger;
         tampered.entries[0].action_name = "tampered".to_string();
         // Recompute corpus_hash for the tampered entries.
-        let payload = serde_json::to_vec(&tampered.entries).unwrap();
+        let payload = serde_json::to_vec(&tampered.entries)?;
         tampered.corpus_hash = ContentHash::compute(&payload);
 
         assert!(!manifest.verify(&tampered));
+        Ok(())
     }
 
     #[test]
-    fn manifest_serde_roundtrip() {
+    fn manifest_serde_roundtrip() -> Result<(), serde_json::Error> {
         let ledger = build_golden_ledger("test-v1", "evidence-v1", 3);
         let mut manifest = GoldenLedgerManifest::new();
         manifest.add(&ledger);
 
-        let json = serde_json::to_string(&manifest).unwrap();
-        let restored: GoldenLedgerManifest = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&manifest)?;
+        let restored: GoldenLedgerManifest = serde_json::from_str(&json)?;
         assert_eq!(manifest, restored);
+        Ok(())
     }
 
     #[test]
@@ -2396,7 +2493,7 @@ mod tests {
     // -------------------------------------------------------------------
 
     #[test]
-    fn run_all_deterministic_across_runs() {
+    fn run_all_deterministic_across_runs() -> Result<(), serde_json::Error> {
         let make_checker = || {
             let ledger = build_golden_ledger("test-v1", "evidence-v1", 5);
 
@@ -2423,9 +2520,10 @@ mod tests {
         let r2 = c2.run_all();
 
         // Compare serialized results for exact determinism.
-        let j1 = serde_json::to_string(&r1).unwrap();
-        let j2 = serde_json::to_string(&r2).unwrap();
+        let j1 = serde_json::to_string(&r1)?;
+        let j2 = serde_json::to_string(&r2)?;
         assert_eq!(j1, j2);
+        Ok(())
     }
 
     // -------------------------------------------------------------------
@@ -2447,14 +2545,15 @@ mod tests {
     // -------------------------------------------------------------------
 
     #[test]
-    fn incompatible_field_serde_roundtrip() {
+    fn incompatible_field_serde_roundtrip() -> Result<(), serde_json::Error> {
         let field = IncompatibleField {
             field_path: "metadata.x".to_string(),
             reason: "type changed".to_string(),
         };
-        let json = serde_json::to_string(&field).unwrap();
-        let restored: IncompatibleField = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&field)?;
+        let restored: IncompatibleField = serde_json::from_str(&json)?;
         assert_eq!(field, restored);
+        Ok(())
     }
 
     // -------------------------------------------------------------------
@@ -2462,18 +2561,19 @@ mod tests {
     // -------------------------------------------------------------------
 
     #[test]
-    fn migration_function_serde_roundtrip() {
+    fn migration_function_serde_roundtrip() -> Result<(), serde_json::Error> {
         let func = MigrationFunction {
             from_version: "evidence-v1".to_string(),
             to_version: "evidence-v2".to_string(),
             lossy: false,
             description: "test".to_string(),
         };
-        let json = serde_json::to_string(&func).unwrap();
-        let restored: MigrationFunction = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&func)?;
+        let restored: MigrationFunction = serde_json::from_str(&json)?;
         assert_eq!(func.from_version, restored.from_version);
         assert_eq!(func.to_version, restored.to_version);
         assert_eq!(func.lossy, restored.lossy);
+        Ok(())
     }
 
     // -------------------------------------------------------------------
@@ -2496,7 +2596,7 @@ mod tests {
         let ledger = build_golden_ledger("test", "evidence-v1", 1);
         let entry = &ledger.entries[0];
 
-        let migrated = v1_to_v2_migration(entry).unwrap();
+        let migrated = v1_to_v2_migration(entry).expect("serde deserialization should succeed");
         assert_eq!(migrated.schema_version, "evidence-v2");
         assert_eq!(
             migrated.metadata.get("migrated_from").map(String::as_str),
@@ -2545,15 +2645,15 @@ mod tests {
     }
 
     fn run_full_migration(runner: &mut CutoverMigrationRunner, id: &str) -> AppliedMigrationEntry {
-        runner.begin(id, 100, "trace-1").unwrap();
+        runner.begin(id, 100, "trace-1").expect("serde deserialization should succeed");
         runner.set_tick(10);
-        runner.create_checkpoint(1, "trace-1").unwrap();
+        runner.create_checkpoint(1, "trace-1").expect("serde deserialization should succeed");
         runner.set_tick(20);
-        runner.execute(100, "trace-1").unwrap();
+        runner.execute(100, "trace-1").expect("serde deserialization should succeed");
         runner.set_tick(30);
-        runner.verify(0, "trace-1").unwrap();
+        runner.verify(0, "trace-1").expect("serde deserialization should succeed");
         runner.set_tick(40);
-        runner.commit("trace-1").unwrap()
+        runner.commit("trace-1").expect("serde deserialization should succeed")
     }
 
     // -- CutoverType -------------------------------------------------------
@@ -2566,16 +2666,17 @@ mod tests {
     }
 
     #[test]
-    fn cutover_type_serde_roundtrip() {
+    fn cutover_type_serde_roundtrip() -> Result<(), serde_json::Error> {
         for ct in [
             CutoverType::HardCutover,
             CutoverType::SoftMigration,
             CutoverType::ParallelRun,
         ] {
-            let json = serde_json::to_string(&ct).unwrap();
-            let deser: CutoverType = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&ct)?;
+            let deser: CutoverType = serde_json::from_str(&json)?;
             assert_eq!(ct, deser);
         }
+        Ok(())
     }
 
     // -- ObjectClass -------------------------------------------------------
@@ -2594,7 +2695,7 @@ mod tests {
     }
 
     #[test]
-    fn object_class_serde_roundtrip() {
+    fn object_class_serde_roundtrip() -> Result<(), serde_json::Error> {
         for oc in [
             ObjectClass::SerializationSchema,
             ObjectClass::KeyFormat,
@@ -2603,10 +2704,11 @@ mod tests {
             ObjectClass::RevocationFormat,
             ObjectClass::PolicyFormat,
         ] {
-            let json = serde_json::to_string(&oc).unwrap();
-            let deser: ObjectClass = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&oc)?;
+            let deser: ObjectClass = serde_json::from_str(&json)?;
             assert_eq!(oc, deser);
         }
+        Ok(())
     }
 
     // -- MigrationPhase ----------------------------------------------------
@@ -2619,7 +2721,7 @@ mod tests {
     }
 
     #[test]
-    fn migration_phase_serde_roundtrip() {
+    fn migration_phase_serde_roundtrip() -> Result<(), serde_json::Error> {
         for phase in [
             MigrationPhase::PreMigration,
             MigrationPhase::Checkpoint,
@@ -2628,10 +2730,11 @@ mod tests {
             MigrationPhase::Commit,
             MigrationPhase::Rollback,
         ] {
-            let json = serde_json::to_string(&phase).unwrap();
-            let deser: MigrationPhase = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&phase)?;
+            let deser: MigrationPhase = serde_json::from_str(&json)?;
             assert_eq!(phase, deser);
         }
+        Ok(())
     }
 
     // -- PhaseOutcome ------------------------------------------------------
@@ -2646,11 +2749,19 @@ mod tests {
     // -- MigrationDeclaration serde ----------------------------------------
 
     #[test]
-    fn migration_declaration_serde_roundtrip() {
+    fn migration_declaration_serde_roundtrip() -> Result<(), serde_json::Error> {
         let decl = test_declaration("mig-1", CutoverType::HardCutover);
-        let json = serde_json::to_string(&decl).unwrap();
-        let deser: MigrationDeclaration = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&decl)?;
+        let deser: MigrationDeclaration = serde_json::from_str(&json)?;
         assert_eq!(decl, deser);
+        Ok(())
+    }
+
+    #[test]
+    fn malformed_migration_json_returns_error() {
+        assert!(serde_json::from_str::<MigrationDeclaration>("{not-json").is_err());
+        assert!(serde_json::from_str::<GoldenLedger>("{\"entries\":").is_err());
+        assert!(serde_json::from_str::<CutoverAuditEvent>("[]").is_err());
     }
 
     // -- CutoverError display and codes ------------------------------------
@@ -2718,11 +2829,12 @@ mod tests {
     }
 
     #[test]
-    fn cutover_error_serde_roundtrip() {
+    fn cutover_error_serde_roundtrip() -> Result<(), serde_json::Error> {
         let err = CutoverError::VerificationFailed { violations: 5 };
-        let json = serde_json::to_string(&err).unwrap();
-        let deser: CutoverError = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&err)?;
+        let deser: CutoverError = serde_json::from_str(&json)?;
         assert_eq!(err, deser);
+        Ok(())
     }
 
     // -- CutoverState ------------------------------------------------------
@@ -2735,7 +2847,7 @@ mod tests {
     }
 
     #[test]
-    fn cutover_state_serde_roundtrip() {
+    fn cutover_state_serde_roundtrip() -> Result<(), serde_json::Error> {
         for state in [
             CutoverState::Declared,
             CutoverState::PreMigrated,
@@ -2745,10 +2857,11 @@ mod tests {
             CutoverState::Committed,
             CutoverState::RolledBack,
         ] {
-            let json = serde_json::to_string(&state).unwrap();
-            let deser: CutoverState = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&state)?;
+            let deser: CutoverState = serde_json::from_str(&json)?;
             assert_eq!(state, deser);
         }
+        Ok(())
     }
 
     // -- TransitionWindow --------------------------------------------------
@@ -2770,16 +2883,17 @@ mod tests {
     }
 
     #[test]
-    fn transition_window_serde_roundtrip() {
+    fn transition_window_serde_roundtrip() -> Result<(), serde_json::Error> {
         let w = TransitionWindow {
             migration_id: "m1".to_string(),
             start_tick: 10,
             end_tick: 20,
             old_format_accepted: true,
         };
-        let json = serde_json::to_string(&w).unwrap();
-        let deser: TransitionWindow = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&w)?;
+        let deser: TransitionWindow = serde_json::from_str(&json)?;
         assert_eq!(w, deser);
+        Ok(())
     }
 
     // -- Declaration validation --------------------------------------------
@@ -2788,7 +2902,7 @@ mod tests {
     fn declare_valid_migration() {
         let mut runner = CutoverMigrationRunner::new();
         let decl = test_declaration("mig-1", CutoverType::HardCutover);
-        runner.declare(decl, "trace-1").unwrap();
+        runner.declare(decl, "trace-1").expect("serde deserialization should succeed");
         assert_eq!(runner.declaration_count(), 1);
     }
 
@@ -2824,7 +2938,7 @@ mod tests {
         let mut runner = CutoverMigrationRunner::new();
         runner
             .declare(test_declaration("mig-1", CutoverType::HardCutover), "t")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let err = runner
             .declare(test_declaration("mig-1", CutoverType::SoftMigration), "t")
             .unwrap_err();
@@ -2837,7 +2951,7 @@ mod tests {
     fn hard_cutover_full_lifecycle() {
         let mut runner = CutoverMigrationRunner::new();
         let decl = test_declaration("mig-1", CutoverType::HardCutover);
-        runner.declare(decl, "trace-1").unwrap();
+        runner.declare(decl, "trace-1").expect("serde deserialization should succeed");
 
         let entry = run_full_migration(&mut runner, "mig-1");
         assert_eq!(entry.state, CutoverState::Committed);
@@ -2851,7 +2965,7 @@ mod tests {
         let mut runner = CutoverMigrationRunner::new();
         runner
             .declare(test_declaration("mig-1", CutoverType::HardCutover), "t")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         run_full_migration(&mut runner, "mig-1");
 
         let err = runner
@@ -2865,13 +2979,13 @@ mod tests {
         let mut runner = CutoverMigrationRunner::new();
         runner
             .declare(test_declaration("mig-1", CutoverType::HardCutover), "t")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         run_full_migration(&mut runner, "mig-1");
 
         // KeyFormat was not affected by this migration.
         runner
             .check_format_acceptance(ObjectClass::KeyFormat)
-            .unwrap();
+            .expect("serde deserialization should succeed");
     }
 
     // -- Soft migration lifecycle -------------------------------------------
@@ -2881,7 +2995,7 @@ mod tests {
         let mut runner = CutoverMigrationRunner::new();
         runner
             .declare(test_declaration("mig-1", CutoverType::SoftMigration), "t")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         run_full_migration(&mut runner, "mig-1");
 
         assert_eq!(runner.transition_windows().len(), 1);
@@ -2895,14 +3009,14 @@ mod tests {
         let mut runner = CutoverMigrationRunner::new();
         runner
             .declare(test_declaration("mig-1", CutoverType::SoftMigration), "t")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         run_full_migration(&mut runner, "mig-1");
 
         // Still within transition window.
         runner.set_tick(41);
         runner
             .check_format_acceptance(ObjectClass::SerializationSchema)
-            .unwrap();
+            .expect("serde deserialization should succeed");
     }
 
     #[test]
@@ -2910,7 +3024,7 @@ mod tests {
         let mut runner = CutoverMigrationRunner::new();
         runner
             .declare(test_declaration("mig-1", CutoverType::SoftMigration), "t")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         run_full_migration(&mut runner, "mig-1");
 
         // After transition window expires (commit at tick 40, window = 1000).
@@ -2928,13 +3042,13 @@ mod tests {
         let mut runner = CutoverMigrationRunner::new();
         runner
             .declare(test_declaration("mig-1", CutoverType::ParallelRun), "t")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
-        runner.begin("mig-1", 100, "t").unwrap();
+        runner.begin("mig-1", 100, "t").expect("serde deserialization should succeed");
         runner.set_tick(10);
-        runner.create_checkpoint(1, "t").unwrap();
+        runner.create_checkpoint(1, "t").expect("serde deserialization should succeed");
         runner.set_tick(20);
-        runner.execute(100, "t").unwrap();
+        runner.execute(100, "t").expect("serde deserialization should succeed");
 
         runner.set_tick(25);
         let err = runner.report_parallel_discrepancies(5, "t").unwrap_err();
@@ -2952,15 +3066,15 @@ mod tests {
         let mut runner = CutoverMigrationRunner::new();
         runner
             .declare(test_declaration("mig-1", CutoverType::ParallelRun), "t")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
-        runner.begin("mig-1", 100, "t").unwrap();
+        runner.begin("mig-1", 100, "t").expect("serde deserialization should succeed");
         runner.set_tick(10);
-        runner.create_checkpoint(1, "t").unwrap();
+        runner.create_checkpoint(1, "t").expect("serde deserialization should succeed");
         runner.set_tick(20);
-        runner.execute(100, "t").unwrap();
+        runner.execute(100, "t").expect("serde deserialization should succeed");
 
-        runner.report_parallel_discrepancies(0, "t").unwrap();
+        runner.report_parallel_discrepancies(0, "t").expect("serde deserialization should succeed");
         // Can continue to verify and commit.
     }
 
@@ -2969,8 +3083,8 @@ mod tests {
         let mut runner = CutoverMigrationRunner::new();
         runner
             .declare(test_declaration("mig-1", CutoverType::HardCutover), "t")
-            .unwrap();
-        runner.begin("mig-1", 100, "t").unwrap();
+            .expect("serde deserialization should succeed");
+        runner.begin("mig-1", 100, "t").expect("serde deserialization should succeed");
 
         let err = runner.report_parallel_discrepancies(0, "t").unwrap_err();
         assert!(matches!(err, CutoverError::PhaseFailed { .. }));
@@ -2983,11 +3097,11 @@ mod tests {
         let mut runner = CutoverMigrationRunner::new();
         runner
             .declare(test_declaration("mig-1", CutoverType::HardCutover), "t")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
-        runner.begin("mig-1", 100, "t").unwrap();
-        runner.create_checkpoint(1, "t").unwrap();
-        runner.execute(100, "t").unwrap();
+        runner.begin("mig-1", 100, "t").expect("serde deserialization should succeed");
+        runner.create_checkpoint(1, "t").expect("serde deserialization should succeed");
+        runner.execute(100, "t").expect("serde deserialization should succeed");
 
         let err = runner.verify(3, "t").unwrap_err();
         assert!(matches!(
@@ -3009,9 +3123,9 @@ mod tests {
         let mut runner = CutoverMigrationRunner::new();
         runner
             .declare(test_declaration("mig-1", CutoverType::HardCutover), "t")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
-        runner.begin("mig-1", 100, "t").unwrap();
+        runner.begin("mig-1", 100, "t").expect("serde deserialization should succeed");
         let err = runner.fail_dry_run(10, "t").unwrap_err();
         assert!(matches!(
             err,
@@ -3029,12 +3143,12 @@ mod tests {
         let mut runner = CutoverMigrationRunner::new();
         runner
             .declare(test_declaration("mig-1", CutoverType::HardCutover), "t")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
-        runner.begin("mig-1", 100, "t").unwrap();
-        runner.create_checkpoint(1, "t").unwrap();
-        runner.execute(100, "t").unwrap();
-        runner.rollback("t").unwrap();
+        runner.begin("mig-1", 100, "t").expect("serde deserialization should succeed");
+        runner.create_checkpoint(1, "t").expect("serde deserialization should succeed");
+        runner.execute(100, "t").expect("serde deserialization should succeed");
+        runner.rollback("t").expect("serde deserialization should succeed");
 
         assert!(runner.active_migration_id().is_none());
         assert_eq!(
@@ -3048,7 +3162,7 @@ mod tests {
         let mut runner = CutoverMigrationRunner::new();
         runner
             .declare(test_declaration("mig-1", CutoverType::HardCutover), "t")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         run_full_migration(&mut runner, "mig-1");
 
         // No active migration to rollback.
@@ -3063,9 +3177,9 @@ mod tests {
         let mut runner = CutoverMigrationRunner::new();
         runner
             .declare(test_declaration("mig-1", CutoverType::HardCutover), "t")
-            .unwrap();
-        runner.begin("mig-1", 100, "t").unwrap();
-        runner.create_checkpoint(1, "t").unwrap();
+            .expect("serde deserialization should succeed");
+        runner.begin("mig-1", 100, "t").expect("serde deserialization should succeed");
+        runner.create_checkpoint(1, "t").expect("serde deserialization should succeed");
 
         // Already checkpointed; creating another should fail.
         let err = runner.create_checkpoint(2, "t").unwrap_err();
@@ -3077,8 +3191,8 @@ mod tests {
         let mut runner = CutoverMigrationRunner::new();
         runner
             .declare(test_declaration("mig-1", CutoverType::HardCutover), "t")
-            .unwrap();
-        runner.begin("mig-1", 100, "t").unwrap();
+            .expect("serde deserialization should succeed");
+        runner.begin("mig-1", 100, "t").expect("serde deserialization should succeed");
 
         // Trying to execute without checkpoint.
         let err = runner.execute(100, "t").unwrap_err();
@@ -3090,9 +3204,9 @@ mod tests {
         let mut runner = CutoverMigrationRunner::new();
         runner
             .declare(test_declaration("mig-1", CutoverType::HardCutover), "t")
-            .unwrap();
-        runner.begin("mig-1", 100, "t").unwrap();
-        runner.create_checkpoint(1, "t").unwrap();
+            .expect("serde deserialization should succeed");
+        runner.begin("mig-1", 100, "t").expect("serde deserialization should succeed");
+        runner.create_checkpoint(1, "t").expect("serde deserialization should succeed");
 
         let err = runner.verify(0, "t").unwrap_err();
         assert!(matches!(err, CutoverError::PhaseFailed { .. }));
@@ -3103,10 +3217,10 @@ mod tests {
         let mut runner = CutoverMigrationRunner::new();
         runner
             .declare(test_declaration("mig-1", CutoverType::HardCutover), "t")
-            .unwrap();
-        runner.begin("mig-1", 100, "t").unwrap();
-        runner.create_checkpoint(1, "t").unwrap();
-        runner.execute(100, "t").unwrap();
+            .expect("serde deserialization should succeed");
+        runner.begin("mig-1", 100, "t").expect("serde deserialization should succeed");
+        runner.create_checkpoint(1, "t").expect("serde deserialization should succeed");
+        runner.execute(100, "t").expect("serde deserialization should succeed");
 
         let err = runner.commit("t").unwrap_err();
         assert!(matches!(err, CutoverError::PhaseFailed { .. }));
@@ -3128,13 +3242,13 @@ mod tests {
         let mut runner = CutoverMigrationRunner::new();
         runner
             .declare(test_declaration("mig-1", CutoverType::HardCutover), "t")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let mut decl2 = test_declaration("mig-2", CutoverType::SoftMigration);
         decl2.from_version = "v2".to_string();
         decl2.to_version = "v3".to_string();
-        runner.declare(decl2, "t").unwrap();
+        runner.declare(decl2, "t").expect("serde deserialization should succeed");
 
-        runner.begin("mig-1", 100, "t").unwrap();
+        runner.begin("mig-1", 100, "t").expect("serde deserialization should succeed");
         let err = runner.begin("mig-2", 50, "t").unwrap_err();
         assert!(matches!(err, CutoverError::PhaseFailed { .. }));
     }
@@ -3146,7 +3260,7 @@ mod tests {
         let mut runner = CutoverMigrationRunner::new();
         runner
             .declare(test_declaration("mig-1", CutoverType::HardCutover), "t")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         run_full_migration(&mut runner, "mig-1");
 
         let events = runner.audit_events();
@@ -3163,17 +3277,17 @@ mod tests {
         let mut runner = CutoverMigrationRunner::new();
         runner
             .declare(test_declaration("mig-1", CutoverType::HardCutover), "t")
-            .unwrap();
-        runner.begin("mig-1", 100, "t").unwrap();
-        runner.create_checkpoint(1, "t").unwrap();
-        runner.execute(100, "t").unwrap();
+            .expect("serde deserialization should succeed");
+        runner.begin("mig-1", 100, "t").expect("serde deserialization should succeed");
+        runner.create_checkpoint(1, "t").expect("serde deserialization should succeed");
+        runner.execute(100, "t").expect("serde deserialization should succeed");
         let _ = runner.verify(2, "t");
 
         let events = runner.drain_audit_events();
         let fail_event = events
             .iter()
             .find(|e| e.event == "verification_failed")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(
             fail_event.error_code.as_deref(),
             Some("MC_VERIFICATION_FAILED")
@@ -3186,7 +3300,7 @@ mod tests {
         let mut runner = CutoverMigrationRunner::new();
         runner
             .declare(test_declaration("mig-1", CutoverType::HardCutover), "t")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(!runner.audit_events().is_empty());
         let drained = runner.drain_audit_events();
         assert!(!drained.is_empty());
@@ -3200,7 +3314,7 @@ mod tests {
         let mut runner = CutoverMigrationRunner::new();
         runner
             .declare(test_declaration("mig-1", CutoverType::HardCutover), "t")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         run_full_migration(&mut runner, "mig-1");
 
         let applied = runner.applied_migrations();
@@ -3213,7 +3327,7 @@ mod tests {
     // -- CutoverAuditEvent serde -------------------------------------------
 
     #[test]
-    fn cutover_audit_event_serde_roundtrip() {
+    fn cutover_audit_event_serde_roundtrip() -> Result<(), serde_json::Error> {
         let event = CutoverAuditEvent {
             trace_id: "t-1".to_string(),
             component: "migration_compatibility".to_string(),
@@ -3225,15 +3339,16 @@ mod tests {
             affected_count: Some(100),
             timestamp: DeterministicTimestamp(42),
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let deser: CutoverAuditEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event)?;
+        let deser: CutoverAuditEvent = serde_json::from_str(&json)?;
         assert_eq!(event, deser);
+        Ok(())
     }
 
     // -- AppliedMigrationEntry serde ---------------------------------------
 
     #[test]
-    fn applied_migration_entry_serde_roundtrip() {
+    fn applied_migration_entry_serde_roundtrip() -> Result<(), serde_json::Error> {
         let mut affected = BTreeSet::new();
         affected.insert(ObjectClass::SerializationSchema);
         let entry = AppliedMigrationEntry {
@@ -3247,15 +3362,16 @@ mod tests {
             declared_at: DeterministicTimestamp(10),
             committed_at: Some(DeterministicTimestamp(40)),
         };
-        let json = serde_json::to_string(&entry).unwrap();
-        let deser: AppliedMigrationEntry = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&entry)?;
+        let deser: AppliedMigrationEntry = serde_json::from_str(&json)?;
         assert_eq!(entry, deser);
+        Ok(())
     }
 
     // -- PhaseExecutionRecord serde ----------------------------------------
 
     #[test]
-    fn phase_execution_record_serde_roundtrip() {
+    fn phase_execution_record_serde_roundtrip() -> Result<(), serde_json::Error> {
         let record = PhaseExecutionRecord {
             migration_id: "mig-1".to_string(),
             phase: MigrationPhase::Execute,
@@ -3264,24 +3380,26 @@ mod tests {
             detail: "done".to_string(),
             timestamp: DeterministicTimestamp(20),
         };
-        let json = serde_json::to_string(&record).unwrap();
-        let deser: PhaseExecutionRecord = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&record)?;
+        let deser: PhaseExecutionRecord = serde_json::from_str(&json)?;
         assert_eq!(record, deser);
+        Ok(())
     }
 
     // -- Determinism: repeated runs same events ----------------------------
 
     #[test]
-    fn cutover_lifecycle_deterministic() {
-        let run = || {
+    fn cutover_lifecycle_deterministic() -> Result<(), serde_json::Error> {
+        let run = || -> Result<String, serde_json::Error> {
             let mut runner = CutoverMigrationRunner::new();
             runner
                 .declare(test_declaration("mig-1", CutoverType::HardCutover), "t")
-                .unwrap();
+                .expect("serde deserialization should succeed");
             run_full_migration(&mut runner, "mig-1");
-            serde_json::to_string(runner.audit_events()).unwrap()
+            serde_json::to_string(runner.audit_events())
         };
-        assert_eq!(run(), run());
+        assert_eq!(run()?, run()?);
+        Ok(())
     }
 
     // -- No active migration operations fail --------------------------------
@@ -3441,7 +3559,7 @@ mod tests {
         let mut runner = CutoverMigrationRunner::new();
         runner
             .declare(test_declaration("m1", CutoverType::HardCutover), "t")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(matches!(
             runner.begin("nonexistent", 50, "t"),
             Err(CutoverError::MigrationNotFound { .. })
@@ -3452,33 +3570,33 @@ mod tests {
     fn parallel_run_accepts_old_format_after_commit() {
         let mut runner = CutoverMigrationRunner::new();
         let decl = test_declaration("m-par", CutoverType::ParallelRun);
-        runner.declare(decl, "t").unwrap();
+        runner.declare(decl, "t").expect("serde deserialization should succeed");
         let _entry = run_full_migration(&mut runner, "m-par");
         // ParallelRun always accepts both formats
         runner
             .check_format_acceptance(ObjectClass::SerializationSchema)
-            .unwrap();
+            .expect("serde deserialization should succeed");
     }
 
     #[test]
     fn check_format_acceptance_unaffected_class_always_ok() {
         let mut runner = CutoverMigrationRunner::new();
         let decl = test_declaration("m-hard", CutoverType::HardCutover);
-        runner.declare(decl, "t").unwrap();
+        runner.declare(decl, "t").expect("serde deserialization should succeed");
         let _entry = run_full_migration(&mut runner, "m-hard");
         // KeyFormat is not in affected_objects, so should pass
         runner
             .check_format_acceptance(ObjectClass::KeyFormat)
-            .unwrap();
+            .expect("serde deserialization should succeed");
     }
 
     #[test]
     fn active_state_tracks_through_lifecycle() {
         let mut runner = CutoverMigrationRunner::new();
         let decl = test_declaration("m-track", CutoverType::HardCutover);
-        runner.declare(decl, "t").unwrap();
+        runner.declare(decl, "t").expect("serde deserialization should succeed");
         assert!(runner.active_state().is_none());
-        runner.begin("m-track", 50, "t").unwrap();
+        runner.begin("m-track", 50, "t").expect("serde deserialization should succeed");
         assert_eq!(runner.active_state(), Some(CutoverState::PreMigrated));
         assert_eq!(runner.active_migration_id(), Some("m-track"));
     }
@@ -3551,7 +3669,7 @@ mod tests {
     }
 
     #[test]
-    fn phase_execution_record_serde_preserves_phase() {
+    fn phase_execution_record_serde_preserves_phase() -> Result<(), serde_json::Error> {
         let record = PhaseExecutionRecord {
             migration_id: "m1".to_string(),
             phase: MigrationPhase::Rollback,
@@ -3560,24 +3678,25 @@ mod tests {
             detail: "processed all objects".to_string(),
             timestamp: DeterministicTimestamp(1000),
         };
-        let json = serde_json::to_string(&record).unwrap();
-        let back: PhaseExecutionRecord = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&record)?;
+        let back: PhaseExecutionRecord = serde_json::from_str(&json)?;
         assert_eq!(record.phase, back.phase);
         assert_eq!(record.outcome, back.outcome);
+        Ok(())
     }
 
     #[test]
     fn applied_entry_committed_at_present_after_commit() {
         let mut runner = CutoverMigrationRunner::new();
         let decl = test_declaration("m-ts", CutoverType::HardCutover);
-        runner.declare(decl, "t").unwrap();
+        runner.declare(decl, "t").expect("serde deserialization should succeed");
         let entry = run_full_migration(&mut runner, "m-ts");
         assert_eq!(entry.state, CutoverState::Committed);
         assert!(entry.committed_at.is_some());
     }
 
     #[test]
-    fn audit_event_optional_fields_populated() {
+    fn audit_event_optional_fields_populated() -> Result<(), serde_json::Error> {
         let event = CutoverAuditEvent {
             trace_id: "t1".to_string(),
             component: "migration_compatibility".to_string(),
@@ -3589,17 +3708,18 @@ mod tests {
             affected_count: Some(50),
             timestamp: DeterministicTimestamp(2000),
         };
-        let json = serde_json::to_string(&event).unwrap();
+        let json = serde_json::to_string(&event)?;
         assert!(json.contains("PHASE_FAILED"));
         assert!(json.contains("Execute"));
-        let back: CutoverAuditEvent = serde_json::from_str(&json).unwrap();
+        let back: CutoverAuditEvent = serde_json::from_str(&json)?;
         assert_eq!(event.error_code, back.error_code);
         assert_eq!(event.phase, back.phase);
         assert_eq!(event.affected_count, back.affected_count);
+        Ok(())
     }
 
     #[test]
-    fn migration_compatibility_event_fields_populated() {
+    fn migration_compatibility_event_fields_populated() -> Result<(), serde_json::Error> {
         let event = MigrationCompatibilityEvent {
             trace_id: "t1".to_string(),
             decision_id: "d1".to_string(),
@@ -3611,9 +3731,10 @@ mod tests {
             from_version: "v1".to_string(),
             to_version: "v2".to_string(),
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let back: MigrationCompatibilityEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event)?;
+        let back: MigrationCompatibilityEvent = serde_json::from_str(&json)?;
         assert_eq!(event, back);
+        Ok(())
     }
 
     // -- Enrichment: PearlTower 2026-03-02 --
@@ -3723,7 +3844,7 @@ mod tests {
     }
 
     #[test]
-    fn cutover_error_serde_all_10_variants() {
+    fn cutover_error_serde_all_10_variants() -> Result<(), serde_json::Error> {
         let errors: Vec<CutoverError> = vec![
             CutoverError::InvalidDeclaration {
                 detail: "test".to_string(),
@@ -3754,10 +3875,11 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap();
-            let deser: CutoverError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(err)?;
+            let deser: CutoverError = serde_json::from_str(&json)?;
             assert_eq!(*err, deser);
         }
+        Ok(())
     }
 
     #[test]
@@ -3862,33 +3984,35 @@ mod tests {
     }
 
     #[test]
-    fn phase_outcome_serde_roundtrip() {
+    fn phase_outcome_serde_roundtrip() -> Result<(), serde_json::Error> {
         for po in [
             PhaseOutcome::Success,
             PhaseOutcome::Failed,
             PhaseOutcome::Skipped,
         ] {
-            let json = serde_json::to_string(&po).unwrap();
-            let deser: PhaseOutcome = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&po)?;
+            let deser: PhaseOutcome = serde_json::from_str(&json)?;
             assert_eq!(po, deser);
         }
+        Ok(())
     }
 
     #[test]
-    fn manifest_entry_serde_roundtrip() {
+    fn manifest_entry_serde_roundtrip() -> Result<(), serde_json::Error> {
         let entry = ManifestEntry {
             schema_version: "evidence-v1".to_string(),
             corpus_hash: ContentHash::compute(b"test"),
             entry_count: 42,
             frozen_at_ms: 1_700_000_000_000,
         };
-        let json = serde_json::to_string(&entry).unwrap();
-        let deser: ManifestEntry = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&entry)?;
+        let deser: ManifestEntry = serde_json::from_str(&json)?;
         assert_eq!(entry, deser);
+        Ok(())
     }
 
     #[test]
-    fn migration_test_result_serde_roundtrip() {
+    fn migration_test_result_serde_roundtrip() -> Result<(), serde_json::Error> {
         let result = MigrationTestResult {
             golden_ledger_name: "test-v1".to_string(),
             from_version: "evidence-v1".to_string(),
@@ -3910,12 +4034,13 @@ mod tests {
             schema_migrations_detected: Vec::new(),
             determinism_verified: true,
         };
-        let json = serde_json::to_string(&result).unwrap();
-        let deser: MigrationTestResult = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&result)?;
+        let deser: MigrationTestResult = serde_json::from_str(&json)?;
         assert_eq!(result.golden_ledger_name, deser.golden_ledger_name);
         assert_eq!(result.outcome, deser.outcome);
         assert_eq!(result.errors.len(), deser.errors.len());
         assert_eq!(result.replay_violations, deser.replay_violations);
+        Ok(())
     }
 
     #[test]
@@ -3932,23 +4057,25 @@ mod tests {
     }
 
     #[test]
-    fn golden_ledger_frozen_at_ms_preserved() {
+    fn golden_ledger_frozen_at_ms_preserved() -> Result<(), serde_json::Error> {
         let ledger = GoldenLedger::freeze("test", "v1", Vec::new(), 1_700_999_999_999);
         assert_eq!(ledger.frozen_at_ms, 1_700_999_999_999);
-        let json = serde_json::to_string(&ledger).unwrap();
-        let deser: GoldenLedger = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&ledger)?;
+        let deser: GoldenLedger = serde_json::from_str(&json)?;
         assert_eq!(deser.frozen_at_ms, 1_700_999_999_999);
+        Ok(())
     }
 
     #[test]
-    fn golden_ledger_metadata_preserved_in_serde() {
+    fn golden_ledger_metadata_preserved_in_serde() -> Result<(), serde_json::Error> {
         let mut ledger = GoldenLedger::freeze("test", "v1", Vec::new(), 0);
         ledger
             .metadata
             .insert("key".to_string(), "value".to_string());
-        let json = serde_json::to_string(&ledger).unwrap();
-        let deser: GoldenLedger = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&ledger)?;
+        let deser: GoldenLedger = serde_json::from_str(&json)?;
         assert_eq!(deser.metadata.get("key").map(String::as_str), Some("value"));
+        Ok(())
     }
 
     #[test]
@@ -3988,11 +4115,11 @@ mod tests {
         let mut runner = CutoverMigrationRunner::new();
         runner
             .declare(test_declaration("m-rb", CutoverType::HardCutover), "t")
-            .unwrap();
-        runner.begin("m-rb", 50, "t").unwrap();
-        runner.create_checkpoint(1, "t").unwrap();
-        runner.execute(50, "t").unwrap();
-        runner.rollback("t").unwrap();
+            .expect("serde deserialization should succeed");
+        runner.begin("m-rb", 50, "t").expect("serde deserialization should succeed");
+        runner.create_checkpoint(1, "t").expect("serde deserialization should succeed");
+        runner.execute(50, "t").expect("serde deserialization should succeed");
+        runner.rollback("t").expect("serde deserialization should succeed");
 
         let applied = runner.applied_migrations();
         assert_eq!(applied.len(), 1);
@@ -4012,7 +4139,7 @@ mod tests {
         let no_path_event = events
             .iter()
             .find(|e| e.event == "no_migration_path")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(
             no_path_event.error_code.as_deref(),
             Some("no_migration_path")
@@ -4040,7 +4167,7 @@ mod tests {
         let fail_event = events
             .iter()
             .find(|e| e.event == "migration_apply")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(
             fail_event.error_code.as_deref(),
             Some("migration_function_failed")
@@ -4065,14 +4192,15 @@ mod tests {
     }
 
     #[test]
-    fn migration_declaration_compatible_fields_preserved() {
+    fn migration_declaration_compatible_fields_preserved() -> Result<(), serde_json::Error> {
         let mut decl = test_declaration("m1", CutoverType::SoftMigration);
         decl.compatible_across_boundary = vec!["wire".to_string(), "api".to_string()];
         decl.incompatible_across_boundary = vec!["storage".to_string()];
-        let json = serde_json::to_string(&decl).unwrap();
-        let deser: MigrationDeclaration = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&decl)?;
+        let deser: MigrationDeclaration = serde_json::from_str(&json)?;
         assert_eq!(deser.compatible_across_boundary.len(), 2);
         assert_eq!(deser.incompatible_across_boundary.len(), 1);
+        Ok(())
     }
 
     #[test]
@@ -4080,7 +4208,7 @@ mod tests {
         let mut runner = CutoverMigrationRunner::new();
         runner
             .declare(test_declaration("m-soft", CutoverType::SoftMigration), "t")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         // Commit happens at tick 40 in run_full_migration
         let _entry = run_full_migration(&mut runner, "m-soft");
 
@@ -4095,7 +4223,7 @@ mod tests {
         let mut runner = CutoverMigrationRunner::new();
         runner
             .declare(test_declaration("m-hard", CutoverType::HardCutover), "t")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let _entry = run_full_migration(&mut runner, "m-hard");
         assert!(runner.transition_windows().is_empty());
     }

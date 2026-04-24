@@ -3238,10 +3238,10 @@ mod tests {
         let version = IrSchemaVersion::CURRENT;
         // SAFETY: IrSchemaVersion derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&version).unwrap();
+        let json = serde_json::to_string(&version).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid IrSchemaVersion,
         // so from_str back to IrSchemaVersion cannot fail (valid format + matching schema).
-        let restored: IrSchemaVersion = serde_json::from_str(&json).unwrap();
+        let restored: IrSchemaVersion = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(version, restored);
     }
 
@@ -3282,10 +3282,10 @@ mod tests {
         ] {
             // SAFETY: IrLevel derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json = serde_json::to_string(&level).unwrap();
+            let json = serde_json::to_string(&level).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by to_string of a valid IrLevel,
             // so from_str back to IrLevel cannot fail (valid format + matching schema).
-            let restored: IrLevel = serde_json::from_str(&json).unwrap();
+            let restored: IrLevel = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(level, restored);
         }
     }
@@ -3336,10 +3336,10 @@ mod tests {
         let ir0 = Ir0Module::from_syntax_tree(tree, "test.js");
         // SAFETY: Ir0Module derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&ir0).unwrap();
+        let json = serde_json::to_string(&ir0).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid Ir0Module,
         // so from_str back to Ir0Module cannot fail (valid format + matching schema).
-        let restored: Ir0Module = serde_json::from_str(&json).unwrap();
+        let restored: Ir0Module = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ir0, restored);
     }
 
@@ -3390,9 +3390,9 @@ mod tests {
         ir1.ops.push(Ir1Op::LoadBinding { binding_id: 0 });
 
         // SAFETY: Ir1Module derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&ir1).unwrap();
+        let json = serde_json::to_string(&ir1).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid Ir1Module serialization
-        let restored: Ir1Module = serde_json::from_str(&json).unwrap();
+        let restored: Ir1Module = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ir1, restored);
     }
 
@@ -3515,9 +3515,9 @@ mod tests {
             flow: None,
         });
         // SAFETY: Ir2Module derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&ir2).unwrap();
+        let json = serde_json::to_string(&ir2).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid Ir2Module serialization
-        let restored: Ir2Module = serde_json::from_str(&json).unwrap();
+        let restored: Ir2Module = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ir2, restored);
     }
 
@@ -3580,9 +3580,9 @@ mod tests {
             rollback_token: ContentHash::compute(b"baseline"),
         });
         // SAFETY: Ir3Module derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&ir3).unwrap();
+        let json = serde_json::to_string(&ir3).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid Ir3Module serialization
-        let restored: Ir3Module = serde_json::from_str(&json).unwrap();
+        let restored: Ir3Module = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ir3, restored);
     }
 
@@ -3712,9 +3712,9 @@ mod tests {
         ir3.required_capabilities
             .push(CapabilityTag("fs:read".to_string()));
         // SAFETY: Ir3Module derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&ir3).unwrap();
+        let json = serde_json::to_string(&ir3).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid Ir3Module serialization
-        let restored: Ir3Module = serde_json::from_str(&json).unwrap();
+        let restored: Ir3Module = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ir3, restored);
     }
 
@@ -3762,9 +3762,9 @@ mod tests {
         ir4.outcome = ExecutionOutcome::Exception;
         ir4.active_specialization_ids.push("spec-1".to_string());
         // SAFETY: Ir4Module derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&ir4).unwrap();
+        let json = serde_json::to_string(&ir4).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid Ir4Module serialization
-        let restored: Ir4Module = serde_json::from_str(&json).unwrap();
+        let restored: Ir4Module = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ir4, restored);
     }
 
@@ -3988,8 +3988,8 @@ mod tests {
     #[test]
     fn ir_error_serde_roundtrip() {
         let err = IrError::new(IrErrorCode::SourceHashMismatch, "test error", IrLevel::Ir2);
-        let json = serde_json::to_string(&err).unwrap();
-        let restored: IrError = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let restored: IrError = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, restored);
     }
 
@@ -4093,17 +4093,17 @@ mod tests {
         let ir0_hash = ir0.content_hash();
 
         let mut verifier = IrVerifier::new();
-        verifier.verify_ir0(&ir0, &ir0_hash, "t-1").unwrap();
+        verifier.verify_ir0(&ir0, &ir0_hash, "t-1").expect("serde deserialization should succeed");
 
         let ir1 = Ir1Module::new(ir0_hash, "ev.js");
-        verifier.verify_ir1(&ir1, &ir0_hash, "t-1").unwrap();
+        verifier.verify_ir1(&ir1, &ir0_hash, "t-1").expect("serde deserialization should succeed");
 
         let ir3 = Ir3Module::new(ContentHash::compute(b"ir2"), "ev.js");
-        verifier.verify_ir3(&ir3, "t-1").unwrap();
+        verifier.verify_ir3(&ir3, "t-1").expect("serde deserialization should succeed");
 
         let ir3_hash = ir3.content_hash();
         let ir4 = Ir4Module::new(ir3_hash, "ev.js");
-        verifier.verify_ir4(&ir4, &ir3_hash, "t-1").unwrap();
+        verifier.verify_ir4(&ir4, &ir3_hash, "t-1").expect("serde deserialization should succeed");
 
         let events = verifier.drain_events();
         assert_eq!(events.len(), 4);
@@ -4145,11 +4145,11 @@ mod tests {
         let ir0_hash = ir0.content_hash();
 
         let mut verifier = IrVerifier::new();
-        verifier.verify_ir0(&ir0, &ir0_hash, "t-serde").unwrap();
+        verifier.verify_ir0(&ir0, &ir0_hash, "t-serde").expect("serde deserialization should succeed");
 
         let events = verifier.drain_events();
-        let json = serde_json::to_string(&events).unwrap();
-        let restored: Vec<IrContractEvent> = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&events).expect("serde deserialization should succeed");
+        let restored: Vec<IrContractEvent> = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(events, restored);
     }
 
@@ -4200,8 +4200,8 @@ mod tests {
             ScopeKind::Block,
             ScopeKind::Catch,
         ] {
-            let json = serde_json::to_string(&kind).unwrap();
-            let restored: ScopeKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
+            let restored: ScopeKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(kind, restored);
         }
     }
@@ -4216,8 +4216,8 @@ mod tests {
             BindingKind::Import,
             BindingKind::FunctionDecl,
         ] {
-            let json = serde_json::to_string(&kind).unwrap();
-            let restored: BindingKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
+            let restored: BindingKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(kind, restored);
         }
     }
@@ -4232,8 +4232,8 @@ mod tests {
             EffectBoundary::FsEffect,
             EffectBoundary::HostcallEffect,
         ] {
-            let json = serde_json::to_string(&eb).unwrap();
-            let restored: EffectBoundary = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&eb).expect("serde deserialization should succeed");
+            let restored: EffectBoundary = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(eb, restored);
         }
     }
@@ -4249,8 +4249,8 @@ mod tests {
             WitnessEventKind::FlowLabelChecked,
             WitnessEventKind::DeclassificationRequested,
         ] {
-            let json = serde_json::to_string(&kind).unwrap();
-            let restored: WitnessEventKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
+            let restored: WitnessEventKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(kind, restored);
         }
     }
@@ -4263,8 +4263,8 @@ mod tests {
             ExecutionOutcome::Timeout,
             ExecutionOutcome::Halted,
         ] {
-            let json = serde_json::to_string(&outcome).unwrap();
-            let restored: ExecutionOutcome = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&outcome).expect("serde deserialization should succeed");
+            let restored: ExecutionOutcome = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(outcome, restored);
         }
     }
@@ -4280,8 +4280,8 @@ mod tests {
             IrErrorCode::InvalidSpecializationLinkage,
             IrErrorCode::WitnessIntegrityViolation,
         ] {
-            let json = serde_json::to_string(&code).unwrap();
-            let restored: IrErrorCode = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&code).expect("serde deserialization should succeed");
+            let restored: IrErrorCode = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(code, restored);
         }
     }
@@ -4297,8 +4297,8 @@ mod tests {
             Ir1Literal::Null,
             Ir1Literal::Undefined,
         ] {
-            let json = serde_json::to_string(&lit).unwrap();
-            let restored: Ir1Literal = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&lit).expect("serde deserialization should succeed");
+            let restored: Ir1Literal = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(lit, restored);
         }
     }
@@ -4315,8 +4315,8 @@ mod tests {
             source_hash: Some(ContentHash::compute(b"src")),
             source_label: "test.js".to_string(),
         };
-        let json = serde_json::to_string(&header).unwrap();
-        let restored: IrHeader = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&header).expect("serde deserialization should succeed");
+        let restored: IrHeader = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(header, restored);
 
         // Also test with None source_hash
@@ -4324,8 +4324,8 @@ mod tests {
             source_hash: None,
             ..header
         };
-        let json2 = serde_json::to_string(&header_none).unwrap();
-        let restored2: IrHeader = serde_json::from_str(&json2).unwrap();
+        let json2 = serde_json::to_string(&header_none).expect("serde deserialization should succeed");
+        let restored2: IrHeader = serde_json::from_str(&json2).expect("serde deserialization should succeed");
         assert_eq!(header_none, restored2);
     }
 
@@ -4336,16 +4336,16 @@ mod tests {
             sink_clearance: Label::Public,
             declassification_required: true,
         };
-        let json = serde_json::to_string(&fa).unwrap();
-        let restored: FlowAnnotation = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&fa).expect("serde deserialization should succeed");
+        let restored: FlowAnnotation = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(fa, restored);
     }
 
     #[test]
     fn reg_range_serde_roundtrip() {
         let rr = RegRange { start: 5, count: 3 };
-        let json = serde_json::to_string(&rr).unwrap();
-        let restored: RegRange = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&rr).expect("serde deserialization should succeed");
+        let restored: RegRange = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(rr, restored);
     }
 
@@ -4358,14 +4358,14 @@ mod tests {
             name: Some("myFunc".to_string()),
             is_generator: false,
         };
-        let json = serde_json::to_string(&desc).unwrap();
-        let restored: Ir3FunctionDesc = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&desc).expect("serde deserialization should succeed");
+        let restored: Ir3FunctionDesc = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(desc, restored);
 
         // Test with None name
         let desc_anon = Ir3FunctionDesc { name: None, ..desc };
-        let json2 = serde_json::to_string(&desc_anon).unwrap();
-        let restored2: Ir3FunctionDesc = serde_json::from_str(&json2).unwrap();
+        let json2 = serde_json::to_string(&desc_anon).expect("serde deserialization should succeed");
+        let restored2: Ir3FunctionDesc = serde_json::from_str(&json2).expect("serde deserialization should succeed");
         assert_eq!(desc_anon, restored2);
     }
 
@@ -4377,8 +4377,8 @@ mod tests {
             validity_epoch: 99,
             rollback_token: ContentHash::compute(b"baseline"),
         };
-        let json = serde_json::to_string(&sl).unwrap();
-        let restored: SpecializationLinkage = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&sl).expect("serde deserialization should succeed");
+        let restored: SpecializationLinkage = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(sl, restored);
     }
 
@@ -4391,8 +4391,8 @@ mod tests {
             payload_hash: ContentHash::compute(b"flow_check"),
             timestamp_tick: 5000,
         };
-        let json = serde_json::to_string(&we).unwrap();
-        let restored: WitnessEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&we).expect("serde deserialization should succeed");
+        let restored: WitnessEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(we, restored);
     }
 
@@ -4404,16 +4404,16 @@ mod tests {
             allowed: false,
             instruction_index: 22,
         };
-        let json = serde_json::to_string(&hdr).unwrap();
-        let restored: HostcallDecisionRecord = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&hdr).expect("serde deserialization should succeed");
+        let restored: HostcallDecisionRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(hdr, restored);
     }
 
     #[test]
     fn capability_tag_serde_roundtrip() {
         let tag = CapabilityTag("fs:write".to_string());
-        let json = serde_json::to_string(&tag).unwrap();
-        let restored: CapabilityTag = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&tag).expect("serde deserialization should succeed");
+        let restored: CapabilityTag = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(tag, restored);
     }
 
@@ -4428,8 +4428,8 @@ mod tests {
             level: IrLevel::Ir0,
             content_hash: Some("abcdef".to_string()),
         };
-        let json = serde_json::to_string(&ok_event).unwrap();
-        let restored: IrContractEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&ok_event).expect("serde deserialization should succeed");
+        let restored: IrContractEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ok_event, restored);
 
         let err_event = IrContractEvent {
@@ -4441,8 +4441,8 @@ mod tests {
             level: IrLevel::Ir3,
             content_hash: None,
         };
-        let json2 = serde_json::to_string(&err_event).unwrap();
-        let restored2: IrContractEvent = serde_json::from_str(&json2).unwrap();
+        let json2 = serde_json::to_string(&err_event).expect("serde deserialization should succeed");
+        let restored2: IrContractEvent = serde_json::from_str(&json2).expect("serde deserialization should succeed");
         assert_eq!(err_event, restored2);
     }
 
@@ -4627,8 +4627,8 @@ mod tests {
             },
         ];
         for op in &ops {
-            let json = serde_json::to_string(op).unwrap();
-            let restored: Ir1Op = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(op).expect("serde deserialization should succeed");
+            let restored: Ir1Op = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*op, restored);
         }
     }
@@ -4848,8 +4848,8 @@ mod tests {
             Ir3Instruction::EndFinally,
         ];
         for instr in &instrs {
-            let json = serde_json::to_string(instr).unwrap();
-            let restored: Ir3Instruction = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(instr).expect("serde deserialization should succeed");
+            let restored: Ir3Instruction = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*instr, restored);
         }
     }
@@ -4873,8 +4873,8 @@ mod tests {
                 declassification_required: true,
             }),
         };
-        let json = serde_json::to_string(&op).unwrap();
-        let restored: Ir2Op = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&op).expect("serde deserialization should succeed");
+        let restored: Ir2Op = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(op, restored);
     }
 
@@ -4902,8 +4902,8 @@ mod tests {
                     kind: BindingKind::Const,
                 }],
             };
-            let json = serde_json::to_string(&node).unwrap();
-            let restored: ScopeNode = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&node).expect("serde deserialization should succeed");
+            let restored: ScopeNode = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(node, restored);
         }
     }
@@ -5036,8 +5036,8 @@ mod tests {
     #[test]
     fn capability_tag_serde_preserves_value() {
         let tag = CapabilityTag("net:fetch".to_string());
-        let json = serde_json::to_string(&tag).unwrap();
-        let back: CapabilityTag = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&tag).expect("serde deserialization should succeed");
+        let back: CapabilityTag = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(tag.0, back.0);
     }
 
@@ -5374,7 +5374,7 @@ mod tests {
         let hash = ir0.content_hash();
 
         let mut verifier = IrVerifier::new();
-        verifier.verify_ir0(&ir0, &hash, "t-drain").unwrap();
+        verifier.verify_ir0(&ir0, &hash, "t-drain").expect("serde deserialization should succeed");
         assert_eq!(verifier.drain_events().len(), 1);
         // Second drain is empty
         assert!(verifier.drain_events().is_empty());
@@ -5435,8 +5435,8 @@ mod tests {
             scope: ScopeId { depth: 1, index: 0 },
             kind: BindingKind::Let,
         };
-        let json = serde_json::to_string(&b).unwrap();
-        let back: ResolvedBinding = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&b).expect("serde deserialization should succeed");
+        let back: ResolvedBinding = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(b, back);
     }
 
@@ -5460,8 +5460,8 @@ mod tests {
                 },
                 kind: *kind,
             };
-            let json = serde_json::to_string(&b).unwrap();
-            let back: ResolvedBinding = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&b).expect("serde deserialization should succeed");
+            let back: ResolvedBinding = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(b, back);
         }
         assert_eq!(kinds.len(), 6);
@@ -5826,14 +5826,14 @@ mod tests {
 
     #[test]
     fn verify_schema_version_rejects_old_major_version() {
-        let old_major = IrSchemaVersion {
-            major: IrSchemaVersion::CURRENT.major.saturating_sub(1),
+        let incompatible_major = IrSchemaVersion {
+            major: IrSchemaVersion::CURRENT.major.saturating_add(1),
             minor: 0,
             patch: 0,
         };
 
         let header = IrHeader {
-            schema_version: old_major,
+            schema_version: incompatible_major,
             level: IrLevel::Ir0,
             source_hash: None,
             source_label: "test".to_string(),

@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 mod _support;
-use _support::test262_common::{RequirementLevel, ExpectedResult, execute_test262_case};
+use _support::test262_common::{ExpectedResult, RequirementLevel, execute_test262_case};
 
 // ---------------------------------------------------------------------------
 // Optional Chaining Test262 Conformance Suite
@@ -460,7 +460,8 @@ impl OptionalChainingHarness {
             category_coverage.total += 1;
 
             if let Some(result) = results.get(&test.id)
-                && matches!(result, OptionalChainingResult::Pass) {
+                && matches!(result, OptionalChainingResult::Pass)
+            {
                 category_coverage.passed += 1;
             }
         }

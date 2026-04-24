@@ -586,7 +586,7 @@ impl AsyncModuleEvaluator {
                         rejected_dependency = Some((
                             dep.clone(),
                             // SAFETY: Rejected phase guarantees rejection_reason_hash is Some
-                            dep_state.rejection_reason_hash.clone().unwrap(),
+                            dep_state.rejection_reason_hash.clone().expect("serde deserialization should succeed"),
                             dep_state.rejection_reason_description.clone(),
                         ));
                     }
@@ -1037,7 +1037,7 @@ pub fn compute_async_evaluation_order(
     while let Some(spec) = queue.pop() {
         order.push(spec.to_string());
         // SAFETY: Every module specifier in queue was inserted into adjacency map above
-        let successors: Vec<&str> = adjacency.get(spec).cloned().unwrap();
+        let successors: Vec<&str> = adjacency.get(spec).cloned().expect("serde deserialization should succeed");
         for succ in successors {
             if let Some(deg) = in_degree.get_mut(succ) {
                 *deg = deg.saturating_sub(1);
@@ -1111,8 +1111,8 @@ mod tests {
     #[test]
     fn phase_serde_roundtrip() {
         for p in AsyncModulePhase::ALL {
-            let json = serde_json::to_string(p).unwrap();
-            let back: AsyncModulePhase = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(p).expect("serde deserialization should succeed");
+            let back: AsyncModulePhase = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*p, back);
         }
     }
@@ -1154,8 +1154,8 @@ mod tests {
     #[test]
     fn linkage_kind_serde_roundtrip() {
         for k in LinkageKind::ALL {
-            let json = serde_json::to_string(k).unwrap();
-            let back: LinkageKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(k).expect("serde deserialization should succeed");
+            let back: LinkageKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*k, back);
         }
     }
@@ -1228,9 +1228,9 @@ mod tests {
         let mut eval = AsyncModuleEvaluator::with_defaults();
         eval.register_module("tla.js", true, &[], Some(PromiseHandle(10)));
         eval.suspend_at_top_level_await("tla.js", PromiseHandle(20))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(eval.states()["tla.js"].suspensions.len(), 1);
-        eval.resume_evaluation("tla.js").unwrap();
+        eval.resume_evaluation("tla.js").expect("serde deserialization should succeed");
         assert!(eval.states()["tla.js"].suspensions[0].resolved);
     }
 
@@ -1238,7 +1238,7 @@ mod tests {
     fn evaluator_settle_module() {
         let mut eval = AsyncModuleEvaluator::with_defaults();
         eval.register_module("m.js", true, &[], Some(PromiseHandle(10)));
-        let resumable = eval.settle_module("m.js").unwrap();
+        let resumable = eval.settle_module("m.js").expect("serde deserialization should succeed");
         assert!(resumable.is_empty());
         assert_eq!(eval.states()["m.js"].phase, AsyncModulePhase::Settled);
     }
@@ -1250,7 +1250,7 @@ mod tests {
         let mut bindings = empty_live_bindings();
         let linkage = eval
             .reject_module("bad.js", &js_error("oops"), &mut bindings)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(linkage.rejected_module, "bad.js");
         assert_eq!(eval.states()["bad.js"].phase, AsyncModulePhase::Rejected);
     }
@@ -1266,10 +1266,10 @@ mod tests {
             Some(PromiseHandle(2)),
         );
         eval.suspend_on_dependency("consumer.js", "dep.js", PromiseHandle(1))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(!eval.states()["consumer.js"].all_dependencies_settled());
 
-        let resumable = eval.notify_dependency_settled("dep.js").unwrap();
+        let resumable = eval.notify_dependency_settled("dep.js").expect("serde deserialization should succeed");
         assert!(resumable.contains(&"consumer.js".to_string()));
         assert!(eval.states()["consumer.js"].all_dependencies_settled());
     }
@@ -1285,12 +1285,12 @@ mod tests {
             Some(PromiseHandle(2)),
         );
         eval.suspend_on_dependency("child.js", "root.js", PromiseHandle(1))
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let mut bindings = empty_live_bindings();
         let linkage = eval
             .reject_module("root.js", &js_error("fail"), &mut bindings)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert!(linkage.transitive_closure.contains("child.js"));
         assert_eq!(eval.states()["child.js"].phase, AsyncModulePhase::Rejected);
@@ -1316,7 +1316,7 @@ mod tests {
         let mut bindings = empty_live_bindings();
         let linkage = eval
             .reject_module("provider.js", &js_error("fail"), &mut bindings)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert!(
             linkage
@@ -1338,7 +1338,7 @@ mod tests {
         eval.register_module("consumer.js", true, &[], Some(PromiseHandle(1)));
 
         eval.suspend_on_dependency("consumer.js", "provider.js", PromiseHandle(2))
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert!(
             eval.declared_dependencies["consumer.js"].is_empty(),
@@ -1348,7 +1348,7 @@ mod tests {
         let mut bindings = empty_live_bindings();
         let linkage = eval
             .reject_module("provider.js", &js_error("fail"), &mut bindings)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert!(
             linkage
@@ -1378,7 +1378,7 @@ mod tests {
 
         let linkage = eval
             .reject_module("bad.js", &js_error("fail"), &mut bindings)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert_eq!(linkage.dead_bindings, vec![binding_id.clone()]);
         assert_eq!(
@@ -1396,7 +1396,7 @@ mod tests {
         let mut eval = AsyncModuleEvaluator::with_defaults();
         eval.register_module("a.js", false, &[], None);
         eval.register_module("b.js", true, &[], Some(PromiseHandle(1)));
-        eval.settle_module("b.js").unwrap();
+        eval.settle_module("b.js").expect("serde deserialization should succeed");
         let result = eval.finalize();
         assert!(result.all_settled);
         assert_eq!(result.total_rejections, 0);
@@ -1409,7 +1409,7 @@ mod tests {
         eval.register_module("bad.js", true, &[], Some(PromiseHandle(1)));
         let mut bindings = empty_live_bindings();
         eval.reject_module("bad.js", &js_error("err"), &mut bindings)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let result = eval.finalize();
         assert!(!result.all_settled);
         assert_eq!(result.total_rejections, 1);
@@ -1420,9 +1420,9 @@ mod tests {
         let mut eval = AsyncModuleEvaluator::with_defaults();
         eval.register_module("m.js", true, &[], Some(PromiseHandle(1)));
         eval.suspend_at_top_level_await("m.js", PromiseHandle(2))
-            .unwrap();
-        eval.resume_evaluation("m.js").unwrap();
-        eval.settle_module("m.js").unwrap();
+            .expect("serde deserialization should succeed");
+        eval.resume_evaluation("m.js").expect("serde deserialization should succeed");
+        eval.settle_module("m.js").expect("serde deserialization should succeed");
         assert!(eval.witness_events().len() >= 4);
     }
 
@@ -1435,9 +1435,9 @@ mod tests {
         let mut eval = AsyncModuleEvaluator::new(config);
         eval.register_module("m.js", true, &[], Some(PromiseHandle(1)));
         eval.suspend_at_top_level_await("m.js", PromiseHandle(2))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         eval.suspend_at_top_level_await("m.js", PromiseHandle(3))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let err = eval
             .suspend_at_top_level_await("m.js", PromiseHandle(4))
             .unwrap_err();
@@ -1467,10 +1467,10 @@ mod tests {
             m.insert("c.js".into(), vec!["b.js".into()]);
             m
         };
-        let order = compute_async_evaluation_order(&modules, &deps).unwrap();
-        let pos_a = order.iter().position(|s| s == "a.js").unwrap();
-        let pos_b = order.iter().position(|s| s == "b.js").unwrap();
-        let pos_c = order.iter().position(|s| s == "c.js").unwrap();
+        let order = compute_async_evaluation_order(&modules, &deps).expect("serde deserialization should succeed");
+        let pos_a = order.iter().position(|s| s == "a.js").expect("serde deserialization should succeed");
+        let pos_b = order.iter().position(|s| s == "b.js").expect("serde deserialization should succeed");
+        let pos_c = order.iter().position(|s| s == "c.js").expect("serde deserialization should succeed");
         assert!(pos_a < pos_b);
         assert!(pos_b < pos_c);
     }
@@ -1479,7 +1479,7 @@ mod tests {
     fn topological_order_no_deps() {
         let modules = vec!["x.js".into(), "y.js".into()];
         let deps = BTreeMap::new();
-        let order = compute_async_evaluation_order(&modules, &deps).unwrap();
+        let order = compute_async_evaluation_order(&modules, &deps).expect("serde deserialization should succeed");
         assert_eq!(order.len(), 2);
     }
 
@@ -1503,10 +1503,10 @@ mod tests {
         let mut eval = AsyncModuleEvaluator::with_defaults();
         eval.register_module("a.js", false, &[], None);
         eval.register_module("b.js", true, &[], Some(PromiseHandle(1)));
-        eval.settle_module("b.js").unwrap();
+        eval.settle_module("b.js").expect("serde deserialization should succeed");
         let result = eval.finalize();
-        let json = serde_json::to_string(&result).unwrap();
-        let back: AsyncEvalResult = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let back: AsyncEvalResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, back);
     }
 
@@ -1518,8 +1518,8 @@ mod tests {
             PromiseHandle(1),
             SuspensionContext::TopLevelAwait,
         );
-        let json = serde_json::to_string(&sr).unwrap();
-        let back: SuspensionRecord = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&sr).expect("serde deserialization should succeed");
+        let back: SuspensionRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(sr, back);
     }
 
@@ -1541,8 +1541,8 @@ mod tests {
             },
             dead_bindings: vec![],
         };
-        let json = serde_json::to_string(&rl).unwrap();
-        let back: RejectionLinkage = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&rl).expect("serde deserialization should succeed");
+        let back: RejectionLinkage = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(rl, back);
     }
 
@@ -1554,8 +1554,8 @@ mod tests {
     #[test]
     fn async_eval_event_type_serde_roundtrip() {
         for t in AsyncEvalEventType::ALL {
-            let json = serde_json::to_string(t).unwrap();
-            let back: AsyncEvalEventType = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(t).expect("serde deserialization should succeed");
+            let back: AsyncEvalEventType = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*t, back);
         }
     }
@@ -1590,8 +1590,8 @@ mod tests {
                 },
             },
         ] {
-            let json = serde_json::to_string(&ctx).unwrap();
-            let back: SuspensionContext = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&ctx).expect("serde deserialization should succeed");
+            let back: SuspensionContext = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(ctx, back);
         }
     }
@@ -1614,7 +1614,7 @@ mod tests {
         eval.register_module("bad.js", true, &[], Some(PromiseHandle(1)));
         let mut bindings = empty_live_bindings();
         eval.reject_module("bad.js", &js_error("err"), &mut bindings)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let result = eval.finalize();
         assert_eq!(result.settled_count(), 1); // ok.js is Synchronous
         assert_eq!(result.rejected_count(), 1); // bad.js
@@ -1759,8 +1759,8 @@ mod tests {
             },
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: AsyncEvalError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: AsyncEvalError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -1891,8 +1891,8 @@ mod tests {
         s.record_suspension(PromiseHandle(100), SuspensionContext::TopLevelAwait);
         s.record_resumption();
         s.add_pending_dependency("dep.js".into());
-        let json = serde_json::to_string(&s).unwrap();
-        let back: AsyncModuleState = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+        let back: AsyncModuleState = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(s, back);
     }
 
@@ -1957,19 +1957,19 @@ mod tests {
         );
 
         // d.js settles -> b.js and c.js should become resumable
-        let resumable = eval.settle_module("d.js").unwrap();
+        let resumable = eval.settle_module("d.js").expect("serde deserialization should succeed");
         assert!(resumable.contains(&"b.js".to_string()));
         assert!(resumable.contains(&"c.js".to_string()));
         // a.js is still waiting on b.js and c.js
         assert!(!resumable.contains(&"a.js".to_string()));
 
         // Settle b.js
-        let resumable2 = eval.settle_module("b.js").unwrap();
+        let resumable2 = eval.settle_module("b.js").expect("serde deserialization should succeed");
         // a.js still waiting on c.js
         assert!(!resumable2.contains(&"a.js".to_string()));
 
         // Settle c.js -> a.js should become resumable
-        let resumable3 = eval.settle_module("c.js").unwrap();
+        let resumable3 = eval.settle_module("c.js").expect("serde deserialization should succeed");
         assert!(resumable3.contains(&"a.js".to_string()));
     }
 
@@ -1980,15 +1980,15 @@ mod tests {
         eval.register_module("root.js", true, &[], Some(PromiseHandle(1)));
         eval.register_module("mid.js", true, &["root.js".into()], Some(PromiseHandle(2)));
         eval.suspend_on_dependency("mid.js", "root.js", PromiseHandle(1))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         eval.register_module("leaf.js", true, &["mid.js".into()], Some(PromiseHandle(3)));
         eval.suspend_on_dependency("leaf.js", "mid.js", PromiseHandle(2))
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let mut bindings = empty_live_bindings();
         let linkage = eval
             .reject_module("root.js", &js_error("cascade"), &mut bindings)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // mid.js depends on root.js, leaf.js depends on mid.js
         assert!(linkage.transitive_closure.contains("mid.js"));
@@ -2004,12 +2004,12 @@ mod tests {
         eval.register_module("mid.js", true, &["root.js".into()], Some(PromiseHandle(1)));
         eval.register_module("leaf.js", true, &["mid.js".into()], Some(PromiseHandle(2)));
         eval.suspend_on_dependency("leaf.js", "mid.js", PromiseHandle(1))
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let mut bindings = empty_live_bindings();
         let linkage = eval
             .reject_module("root.js", &js_error("cascade"), &mut bindings)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert!(linkage.transitive_closure.contains("mid.js"));
         assert!(linkage.transitive_closure.contains("leaf.js"));
@@ -2027,15 +2027,15 @@ mod tests {
         eval.register_module("root.js", true, &[], Some(PromiseHandle(1)));
         eval.register_module("mid.js", true, &["root.js".into()], Some(PromiseHandle(2)));
         eval.suspend_on_dependency("mid.js", "root.js", PromiseHandle(1))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         eval.register_module("leaf.js", true, &["mid.js".into()], Some(PromiseHandle(3)));
         eval.suspend_on_dependency("leaf.js", "mid.js", PromiseHandle(2))
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let mut bindings = empty_live_bindings();
         let linkage = eval
             .reject_module("root.js", &js_error("no-cascade"), &mut bindings)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Without transitive propagation, only direct dependents are in the closure.
         assert!(linkage.transitive_closure.contains("mid.js"));
@@ -2048,13 +2048,13 @@ mod tests {
         let mut eval = AsyncModuleEvaluator::with_defaults();
         eval.register_module("m.js", true, &[], Some(PromiseHandle(1)));
         eval.suspend_at_top_level_await("m.js", PromiseHandle(10))
-            .unwrap();
-        eval.resume_evaluation("m.js").unwrap();
+            .expect("serde deserialization should succeed");
+        eval.resume_evaluation("m.js").expect("serde deserialization should succeed");
         eval.suspend_at_top_level_await("m.js", PromiseHandle(11))
-            .unwrap();
-        eval.resume_evaluation("m.js").unwrap();
+            .expect("serde deserialization should succeed");
+        eval.resume_evaluation("m.js").expect("serde deserialization should succeed");
         eval.suspend_at_top_level_await("m.js", PromiseHandle(12))
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let state = &eval.states()["m.js"];
         assert_eq!(state.suspensions.len(), 3);
@@ -2069,7 +2069,7 @@ mod tests {
         eval.register_module("dep.js", true, &[], Some(PromiseHandle(1)));
         let mut bindings = empty_live_bindings();
         eval.reject_module("dep.js", &js_error("fail"), &mut bindings)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Now register a consumer that depends on the rejected module.
         eval.register_module("consumer.js", false, &["dep.js".into()], None);
@@ -2111,7 +2111,7 @@ mod tests {
     fn evaluator_notify_dependency_settled_unknown_module_returns_empty() {
         let mut eval = AsyncModuleEvaluator::with_defaults();
         eval.register_module("m.js", true, &[], Some(PromiseHandle(1)));
-        let resumable = eval.notify_dependency_settled("unknown.js").unwrap();
+        let resumable = eval.notify_dependency_settled("unknown.js").expect("serde deserialization should succeed");
         assert!(resumable.is_empty());
     }
 
@@ -2143,21 +2143,21 @@ mod tests {
 
         let linkage = eval
             .reject_module("lib.js", &js_error("err"), &mut bindings)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert!(linkage.dead_bindings.contains(&id1));
         assert!(linkage.dead_bindings.contains(&id2));
         assert!(!linkage.dead_bindings.contains(&id_other));
         assert_eq!(
-            bindings.get_cell(&id1).unwrap().state,
+            bindings.get_cell(&id1).expect("serde deserialization should succeed").state,
             BindingCellState::Dead
         );
         assert_eq!(
-            bindings.get_cell(&id2).unwrap().state,
+            bindings.get_cell(&id2).expect("serde deserialization should succeed").state,
             BindingCellState::Dead
         );
         assert_ne!(
-            bindings.get_cell(&id_other).unwrap().state,
+            bindings.get_cell(&id_other).expect("serde deserialization should succeed").state,
             BindingCellState::Dead
         );
     }
@@ -2175,11 +2175,11 @@ mod tests {
             BindingType::Direct,
         ));
         // Pre-mark the binding as dead.
-        bindings.mark_dead(&id).unwrap();
+        bindings.mark_dead(&id).expect("serde deserialization should succeed");
 
         let linkage = eval
             .reject_module("lib.js", &js_error("err"), &mut bindings)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         // Already-dead binding should not appear in dead_bindings.
         assert!(linkage.dead_bindings.is_empty());
     }
@@ -2192,7 +2192,7 @@ mod tests {
             let mut eval = AsyncModuleEvaluator::with_defaults();
             eval.register_module("a.js", false, &[], None);
             eval.register_module("b.js", true, &[], Some(PromiseHandle(1)));
-            eval.settle_module("b.js").unwrap();
+            eval.settle_module("b.js").expect("serde deserialization should succeed");
             eval.finalize()
         };
         let r1 = build();
@@ -2220,7 +2220,7 @@ mod tests {
     fn topological_order_single_module() {
         let modules = vec!["only.js".into()];
         let deps = BTreeMap::new();
-        let order = compute_async_evaluation_order(&modules, &deps).unwrap();
+        let order = compute_async_evaluation_order(&modules, &deps).expect("serde deserialization should succeed");
         assert_eq!(order, vec!["only.js".to_string()]);
     }
 
@@ -2232,8 +2232,8 @@ mod tests {
         deps.insert("b.js".into(), vec!["a.js".into()]);
         deps.insert("c.js".into(), vec!["a.js".into()]);
         deps.insert("d.js".into(), vec!["b.js".into(), "c.js".into()]);
-        let order = compute_async_evaluation_order(&modules, &deps).unwrap();
-        let pos = |name: &str| order.iter().position(|s| s == name).unwrap();
+        let order = compute_async_evaluation_order(&modules, &deps).expect("serde deserialization should succeed");
+        let pos = |name: &str| order.iter().position(|s| s == name).expect("serde deserialization should succeed");
         assert!(pos("a.js") < pos("b.js"));
         assert!(pos("a.js") < pos("c.js"));
         assert!(pos("b.js") < pos("d.js"));
@@ -2244,8 +2244,8 @@ mod tests {
     fn topological_order_deterministic_across_runs() {
         let modules: Vec<String> = vec!["z.js".into(), "y.js".into(), "x.js".into(), "w.js".into()];
         let deps = BTreeMap::new();
-        let order1 = compute_async_evaluation_order(&modules, &deps).unwrap();
-        let order2 = compute_async_evaluation_order(&modules, &deps).unwrap();
+        let order1 = compute_async_evaluation_order(&modules, &deps).expect("serde deserialization should succeed");
+        let order2 = compute_async_evaluation_order(&modules, &deps).expect("serde deserialization should succeed");
         assert_eq!(order1, order2);
     }
 
@@ -2255,7 +2255,7 @@ mod tests {
         let modules = vec!["a.js".into(), "b.js".into()];
         let mut deps: BTreeMap<String, Vec<String>> = BTreeMap::new();
         deps.insert("b.js".into(), vec!["external.js".into()]);
-        let order = compute_async_evaluation_order(&modules, &deps).unwrap();
+        let order = compute_async_evaluation_order(&modules, &deps).expect("serde deserialization should succeed");
         assert_eq!(order.len(), 2);
     }
 
@@ -2278,7 +2278,7 @@ mod tests {
     fn topological_order_empty_input() {
         let modules: Vec<String> = vec![];
         let deps = BTreeMap::new();
-        let order = compute_async_evaluation_order(&modules, &deps).unwrap();
+        let order = compute_async_evaluation_order(&modules, &deps).expect("serde deserialization should succeed");
         assert!(order.is_empty());
     }
 
@@ -2289,9 +2289,9 @@ mod tests {
         let mut eval = AsyncModuleEvaluator::with_defaults();
         eval.register_module("m.js", true, &[], Some(PromiseHandle(1)));
         eval.suspend_at_top_level_await("m.js", PromiseHandle(2))
-            .unwrap();
-        eval.resume_evaluation("m.js").unwrap();
-        eval.settle_module("m.js").unwrap();
+            .expect("serde deserialization should succeed");
+        eval.resume_evaluation("m.js").expect("serde deserialization should succeed");
+        eval.settle_module("m.js").expect("serde deserialization should succeed");
 
         let events = eval.witness_events();
         let types: Vec<AsyncEvalEventType> = events.iter().map(|e| e.event_type).collect();
@@ -2307,10 +2307,10 @@ mod tests {
         eval.register_module("a.js", true, &[], Some(PromiseHandle(1)));
         eval.register_module("b.js", true, &[], Some(PromiseHandle(2)));
         eval.suspend_at_top_level_await("a.js", PromiseHandle(10))
-            .unwrap();
-        eval.resume_evaluation("a.js").unwrap();
-        eval.settle_module("a.js").unwrap();
-        eval.settle_module("b.js").unwrap();
+            .expect("serde deserialization should succeed");
+        eval.resume_evaluation("a.js").expect("serde deserialization should succeed");
+        eval.settle_module("a.js").expect("serde deserialization should succeed");
+        eval.settle_module("b.js").expect("serde deserialization should succeed");
 
         let events = eval.witness_events();
         for window in events.windows(2) {
@@ -2332,8 +2332,8 @@ mod tests {
             max_total_suspensions: 50,
             transitive_rejection_propagation: false,
         };
-        let json = serde_json::to_string(&cfg).unwrap();
-        let back: AsyncEvalConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
+        let back: AsyncEvalConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cfg, back);
     }
 
@@ -2349,8 +2349,8 @@ mod tests {
             ],
             linkage_kind: LinkageKind::NamespaceImport,
         };
-        let json = serde_json::to_string(&lm).unwrap();
-        let back: LinkedModule = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&lm).expect("serde deserialization should succeed");
+        let back: LinkedModule = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(lm, back);
     }
 
@@ -2364,8 +2364,8 @@ mod tests {
             seq: 42,
             detail: "binding=m.js:x".into(),
         };
-        let json = serde_json::to_string(&ev).unwrap();
-        let back: AsyncEvalWitnessEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
+        let back: AsyncEvalWitnessEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ev, back);
     }
 
@@ -2381,18 +2381,18 @@ mod tests {
 
         // app.js suspends on TLA, then suspends on dep.js
         eval.suspend_at_top_level_await("app.js", PromiseHandle(10))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         eval.suspend_on_dependency("app.js", "dep.js", PromiseHandle(1))
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // dep.js settles
-        eval.settle_module("dep.js").unwrap();
+        eval.settle_module("dep.js").expect("serde deserialization should succeed");
 
         // app.js should now be resumable
         assert!(eval.states()["app.js"].all_dependencies_settled());
 
-        eval.resume_evaluation("app.js").unwrap();
-        eval.settle_module("app.js").unwrap();
+        eval.resume_evaluation("app.js").expect("serde deserialization should succeed");
+        eval.settle_module("app.js").expect("serde deserialization should succeed");
 
         let result = eval.finalize();
         assert!(result.all_settled);
@@ -2407,7 +2407,7 @@ mod tests {
     fn evaluator_register_with_settled_dep_no_pending() {
         let mut eval = AsyncModuleEvaluator::with_defaults();
         eval.register_module("dep.js", true, &[], Some(PromiseHandle(1)));
-        eval.settle_module("dep.js").unwrap();
+        eval.settle_module("dep.js").expect("serde deserialization should succeed");
 
         // Now register consumer — dep.js is Settled (terminal, not Rejected)
         // so it should NOT be added as pending.

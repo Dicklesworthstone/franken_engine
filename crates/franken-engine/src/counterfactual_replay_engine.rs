@@ -1263,7 +1263,7 @@ mod tests {
 
         let result = engine
             .compare(&[trace], &[alt], &default_scope(), None)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert_eq!(result.schema_version, REPLAY_ENGINE_SCHEMA_VERSION);
         assert_eq!(result.trace_count, 1);
@@ -1286,11 +1286,11 @@ mod tests {
                 &default_scope(),
                 None,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(engine.replay_count(), 1);
         engine
             .compare(&[trace], &[alt], &default_scope(), None)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(engine.replay_count(), 2);
     }
 
@@ -1309,7 +1309,7 @@ mod tests {
 
         let result = engine
             .compare(&[trace], &alts, &default_scope(), None)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert_eq!(result.policy_reports.len(), 3);
         assert_eq!(result.ranked_recommendations.len(), 3);
@@ -1331,7 +1331,7 @@ mod tests {
 
         let result = engine
             .compare(&[trace], &[alt], &default_scope(), None)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let report = &result.policy_reports[0];
         assert_eq!(report.divergence_count, 5);
@@ -1361,7 +1361,7 @@ mod tests {
 
         let result = engine
             .compare(&[trace], &[alt], &default_scope(), None)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let report = &result.policy_reports[0];
         // With threshold override of 600k vs original 500k, the decision
@@ -1386,7 +1386,7 @@ mod tests {
             ..Default::default()
         };
 
-        let result = engine.compare(&[trace], &[alt], &scope, None).unwrap();
+        let result = engine.compare(&[trace], &[alt], &scope, None).expect("serde deserialization should succeed");
         assert_eq!(result.total_decisions, 2);
     }
 
@@ -1406,7 +1406,7 @@ mod tests {
             ..Default::default()
         };
 
-        let result = engine.compare(&[trace], &[alt], &scope, None).unwrap();
+        let result = engine.compare(&[trace], &[alt], &scope, None).expect("serde deserialization should succeed");
         assert_eq!(result.total_decisions, 2);
     }
 
@@ -1438,7 +1438,7 @@ mod tests {
 
         let result = engine
             .compare(&[trace_with_incident, trace_without], &[alt], &scope, None)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         // Only the incident trace should be included
         assert_eq!(result.trace_count, 1);
         assert_eq!(result.total_decisions, 1);
@@ -1453,7 +1453,7 @@ mod tests {
         let alt = make_alternate_policy("alt-1", "test");
         let result = engine
             .compare(&[trace], &[alt], &default_scope(), None)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(result.schema_version, REPLAY_ENGINE_SCHEMA_VERSION);
         assert_eq!(
             result.policy_reports[0].schema_version,
@@ -1468,7 +1468,7 @@ mod tests {
         let alt = make_alternate_policy("alt-1", "test");
         let result = engine
             .compare(&[trace], &[alt], &default_scope(), None)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         // Hashes should be non-zero
         assert_ne!(result.artifact_hash.as_bytes(), &[0u8; 32]);
         assert_ne!(
@@ -1496,8 +1496,8 @@ mod tests {
                 &scope,
                 None,
             )
-            .unwrap();
-        let r2 = e2.compare(&[trace], &[alt], &scope, None).unwrap();
+            .expect("serde deserialization should succeed");
+        let r2 = e2.compare(&[trace], &[alt], &scope, None).expect("serde deserialization should succeed");
 
         assert_eq!(r1.artifact_hash, r2.artifact_hash);
         assert_eq!(
@@ -1521,10 +1521,10 @@ mod tests {
                 &default_scope(),
                 None,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let result_b = engine_b
             .compare(&[trace], &[alt_b], &default_scope(), None)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert_ne!(
             result_a.policy_reports[0].alternate_description,
@@ -1556,8 +1556,8 @@ mod tests {
                 &scope_a,
                 None,
             )
-            .unwrap();
-        let result_b = engine_b.compare(&[trace], &[alt], &scope_b, None).unwrap();
+            .expect("serde deserialization should succeed");
+        let result_b = engine_b.compare(&[trace], &[alt], &scope_b, None).expect("serde deserialization should succeed");
 
         assert_eq!(result_a.total_decisions, result_b.total_decisions);
         assert_eq!(result_a.trace_count, result_b.trace_count);
@@ -1579,7 +1579,7 @@ mod tests {
 
         let result = engine
             .compare(&[trace], &[alt], &default_scope(), None)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let env = &result.policy_reports[0].confidence_envelope;
         assert!(env.lower_millionths <= env.estimate_millionths);
@@ -1599,7 +1599,7 @@ mod tests {
 
         let result = engine
             .compare(&[trace], &[alt], &default_scope(), None)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let report = &result.policy_reports[0];
         match report.safety_status {
@@ -1648,7 +1648,7 @@ mod tests {
 
         let result = engine
             .compare(&[trace], &alts, &default_scope(), None)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert_eq!(result.ranked_recommendations.len(), 2);
         assert_eq!(result.ranked_recommendations[0].rank, 1);
@@ -1685,7 +1685,7 @@ mod tests {
 
         let result = engine
             .compare(&[trace], &[alt], &default_scope(), None)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert!(!result.global_assumptions.is_empty());
         let categories: Vec<_> = result
@@ -1702,11 +1702,11 @@ mod tests {
         let mut engine = default_engine();
         let trace = make_trace(vec![make_decision(0, "native", 500_000)]);
         let alt = make_alternate_policy("alt-1", "test");
-        let model = build_lane_decision_dag().unwrap();
+        let model = build_lane_decision_dag().expect("serde deserialization should succeed");
 
         let result = engine
             .compare(&[trace], &[alt], &default_scope(), Some(&model))
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let has_confounding = result
             .global_assumptions
@@ -1723,7 +1723,7 @@ mod tests {
 
         let result = engine
             .compare(&[trace], &[alt], &default_scope(), None)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let report = &result.policy_reports[0];
         assert!(!report.assumptions.is_empty());
@@ -1747,7 +1747,7 @@ mod tests {
 
         let result = engine
             .compare(&[trace], &[alt], &default_scope(), None)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let report = &result.policy_reports[0];
         assert!(!report.regime_breakdown.is_empty());
@@ -1770,7 +1770,7 @@ mod tests {
 
         let result = engine
             .compare(&[trace1, trace2], &[alt], &default_scope(), None)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Both traces have same trace_id so trace_count may count both
         assert!(result.total_decisions >= 4);
@@ -1786,11 +1786,11 @@ mod tests {
             .collect();
         let trace = make_trace(decisions);
         let alt = make_alternate_policy("alt-1", "test");
-        let model = build_lane_decision_dag().unwrap();
+        let model = build_lane_decision_dag().expect("serde deserialization should succeed");
 
         let result = engine
             .compare(&[trace], &[alt], &default_scope(), Some(&model))
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Causal effects may or may not be empty depending on observation data
         // but the field should exist
@@ -1805,7 +1805,7 @@ mod tests {
 
         let result = engine
             .compare(&[trace], &[alt], &default_scope(), None)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert!(result.causal_effects.is_empty());
     }
@@ -1827,7 +1827,7 @@ mod tests {
 
         let result = engine
             .compare(&[trace], &[alt], &default_scope(), None)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let report = &result.policy_reports[0];
         assert!(report.divergent_decisions.len() <= 3);
@@ -1850,7 +1850,7 @@ mod tests {
 
         let result = engine
             .compare(&[trace], &[alt], &default_scope(), None)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let report = &result.policy_reports[0];
         assert!(report.divergent_decisions.is_empty());
@@ -1887,7 +1887,7 @@ mod tests {
 
         let result = engine
             .compare(&[trace], &[alt], &default_scope(), None)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let report = &result.policy_reports[0];
         let rate = report.divergence_rate_millionths();
@@ -1928,8 +1928,8 @@ mod tests {
     #[test]
     fn config_serde_roundtrip() {
         let config = ReplayEngineConfig::default();
-        let json = serde_json::to_string(&config).unwrap();
-        let back: ReplayEngineConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let back: ReplayEngineConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, back);
     }
 
@@ -1947,8 +1947,8 @@ mod tests {
             },
             min_decisions: 10,
         };
-        let json = serde_json::to_string(&scope).unwrap();
-        let back: ReplayScope = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&scope).expect("serde deserialization should succeed");
+        let back: ReplayScope = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(scope, back);
     }
 
@@ -1967,8 +1967,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap();
-            let back: ReplayEngineError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let back: ReplayEngineError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, back);
         }
     }
@@ -1981,10 +1981,10 @@ mod tests {
 
         let result = engine
             .compare(&[trace], &[alt], &default_scope(), None)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
-        let json = serde_json::to_string(&result).unwrap();
-        let back: ReplayComparisonResult = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let back: ReplayComparisonResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result.artifact_hash, back.artifact_hash);
         assert_eq!(result.total_decisions, back.total_decisions);
     }
@@ -2101,7 +2101,7 @@ mod tests {
 
         let result = engine
             .compare(&[trace], &[alt], &default_scope(), None)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let report = &result.policy_reports[0];
         assert_eq!(report.divergence_count, 5);
@@ -2137,7 +2137,7 @@ mod tests {
 
         let result = engine
             .compare(&[trace], &[alt], &default_scope(), None)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Should complete without error
         assert_eq!(result.policy_reports.len(), 1);
@@ -2237,8 +2237,8 @@ mod tests {
     #[test]
     fn alternate_policy_serde_roundtrip() {
         let ap = make_alternate_policy("test-pol", "test description");
-        let json = serde_json::to_string(&ap).unwrap();
-        let back: AlternatePolicy = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&ap).expect("serde deserialization should succeed");
+        let back: AlternatePolicy = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ap, back);
     }
 
@@ -2252,8 +2252,8 @@ mod tests {
             test_passed: Some(false),
             sensitivity_bound_millionths: 100_000,
         };
-        let json = serde_json::to_string(&card).unwrap();
-        let back: AssumptionCard = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&card).expect("serde deserialization should succeed");
+        let back: AssumptionCard = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(card, back);
     }
 
@@ -2270,8 +2270,8 @@ mod tests {
             diverged: true,
             regime: "default".to_string(),
         };
-        let json = serde_json::to_string(&dc).unwrap();
-        let back: DecisionComparison = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&dc).expect("serde deserialization should succeed");
+        let back: DecisionComparison = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(dc, back);
     }
 
@@ -2285,8 +2285,8 @@ mod tests {
             safety_status: EnvelopeStatus::Safe,
             rationale: "good policy".to_string(),
         };
-        let json = serde_json::to_string(&rec).unwrap();
-        let back: Recommendation = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&rec).expect("serde deserialization should succeed");
+        let back: Recommendation = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(rec, back);
     }
 
@@ -2417,8 +2417,8 @@ mod tests {
     #[test]
     fn engine_serde_roundtrip() {
         let engine = default_engine();
-        let json = serde_json::to_string(&engine).unwrap();
-        let back: CounterfactualReplayEngine = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&engine).expect("serde deserialization should succeed");
+        let back: CounterfactualReplayEngine = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(engine.replay_count(), back.replay_count());
         assert_eq!(
             engine.config().baseline_policy_id,
@@ -2434,7 +2434,7 @@ mod tests {
 
         let result = engine
             .compare(&[trace], &[alt], &default_scope(), None)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let temporal = result
             .global_assumptions
@@ -2454,7 +2454,7 @@ mod tests {
 
         let result = engine
             .compare(&[trace], &[alt], &default_scope(), None)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let report = &result.policy_reports[0];
         let has_model_spec = report
@@ -2513,8 +2513,8 @@ mod tests {
             AssumptionCategory::TemporalStability,
         ];
         for cat in &categories {
-            let json = serde_json::to_string(cat).unwrap();
-            let back: AssumptionCategory = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(cat).expect("serde deserialization should succeed");
+            let back: AssumptionCategory = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*cat, back);
         }
     }
@@ -2565,8 +2565,8 @@ mod tests {
             }],
             artifact_hash: ContentHash::compute(b"report"),
         };
-        let json = serde_json::to_string(&report).unwrap();
-        let back: PolicyComparisonReport = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let back: PolicyComparisonReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report, back);
     }
 
@@ -2624,7 +2624,7 @@ mod tests {
 
         let result = engine
             .compare(&[trace], &[alt], &default_scope(), None)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // At least verify the rationale is non-empty
         for rec in &result.ranked_recommendations {
@@ -2674,8 +2674,8 @@ mod tests {
             test_passed: None,
             sensitivity_bound_millionths: 100_000,
         };
-        let json = serde_json::to_string(&card).unwrap();
-        let back: AssumptionCard = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&card).expect("serde deserialization should succeed");
+        let back: AssumptionCard = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(card, back);
         assert!(back.test_passed.is_none());
     }
@@ -2694,14 +2694,14 @@ mod tests {
                 &default_scope(),
                 None,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         engine
             .compare(&[trace], &[alt], &default_scope(), None)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(engine.replay_count(), 2);
 
-        let json = serde_json::to_string(&engine).unwrap();
-        let back: CounterfactualReplayEngine = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&engine).expect("serde deserialization should succeed");
+        let back: CounterfactualReplayEngine = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.replay_count(), 2);
     }
 
@@ -2829,8 +2829,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap();
-            let back: ReplayEngineError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let back: ReplayEngineError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, back);
         }
     }

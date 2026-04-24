@@ -655,7 +655,7 @@ mod tests {
     fn make_signing_key(seed: &[u8; 32], epoch: SecurityEpoch) -> SigningKey {
         let derived = derive_role_key(seed, KeyRole::Signing, epoch);
         // SAFETY: Test helper unwrap, derive_role_key produces valid 32-byte array
-        SigningKey::from_bytes(derived).unwrap()
+        SigningKey::from_bytes(derived).expect("serde deserialization should succeed")
     }
 
     fn make_encryption_private(seed: &[u8; 32], epoch: SecurityEpoch) -> EncryptionPrivateKey {
@@ -666,7 +666,7 @@ mod tests {
     fn make_issuance_key(seed: &[u8; 32], epoch: SecurityEpoch) -> SigningKey {
         let derived = derive_role_key(seed, KeyRole::Issuance, epoch);
         // SAFETY: Test helper unwrap, derive_role_key produces valid 32-byte array
-        SigningKey::from_bytes(derived).unwrap()
+        SigningKey::from_bytes(derived).expect("serde deserialization should succeed")
     }
 
     fn make_role_entry(
@@ -792,13 +792,13 @@ mod tests {
                 0,
             ))
             // SAFETY: Test-only unwrap with valid key registration parameters
-            .unwrap();
+            .expect("serde deserialization should succeed");
         store
             .register_key(make_role_entry(
                 KeyRole::Encryption,
                 SigningKey::from_bytes([0x01; 32])
                     // SAFETY: Test helper with fixed 32-byte array should create valid SigningKey
-                    .unwrap()
+                    .expect("serde deserialization should succeed")
                     .verification_key(), // placeholder for encryption role
                 Some(enc.public_key()),
                 KeyStatus::Active,
@@ -806,7 +806,7 @@ mod tests {
                 0,
             ))
             // SAFETY: Test-only unwrap with valid key registration parameters
-            .unwrap();
+            .expect("serde deserialization should succeed");
         store
             .register_key(make_role_entry(
                 KeyRole::Issuance,
@@ -817,11 +817,11 @@ mod tests {
                 0,
             ))
             // SAFETY: Test-only unwrap with valid key registration parameters
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Revoke only the signing key.
         // SAFETY: Test-only unwrap with valid revocation parameters (registered key)
-        store.revoke_key(KeyRole::Signing, 0, epoch2).unwrap();
+        store.revoke_key(KeyRole::Signing, 0, epoch2).expect("serde deserialization should succeed");
 
         // Signing is revoked.
         let signing = store.get_active_key(KeyRole::Signing);
@@ -852,7 +852,7 @@ mod tests {
             1,
         )
         // SAFETY: Test-only unwrap with valid bundle creation parameters
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         assert!(bundle.verify(&owner_vk).is_ok());
     }
@@ -876,11 +876,11 @@ mod tests {
             1,
         )
         // SAFETY: Test-only unwrap with valid bundle creation parameters
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let wrong_vk = SigningKey::from_bytes([0xAB; 32])
             // SAFETY: Test helper with fixed 32-byte array should create valid SigningKey
-            .unwrap()
+            .expect("serde deserialization should succeed")
             .verification_key();
         assert_eq!(
             bundle.verify(&wrong_vk),
@@ -910,7 +910,7 @@ mod tests {
                 epoch1,
                 0,
             ))
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Register second key as pending.
         store
@@ -922,17 +922,17 @@ mod tests {
                 epoch2,
                 1,
             ))
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Rotate: old becomes Rotated, new becomes Active.
-        store.rotate_key(KeyRole::Signing, 0, 1, epoch2).unwrap();
+        store.rotate_key(KeyRole::Signing, 0, 1, epoch2).expect("serde deserialization should succeed");
 
         // Both should be valid for verification.
         let verifiable = store.verification_keys_for_role(KeyRole::Signing);
         assert_eq!(verifiable.len(), 2);
 
         // Only the new key is active for creation.
-        let active = store.get_active_key(KeyRole::Signing).unwrap();
+        let active = store.get_active_key(KeyRole::Signing).expect("serde deserialization should succeed");
         assert_eq!(active.sequence, 1);
     }
 
@@ -952,7 +952,7 @@ mod tests {
                 epoch,
                 5,
             ))
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let sk2 = make_signing_key(&[0xBB; 32], epoch);
         let result = store.register_key(make_role_entry(
@@ -990,7 +990,7 @@ mod tests {
                 epoch,
                 0,
             ))
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let result = store.register_key(make_role_entry(
             KeyRole::Signing,
@@ -1030,19 +1030,19 @@ mod tests {
                 epoch,
                 0,
             ))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         store
             .register_key(make_role_entry(
                 KeyRole::Encryption,
                 SigningKey::from_bytes([0x01; 32])
-                    .unwrap()
+                    .expect("serde deserialization should succeed")
                     .verification_key(),
                 Some(enc.public_key()),
                 KeyStatus::Active,
                 epoch,
                 0,
             ))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         store
             .register_key(make_role_entry(
                 KeyRole::Issuance,
@@ -1052,15 +1052,15 @@ mod tests {
                 epoch,
                 0,
             ))
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
-        let s = store.get_active_key(KeyRole::Signing).unwrap();
+        let s = store.get_active_key(KeyRole::Signing).expect("serde deserialization should succeed");
         assert_eq!(s.role, KeyRole::Signing);
 
-        let e = store.get_active_key(KeyRole::Encryption).unwrap();
+        let e = store.get_active_key(KeyRole::Encryption).expect("serde deserialization should succeed");
         assert_eq!(e.role, KeyRole::Encryption);
 
-        let i = store.get_active_key(KeyRole::Issuance).unwrap();
+        let i = store.get_active_key(KeyRole::Issuance).expect("serde deserialization should succeed");
         assert_eq!(i.role, KeyRole::Issuance);
     }
 
@@ -1095,17 +1095,17 @@ mod tests {
                 epoch1,
                 0,
             ))
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Not yet active.
         assert!(store.get_active_key(KeyRole::Signing).is_err());
 
         // Activate.
-        store.activate_key(KeyRole::Signing, 0, epoch2).unwrap();
+        store.activate_key(KeyRole::Signing, 0, epoch2).expect("serde deserialization should succeed");
         assert!(store.get_active_key(KeyRole::Signing).is_ok());
 
         // Revoke.
-        store.revoke_key(KeyRole::Signing, 0, epoch3).unwrap();
+        store.revoke_key(KeyRole::Signing, 0, epoch3).expect("serde deserialization should succeed");
         assert!(store.get_active_key(KeyRole::Signing).is_err());
     }
 
@@ -1166,7 +1166,7 @@ mod tests {
             epoch,
             1,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let id2 = OwnerKeyBundle::derive_id(
             &sk.verification_key(),
             &enc.public_key(),
@@ -1174,7 +1174,7 @@ mod tests {
             epoch,
             1,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         assert_eq!(id1, id2, "ID derivation is deterministic");
     }
@@ -1196,7 +1196,7 @@ mod tests {
             epoch,
             1,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let id2 = OwnerKeyBundle::derive_id(
             &sk2.verification_key(),
             &enc.public_key(),
@@ -1204,7 +1204,7 @@ mod tests {
             epoch,
             1,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         assert_ne!(id1, id2);
     }
@@ -1228,7 +1228,7 @@ mod tests {
                 epoch,
                 0,
             ))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         store
             .register_key(make_role_entry(
                 KeyRole::Signing,
@@ -1238,9 +1238,9 @@ mod tests {
                 epoch,
                 1,
             ))
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
-        store.revoke_key(KeyRole::Signing, 0, epoch2).unwrap();
+        store.revoke_key(KeyRole::Signing, 0, epoch2).expect("serde deserialization should succeed");
 
         let all = store.keys_for_role(KeyRole::Signing);
         assert_eq!(all.len(), 2);
@@ -1266,21 +1266,21 @@ mod tests {
                 epoch,
                 0,
             ))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(store.total_key_count(), 1);
 
         store
             .register_key(make_role_entry(
                 KeyRole::Encryption,
                 SigningKey::from_bytes([0x01; 32])
-                    .unwrap()
+                    .expect("serde deserialization should succeed")
                     .verification_key(),
                 Some(enc.public_key()),
                 KeyStatus::Active,
                 epoch,
                 0,
             ))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(store.total_key_count(), 2);
     }
 
@@ -1347,13 +1347,13 @@ mod tests {
             epoch,
             1,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let mut store = PrincipalKeyStore::new();
         assert!(store.bundle().is_none());
         store.set_bundle(bundle.clone());
         assert!(store.bundle().is_some());
-        assert_eq!(store.bundle().unwrap().sequence, 1);
+        assert_eq!(store.bundle().expect("serde deserialization should succeed").sequence, 1);
     }
 
     #[test]
@@ -1375,7 +1375,7 @@ mod tests {
                 epoch,
                 0,
             ))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         store
             .register_key(make_role_entry(
                 KeyRole::Issuance,
@@ -1385,16 +1385,16 @@ mod tests {
                 epoch,
                 0,
             ))
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Get signing key.
-        let signing_entry = store.get_active_key(KeyRole::Signing).unwrap();
+        let signing_entry = store.get_active_key(KeyRole::Signing).expect("serde deserialization should succeed");
 
         // Attempt to use it for issuance should fail.
         assert!(enforce_role(signing_entry, KeyRole::Issuance).is_err());
 
         // Correct issuance key should work.
-        let issuance_entry = store.get_active_key(KeyRole::Issuance).unwrap();
+        let issuance_entry = store.get_active_key(KeyRole::Issuance).expect("serde deserialization should succeed");
         assert!(enforce_role(issuance_entry, KeyRole::Issuance).is_ok());
     }
 
@@ -1418,7 +1418,7 @@ mod tests {
                 epoch,
                 0,
             ))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         store
             .register_key(make_role_entry(
                 KeyRole::Issuance,
@@ -1428,10 +1428,10 @@ mod tests {
                 epoch,
                 0,
             ))
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Attacker retrieves signing entry.
-        let signing_entry = store.get_active_key(KeyRole::Signing).unwrap();
+        let signing_entry = store.get_active_key(KeyRole::Signing).expect("serde deserialization should succeed");
 
         // Role enforcement blocks issuance use.
         assert_eq!(
@@ -1474,7 +1474,7 @@ mod tests {
                 epoch,
                 0,
             ))
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Trying to activate an already-active key should fail.
         let result = store.activate_key(KeyRole::Signing, 0, epoch);
@@ -1499,7 +1499,7 @@ mod tests {
                 epoch,
                 0,
             ))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         store
             .register_key(make_role_entry(
                 KeyRole::Signing,
@@ -1509,7 +1509,7 @@ mod tests {
                 epoch,
                 1,
             ))
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Old key is Pending, not Active — rotation should fail.
         let result = store.rotate_key(KeyRole::Signing, 0, 1, epoch);
@@ -1521,8 +1521,8 @@ mod tests {
     #[test]
     fn key_role_serde_roundtrip() {
         for role in KeyRole::ALL {
-            let json = serde_json::to_string(role).unwrap();
-            let back: KeyRole = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(role).expect("serde deserialization should succeed");
+            let back: KeyRole = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*role, back);
         }
     }
@@ -1536,8 +1536,8 @@ mod tests {
             KeyStatus::Revoked,
             KeyStatus::Expired,
         ] {
-            let json = serde_json::to_string(status).unwrap();
-            let back: KeyStatus = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(status).expect("serde deserialization should succeed");
+            let back: KeyStatus = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*status, back);
         }
     }
@@ -1570,8 +1570,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap();
-            let back: KeyRoleError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let back: KeyRoleError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, back);
         }
     }
@@ -1645,16 +1645,16 @@ mod tests {
     #[test]
     fn encryption_public_key_serde_roundtrip() {
         let pk = EncryptionPublicKey::from_bytes([0x42; 32]);
-        let json = serde_json::to_string(&pk).unwrap();
-        let back: EncryptionPublicKey = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&pk).expect("serde deserialization should succeed");
+        let back: EncryptionPublicKey = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(pk, back);
     }
 
     #[test]
     fn encryption_private_key_serde_roundtrip() {
         let sk = EncryptionPrivateKey::from_bytes([0x99; 32]);
-        let json = serde_json::to_string(&sk).unwrap();
-        let back: EncryptionPrivateKey = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&sk).expect("serde deserialization should succeed");
+        let back: EncryptionPrivateKey = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(sk.as_bytes(), back.as_bytes());
     }
 
@@ -1671,8 +1671,8 @@ mod tests {
             epoch,
             0,
         );
-        let json = serde_json::to_string(&entry).unwrap();
-        let back: RoleKeyEntry = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let back: RoleKeyEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, back);
     }
 
@@ -1790,7 +1790,7 @@ mod tests {
                 epoch,
                 0,
             ))
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Pending keys are not verifiable.
         assert!(
@@ -1844,20 +1844,20 @@ mod tests {
                 epoch,
                 0,
             ))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(store.total_key_count(), 1);
         store
             .register_key(make_role_entry(
                 KeyRole::Encryption,
                 SigningKey::from_bytes([0x01; 32])
-                    .unwrap()
+                    .expect("serde deserialization should succeed")
                     .verification_key(),
                 Some(enc.public_key()),
                 KeyStatus::Active,
                 epoch,
                 0,
             ))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(store.total_key_count(), 2);
     }
 
@@ -1908,12 +1908,12 @@ mod tests {
             epoch,
             1,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         // SAFETY: OwnerKeyBundle derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&bundle).unwrap();
+        let json = serde_json::to_string(&bundle).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid OwnerKeyBundle serialization
-        let back: OwnerKeyBundle = serde_json::from_str(&json).unwrap();
+        let back: OwnerKeyBundle = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(bundle.sequence, back.sequence);
         assert_eq!(bundle.epoch, back.epoch);
     }
@@ -1950,9 +1950,9 @@ mod tests {
     fn key_role_serde_all_variants() {
         for role in KeyRole::ALL {
             // SAFETY: KeyRole derives Serialize and has no non-serializable fields
-            let json = serde_json::to_string(role).unwrap();
+            let json = serde_json::to_string(role).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by valid KeyRole serialization
-            let back: KeyRole = serde_json::from_str(&json).unwrap();
+            let back: KeyRole = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*role, back);
         }
     }
@@ -1998,9 +1998,9 @@ mod tests {
             KeyStatus::Expired,
         ] {
             // SAFETY: KeyStatus derives Serialize and has no non-serializable fields
-            let json = serde_json::to_string(&status).unwrap();
+            let json = serde_json::to_string(&status).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by valid KeyStatus serialization
-            let back: KeyStatus = serde_json::from_str(&json).unwrap();
+            let back: KeyStatus = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(status, back);
         }
     }
@@ -2034,16 +2034,16 @@ mod tests {
     #[test]
     fn encryption_public_key_bytes_serde_roundtrip() {
         let pk = EncryptionPublicKey::from_bytes([0x01; 32]);
-        let json = serde_json::to_string(&pk).unwrap();
-        let back: EncryptionPublicKey = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&pk).expect("serde deserialization should succeed");
+        let back: EncryptionPublicKey = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(pk, back);
     }
 
     #[test]
     fn encryption_private_key_bytes_serde_roundtrip() {
         let sk = EncryptionPrivateKey::from_bytes([0x99; 32]);
-        let json = serde_json::to_string(&sk).unwrap();
-        let back: EncryptionPrivateKey = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&sk).expect("serde deserialization should succeed");
+        let back: EncryptionPrivateKey = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(sk, back);
     }
 

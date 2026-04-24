@@ -1407,7 +1407,7 @@ mod tests {
     }
 
     fn build_test_surface() -> OperatorSafetyCopilotSurface {
-        build_operator_safety_copilot_surface(&test_input()).unwrap()
+        build_operator_safety_copilot_surface(&test_input()).expect("serde deserialization should succeed")
     }
 
     // ── Enum serde round-trips ────────────────────────────────────
@@ -1418,8 +1418,8 @@ mod tests {
             RecommendationReversibility::LimitedWindow,
             RecommendationReversibility::Irreversible,
         ] {
-            let json = serde_json::to_string(&v).unwrap();
-            let back: RecommendationReversibility = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let back: RecommendationReversibility = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(v, back);
         }
     }
@@ -1431,8 +1431,8 @@ mod tests {
             TimeSensitivity::NearTerm,
             TimeSensitivity::Routine,
         ] {
-            let json = serde_json::to_string(&v).unwrap();
-            let back: TimeSensitivity = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let back: TimeSensitivity = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(v, back);
         }
     }
@@ -1444,8 +1444,8 @@ mod tests {
             OperatorRole::Operator,
             OperatorRole::Administrator,
         ] {
-            let json = serde_json::to_string(&v).unwrap();
-            let back: OperatorRole = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let back: OperatorRole = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(v, back);
         }
     }
@@ -1456,8 +1456,8 @@ mod tests {
             BoundaryTriggerDirection::AtOrAbove,
             BoundaryTriggerDirection::AtOrBelow,
         ] {
-            let json = serde_json::to_string(&v).unwrap();
-            let back: BoundaryTriggerDirection = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let back: BoundaryTriggerDirection = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(v, back);
         }
     }
@@ -1477,8 +1477,8 @@ mod tests {
             IncidentSeverity::High,
             IncidentSeverity::Critical,
         ] {
-            let json = serde_json::to_string(&v).unwrap();
-            let back: IncidentSeverity = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let back: IncidentSeverity = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(v, back);
         }
     }
@@ -1594,17 +1594,17 @@ mod tests {
     // ── validate_probability ──────────────────────────────────────
     #[test]
     fn validate_probability_valid_zero() {
-        validate_probability("test", 0).unwrap();
+        validate_probability("test", 0).expect("serde deserialization should succeed");
     }
 
     #[test]
     fn validate_probability_valid_million() {
-        validate_probability("test", MILLION).unwrap();
+        validate_probability("test", MILLION).expect("serde deserialization should succeed");
     }
 
     #[test]
     fn validate_probability_valid_mid() {
-        validate_probability("test", 500_000).unwrap();
+        validate_probability("test", 500_000).expect("serde deserialization should succeed");
     }
 
     #[test]
@@ -1620,7 +1620,7 @@ mod tests {
     // ── validate_non_empty ────────────────────────────────────────
     #[test]
     fn validate_non_empty_valid() {
-        validate_non_empty("f", "hello").unwrap();
+        validate_non_empty("f", "hello").expect("serde deserialization should succeed");
     }
 
     #[test]
@@ -1762,7 +1762,7 @@ mod tests {
             upper_millionths: 700_000,
             confidence_level_bps: 9500,
         };
-        band.validate().unwrap();
+        band.validate().expect("serde deserialization should succeed");
     }
 
     #[test]
@@ -1812,7 +1812,7 @@ mod tests {
             evidence_type: "hostcall".to_string(),
             trigger_direction: BoundaryTriggerDirection::AtOrAbove,
         };
-        hint.validate().unwrap();
+        hint.validate().expect("serde deserialization should succeed");
     }
 
     #[test]
@@ -1906,7 +1906,7 @@ mod tests {
         input.recommendations[0].reversibility = RecommendationReversibility::Irreversible;
         input.recommendations[0].snapshot_id = None;
         input.recommendations[0].rollback_window_ms = None;
-        build_operator_safety_copilot_surface(&input).unwrap();
+        build_operator_safety_copilot_surface(&input).expect("serde deserialization should succeed");
     }
 
     #[test]
@@ -1921,7 +1921,7 @@ mod tests {
             error_code: None,
             drilldown: TimelineDrilldownPointers::default(),
         });
-        let surface = build_operator_safety_copilot_surface(&input).unwrap();
+        let surface = build_operator_safety_copilot_surface(&input).expect("serde deserialization should succeed");
         assert_eq!(surface.timeline[0].timestamp_ns, 500);
         assert_eq!(surface.timeline[1].timestamp_ns, 1000);
     }
@@ -1936,7 +1936,7 @@ mod tests {
             upper_millionths: 200_000,
             confidence_level_bps: 9000,
         });
-        let surface = build_operator_safety_copilot_surface(&input).unwrap();
+        let surface = build_operator_safety_copilot_surface(&input).expect("serde deserialization should succeed");
         assert_eq!(surface.confidence_bands[0].metric, "aaa_metric");
     }
 
@@ -1945,7 +1945,7 @@ mod tests {
     fn select_recommendation_rank_1() {
         let surface = build_test_surface();
         let identity = test_identity();
-        let review = select_recommendation_for_review(&surface, &identity, 1, 999).unwrap();
+        let review = select_recommendation_for_review(&surface, &identity, 1, 999).expect("serde deserialization should succeed");
         assert_eq!(review.selected_rank, 1);
         assert_eq!(review.selected_recommendation.action_type, "throttle");
         assert_eq!(review.audit_event.event, "copilot_action_selected");
@@ -1955,7 +1955,7 @@ mod tests {
     fn select_recommendation_rank_2() {
         let surface = build_test_surface();
         let identity = test_identity();
-        let review = select_recommendation_for_review(&surface, &identity, 2, 999).unwrap();
+        let review = select_recommendation_for_review(&surface, &identity, 2, 999).expect("serde deserialization should succeed");
         assert_eq!(review.selected_rank, 2);
         assert_eq!(review.selected_recommendation.action_type, "isolate");
     }
@@ -1999,7 +1999,7 @@ mod tests {
             operator_id: "admin-1".to_string(),
             role: OperatorRole::Administrator,
         };
-        select_recommendation_for_review(&surface, &identity, 1, 999).unwrap();
+        select_recommendation_for_review(&surface, &identity, 1, 999).expect("serde deserialization should succeed");
     }
 
     // ── confirm_selected_recommendation ───────────────────────────
@@ -2007,9 +2007,9 @@ mod tests {
     fn confirm_recommendation_basic() {
         let surface = build_test_surface();
         let identity = test_identity();
-        let review = select_recommendation_for_review(&surface, &identity, 1, 999).unwrap();
+        let review = select_recommendation_for_review(&surface, &identity, 1, 999).expect("serde deserialization should succeed");
         let confirmed =
-            confirm_selected_recommendation(&review, &identity, "token-123", 1000).unwrap();
+            confirm_selected_recommendation(&review, &identity, "token-123", 1000).expect("serde deserialization should succeed");
         assert!(!confirmed.execution_command.is_empty());
         assert!(confirmed.receipt.receipt_id.starts_with("action-receipt-"));
         assert_eq!(confirmed.audit_event.event, "copilot_action_confirmed");
@@ -2020,7 +2020,7 @@ mod tests {
     fn confirm_recommendation_operator_mismatch() {
         let surface = build_test_surface();
         let identity = test_identity();
-        let review = select_recommendation_for_review(&surface, &identity, 1, 999).unwrap();
+        let review = select_recommendation_for_review(&surface, &identity, 1, 999).expect("serde deserialization should succeed");
         let other = OperatorIdentity {
             operator_id: "op-other".to_string(),
             role: OperatorRole::Operator,
@@ -2033,7 +2033,7 @@ mod tests {
     fn confirm_recommendation_empty_token() {
         let surface = build_test_surface();
         let identity = test_identity();
-        let review = select_recommendation_for_review(&surface, &identity, 1, 999).unwrap();
+        let review = select_recommendation_for_review(&surface, &identity, 1, 999).expect("serde deserialization should succeed");
         let err = confirm_selected_recommendation(&review, &identity, "  ", 1000).unwrap_err();
         assert!(matches!(err, CopilotError::MissingConfirmationToken));
     }
@@ -2042,7 +2042,7 @@ mod tests {
     fn confirm_recommendation_viewer_unauthorized() {
         let surface = build_test_surface();
         let identity = test_identity();
-        let review = select_recommendation_for_review(&surface, &identity, 1, 999).unwrap();
+        let review = select_recommendation_for_review(&surface, &identity, 1, 999).expect("serde deserialization should succeed");
         let viewer = OperatorIdentity {
             operator_id: "op-1".to_string(),
             role: OperatorRole::Viewer,
@@ -2055,9 +2055,9 @@ mod tests {
     fn confirm_recommendation_receipt_deterministic() {
         let surface = build_test_surface();
         let identity = test_identity();
-        let review = select_recommendation_for_review(&surface, &identity, 1, 999).unwrap();
-        let c1 = confirm_selected_recommendation(&review, &identity, "token", 1000).unwrap();
-        let c2 = confirm_selected_recommendation(&review, &identity, "token", 1000).unwrap();
+        let review = select_recommendation_for_review(&surface, &identity, 1, 999).expect("serde deserialization should succeed");
+        let c1 = confirm_selected_recommendation(&review, &identity, "token", 1000).expect("serde deserialization should succeed");
+        let c2 = confirm_selected_recommendation(&review, &identity, "token", 1000).expect("serde deserialization should succeed");
         assert_eq!(c1.receipt.receipt_id, c2.receipt.receipt_id);
         assert_eq!(c1.receipt.signature, c2.receipt.signature);
     }
@@ -2075,7 +2075,7 @@ mod tests {
             restoration_verification: "rv-1".to_string(),
             executed_at_ns: 5000,
         };
-        let receipt = build_rollback_execution_receipt(&input).unwrap();
+        let receipt = build_rollback_execution_receipt(&input).expect("serde deserialization should succeed");
         assert!(receipt.receipt_id.starts_with("rollback-receipt-"));
         assert_eq!(receipt.action_receipt_id, "ar-1");
     }
@@ -2108,8 +2108,8 @@ mod tests {
             restoration_verification: "rv-1".to_string(),
             executed_at_ns: 5000,
         };
-        let r1 = build_rollback_execution_receipt(&input).unwrap();
-        let r2 = build_rollback_execution_receipt(&input).unwrap();
+        let r1 = build_rollback_execution_receipt(&input).expect("serde deserialization should succeed");
+        let r2 = build_rollback_execution_receipt(&input).expect("serde deserialization should succeed");
         assert_eq!(r1.receipt_id, r2.receipt_id);
         assert_eq!(r1.signature, r2.signature);
     }
@@ -2194,7 +2194,7 @@ mod tests {
                 observed_millionths: 750_000,
             }],
         };
-        let view = build_policy_effectiveness_view(&input).unwrap();
+        let view = build_policy_effectiveness_view(&input).expect("serde deserialization should succeed");
         assert_eq!(view.detection_rate_by_category.len(), 1);
         assert_eq!(view.detection_rate_by_category[0].rate_millionths, 800_000);
         assert!(view.containment_latency_p50_ms > 0);
@@ -2212,7 +2212,7 @@ mod tests {
             containment_latencies_ms: vec![],
             calibration_history: vec![],
         };
-        let view = build_policy_effectiveness_view(&input).unwrap();
+        let view = build_policy_effectiveness_view(&input).expect("serde deserialization should succeed");
         assert_eq!(view.detection_rate_by_category[0].rate_millionths, 0);
     }
 
@@ -2246,7 +2246,7 @@ mod tests {
             containment_latencies_ms: vec![],
             calibration_history: vec![],
         };
-        let view = build_policy_effectiveness_view(&input).unwrap();
+        let view = build_policy_effectiveness_view(&input).expect("serde deserialization should succeed");
         assert_eq!(view.detection_rate_by_category[0].category, "aaa");
     }
 
@@ -2324,8 +2324,8 @@ mod tests {
             outcome: "pass".to_string(),
             error_code: None,
         };
-        let json = serde_json::to_string(&evt).unwrap();
-        let back: CopilotStructuredLogEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&evt).expect("serde deserialization should succeed");
+        let back: CopilotStructuredLogEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(evt, back);
     }
 
@@ -2343,8 +2343,8 @@ mod tests {
             timestamp_ns: 1234,
             error_code: None,
         };
-        let json = serde_json::to_string(&evt).unwrap();
-        let back: OperatorAuditEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&evt).expect("serde deserialization should succeed");
+        let back: OperatorAuditEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(evt, back);
     }
 
@@ -2356,8 +2356,8 @@ mod tests {
             reversible: true,
             rollback_window_ms_remaining: Some(30_000),
         };
-        let json = serde_json::to_string(&s).unwrap();
-        let back: ActionImpactSummary = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+        let back: ActionImpactSummary = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(s, back);
     }
 
@@ -2381,8 +2381,8 @@ mod tests {
             ExtensionTrustLevel::Quarantined,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: ExtensionTrustLevel = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: ExtensionTrustLevel = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -2396,8 +2396,8 @@ mod tests {
             upper_millionths: 600_000,
             confidence_level_bps: 9500,
         };
-        let json = serde_json::to_string(&cb).unwrap();
-        let back: ConfidenceBand = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&cb).expect("serde deserialization should succeed");
+        let back: ConfidenceBand = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cb, back);
     }
 
@@ -2407,8 +2407,8 @@ mod tests {
             evidence_atoms: 42,
             observation_window_seconds: 3600,
         };
-        let json = serde_json::to_string(&es).unwrap();
-        let back: EvidenceStrength = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&es).expect("serde deserialization should succeed");
+        let back: EvidenceStrength = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(es, back);
     }
 
@@ -2422,8 +2422,8 @@ mod tests {
             evidence_type: "test_run".into(),
             trigger_direction: BoundaryTriggerDirection::AtOrAbove,
         };
-        let json = serde_json::to_string(&h).unwrap();
-        let back: DecisionBoundaryHint = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&h).expect("serde deserialization should succeed");
+        let back: DecisionBoundaryHint = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(h, back);
     }
 
@@ -2435,8 +2435,8 @@ mod tests {
             replay_pointer: Some("rp-1".into()),
             counterfactual_pointer: None,
         };
-        let json = serde_json::to_string(&p).unwrap();
-        let back: TimelineDrilldownPointers = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
+        let back: TimelineDrilldownPointers = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(p, back);
     }
 
@@ -2451,8 +2451,8 @@ mod tests {
             error_code: None,
             drilldown: TimelineDrilldownPointers::default(),
         };
-        let json = serde_json::to_string(&e).unwrap();
-        let back: IncidentTimelineEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
+        let back: IncidentTimelineEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(e, back);
     }
 
@@ -2462,8 +2462,8 @@ mod tests {
             command: "restore-snapshot ext-a snap-123".into(),
             safety_summary: "reverts to known-good state".into(),
         };
-        let json = serde_json::to_string(&rc).unwrap();
-        let back: RollbackCommand = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&rc).expect("serde deserialization should succeed");
+        let back: RollbackCommand = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(rc, back);
     }
 
@@ -2473,8 +2473,8 @@ mod tests {
             operator_id: "op-1".into(),
             role: OperatorRole::Administrator,
         };
-        let json = serde_json::to_string(&id).unwrap();
-        let back: OperatorIdentity = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&id).expect("serde deserialization should succeed");
+        let back: OperatorIdentity = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(id, back);
     }
 
@@ -2493,8 +2493,8 @@ mod tests {
             rollback_window_ms: Some(60_000),
             snapshot_id: Some("snap-1".into()),
         };
-        let json = serde_json::to_string(&c).unwrap();
-        let back: ActionRecommendationCandidate = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let back: ActionRecommendationCandidate = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c, back);
     }
 
@@ -2513,8 +2513,8 @@ mod tests {
             confirmed_at_ns: 999_000,
             rollback_command: "rollback ext-a".into(),
         };
-        let json = serde_json::to_string(&r).unwrap();
-        let back: ActionExecutionReceipt = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let back: ActionExecutionReceipt = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 
@@ -2575,24 +2575,24 @@ mod tests {
     #[test]
     fn ranked_recommendation_serde_roundtrip() {
         let r = make_ranked_rec(1);
-        let json = serde_json::to_string(&r).unwrap();
-        let back: RankedRecommendation = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let back: RankedRecommendation = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 
     #[test]
     fn copilot_structured_log_event_serde_roundtrip() {
         let e = make_log_event();
-        let json = serde_json::to_string(&e).unwrap();
-        let back: CopilotStructuredLogEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
+        let back: CopilotStructuredLogEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(e, back);
     }
 
     #[test]
     fn operator_audit_event_serde_roundtrip() {
         let e = make_audit_event();
-        let json = serde_json::to_string(&e).unwrap();
-        let back: OperatorAuditEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
+        let back: OperatorAuditEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(e, back);
     }
 
@@ -2604,8 +2604,8 @@ mod tests {
             reversible: true,
             rollback_window_ms_remaining: Some(30_000),
         };
-        let json = serde_json::to_string(&s).unwrap();
-        let back: ActionImpactSummary = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+        let back: ActionImpactSummary = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(s, back);
     }
 
@@ -2631,8 +2631,8 @@ mod tests {
             selected_at_ns: 2_000_000,
             audit_event: make_audit_event(),
         };
-        let json = serde_json::to_string(&r).unwrap();
-        let back: ActionSelectionReview = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let back: ActionSelectionReview = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 
@@ -2657,8 +2657,8 @@ mod tests {
             audit_event: make_audit_event(),
             log_event: make_log_event(),
         };
-        let json = serde_json::to_string(&c).unwrap();
-        let back: ConfirmedActionExecution = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let back: ConfirmedActionExecution = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c, back);
     }
 
@@ -2674,8 +2674,8 @@ mod tests {
             restoration_verification: "verified".into(),
             executed_at_ns: 4_000_000,
         };
-        let json = serde_json::to_string(&r).unwrap();
-        let back: RollbackReceiptInput = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let back: RollbackReceiptInput = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 
@@ -2693,8 +2693,8 @@ mod tests {
             restoration_verification: "verified".into(),
             executed_at_ns: 5_000_000,
         };
-        let json = serde_json::to_string(&r).unwrap();
-        let back: RollbackExecutionReceipt = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let back: RollbackExecutionReceipt = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 
@@ -2707,8 +2707,8 @@ mod tests {
             recent_decision_ids: vec!["d-1".into(), "d-2".into()],
             current_recommendation: Some("monitor".into()),
         };
-        let json = serde_json::to_string(&c).unwrap();
-        let back: ExtensionTrustCard = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let back: ExtensionTrustCard = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c, back);
     }
 
@@ -2721,8 +2721,8 @@ mod tests {
             started_at_ns: 100_000,
             status: "active".into(),
         };
-        let json = serde_json::to_string(&s).unwrap();
-        let back: ActiveIncidentSummary = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+        let back: ActiveIncidentSummary = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(s, back);
     }
 
@@ -2745,8 +2745,8 @@ mod tests {
             }],
             extension_details: vec![],
         };
-        let json = serde_json::to_string(&f).unwrap();
-        let back: FleetHealthOverview = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&f).expect("serde deserialization should succeed");
+        let back: FleetHealthOverview = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(f, back);
     }
 
@@ -2766,8 +2766,8 @@ mod tests {
                 observed_millionths: 880_000,
             }],
         };
-        let json = serde_json::to_string(&p).unwrap();
-        let back: PolicyEffectivenessInput = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
+        let back: PolicyEffectivenessInput = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(p, back);
     }
 
@@ -2785,8 +2785,8 @@ mod tests {
             containment_latency_p95_ms: 45,
             calibration_history: vec![],
         };
-        let json = serde_json::to_string(&v).unwrap();
-        let back: PolicyEffectivenessView = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let back: PolicyEffectivenessView = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, back);
     }
 
@@ -2830,8 +2830,8 @@ mod tests {
             CopilotError::MissingConfirmationToken,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: CopilotError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: CopilotError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
         assert_eq!(variants.len(), 11);

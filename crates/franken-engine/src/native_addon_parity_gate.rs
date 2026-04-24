@@ -1117,7 +1117,7 @@ impl GateEvaluator {
             if violated_axes.len() > 1 {
                 GateVerdict::MultipleViolations
             } else {
-                match violated_axes.iter().next().unwrap() {
+                match violated_axes.iter().next().expect("serde deserialization should succeed") {
                     GateAxis::Parity => GateVerdict::ParityViolation,
                     GateAxis::Security => GateVerdict::SecurityBlocking,
                     GateAxis::Throughput => GateVerdict::ThroughputExceeded,
@@ -1288,8 +1288,8 @@ mod tests {
     #[test]
     fn test_addon_cohort_serde_roundtrip() {
         let c = AddonCohort::Compression;
-        let json = serde_json::to_string(&c).unwrap();
-        let back: AddonCohort = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let back: AddonCohort = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c, back);
     }
 
@@ -1319,8 +1319,8 @@ mod tests {
     #[test]
     fn test_gate_axis_serde_roundtrip() {
         let a = GateAxis::Security;
-        let json = serde_json::to_string(&a).unwrap();
-        let back: GateAxis = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&a).expect("serde deserialization should succeed");
+        let back: GateAxis = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(a, back);
     }
 
@@ -1345,8 +1345,8 @@ mod tests {
     #[test]
     fn test_finding_severity_serde() {
         let s = FindingSeverity::High;
-        let json = serde_json::to_string(&s).unwrap();
-        let back: FindingSeverity = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+        let back: FindingSeverity = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(s, back);
     }
 
@@ -1629,8 +1629,8 @@ mod tests {
     #[test]
     fn test_config_serde() {
         let c = GateConfig::default();
-        let json = serde_json::to_string(&c).unwrap();
-        let back: GateConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let back: GateConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c, back);
     }
 
@@ -1667,8 +1667,8 @@ mod tests {
     #[test]
     fn test_verdict_serde() {
         let v = GateVerdict::ThroughputExceeded;
-        let json = serde_json::to_string(&v).unwrap();
-        let back: GateVerdict = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let back: GateVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, back);
     }
 
@@ -2026,8 +2026,8 @@ mod tests {
             support_surface_entries: 3,
             approval_rate_millionths: 600_000,
         };
-        let json = serde_json::to_string(&s).unwrap();
-        let back: GateSummary = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+        let back: GateSummary = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(s, back);
     }
 
@@ -2045,8 +2045,8 @@ mod tests {
     #[test]
     fn test_violation_serde() {
         let v = Violation::new(GateAxis::Throughput, None, "too slow");
-        let json = serde_json::to_string(&v).unwrap();
-        let back: Violation = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let back: Violation = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, back);
     }
 
@@ -2057,10 +2057,10 @@ mod tests {
     #[test]
     fn test_manifest() {
         let m = native_addon_parity_gate_manifest();
-        assert_eq!(m.get("schema_version").unwrap(), SCHEMA_VERSION);
-        assert_eq!(m.get("component").unwrap(), COMPONENT);
-        assert_eq!(m.get("bead_id").unwrap(), BEAD_ID);
-        assert_eq!(m.get("policy_id").unwrap(), POLICY_ID);
+        assert_eq!(m.get("schema_version").expect("serde deserialization should succeed"), SCHEMA_VERSION);
+        assert_eq!(m.get("component").expect("serde deserialization should succeed"), COMPONENT);
+        assert_eq!(m.get("bead_id").expect("serde deserialization should succeed"), BEAD_ID);
+        assert_eq!(m.get("policy_id").expect("serde deserialization should succeed"), POLICY_ID);
     }
 
     // -----------------------------------------------------------------------
@@ -2072,8 +2072,8 @@ mod tests {
         let mut g = GateEvaluator::with_defaults(epoch());
         g.add_parity(AddonCohort::Crypto, "aes", GateAxis::Parity, MILLIONTHS, 50);
         g.evaluate();
-        let json = serde_json::to_string(&g).unwrap();
-        let back: GateEvaluator = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&g).expect("serde deserialization should succeed");
+        let back: GateEvaluator = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.evaluation_count(), 1);
         assert_eq!(back.approved_count(), 1);
     }

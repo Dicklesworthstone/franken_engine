@@ -647,7 +647,7 @@ mod tests {
         registry.register_artifact(artifact.clone());
 
         // Retrieve by ID
-        let retrieved = registry.get_artifact("test-artifact-001").unwrap();
+        let retrieved = registry.get_artifact("test-artifact-001").expect("serde deserialization should succeed");
         assert_eq!(retrieved, &artifact);
 
         // List all artifacts

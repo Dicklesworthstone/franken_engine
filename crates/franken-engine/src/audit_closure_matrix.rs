@@ -234,10 +234,10 @@ mod tests {
 ## Summary
         "#;
 
-        let matrix = AuditClosureMatrix::parse_from_markdown(markdown_content).unwrap();
+        let matrix = AuditClosureMatrix::parse_from_markdown(markdown_content).expect("serde deserialization should succeed");
         assert_eq!(matrix.total_closures(), 2);
 
-        let closure = matrix.get_closure("RGC-920A.1").unwrap();
+        let closure = matrix.get_closure("RGC-920A.1").expect("serde deserialization should succeed");
         assert_eq!(closure.fixing_bead, "bd-2muur.1.1");
         assert_eq!(closure.file_path, "src/test.rs:123-145");
         assert_eq!(closure.test_coverage, "tests/test.rs::test_fix");

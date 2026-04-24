@@ -397,7 +397,7 @@ fn normalize_limit(value: usize) -> usize {
 
 fn sha256_hex<T: Serialize>(value: &T) -> String {
     // SAFETY: serde_json::to_vec only fails on writer errors, not possible with Vec<u8>
-    let payload = serde_json::to_vec(value).unwrap();
+    let payload = serde_json::to_vec(value).expect("serde deserialization should succeed");
     let digest = Sha256::digest(payload);
     hex::encode(digest)
 }
@@ -1024,10 +1024,10 @@ mod tests {
         let policy = TierUpPolicy::default();
         // SAFETY: TierUpPolicy derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&policy).unwrap();
+        let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid TierUpPolicy,
         // so from_str back to TierUpPolicy cannot fail (valid format + matching schema).
-        let restored: TierUpPolicy = serde_json::from_str(&json).unwrap();
+        let restored: TierUpPolicy = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(policy, restored);
     }
 
@@ -1043,10 +1043,10 @@ mod tests {
         };
         // SAFETY: HotPathSample derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&sample).unwrap();
+        let json = serde_json::to_string(&sample).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid HotPathSample,
         // so from_str back to HotPathSample cannot fail (valid format + matching schema).
-        let restored: HotPathSample = serde_json::from_str(&json).unwrap();
+        let restored: HotPathSample = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(sample, restored);
     }
 
@@ -1059,9 +1059,9 @@ mod tests {
         let policy = TierUpPolicy::default();
         let decision = evaluate_tier_up_eligibility(&report, &policy);
         // SAFETY: TierUpDecision derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&decision).unwrap();
+        let json = serde_json::to_string(&decision).expect("serde deserialization should succeed");
         // SAFETY: JSON was just generated from TierUpDecision, deserialization guaranteed to succeed
-        let restored: TierUpDecision = serde_json::from_str(&json).unwrap();
+        let restored: TierUpDecision = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(decision, restored);
     }
 
@@ -1124,9 +1124,9 @@ mod tests {
     fn policy_default_serde_roundtrip() {
         let policy = TierUpPolicy::default();
         // SAFETY: TierUpPolicy derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&policy).unwrap();
+        let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
         // SAFETY: JSON was just generated from TierUpPolicy, deserialization guaranteed to succeed
-        let back: TierUpPolicy = serde_json::from_str(&json).unwrap();
+        let back: TierUpPolicy = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(policy, back);
     }
 
@@ -1239,7 +1239,7 @@ mod tests {
             .events
             .iter()
             .find(|e| e.event == "tier_up_completed")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(completed.outcome, "deny");
         assert_eq!(completed.reason, "insufficient_total_steps");
     }
@@ -1350,7 +1350,7 @@ mod tests {
             .events
             .iter()
             .find(|e| e.event == "tier_up_completed")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(completed.outcome, "allow");
     }
 
@@ -1385,9 +1385,9 @@ mod tests {
         let report = make_report(100, events);
         let decision = evaluate_tier_up_eligibility(&report, &policy);
         // SAFETY: TierUpDecision derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&decision).unwrap();
+        let json = serde_json::to_string(&decision).expect("serde deserialization should succeed");
         // SAFETY: JSON was just generated from TierUpDecision, deserialization guaranteed to succeed
-        let back: TierUpDecision = serde_json::from_str(&json).unwrap();
+        let back: TierUpDecision = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(decision, back);
     }
 
@@ -1401,9 +1401,9 @@ mod tests {
             reason: "test".to_string(),
         };
         // SAFETY: TierUpRejection derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&rejection).unwrap();
+        let json = serde_json::to_string(&rejection).expect("serde deserialization should succeed");
         // SAFETY: JSON was just generated from TierUpRejection, deserialization guaranteed to succeed
-        let back: TierUpRejection = serde_json::from_str(&json).unwrap();
+        let back: TierUpRejection = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(rejection, back);
     }
 
@@ -1417,9 +1417,9 @@ mod tests {
             rationale: "hot".to_string(),
         };
         // SAFETY: TierUpCandidate derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&candidate).unwrap();
+        let json = serde_json::to_string(&candidate).expect("serde deserialization should succeed");
         // SAFETY: JSON was just generated from TierUpCandidate, deserialization guaranteed to succeed
-        let back: TierUpCandidate = serde_json::from_str(&json).unwrap();
+        let back: TierUpCandidate = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(candidate, back);
     }
 
@@ -1450,9 +1450,9 @@ mod tests {
             reason: "r".to_string(),
         };
         // SAFETY: TierUpDecisionEvent derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&event).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
         // SAFETY: JSON was just generated from TierUpDecisionEvent, deserialization guaranteed to succeed
-        let back: TierUpDecisionEvent = serde_json::from_str(&json).unwrap();
+        let back: TierUpDecisionEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
     }
 

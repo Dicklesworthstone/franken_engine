@@ -955,7 +955,7 @@ mod tests {
     fn challenge_validity() {
         let verifier = test_verifier();
         // SAFETY: Test verifier accepts the fixed nonce, timestamp, and positive lifetime.
-        let challenge = verifier.generate_challenge([1u8; 32], 1000, 500).unwrap();
+        let challenge = verifier.generate_challenge([1u8; 32], 1000, 500).expect("serde deserialization should succeed");
         assert!(challenge.is_valid_at(1000));
         assert!(challenge.is_valid_at(1500));
         assert!(!challenge.is_valid_at(1501));
@@ -965,9 +965,9 @@ mod tests {
     fn challenge_canonical_bytes_deterministic() {
         let verifier = test_verifier();
         // SAFETY: Test verifier accepts the fixed nonce, timestamp, and positive lifetime.
-        let c1 = verifier.generate_challenge([1u8; 32], 1000, 500).unwrap();
+        let c1 = verifier.generate_challenge([1u8; 32], 1000, 500).expect("serde deserialization should succeed");
         // SAFETY: Same valid parameters as c1; this call verifies deterministic encoding.
-        let c2 = verifier.generate_challenge([1u8; 32], 1000, 500).unwrap();
+        let c2 = verifier.generate_challenge([1u8; 32], 1000, 500).expect("serde deserialization should succeed");
         assert_eq!(c1.canonical_bytes(), c2.canonical_bytes());
     }
 
@@ -975,13 +975,13 @@ mod tests {
     fn challenge_serde_roundtrip() {
         let verifier = test_verifier();
         // SAFETY: Test verifier with valid parameters should allow challenge generation to succeed
-        let challenge = verifier.generate_challenge([1u8; 32], 1000, 500).unwrap();
+        let challenge = verifier.generate_challenge([1u8; 32], 1000, 500).expect("serde deserialization should succeed");
         // SAFETY: AttestationChallenge derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&challenge).unwrap();
+        let json = serde_json::to_string(&challenge).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid AttestationChallenge,
         // so from_str back to AttestationChallenge cannot fail (valid format + matching schema).
-        let restored: AttestationChallenge = serde_json::from_str(&json).unwrap();
+        let restored: AttestationChallenge = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(challenge, restored);
     }
 
@@ -996,7 +996,7 @@ mod tests {
 
         let client = test_client();
         // SAFETY: Test setup with valid verifier, client, root, and measurement should allow handshake to succeed
-        let auth = do_full_handshake(&mut verifier, &client, &root, &measurement, 1000).unwrap();
+        let auth = do_full_handshake(&mut verifier, &client, &root, &measurement, 1000).expect("serde deserialization should succeed");
 
         assert!(auth.is_valid_at(1000));
         assert!(auth.is_valid_at(1000 + 300_000_000_000)); // At boundary.
@@ -1012,7 +1012,7 @@ mod tests {
 
         let client = test_client();
         // SAFETY: Test setup uses an approved measurement and valid client/root inputs.
-        let auth = do_full_handshake(&mut verifier, &client, &root, &measurement, 1000).unwrap();
+        let auth = do_full_handshake(&mut verifier, &client, &root, &measurement, 1000).expect("serde deserialization should succeed");
 
         assert!(auth.authorizes("sign_receipts"));
         assert!(auth.authorizes("emit_evidence"));
@@ -1028,14 +1028,14 @@ mod tests {
 
         let client = test_client();
         // SAFETY: Test setup with valid verifier, client, root, and measurement should allow handshake to succeed
-        let auth = do_full_handshake(&mut verifier, &client, &root, &measurement, 1000).unwrap();
+        let auth = do_full_handshake(&mut verifier, &client, &root, &measurement, 1000).expect("serde deserialization should succeed");
 
         // SAFETY: CellAuthorization derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&auth).unwrap();
+        let json = serde_json::to_string(&auth).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid CellAuthorization,
         // so from_str back to CellAuthorization cannot fail (valid format + matching schema).
-        let restored: CellAuthorization = serde_json::from_str(&json).unwrap();
+        let restored: CellAuthorization = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(auth, restored);
     }
 
@@ -1050,7 +1050,7 @@ mod tests {
 
         let client = test_client();
         // SAFETY: Test setup with valid verifier, client, root, and measurement should allow handshake to succeed
-        let auth = do_full_handshake(&mut verifier, &client, &root, &measurement, 1000).unwrap();
+        let auth = do_full_handshake(&mut verifier, &client, &root, &measurement, 1000).expect("serde deserialization should succeed");
 
         assert_eq!(auth.cell_id, "cell-001");
         assert_eq!(auth.policy_version, 1);
@@ -1067,7 +1067,7 @@ mod tests {
 
         let nonce = [1u8; 32];
         // SAFETY: Test verifier accepts the fixed nonce, timestamp, and positive lifetime.
-        let challenge = verifier.generate_challenge(nonce, 1000, 100).unwrap();
+        let challenge = verifier.generate_challenge(nonce, 1000, 100).expect("serde deserialization should succeed");
         let client = test_client();
         let response = client.respond(&challenge, &measurement, &root, 10_000, 1200);
 
@@ -1089,7 +1089,7 @@ mod tests {
         // SAFETY: Test verifier accepts the fixed nonce, timestamp, and positive lifetime.
         let mut challenge = verifier
             .generate_challenge([1u8; 32], 1000, 10_000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         challenge.policy_plane_signature = vec![0xCA, 0xFE];
 
         let client = test_client();
@@ -1124,7 +1124,7 @@ mod tests {
 
         let challenge = verifier
             .generate_challenge([1u8; 32], 1000, 10_000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let client = test_client();
 
         // Client responds with a different nonce (uses challenge nonce internally,
@@ -1147,7 +1147,7 @@ mod tests {
 
         let challenge = verifier
             .generate_challenge([1u8; 32], 1000, 10_000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let client = test_client();
         let mut response = client.respond(&challenge, &measurement, &root, 10_000, 1000);
         response.key_binding_proof = vec![0xDE, 0xAD]; // Tamper.
@@ -1167,7 +1167,7 @@ mod tests {
 
         let challenge = verifier
             .generate_challenge([1u8; 32], 1000, 10_000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let client = test_client();
         let mut response = client.respond(&challenge, &measurement, &root, 10_000, 1000);
         response.response_signature = vec![0xBA, 0xAD]; // Tamper.
@@ -1187,7 +1187,7 @@ mod tests {
 
         let challenge = verifier
             .generate_challenge([1u8; 32], 1000, 10_000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let client = test_client();
         let mut response = client.respond(&challenge, &measurement, &root, 10_000, 1000);
         response.attestation_quote.issued_at_ns = 999;
@@ -1228,7 +1228,7 @@ mod tests {
         verifier.approve_measurement(measurement.composite_hash());
 
         let client = test_client();
-        do_full_handshake(&mut verifier, &client, &root, &measurement, 1000).unwrap();
+        do_full_handshake(&mut verifier, &client, &root, &measurement, 1000).expect("serde deserialization should succeed");
 
         assert!(
             verifier
@@ -1245,7 +1245,7 @@ mod tests {
         verifier.approve_measurement(measurement.composite_hash());
 
         let client = test_client();
-        do_full_handshake(&mut verifier, &client, &root, &measurement, 1000).unwrap();
+        do_full_handshake(&mut verifier, &client, &root, &measurement, 1000).expect("serde deserialization should succeed");
 
         verifier
             .active_authorizations
@@ -1269,7 +1269,7 @@ mod tests {
         verifier.approve_measurement(measurement.composite_hash());
 
         let client = test_client();
-        do_full_handshake(&mut verifier, &client, &root, &measurement, 1000).unwrap();
+        do_full_handshake(&mut verifier, &client, &root, &measurement, 1000).expect("serde deserialization should succeed");
 
         let err = verifier
             .check_authorization("cell-001", "sign_receipts", 1200)
@@ -1294,7 +1294,7 @@ mod tests {
         verifier.approve_measurement(measurement.composite_hash());
 
         let client = test_client();
-        do_full_handshake(&mut verifier, &client, &root, &measurement, 1000).unwrap();
+        do_full_handshake(&mut verifier, &client, &root, &measurement, 1000).expect("serde deserialization should succeed");
 
         let err = verifier
             .check_authorization("cell-001", "admin_override", 2000)
@@ -1312,7 +1312,7 @@ mod tests {
         verifier.approve_measurement(measurement.composite_hash());
 
         let client = test_client();
-        do_full_handshake(&mut verifier, &client, &root, &measurement, 1000).unwrap();
+        do_full_handshake(&mut verifier, &client, &root, &measurement, 1000).expect("serde deserialization should succeed");
         assert_eq!(verifier.authorization_count(), 1);
 
         assert!(verifier.revoke_authorization("cell-001"));
@@ -1328,11 +1328,11 @@ mod tests {
         verifier.approve_measurement(measurement.composite_hash());
 
         let client1 = test_client();
-        do_full_handshake(&mut verifier, &client1, &root, &measurement, 1000).unwrap();
+        do_full_handshake(&mut verifier, &client1, &root, &measurement, 1000).expect("serde deserialization should succeed");
 
         let mut client2 = test_client();
         client2.cell_id = "cell-002".to_string();
-        do_full_handshake(&mut verifier, &client2, &root, &measurement, 2000).unwrap();
+        do_full_handshake(&mut verifier, &client2, &root, &measurement, 2000).expect("serde deserialization should succeed");
 
         assert_eq!(verifier.authorization_count(), 2);
         let revoked = verifier.revoke_all_authorizations();
@@ -1351,7 +1351,7 @@ mod tests {
         verifier.approve_measurement(measurement.composite_hash());
 
         let client = test_client();
-        do_full_handshake(&mut verifier, &client, &root, &measurement, 1000).unwrap();
+        do_full_handshake(&mut verifier, &client, &root, &measurement, 1000).expect("serde deserialization should succeed");
 
         // At 1500ns, within interval.
         assert!(verifier.cells_needing_reattestation(1500).is_empty());
@@ -1380,7 +1380,7 @@ mod tests {
         verifier.approve_measurement(measurement.composite_hash());
 
         let client = test_client();
-        do_full_handshake(&mut verifier, &client, &root, &measurement, 1000).unwrap();
+        do_full_handshake(&mut verifier, &client, &root, &measurement, 1000).expect("serde deserialization should succeed");
 
         assert_eq!(verifier.events().len(), 1);
         assert_eq!(verifier.events()[0].outcome, HandshakeOutcome::Authorized);
@@ -1413,11 +1413,11 @@ mod tests {
         verifier.approve_measurement(measurement.composite_hash());
 
         let client = test_client();
-        do_full_handshake(&mut verifier, &client, &root, &measurement, 1000).unwrap();
+        do_full_handshake(&mut verifier, &client, &root, &measurement, 1000).expect("serde deserialization should succeed");
 
         let mut client2 = test_client();
         client2.cell_id = "cell-002".to_string();
-        do_full_handshake(&mut verifier, &client2, &root, &measurement, 2000).unwrap();
+        do_full_handshake(&mut verifier, &client2, &root, &measurement, 2000).expect("serde deserialization should succeed");
 
         assert_eq!(verifier.events()[0].seq, 0);
         assert_eq!(verifier.events()[1].seq, 1);
@@ -1525,8 +1525,8 @@ mod tests {
             trust_level: Some(TrustLevel::SoftwareOnly),
             failure_reason: None,
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let restored: HandshakeEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let restored: HandshakeEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, restored);
     }
 
@@ -1538,11 +1538,11 @@ mod tests {
         let verifier = test_verifier();
         let challenge = verifier
             .generate_challenge([1u8; 32], 1000, 10_000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let response = client.respond(&challenge, &measurement, &root, 10_000, 1000);
 
-        let json = serde_json::to_string(&response).unwrap();
-        let restored: AttestationResponse = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&response).expect("serde deserialization should succeed");
+        let restored: AttestationResponse = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(response, restored);
     }
 
@@ -1557,7 +1557,7 @@ mod tests {
         verifier.approve_measurement(measurement.composite_hash());
 
         let client = test_client();
-        do_full_handshake(&mut verifier, &client, &root, &measurement, 1000).unwrap();
+        do_full_handshake(&mut verifier, &client, &root, &measurement, 1000).expect("serde deserialization should succeed");
 
         assert_eq!(verifier.valid_authorizations_at(1050).len(), 1);
         assert_eq!(verifier.valid_authorizations_at(1200).len(), 0);
@@ -1575,8 +1575,8 @@ mod tests {
             HandshakeOutcome::KeyBindingFailed,
             HandshakeOutcome::SignatureFailed,
         ] {
-            let json = serde_json::to_string(outcome).unwrap();
-            let back: HandshakeOutcome = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(outcome).expect("serde deserialization should succeed");
+            let back: HandshakeOutcome = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*outcome, back);
         }
     }
@@ -1590,8 +1590,8 @@ mod tests {
             ReattestationTrigger::TrustRootUpdate,
             ReattestationTrigger::Manual,
         ] {
-            let json = serde_json::to_string(trigger).unwrap();
-            let back: ReattestationTrigger = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(trigger).expect("serde deserialization should succeed");
+            let back: ReattestationTrigger = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*trigger, back);
         }
     }
@@ -1632,8 +1632,8 @@ mod tests {
             HandshakeError::IdDerivation("err".to_string()),
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap();
-            let back: HandshakeError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let back: HandshakeError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, back);
         }
     }
@@ -1648,7 +1648,7 @@ mod tests {
         verifier.approve_measurement(measurement.composite_hash());
 
         let client = test_client();
-        let auth = do_full_handshake(&mut verifier, &client, &root, &measurement, 1000).unwrap();
+        let auth = do_full_handshake(&mut verifier, &client, &root, &measurement, 1000).expect("serde deserialization should succeed");
 
         let bytes1 = auth.canonical_bytes();
         let bytes2 = auth.canonical_bytes();
@@ -1664,7 +1664,7 @@ mod tests {
         let verifier = test_verifier();
         let challenge = verifier
             .generate_challenge([1u8; 32], 1000, 10_000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let response = client.respond(&challenge, &measurement, &root, 10_000, 1000);
 
         let b1 = response.canonical_bytes();
@@ -1693,7 +1693,7 @@ mod tests {
         verifier.approve_measurement(measurement.composite_hash());
 
         let client = test_client();
-        do_full_handshake(&mut verifier, &client, &root, &measurement, 1000).unwrap();
+        do_full_handshake(&mut verifier, &client, &root, &measurement, 1000).expect("serde deserialization should succeed");
 
         let cells = verifier.authorized_cells();
         assert_eq!(cells.len(), 1);
@@ -1708,7 +1708,7 @@ mod tests {
         assert_eq!(verifier.epoch, SecurityEpoch::from_raw(42));
         verifier.advance_epoch(SecurityEpoch::from_raw(43));
         // Next challenge should use the new epoch.
-        let challenge = verifier.generate_challenge([2u8; 32], 5000, 1000).unwrap();
+        let challenge = verifier.generate_challenge([2u8; 32], 5000, 1000).expect("serde deserialization should succeed");
         assert_eq!(challenge.epoch, SecurityEpoch::from_raw(43));
     }
 
@@ -1777,8 +1777,8 @@ mod tests {
             HandshakeOutcome::SignatureFailed,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let restored: HandshakeOutcome = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let restored: HandshakeOutcome = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, restored);
         }
     }
@@ -1793,8 +1793,8 @@ mod tests {
             ReattestationTrigger::Manual,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let restored: ReattestationTrigger = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let restored: ReattestationTrigger = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, restored);
         }
     }
@@ -1806,7 +1806,7 @@ mod tests {
         let measurement = test_measurement(&root);
         verifier.approve_measurement(measurement.composite_hash());
         let client = test_client();
-        let auth = do_full_handshake(&mut verifier, &client, &root, &measurement, 1000).unwrap();
+        let auth = do_full_handshake(&mut verifier, &client, &root, &measurement, 1000).expect("serde deserialization should succeed");
         // Operation not in authorized set should fail
         assert!(!auth.authorizes("nonexistent_op"));
     }
@@ -1931,8 +1931,8 @@ mod tests {
     #[test]
     fn challenge_different_nonces_produce_different_ids() {
         let verifier = test_verifier();
-        let c1 = verifier.generate_challenge([1u8; 32], 1000, 500).unwrap();
-        let c2 = verifier.generate_challenge([2u8; 32], 1000, 500).unwrap();
+        let c1 = verifier.generate_challenge([1u8; 32], 1000, 500).expect("serde deserialization should succeed");
+        let c2 = verifier.generate_challenge([2u8; 32], 1000, 500).expect("serde deserialization should succeed");
         assert_ne!(c1.challenge_id, c2.challenge_id);
     }
 
@@ -1953,7 +1953,7 @@ mod tests {
                 &measurement,
                 1000 + u64::from(i) * 1000,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         }
         assert_eq!(verifier.authorization_count(), 3);
         assert_eq!(verifier.authorized_cells().len(), 3);
@@ -1981,8 +1981,8 @@ mod tests {
                 trust_level: None,
                 failure_reason: None,
             };
-            let json = serde_json::to_string(&event).unwrap();
-            let restored: HandshakeEvent = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+            let restored: HandshakeEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(event, restored);
         }
     }
@@ -1994,7 +1994,7 @@ mod tests {
     #[test]
     fn challenge_is_valid_at_exact_boundary() {
         let verifier = test_verifier();
-        let challenge = verifier.generate_challenge([1u8; 32], 1000, 500).unwrap();
+        let challenge = verifier.generate_challenge([1u8; 32], 1000, 500).expect("serde deserialization should succeed");
         // At exactly timestamp + deadline, should still be valid.
         assert!(challenge.is_valid_at(1500));
         // One past the deadline, invalid.
@@ -2008,7 +2008,7 @@ mod tests {
         let mut verifier = test_verifier();
         verifier.approve_measurement(measurement.composite_hash());
         let client = test_client();
-        let auth = do_full_handshake(&mut verifier, &client, &root, &measurement, 1000).unwrap();
+        let auth = do_full_handshake(&mut verifier, &client, &root, &measurement, 1000).expect("serde deserialization should succeed");
         // At exactly issued_at + validity_window, should still be valid.
         let boundary = auth.issued_at_ns + auth.validity_window_ns;
         assert!(auth.is_valid_at(boundary));
@@ -2023,7 +2023,7 @@ mod tests {
         verifier.approve_measurement(measurement.composite_hash());
         verifier.set_reattestation_interval(1000);
         let client = test_client();
-        let _auth = do_full_handshake(&mut verifier, &client, &root, &measurement, 100).unwrap();
+        let _auth = do_full_handshake(&mut verifier, &client, &root, &measurement, 100).expect("serde deserialization should succeed");
         // At t=1099, age is 999 < 1000 interval, no reattestation needed.
         assert!(verifier.cells_needing_reattestation(1099).is_empty());
         // At t=1100, age is 1000 >= 1000 interval, reattestation needed.
@@ -2038,7 +2038,7 @@ mod tests {
         verifier.approve_measurement(measurement.composite_hash());
         verifier.set_authorization_window(2000);
         let client = test_client();
-        let auth = do_full_handshake(&mut verifier, &client, &root, &measurement, 100).unwrap();
+        let auth = do_full_handshake(&mut verifier, &client, &root, &measurement, 100).expect("serde deserialization should succeed");
         assert_eq!(auth.validity_window_ns, 2000);
     }
 
@@ -2064,7 +2064,7 @@ mod tests {
         let verifier = test_verifier();
         let challenge = verifier
             .generate_challenge([99u8; 32], 5000, 10000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let response = client.respond(&challenge, &measurement, &root, 10000, 5000);
         assert_eq!(response.cell_id, "cell-001");
         assert_eq!(response.cell_function, CellFunction::DecisionReceiptSigner);
@@ -2079,8 +2079,8 @@ mod tests {
     #[test]
     fn challenge_canonical_bytes_changes_with_nonce() {
         let verifier = test_verifier();
-        let c1 = verifier.generate_challenge([1u8; 32], 1000, 500).unwrap();
-        let c2 = verifier.generate_challenge([2u8; 32], 1000, 500).unwrap();
+        let c1 = verifier.generate_challenge([1u8; 32], 1000, 500).expect("serde deserialization should succeed");
+        let c2 = verifier.generate_challenge([2u8; 32], 1000, 500).expect("serde deserialization should succeed");
         assert_ne!(c1.canonical_bytes(), c2.canonical_bytes());
     }
 
@@ -2091,7 +2091,7 @@ mod tests {
         let mut verifier = test_verifier();
         verifier.approve_measurement(measurement.composite_hash());
         let client = test_client();
-        let auth = do_full_handshake(&mut verifier, &client, &root, &measurement, 1000).unwrap();
+        let auth = do_full_handshake(&mut verifier, &client, &root, &measurement, 1000).expect("serde deserialization should succeed");
         assert!(auth.authorizes("sign_receipts"));
         assert!(auth.authorizes("emit_evidence"));
         assert!(!auth.authorizes("delete_data"));
@@ -2116,8 +2116,8 @@ mod tests {
             trust_level: Some(TrustLevel::SoftwareOnly),
             failure_reason: Some("measurement not approved".to_string()),
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let back: HandshakeEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let back: HandshakeEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
         assert!(back.measurement_hash.is_some());
         assert!(back.trust_level.is_some());
@@ -2131,9 +2131,9 @@ mod tests {
         let mut verifier = test_verifier();
         verifier.approve_measurement(measurement.composite_hash());
         let client = test_client();
-        let auth = do_full_handshake(&mut verifier, &client, &root, &measurement, 1000).unwrap();
-        let json = serde_json::to_string(&auth).unwrap();
-        let back: CellAuthorization = serde_json::from_str(&json).unwrap();
+        let auth = do_full_handshake(&mut verifier, &client, &root, &measurement, 1000).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&auth).expect("serde deserialization should succeed");
+        let back: CellAuthorization = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(auth.cell_id, back.cell_id);
         assert_eq!(auth.authorized_operations, back.authorized_operations);
         assert_eq!(auth.epoch, back.epoch);
@@ -2142,8 +2142,8 @@ mod tests {
     #[test]
     fn verifier_serde_roundtrip() {
         let verifier = test_verifier();
-        let json = serde_json::to_string(&verifier).unwrap();
-        let back: PolicyPlaneVerifier = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&verifier).expect("serde deserialization should succeed");
+        let back: PolicyPlaneVerifier = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(verifier.policy_version(), back.policy_version());
         assert_eq!(verifier.authorization_count(), back.authorization_count());
     }
@@ -2153,24 +2153,24 @@ mod tests {
     #[test]
     fn challenge_canonical_bytes_sensitive_to_policy_version() {
         let mut verifier = test_verifier();
-        let c1 = verifier.generate_challenge([1u8; 32], 1000, 500).unwrap();
+        let c1 = verifier.generate_challenge([1u8; 32], 1000, 500).expect("serde deserialization should succeed");
         verifier.bump_policy_version();
-        let c2 = verifier.generate_challenge([1u8; 32], 1000, 500).unwrap();
+        let c2 = verifier.generate_challenge([1u8; 32], 1000, 500).expect("serde deserialization should succeed");
         assert_ne!(c1.canonical_bytes(), c2.canonical_bytes());
     }
 
     #[test]
     fn challenge_canonical_bytes_sensitive_to_timestamp() {
         let verifier = test_verifier();
-        let c1 = verifier.generate_challenge([1u8; 32], 1000, 500).unwrap();
-        let c2 = verifier.generate_challenge([1u8; 32], 2000, 500).unwrap();
+        let c1 = verifier.generate_challenge([1u8; 32], 1000, 500).expect("serde deserialization should succeed");
+        let c2 = verifier.generate_challenge([1u8; 32], 2000, 500).expect("serde deserialization should succeed");
         assert_ne!(c1.canonical_bytes(), c2.canonical_bytes());
     }
 
     #[test]
     fn challenge_canonical_bytes_sensitive_to_epoch() {
         let verifier = test_verifier();
-        let c1 = verifier.generate_challenge([1u8; 32], 1000, 500).unwrap();
+        let c1 = verifier.generate_challenge([1u8; 32], 1000, 500).expect("serde deserialization should succeed");
         // Epoch is baked into canonical_bytes via the verifier's epoch field.
         // Create a new verifier with different epoch.
         let verifier2 = PolicyPlaneVerifier::new(
@@ -2179,7 +2179,7 @@ mod tests {
             SecurityEpoch::from_raw(99),
             "production",
         );
-        let c2 = verifier2.generate_challenge([1u8; 32], 1000, 500).unwrap();
+        let c2 = verifier2.generate_challenge([1u8; 32], 1000, 500).expect("serde deserialization should succeed");
         assert_ne!(c1.canonical_bytes(), c2.canonical_bytes());
     }
 
@@ -2190,7 +2190,7 @@ mod tests {
         let verifier = test_verifier();
         let challenge = verifier
             .generate_challenge([1u8; 32], 1000, 10_000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let client1 = test_client();
         let mut client2 = test_client();
         client2.cell_id = "cell-999".to_string();
@@ -2206,7 +2206,7 @@ mod tests {
         let verifier = test_verifier();
         let challenge = verifier
             .generate_challenge([1u8; 32], 1000, 10_000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let client = test_client();
         let r1 = client.respond(&challenge, &measurement, &root, 10_000, 1000);
         let mut r2 = r1.clone();
@@ -2221,8 +2221,8 @@ mod tests {
         let measurement = test_measurement(&root);
         verifier.approve_measurement(measurement.composite_hash());
         let client = test_client();
-        let auth1 = do_full_handshake(&mut verifier, &client, &root, &measurement, 1000).unwrap();
-        let auth2 = do_full_handshake(&mut verifier, &client, &root, &measurement, 2000).unwrap();
+        let auth1 = do_full_handshake(&mut verifier, &client, &root, &measurement, 1000).expect("serde deserialization should succeed");
+        let auth2 = do_full_handshake(&mut verifier, &client, &root, &measurement, 2000).expect("serde deserialization should succeed");
         // Still only one authorization (replaced, not accumulated).
         assert_eq!(verifier.authorization_count(), 1);
         // The new one has the later timestamp.
@@ -2238,7 +2238,7 @@ mod tests {
         verifier.approve_measurement(m1);
         verifier.approve_measurement(m2);
         // Both should appear in challenges.
-        let challenge = verifier.generate_challenge([1u8; 32], 1000, 500).unwrap();
+        let challenge = verifier.generate_challenge([1u8; 32], 1000, 500).expect("serde deserialization should succeed");
         assert!(challenge.approved_measurements.contains(&m1));
         assert!(challenge.approved_measurements.contains(&m2));
     }
@@ -2252,10 +2252,10 @@ mod tests {
         verifier.approve_measurement(measurement.composite_hash());
 
         let c1 = test_client();
-        do_full_handshake(&mut verifier, &c1, &root, &measurement, 100).unwrap();
+        do_full_handshake(&mut verifier, &c1, &root, &measurement, 100).expect("serde deserialization should succeed");
         let mut c2 = test_client();
         c2.cell_id = "cell-002".to_string();
-        do_full_handshake(&mut verifier, &c2, &root, &measurement, 200).unwrap();
+        do_full_handshake(&mut verifier, &c2, &root, &measurement, 200).expect("serde deserialization should succeed");
 
         // At t=600, cell-001 age=500 (needs reattest), cell-002 age=400 (doesn't).
         let needing = verifier.cells_needing_reattestation(600);
@@ -2276,10 +2276,10 @@ mod tests {
         verifier.approve_measurement(measurement.composite_hash());
 
         let c1 = test_client();
-        do_full_handshake(&mut verifier, &c1, &root, &measurement, 100).unwrap();
+        do_full_handshake(&mut verifier, &c1, &root, &measurement, 100).expect("serde deserialization should succeed");
         let mut c2 = test_client();
         c2.cell_id = "cell-002".to_string();
-        do_full_handshake(&mut verifier, &c2, &root, &measurement, 400).unwrap();
+        do_full_handshake(&mut verifier, &c2, &root, &measurement, 400).expect("serde deserialization should succeed");
 
         // At t=601, cell-001 (issued 100, window 500) expired, cell-002 still valid.
         assert_eq!(verifier.valid_authorizations_at(601).len(), 1);
@@ -2307,7 +2307,7 @@ mod tests {
     #[test]
     fn challenge_validity_with_zero_deadline() {
         let verifier = test_verifier();
-        let challenge = verifier.generate_challenge([1u8; 32], 1000, 0).unwrap();
+        let challenge = verifier.generate_challenge([1u8; 32], 1000, 0).expect("serde deserialization should succeed");
         // With zero deadline, only valid at exact timestamp.
         assert!(challenge.is_valid_at(1000));
         assert!(!challenge.is_valid_at(1001));
@@ -2316,7 +2316,7 @@ mod tests {
     #[test]
     fn challenge_signature_is_non_empty() {
         let verifier = test_verifier();
-        let challenge = verifier.generate_challenge([1u8; 32], 1000, 500).unwrap();
+        let challenge = verifier.generate_challenge([1u8; 32], 1000, 500).expect("serde deserialization should succeed");
         assert!(
             !challenge.policy_plane_signature.is_empty(),
             "signature should be populated"
@@ -2331,10 +2331,10 @@ mod tests {
         verifier.approve_measurement(measurement.composite_hash());
 
         let c1 = test_client();
-        let auth1 = do_full_handshake(&mut verifier, &c1, &root, &measurement, 1000).unwrap();
+        let auth1 = do_full_handshake(&mut verifier, &c1, &root, &measurement, 1000).expect("serde deserialization should succeed");
         let mut c2 = test_client();
         c2.cell_id = "cell-other".to_string();
-        let auth2 = do_full_handshake(&mut verifier, &c2, &root, &measurement, 2000).unwrap();
+        let auth2 = do_full_handshake(&mut verifier, &c2, &root, &measurement, 2000).expect("serde deserialization should succeed");
 
         assert_ne!(auth1.canonical_bytes(), auth2.canonical_bytes());
     }
@@ -2342,11 +2342,11 @@ mod tests {
     #[test]
     fn advance_epoch_then_challenge_uses_new_epoch() {
         let mut verifier = test_verifier();
-        let c1 = verifier.generate_challenge([1u8; 32], 1000, 500).unwrap();
+        let c1 = verifier.generate_challenge([1u8; 32], 1000, 500).expect("serde deserialization should succeed");
         assert_eq!(c1.epoch, SecurityEpoch::from_raw(42));
 
         verifier.advance_epoch(SecurityEpoch::from_raw(100));
-        let c2 = verifier.generate_challenge([1u8; 32], 2000, 500).unwrap();
+        let c2 = verifier.generate_challenge([1u8; 32], 2000, 500).expect("serde deserialization should succeed");
         assert_eq!(c2.epoch, SecurityEpoch::from_raw(100));
 
         // Canonical bytes differ because epoch differs.

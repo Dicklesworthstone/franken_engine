@@ -1381,8 +1381,8 @@ mod tests {
     #[test]
     fn artifact_kind_serde_roundtrip() {
         for kind in ArtifactKind::ALL {
-            let json = serde_json::to_string(kind).unwrap();
-            let back: ArtifactKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(kind).expect("serde deserialization should succeed");
+            let back: ArtifactKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*kind, back);
         }
     }
@@ -1432,8 +1432,8 @@ mod tests {
             TransportOutcome::Incompatible,
         ];
         for outcome in outcomes {
-            let json = serde_json::to_string(&outcome).unwrap();
-            let back: TransportOutcome = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&outcome).expect("serde deserialization should succeed");
+            let back: TransportOutcome = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(outcome, back);
         }
     }
@@ -1487,8 +1487,8 @@ mod tests {
             DegradationReason::UnknownReason("custom".into()),
         ];
         for reason in reasons {
-            let json = serde_json::to_string(&reason).unwrap();
-            let back: DegradationReason = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&reason).expect("serde deserialization should succeed");
+            let back: DegradationReason = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(reason, back);
         }
     }
@@ -1589,8 +1589,8 @@ mod tests {
     #[test]
     fn hardware_cell_serde_roundtrip() {
         let cell = cell_x86_avx512();
-        let json = serde_json::to_string(&cell).unwrap();
-        let back: HardwareCell = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&cell).expect("serde deserialization should succeed");
+        let back: HardwareCell = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cell, back);
     }
 
@@ -1756,7 +1756,7 @@ mod tests {
             MILLIONTHS,
             MILLIONTHS,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(cert.outcome, TransportOutcome::FullTransport);
         assert_eq!(cert.residual_fraction_millionths, MILLIONTHS);
         assert!(cert.degradation_reasons.is_empty());
@@ -1774,7 +1774,7 @@ mod tests {
             MILLIONTHS,
             850_000,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(cert.outcome, TransportOutcome::PartialTransport);
         assert_eq!(cert.residual_fraction_millionths, 850_000);
         assert!(
@@ -1793,7 +1793,7 @@ mod tests {
             MILLIONTHS,
             200_000,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(cert.outcome, TransportOutcome::Incompatible);
         assert!(!cert.is_usable());
     }
@@ -1808,7 +1808,7 @@ mod tests {
             MILLIONTHS,
             800_000,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         // ProfileData is not arch-sensitive, so it can transport.
         assert_eq!(cert.outcome, TransportOutcome::PartialTransport);
         assert!(cert.is_usable());
@@ -1824,7 +1824,7 @@ mod tests {
             MILLIONTHS,
             100_000,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(cert.outcome, TransportOutcome::Failed);
         assert!(!cert.is_usable());
     }
@@ -1839,7 +1839,7 @@ mod tests {
             MILLIONTHS,
             750_000,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(cert.performance_loss_millionths(), 250_000);
     }
 
@@ -1854,7 +1854,7 @@ mod tests {
             MILLIONTHS,
             500_000,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let c2 = evaluate_transport(
             ArtifactKind::RewriteRule,
             h,
@@ -1863,7 +1863,7 @@ mod tests {
             MILLIONTHS,
             500_000,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(c1.certificate_id, c2.certificate_id);
         assert_eq!(c1.content_hash, c2.content_hash);
     }
@@ -1878,7 +1878,7 @@ mod tests {
             MILLIONTHS,
             500_000,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let s = format!("{cert}");
         assert!(s.contains("rewrite_rule"));
         assert!(s.contains("x86-zen4"));
@@ -1895,9 +1895,9 @@ mod tests {
             MILLIONTHS,
             700_000,
         )
-        .unwrap();
-        let json = serde_json::to_string(&cert).unwrap();
-        let back: TransportCertificate = serde_json::from_str(&json).unwrap();
+        .expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cert).expect("serde deserialization should succeed");
+        let back: TransportCertificate = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cert, back);
     }
 
@@ -1933,8 +1933,8 @@ mod tests {
     #[test]
     fn residual_component_serde_roundtrip() {
         let comp = ResidualComponent::new("cache", 500_000, 400_000, "eviction");
-        let json = serde_json::to_string(&comp).unwrap();
-        let back: ResidualComponent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&comp).expect("serde deserialization should succeed");
+        let back: ResidualComponent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(comp, back);
     }
 
@@ -1950,7 +1950,7 @@ mod tests {
             MILLIONTHS,
             800_000,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let components = vec![
             ResidualComponent::new("branch", 400_000, 350_000, "cold branch tables"),
@@ -1958,7 +1958,7 @@ mod tests {
             ResidualComponent::new("other", 200_000, 180_000, "misc"),
         ];
 
-        let ledger = build_residual_ledger(&cert, components).unwrap();
+        let ledger = build_residual_ledger(&cert, components).expect("serde deserialization should succeed");
         assert_eq!(ledger.total_source_millionths, 900_000);
         assert_eq!(ledger.total_transported_millionths, 780_000);
         assert_eq!(ledger.component_count(), 3);
@@ -1975,9 +1975,9 @@ mod tests {
             MILLIONTHS,
             MILLIONTHS,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
-        let ledger = build_residual_ledger(&cert, vec![]).unwrap();
+        let ledger = build_residual_ledger(&cert, vec![]).expect("serde deserialization should succeed");
         assert_eq!(ledger.total_source_millionths, 0);
         assert_eq!(ledger.total_transported_millionths, 0);
         assert_eq!(ledger.component_count(), 0);
@@ -1993,7 +1993,7 @@ mod tests {
             500_000,
             500_000,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         // Component source total exceeds certificate source perf.
         let components = vec![
@@ -2016,7 +2016,7 @@ mod tests {
             MILLIONTHS,
             900_000,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let components = vec![ResidualComponent::new(
             "profile",
@@ -2025,9 +2025,9 @@ mod tests {
             "profile portability",
         )];
 
-        let ledger = build_residual_ledger(&cert, components).unwrap();
-        let json = serde_json::to_string(&ledger).unwrap();
-        let back: ResidualLedger = serde_json::from_str(&json).unwrap();
+        let ledger = build_residual_ledger(&cert, components).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ledger).expect("serde deserialization should succeed");
+        let back: ResidualLedger = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ledger, back);
     }
 
@@ -2041,13 +2041,13 @@ mod tests {
             MILLIONTHS,
             800_000,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let comps1 = vec![ResidualComponent::new("a", 300_000, 250_000, "x")];
         let comps2 = vec![ResidualComponent::new("a", 300_000, 250_000, "x")];
 
-        let l1 = build_residual_ledger(&cert, comps1).unwrap();
-        let l2 = build_residual_ledger(&cert, comps2).unwrap();
+        let l1 = build_residual_ledger(&cert, comps1).expect("serde deserialization should succeed");
+        let l2 = build_residual_ledger(&cert, comps2).expect("serde deserialization should succeed");
         assert_eq!(l1.content_hash, l2.content_hash);
     }
 
@@ -2061,8 +2061,8 @@ mod tests {
             MILLIONTHS,
             800_000,
         )
-        .unwrap();
-        let ledger = build_residual_ledger(&cert, vec![]).unwrap();
+        .expect("serde deserialization should succeed");
+        let ledger = build_residual_ledger(&cert, vec![]).expect("serde deserialization should succeed");
         let s = format!("{ledger}");
         assert!(s.contains("ledger:"));
         assert!(s.contains("cert="));
@@ -2078,14 +2078,14 @@ mod tests {
             MILLIONTHS,
             800_000,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let components = vec![
             ResidualComponent::new("branch", 400_000, 350_000, "x"),
             ResidualComponent::new("cache", 300_000, 250_000, "y"),
         ];
 
-        let ledger = build_residual_ledger(&cert, components).unwrap();
+        let ledger = build_residual_ledger(&cert, components).expect("serde deserialization should succeed");
         assert!(ledger.component_by_name("branch").is_some());
         assert!(ledger.component_by_name("cache").is_some());
         assert!(ledger.component_by_name("missing").is_none());
@@ -2103,14 +2103,14 @@ mod tests {
             MILLIONTHS,
             800_000,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let components = vec![
             ResidualComponent::new("a", 400_000, 350_000, "x"),
             ResidualComponent::new("b", 300_000, 250_000, "y"),
         ];
 
-        let ledger = build_residual_ledger(&cert, components).unwrap();
+        let ledger = build_residual_ledger(&cert, components).expect("serde deserialization should succeed");
         assert!(validate_ledger_consistency(&ledger).is_ok());
     }
 
@@ -2185,8 +2185,8 @@ mod tests {
             TransportError::InternalError("test error".into()),
         ];
         for err in errors {
-            let json = serde_json::to_string(&err).unwrap();
-            let back: TransportError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+            let back: TransportError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(err, back);
         }
     }
@@ -2284,8 +2284,8 @@ mod tests {
     fn manifest_summary_serde_roundtrip() {
         let certs = franken_engine_transport_manifest();
         let summary = TransportManifestSummary::build(&certs);
-        let json = serde_json::to_string(&summary).unwrap();
-        let back: TransportManifestSummary = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
+        let back: TransportManifestSummary = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(summary, back);
     }
 
@@ -2318,7 +2318,7 @@ mod tests {
             MILLIONTHS,
             500_000,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let evt = TransportEvent::from_certificate(
             &cert,
             TransportEventKind::CertificateCreated,
@@ -2341,11 +2341,11 @@ mod tests {
             MILLIONTHS,
             800_000,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let evt =
             TransportEvent::from_certificate(&cert, TransportEventKind::LedgerBuilt, test_epoch());
-        let json = serde_json::to_string(&evt).unwrap();
-        let back: TransportEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&evt).expect("serde deserialization should succeed");
+        let back: TransportEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(evt, back);
     }
 
@@ -2379,7 +2379,7 @@ mod tests {
             MILLIONTHS,
             200_000,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let evt = TransportEvent::from_certificate(
             &cert,
             TransportEventKind::CertificateCreated,
@@ -2414,14 +2414,14 @@ mod tests {
             MILLIONTHS,
             800_000,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let components = vec![
             ResidualComponent::new("a", 600_000, 480_000, "x"),
             ResidualComponent::new("b", 400_000, 320_000, "y"),
         ];
 
-        let ledger = build_residual_ledger(&cert, components).unwrap();
+        let ledger = build_residual_ledger(&cert, components).expect("serde deserialization should succeed");
         assert_eq!(ledger.survival_fraction_millionths(), 800_000);
         assert_eq!(ledger.total_loss_millionths(), 200_000);
     }
@@ -2436,9 +2436,9 @@ mod tests {
             MILLIONTHS,
             MILLIONTHS,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
-        let ledger = build_residual_ledger(&cert, vec![]).unwrap();
+        let ledger = build_residual_ledger(&cert, vec![]).expect("serde deserialization should succeed");
         // Zero source total → returns MILLIONTHS.
         assert_eq!(ledger.survival_fraction_millionths(), MILLIONTHS);
     }
@@ -2456,7 +2456,7 @@ mod tests {
             MILLIONTHS,
             MILLIONTHS,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert!(cert.same_arch_family());
         assert!(cert.same_hardware());
     }
@@ -2471,7 +2471,7 @@ mod tests {
             MILLIONTHS,
             500_000,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert!(!cert.same_arch_family());
         assert!(!cert.same_hardware());
     }

@@ -2296,7 +2296,7 @@ mod tests {
         );
         assert!(record.is_some());
         // SAFETY: Just verified record.is_some() above
-        let record = record.unwrap();
+        let record = record.expect("serde deserialization should succeed");
         assert_eq!(record.trigger, RollbackTrigger::OperatorInitiated);
         assert_eq!(record.consecutive_count, 1);
     }
@@ -2341,7 +2341,7 @@ mod tests {
 
         assert!(ev.reset_rollback_counter("site-s"));
         // SAFETY: test just reset rollback counter for "site-s", state guaranteed to exist
-        let state = ev.site_states().get("site-s").unwrap();
+        let state = ev.site_states().get("site-s").expect("serde deserialization should succeed");
         assert_eq!(state.consecutive_rollbacks, 0);
         assert!(!state.permanently_denied);
     }

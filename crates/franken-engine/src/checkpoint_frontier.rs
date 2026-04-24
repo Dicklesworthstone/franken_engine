@@ -625,7 +625,7 @@ mod tests {
     use crate::signature_preimage::SigningKey;
 
     fn make_sk(seed: u8) -> SigningKey {
-        SigningKey::from_bytes([seed; 32]).unwrap()
+        SigningKey::from_bytes([seed; 32]).expect("serde deserialization should succeed")
     }
 
     fn make_policy_head(pt: PolicyType, version: u64) -> PolicyHead {
@@ -641,7 +641,7 @@ mod tests {
         CheckpointBuilder::genesis(SecurityEpoch::GENESIS, DeterministicTimestamp(100), zone)
             .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 1))
             .build(keys)
-            .unwrap()
+            .expect("serde deserialization should succeed")
     }
 
     fn build_after(
@@ -655,7 +655,7 @@ mod tests {
         CheckpointBuilder::after(prev, seq, epoch, DeterministicTimestamp(tick), zone)
             .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, seq + 1))
             .build(keys)
-            .unwrap()
+            .expect("serde deserialization should succeed")
     }
 
     // -- Genesis acceptance --
@@ -668,9 +668,9 @@ mod tests {
 
         let mut mgr = CheckpointFrontierManager::new(InMemoryBackend::new());
         mgr.accept_checkpoint("zone-a", &genesis, 1, &[vk], "t-genesis")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
-        let frontier = mgr.get_frontier("zone-a").unwrap();
+        let frontier = mgr.get_frontier("zone-a").expect("serde deserialization should succeed");
         assert_eq!(frontier.frontier_seq, 0);
         assert_eq!(frontier.frontier_checkpoint_id, genesis.checkpoint_id);
         assert_eq!(frontier.accept_count, 1);
@@ -684,7 +684,7 @@ mod tests {
 
         let mut mgr = CheckpointFrontierManager::new(InMemoryBackend::new());
         mgr.accept_checkpoint("zone-a", &genesis, 1, &[vk], "t-1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let events = mgr.drain_events();
         assert_eq!(events.len(), 1);
@@ -705,7 +705,7 @@ mod tests {
 
         let mut mgr = CheckpointFrontierManager::new(InMemoryBackend::new());
         mgr.accept_checkpoint("zone-a", &genesis, 1, std::slice::from_ref(&vk), "t-0")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let cp1 = build_after(
             &genesis,
@@ -716,13 +716,13 @@ mod tests {
             "zone-a",
         );
         mgr.accept_checkpoint("zone-a", &cp1, 1, std::slice::from_ref(&vk), "t-1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let cp2 = build_after(&cp1, 2, SecurityEpoch::GENESIS, 300, &[sk], "zone-a");
         mgr.accept_checkpoint("zone-a", &cp2, 1, &[vk], "t-2")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
-        let frontier = mgr.get_frontier("zone-a").unwrap();
+        let frontier = mgr.get_frontier("zone-a").expect("serde deserialization should succeed");
         assert_eq!(frontier.frontier_seq, 2);
         assert_eq!(frontier.frontier_checkpoint_id, cp2.checkpoint_id);
         assert_eq!(frontier.accept_count, 3);
@@ -738,7 +738,7 @@ mod tests {
 
         let mut mgr = CheckpointFrontierManager::new(InMemoryBackend::new());
         mgr.accept_checkpoint("zone-a", &genesis, 1, std::slice::from_ref(&vk), "t-0")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let cp1 = build_after(
             &genesis,
@@ -749,7 +749,7 @@ mod tests {
             "zone-a",
         );
         mgr.accept_checkpoint("zone-a", &cp1, 1, std::slice::from_ref(&vk), "t-1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Build a validly-signed checkpoint at seq=0 (rollback to genesis level).
         // This must be rejected even though signatures are valid.
@@ -776,7 +776,7 @@ mod tests {
 
         let mut mgr = CheckpointFrontierManager::new(InMemoryBackend::new());
         mgr.accept_checkpoint("zone-a", &genesis, 1, std::slice::from_ref(&vk), "t-0")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let cp1 = build_after(
             &genesis,
@@ -787,7 +787,7 @@ mod tests {
             "zone-a",
         );
         mgr.accept_checkpoint("zone-a", &cp1, 1, std::slice::from_ref(&vk), "t-1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Drain previous events.
         mgr.drain_events();
@@ -813,7 +813,7 @@ mod tests {
 
         let mut mgr = CheckpointFrontierManager::new(InMemoryBackend::new());
         mgr.accept_checkpoint("zone-a", &genesis, 1, std::slice::from_ref(&vk), "t-0")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let cp1 = build_after(
             &genesis,
@@ -824,7 +824,7 @@ mod tests {
             "zone-a",
         );
         mgr.accept_checkpoint("zone-a", &cp1, 1, std::slice::from_ref(&vk), "t-1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Try to accept cp1 again (same seq=1).
         let dup = build_after(&genesis, 1, SecurityEpoch::GENESIS, 250, &[sk], "zone-a");
@@ -856,11 +856,11 @@ mod tests {
         )
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 1))
         .build(std::slice::from_ref(&sk))
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let mut mgr = CheckpointFrontierManager::new(InMemoryBackend::new());
         mgr.accept_checkpoint("zone-a", &genesis_e5, 1, std::slice::from_ref(&vk), "t-0")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Advance to seq=1, still at epoch 5.
         let cp1 = build_after(
@@ -872,7 +872,7 @@ mod tests {
             "zone-a",
         );
         mgr.accept_checkpoint("zone-a", &cp1, 1, std::slice::from_ref(&vk), "t-1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Build a seq=2 checkpoint at epoch 3 (regression). The builder
         // won't catch this because it only checks against its direct
@@ -887,7 +887,7 @@ mod tests {
         )
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 1))
         .build(std::slice::from_ref(&sk))
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         // Build seq=2 from the epoch-3 chain.
         let regressed_cp = build_after(
@@ -919,9 +919,9 @@ mod tests {
 
         let mut mgr = CheckpointFrontierManager::new(InMemoryBackend::new());
         mgr.accept_checkpoint("zone-a", &genesis_a, 1, std::slice::from_ref(&vk), "t-a0")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         mgr.accept_checkpoint("zone-b", &genesis_b, 1, std::slice::from_ref(&vk), "t-b0")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Advance zone-a to seq=3.
         let cp_a1 = build_after(
@@ -933,7 +933,7 @@ mod tests {
             "zone-a",
         );
         mgr.accept_checkpoint("zone-a", &cp_a1, 1, std::slice::from_ref(&vk), "t-a1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let cp_a2 = build_after(
             &cp_a1,
@@ -944,7 +944,7 @@ mod tests {
             "zone-a",
         );
         mgr.accept_checkpoint("zone-a", &cp_a2, 1, std::slice::from_ref(&vk), "t-a2")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let cp_a3 = build_after(
             &cp_a2,
@@ -955,22 +955,22 @@ mod tests {
             "zone-a",
         );
         mgr.accept_checkpoint("zone-a", &cp_a3, 1, std::slice::from_ref(&vk), "t-a3")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Zone-b should still be at seq=0.
-        let frontier_b = mgr.get_frontier("zone-b").unwrap();
+        let frontier_b = mgr.get_frontier("zone-b").expect("serde deserialization should succeed");
         assert_eq!(frontier_b.frontier_seq, 0);
 
         // Zone-a should be at seq=3.
-        let frontier_a = mgr.get_frontier("zone-a").unwrap();
+        let frontier_a = mgr.get_frontier("zone-a").expect("serde deserialization should succeed");
         assert_eq!(frontier_a.frontier_seq, 3);
 
         // Zone-b can still accept seq=1.
         let cp_b1 = build_after(&genesis_b, 1, SecurityEpoch::GENESIS, 200, &[sk], "zone-b");
         mgr.accept_checkpoint("zone-b", &cp_b1, 1, &[vk], "t-b1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
-        let frontier_b = mgr.get_frontier("zone-b").unwrap();
+        let frontier_b = mgr.get_frontier("zone-b").expect("serde deserialization should succeed");
         assert_eq!(frontier_b.frontier_seq, 1);
     }
 
@@ -979,7 +979,7 @@ mod tests {
     #[test]
     fn quorum_failure_rejects_acceptance() {
         let sk = make_sk(1);
-        let wrong_vk = VerificationKey::from_bytes([0xFF; 32]).unwrap();
+        let wrong_vk = VerificationKey::from_bytes([0xFF; 32]).expect("serde deserialization should succeed");
         let genesis = build_genesis(&[sk], "zone-a");
 
         let mut mgr = CheckpointFrontierManager::new(InMemoryBackend::new());
@@ -1003,10 +1003,10 @@ mod tests {
 
         let mut mgr = CheckpointFrontierManager::new(InMemoryBackend::new());
         mgr.accept_checkpoint("zone-a", &genesis, 1, &[vk], "t-0")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert_eq!(mgr.backend().persist_count, 1);
-        let loaded = mgr.backend().load("zone-a").unwrap().unwrap();
+        let loaded = mgr.backend().load("zone-a").expect("serde deserialization should succeed").expect("serde deserialization should succeed");
         assert_eq!(loaded.frontier_seq, 0);
         assert_eq!(loaded.zone, "zone-a");
     }
@@ -1019,7 +1019,7 @@ mod tests {
 
         let mut mgr = CheckpointFrontierManager::new(InMemoryBackend::new());
         mgr.accept_checkpoint("zone-a", &genesis, 1, std::slice::from_ref(&vk), "t-0")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Enable failure.
         mgr.backend_mut().fail_on_persist = true;
@@ -1032,7 +1032,7 @@ mod tests {
         assert!(matches!(err, FrontierError::PersistenceFailed { .. }));
 
         // Frontier should NOT have advanced.
-        let frontier = mgr.get_frontier("zone-a").unwrap();
+        let frontier = mgr.get_frontier("zone-a").expect("serde deserialization should succeed");
         assert_eq!(frontier.frontier_seq, 0);
     }
 
@@ -1068,14 +1068,14 @@ mod tests {
         let mut state = FrontierState::from_genesis("zone-a", &genesis);
         state.advance(&cp1);
         state.advance(&cp2);
-        backend.persist(&state).unwrap();
+        backend.persist(&state).expect("serde deserialization should succeed");
 
         // Create new manager and recover.
         let mut mgr = CheckpointFrontierManager::new(backend);
-        let count = mgr.recover("t-recover").unwrap();
+        let count = mgr.recover("t-recover").expect("serde deserialization should succeed");
         assert_eq!(count, 1);
 
-        let frontier = mgr.get_frontier("zone-a").unwrap();
+        let frontier = mgr.get_frontier("zone-a").expect("serde deserialization should succeed");
         assert_eq!(frontier.frontier_seq, 2);
         assert_eq!(frontier.accept_count, 3);
 
@@ -1109,9 +1109,9 @@ mod tests {
             "zone-a",
         );
         mgr.accept_checkpoint("zone-a", &cp3, 1, &[vk], "t-3")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
-        let frontier = mgr.get_frontier("zone-a").unwrap();
+        let frontier = mgr.get_frontier("zone-a").expect("serde deserialization should succeed");
         assert_eq!(frontier.frontier_seq, 3);
     }
 
@@ -1125,7 +1125,7 @@ mod tests {
 
         let mut mgr = CheckpointFrontierManager::new(InMemoryBackend::new());
         mgr.accept_checkpoint("zone-a", &genesis, 1, std::slice::from_ref(&vk), "t-0")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let cp1 = build_after(
             &genesis,
@@ -1136,13 +1136,13 @@ mod tests {
             "zone-a",
         );
         mgr.accept_checkpoint("zone-a", &cp1, 1, std::slice::from_ref(&vk), "t-1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let cp2 = build_after(&cp1, 2, SecurityEpoch::GENESIS, 300, &[sk], "zone-a");
         mgr.accept_checkpoint("zone-a", &cp2, 1, &[vk], "t-2")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
-        let frontier = mgr.get_frontier("zone-a").unwrap();
+        let frontier = mgr.get_frontier("zone-a").expect("serde deserialization should succeed");
         assert_eq!(frontier.recent_ids.len(), 3);
         assert_eq!(frontier.recent_ids[0].checkpoint_seq, 0);
         assert_eq!(frontier.recent_ids[1].checkpoint_seq, 1);
@@ -1157,7 +1157,7 @@ mod tests {
 
         let mut mgr = CheckpointFrontierManager::new(InMemoryBackend::new());
         mgr.accept_checkpoint("zone-a", &genesis, 1, std::slice::from_ref(&vk), "t-0")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Accept 40 more checkpoints (exceeds MAX_RECENT_ENTRIES=32).
         let mut prev = genesis;
@@ -1177,14 +1177,14 @@ mod tests {
                 std::slice::from_ref(&vk),
                 &format!("t-{i}"),
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
             prev = cp;
         }
 
-        let frontier = mgr.get_frontier("zone-a").unwrap();
+        let frontier = mgr.get_frontier("zone-a").expect("serde deserialization should succeed");
         assert!(frontier.recent_ids.len() <= FrontierState::MAX_RECENT_ENTRIES);
         // The last entry should be seq=40.
-        assert_eq!(frontier.recent_ids.last().unwrap().checkpoint_seq, 40);
+        assert_eq!(frontier.recent_ids.last().expect("serde deserialization should succeed").checkpoint_seq, 40);
     }
 
     // -- Unknown zone --
@@ -1211,13 +1211,13 @@ mod tests {
         )
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 1))
         .build(&[sk1, sk2])
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let mut mgr = CheckpointFrontierManager::new(InMemoryBackend::new());
         mgr.accept_checkpoint("zone-a", &genesis, 2, &[vk1, vk2], "t-0")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
-        let frontier = mgr.get_frontier("zone-a").unwrap();
+        let frontier = mgr.get_frontier("zone-a").expect("serde deserialization should succeed");
         assert_eq!(frontier.frontier_seq, 0);
     }
 
@@ -1231,7 +1231,7 @@ mod tests {
 
         let mut mgr = CheckpointFrontierManager::new(InMemoryBackend::new());
         mgr.accept_checkpoint("zone-a", &genesis, 1, std::slice::from_ref(&vk), "t-0")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Epoch transition from 0 to 5.
         let cp1 = build_after(
@@ -1243,9 +1243,9 @@ mod tests {
             "zone-a",
         );
         mgr.accept_checkpoint("zone-a", &cp1, 1, &[vk], "t-1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
-        let frontier = mgr.get_frontier("zone-a").unwrap();
+        let frontier = mgr.get_frontier("zone-a").expect("serde deserialization should succeed");
         assert_eq!(frontier.frontier_epoch, SecurityEpoch::from_raw(5));
     }
 
@@ -1261,11 +1261,11 @@ mod tests {
 
         let genesis_a = build_genesis(std::slice::from_ref(&sk), "zone-a");
         mgr.accept_checkpoint("zone-a", &genesis_a, 1, std::slice::from_ref(&vk), "t-a")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let genesis_b = build_genesis(&[sk], "zone-b");
         mgr.accept_checkpoint("zone-b", &genesis_b, 1, &[vk], "t-b")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let zones = mgr.zones();
         assert_eq!(zones.len(), 2);
@@ -1283,7 +1283,7 @@ mod tests {
 
         let mut mgr = CheckpointFrontierManager::new(InMemoryBackend::new());
         mgr.accept_checkpoint("zone-a", &genesis, 1, std::slice::from_ref(&vk), "t-0")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let cp1 = build_after(
             &genesis,
@@ -1294,7 +1294,7 @@ mod tests {
             "zone-a",
         );
         mgr.accept_checkpoint("zone-a", &cp1, 1, std::slice::from_ref(&vk), "t-1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Attempt rollback.
         let rollback = build_genesis(&[sk], "zone-a");
@@ -1314,8 +1314,8 @@ mod tests {
         let genesis = build_genesis(&[sk], "zone-a");
         let state = FrontierState::from_genesis("zone-a", &genesis);
 
-        let json = serde_json::to_string(&state).unwrap();
-        let restored: FrontierState = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&state).expect("serde deserialization should succeed");
+        let restored: FrontierState = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(state, restored);
     }
 
@@ -1336,8 +1336,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap();
-            let restored: FrontierError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let restored: FrontierError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, restored);
         }
     }
@@ -1352,8 +1352,8 @@ mod tests {
             },
             trace_id: "t-1".to_string(),
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let restored: FrontierEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let restored: FrontierEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, restored);
     }
 
@@ -1393,12 +1393,12 @@ mod tests {
 
         let mut mgr = CheckpointFrontierManager::new(InMemoryBackend::new());
         mgr.accept_checkpoint("zone-a", &genesis, 1, std::slice::from_ref(&vk), "t-0")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let cp1 = build_after(&genesis, 1, SecurityEpoch::GENESIS, 200, &[sk], "zone-a");
 
         mgr.verify_linkage_against_frontier("zone-a", &genesis, &cp1)
-            .unwrap();
+            .expect("serde deserialization should succeed");
     }
 
     #[test]
@@ -1409,7 +1409,7 @@ mod tests {
 
         let mut mgr = CheckpointFrontierManager::new(InMemoryBackend::new());
         mgr.accept_checkpoint("zone-a", &genesis, 1, std::slice::from_ref(&vk), "t-0")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let cp1 = build_after(
             &genesis,
@@ -1420,7 +1420,7 @@ mod tests {
             "zone-a",
         );
         mgr.accept_checkpoint("zone-a", &cp1, 1, std::slice::from_ref(&vk), "t-1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Try to verify using genesis as prev (but frontier is at cp1).
         let cp2 = build_after(&cp1, 2, SecurityEpoch::GENESIS, 300, &[sk], "zone-a");
@@ -1578,8 +1578,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap();
-            let restored: FrontierError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let restored: FrontierError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, restored);
         }
     }
@@ -1593,8 +1593,8 @@ mod tests {
             checkpoint_id: EngineObjectId([0xAA; 32]),
             epoch: SecurityEpoch::from_raw(2),
         };
-        let json = serde_json::to_string(&entry).unwrap();
-        let restored: FrontierEntry = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let restored: FrontierEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, restored);
     }
 
@@ -1617,9 +1617,9 @@ mod tests {
 
         let mut mgr = CheckpointFrontierManager::new(InMemoryBackend::new());
         mgr.accept_checkpoint("zone-a", &genesis_a, 1, std::slice::from_ref(&vk), "t-a")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         mgr.accept_checkpoint("zone-b", &genesis_b, 1, &[vk], "t-b")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let zones = mgr.zones();
         assert_eq!(zones.len(), 2);
@@ -1637,7 +1637,7 @@ mod tests {
 
         let mut mgr = CheckpointFrontierManager::new(InMemoryBackend::new());
         mgr.accept_checkpoint("zone-a", &genesis, 1, std::slice::from_ref(&vk), "t-0")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let cp1 = build_after(
             &genesis,
@@ -1648,7 +1648,7 @@ mod tests {
             "zone-a",
         );
         mgr.accept_checkpoint("zone-a", &cp1, 1, std::slice::from_ref(&vk), "t-1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Re-submit cp1 — should be duplicate.
         let err = mgr
@@ -1689,7 +1689,7 @@ mod tests {
 
         let mut mgr = CheckpointFrontierManager::new(InMemoryBackend::new());
         mgr.accept_checkpoint("zone-a", &genesis, 1, std::slice::from_ref(&vk), "t-0")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Enable failure.
         mgr.backend_mut().fail_on_persist = true;
@@ -1701,7 +1701,7 @@ mod tests {
         assert!(matches!(err, FrontierError::PersistenceFailed { .. }));
 
         // Frontier should NOT have advanced.
-        assert_eq!(mgr.get_frontier("zone-a").unwrap().frontier_seq, 0);
+        assert_eq!(mgr.get_frontier("zone-a").expect("serde deserialization should succeed").frontier_seq, 0);
     }
 
     // -- Recovery --
@@ -1713,12 +1713,12 @@ mod tests {
 
         let mut backend = InMemoryBackend::new();
         let state = FrontierState::from_genesis("zone-a", &genesis);
-        backend.persist(&state).unwrap();
+        backend.persist(&state).expect("serde deserialization should succeed");
 
         let mut mgr = CheckpointFrontierManager::new(backend);
-        let count = mgr.recover("t-recover").unwrap();
+        let count = mgr.recover("t-recover").expect("serde deserialization should succeed");
         assert_eq!(count, 1);
-        assert_eq!(mgr.get_frontier("zone-a").unwrap().frontier_seq, 0);
+        assert_eq!(mgr.get_frontier("zone-a").expect("serde deserialization should succeed").frontier_seq, 0);
     }
 
     #[test]
@@ -1729,10 +1729,10 @@ mod tests {
         let mut backend = InMemoryBackend::new();
         backend
             .persist(&FrontierState::from_genesis("zone-a", &genesis))
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let mut mgr = CheckpointFrontierManager::new(backend);
-        mgr.recover("t-recover").unwrap();
+        mgr.recover("t-recover").expect("serde deserialization should succeed");
 
         let events = mgr.drain_events();
         assert_eq!(events.len(), 1);
@@ -1754,12 +1754,12 @@ mod tests {
         assert_eq!(mgr.backend().persist_count, 0);
 
         mgr.accept_checkpoint("zone-a", &genesis, 1, std::slice::from_ref(&vk), "t-0")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(mgr.backend().persist_count, 1);
 
         let cp1 = build_after(&genesis, 1, SecurityEpoch::GENESIS, 200, &[sk], "zone-a");
         mgr.accept_checkpoint("zone-a", &cp1, 1, &[vk], "t-1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(mgr.backend().persist_count, 2);
     }
 
@@ -1773,7 +1773,7 @@ mod tests {
 
         let mut mgr = CheckpointFrontierManager::new(InMemoryBackend::new());
         mgr.accept_checkpoint("zone-a", &genesis, 1, std::slice::from_ref(&vk), "t-0")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let mut prev = genesis;
         for i in 1..=40u64 {
@@ -1792,11 +1792,11 @@ mod tests {
                 std::slice::from_ref(&vk),
                 &format!("t-{i}"),
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
             prev = cp;
         }
 
-        let frontier = mgr.get_frontier("zone-a").unwrap();
+        let frontier = mgr.get_frontier("zone-a").expect("serde deserialization should succeed");
         assert!(frontier.recent_ids.len() <= FrontierState::MAX_RECENT_ENTRIES);
         assert_eq!(frontier.frontier_seq, 40);
         assert_eq!(frontier.accept_count, 41); // genesis + 40
@@ -1807,13 +1807,13 @@ mod tests {
     #[test]
     fn in_memory_backend_load_returns_none_for_missing() {
         let backend = InMemoryBackend::new();
-        assert!(backend.load("nonexistent").unwrap().is_none());
+        assert!(backend.load("nonexistent").expect("serde deserialization should succeed").is_none());
     }
 
     #[test]
     fn in_memory_backend_load_all_empty() {
         let backend = InMemoryBackend::new();
-        assert!(backend.load_all().unwrap().is_empty());
+        assert!(backend.load_all().expect("serde deserialization should succeed").is_empty());
     }
 
     // -- drain_events empties buffer --
@@ -1826,7 +1826,7 @@ mod tests {
 
         let mut mgr = CheckpointFrontierManager::new(InMemoryBackend::new());
         mgr.accept_checkpoint("zone-a", &genesis, 1, &[vk], "t-0")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let events = mgr.drain_events();
         assert!(!events.is_empty());
@@ -2001,8 +2001,8 @@ mod tests {
         let sk = make_sk(1);
         let genesis = build_genesis(std::slice::from_ref(&sk), "zone-a");
         let state = FrontierState::from_genesis("zone-a", &genesis);
-        let json1 = serde_json::to_string(&state).unwrap();
-        let json2 = serde_json::to_string(&state).unwrap();
+        let json1 = serde_json::to_string(&state).expect("serde deserialization should succeed");
+        let json2 = serde_json::to_string(&state).expect("serde deserialization should succeed");
         assert_eq!(json1, json2, "serialization must be deterministic");
     }
 
@@ -2022,9 +2022,9 @@ mod tests {
 
         let mut mgr = CheckpointFrontierManager::new(InMemoryBackend::new());
         mgr.accept_checkpoint("zone-a", &genesis_a, 1, std::slice::from_ref(&vk), "t-a")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         mgr.accept_checkpoint("zone-b", &genesis_b, 1, std::slice::from_ref(&vk), "t-b")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let counts = mgr.event_counts();
         assert_eq!(counts["zone_initialized"], 2);
@@ -2038,8 +2038,8 @@ mod tests {
             zone: "z".into(),
             genesis_seq: 0,
         };
-        let json = serde_json::to_string(&et).unwrap();
-        let back: FrontierEventType = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&et).expect("serde deserialization should succeed");
+        let back: FrontierEventType = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(et, back);
     }
 
@@ -2050,8 +2050,8 @@ mod tests {
             prev_seq: 1,
             new_seq: 2,
         };
-        let json = serde_json::to_string(&et).unwrap();
-        let back: FrontierEventType = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&et).expect("serde deserialization should succeed");
+        let back: FrontierEventType = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(et, back);
     }
 
@@ -2062,8 +2062,8 @@ mod tests {
             frontier_seq: 10,
             attempted_seq: 3,
         };
-        let json = serde_json::to_string(&et).unwrap();
-        let back: FrontierEventType = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&et).expect("serde deserialization should succeed");
+        let back: FrontierEventType = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(et, back);
     }
 
@@ -2073,8 +2073,8 @@ mod tests {
             zone: "z".into(),
             checkpoint_seq: 5,
         };
-        let json = serde_json::to_string(&et).unwrap();
-        let back: FrontierEventType = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&et).expect("serde deserialization should succeed");
+        let back: FrontierEventType = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(et, back);
     }
 
@@ -2085,8 +2085,8 @@ mod tests {
             frontier_epoch: SecurityEpoch::from_raw(5),
             attempted_epoch: SecurityEpoch::from_raw(2),
         };
-        let json = serde_json::to_string(&et).unwrap();
-        let back: FrontierEventType = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&et).expect("serde deserialization should succeed");
+        let back: FrontierEventType = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(et, back);
     }
 
@@ -2096,8 +2096,8 @@ mod tests {
             zone: "z".into(),
             frontier_seq: 42,
         };
-        let json = serde_json::to_string(&et).unwrap();
-        let back: FrontierEventType = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&et).expect("serde deserialization should succeed");
+        let back: FrontierEventType = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(et, back);
     }
 
@@ -2111,7 +2111,7 @@ mod tests {
 
         let mut mgr = CheckpointFrontierManager::new(InMemoryBackend::new());
         mgr.accept_checkpoint("zone-a", &genesis, 1, std::slice::from_ref(&vk), "t-0")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Skip from seq 0 to seq 5 — monotonicity only requires > frontier.
         let cp5 = build_after(
@@ -2123,9 +2123,9 @@ mod tests {
             "zone-a",
         );
         mgr.accept_checkpoint("zone-a", &cp5, 1, std::slice::from_ref(&vk), "t-5")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
-        let frontier = mgr.get_frontier("zone-a").unwrap();
+        let frontier = mgr.get_frontier("zone-a").expect("serde deserialization should succeed");
         assert_eq!(frontier.frontier_seq, 5);
         assert_eq!(frontier.accept_count, 2);
     }
@@ -2140,7 +2140,7 @@ mod tests {
 
         let mut mgr = CheckpointFrontierManager::new(InMemoryBackend::new());
         mgr.accept_checkpoint("zone-a", &genesis, 1, std::slice::from_ref(&vk), "trace-42")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let events = mgr.drain_events();
         assert_eq!(events[0].trace_id, "trace-42");
@@ -2158,15 +2158,15 @@ mod tests {
         // Insert in reverse alphabetical order.
         let genesis_c = build_genesis(std::slice::from_ref(&sk), "zone-c");
         mgr.accept_checkpoint("zone-c", &genesis_c, 1, std::slice::from_ref(&vk), "t-c")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let genesis_a = build_genesis(std::slice::from_ref(&sk), "zone-a");
         mgr.accept_checkpoint("zone-a", &genesis_a, 1, std::slice::from_ref(&vk), "t-a")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let genesis_b = build_genesis(std::slice::from_ref(&sk), "zone-b");
         mgr.accept_checkpoint("zone-b", &genesis_b, 1, std::slice::from_ref(&vk), "t-b")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let zones = mgr.zones();
         assert_eq!(zones, vec!["zone-a", "zone-b", "zone-c"]);
@@ -2183,13 +2183,13 @@ mod tests {
         let mut backend = InMemoryBackend::new();
         backend
             .persist(&FrontierState::from_genesis("zone-a", &genesis_a))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         backend
             .persist(&FrontierState::from_genesis("zone-b", &genesis_b))
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let mut mgr = CheckpointFrontierManager::new(backend);
-        let count = mgr.recover("t-recover-multi").unwrap();
+        let count = mgr.recover("t-recover-multi").expect("serde deserialization should succeed");
         assert_eq!(count, 2);
 
         assert!(mgr.get_frontier("zone-a").is_some());
@@ -2219,11 +2219,11 @@ mod tests {
         )
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 1))
         .build(std::slice::from_ref(&sk))
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let mut mgr = CheckpointFrontierManager::new(InMemoryBackend::new());
         mgr.accept_checkpoint("zone-a", &genesis_e5, 1, std::slice::from_ref(&vk), "t-0")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let cp1 = build_after(
             &genesis_e5,
@@ -2234,7 +2234,7 @@ mod tests {
             "zone-a",
         );
         mgr.accept_checkpoint("zone-a", &cp1, 1, std::slice::from_ref(&vk), "t-1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Trigger duplicate (seq=1 again).
         let _ = mgr.accept_checkpoint("zone-a", &cp1, 1, std::slice::from_ref(&vk), "t-dup");
@@ -2247,7 +2247,7 @@ mod tests {
         )
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 1))
         .build(std::slice::from_ref(&sk))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let regressed = build_after(
             &low_epoch_genesis,
             2,
@@ -2315,8 +2315,8 @@ mod tests {
             },
         ];
         for event in &events {
-            let json = serde_json::to_string(event).unwrap();
-            let back: FrontierEvent = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(event).expect("serde deserialization should succeed");
+            let back: FrontierEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*event, back);
         }
     }
@@ -2334,7 +2334,7 @@ mod tests {
         assert!(!mgr.backend().fail_on_persist);
 
         mgr.accept_checkpoint("zone-a", &genesis, 1, std::slice::from_ref(&vk), "t-0")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(mgr.backend().persist_count, 1);
     }
 
@@ -2348,9 +2348,9 @@ mod tests {
 
         let mut mgr = CheckpointFrontierManager::new(InMemoryBackend::new());
         mgr.accept_checkpoint("zone-a", &genesis, 1, std::slice::from_ref(&vk), "t-0")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(
-            mgr.get_frontier("zone-a").unwrap().frontier_epoch,
+            mgr.get_frontier("zone-a").expect("serde deserialization should succeed").frontier_epoch,
             SecurityEpoch::GENESIS
         );
 
@@ -2364,9 +2364,9 @@ mod tests {
             "zone-a",
         );
         mgr.accept_checkpoint("zone-a", &cp1, 1, std::slice::from_ref(&vk), "t-1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(
-            mgr.get_frontier("zone-a").unwrap().frontier_epoch,
+            mgr.get_frontier("zone-a").expect("serde deserialization should succeed").frontier_epoch,
             SecurityEpoch::from_raw(3)
         );
 
@@ -2380,9 +2380,9 @@ mod tests {
             "zone-a",
         );
         mgr.accept_checkpoint("zone-a", &cp2, 1, std::slice::from_ref(&vk), "t-2")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(
-            mgr.get_frontier("zone-a").unwrap().frontier_epoch,
+            mgr.get_frontier("zone-a").expect("serde deserialization should succeed").frontier_epoch,
             SecurityEpoch::from_raw(7)
         );
     }
@@ -2397,8 +2397,8 @@ mod tests {
 
         let mut mgr = CheckpointFrontierManager::new(InMemoryBackend::new());
         mgr.accept_checkpoint("zone-a", &genesis, 1, std::slice::from_ref(&vk), "t-0")
-            .unwrap();
-        assert_eq!(mgr.get_frontier("zone-a").unwrap().accept_count, 1);
+            .expect("serde deserialization should succeed");
+        assert_eq!(mgr.get_frontier("zone-a").expect("serde deserialization should succeed").accept_count, 1);
 
         let mut prev = genesis;
         for i in 1..=5u64 {
@@ -2417,10 +2417,10 @@ mod tests {
                 std::slice::from_ref(&vk),
                 &format!("t-{i}"),
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
             prev = cp;
         }
-        assert_eq!(mgr.get_frontier("zone-a").unwrap().accept_count, 6);
+        assert_eq!(mgr.get_frontier("zone-a").expect("serde deserialization should succeed").accept_count, 6);
     }
 
     // -- Enrichment: FrontierState clone equality --
@@ -2444,7 +2444,7 @@ mod tests {
 
         let mut mgr = CheckpointFrontierManager::new(InMemoryBackend::new());
         mgr.accept_checkpoint("zone-a", &genesis, 1, std::slice::from_ref(&vk), "t-0")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let cp1 = build_after(
             &genesis,
@@ -2455,7 +2455,7 @@ mod tests {
             "zone-a",
         );
         mgr.accept_checkpoint("zone-a", &cp1, 1, std::slice::from_ref(&vk), "t-1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let cp2 = build_after(
             &cp1,
@@ -2466,7 +2466,7 @@ mod tests {
             "zone-a",
         );
         mgr.accept_checkpoint("zone-a", &cp2, 1, std::slice::from_ref(&vk), "t-2")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         mgr.drain_events(); // clear
 
@@ -2501,8 +2501,8 @@ mod tests {
         let state1 = FrontierState::from_genesis("zone-a", &genesis);
 
         let mut backend = InMemoryBackend::new();
-        backend.persist(&state1).unwrap();
-        assert_eq!(backend.load("zone-a").unwrap().unwrap().accept_count, 1);
+        backend.persist(&state1).expect("serde deserialization should succeed");
+        assert_eq!(backend.load("zone-a").expect("serde deserialization should succeed").expect("serde deserialization should succeed").accept_count, 1);
 
         // Overwrite with updated state.
         let mut state2 = state1;
@@ -2515,9 +2515,9 @@ mod tests {
             "zone-a",
         );
         state2.advance(&cp1);
-        backend.persist(&state2).unwrap();
+        backend.persist(&state2).expect("serde deserialization should succeed");
 
-        let loaded = backend.load("zone-a").unwrap().unwrap();
+        let loaded = backend.load("zone-a").expect("serde deserialization should succeed").expect("serde deserialization should succeed");
         assert_eq!(loaded.accept_count, 2);
         assert_eq!(loaded.frontier_seq, 1);
     }
@@ -2532,7 +2532,7 @@ mod tests {
 
         let mut mgr = CheckpointFrontierManager::new(InMemoryBackend::new());
         mgr.accept_checkpoint("zone-a", &genesis, 1, std::slice::from_ref(&vk), "t-0")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         mgr.drain_events(); // clear genesis event
 
         let cp1 = build_after(
@@ -2544,7 +2544,7 @@ mod tests {
             "zone-a",
         );
         mgr.accept_checkpoint("zone-a", &cp1, 1, std::slice::from_ref(&vk), "t-1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let events = mgr.drain_events();
         assert_eq!(events.len(), 1);
@@ -2664,8 +2664,8 @@ mod tests {
                 },
             ],
         };
-        let json = serde_json::to_string(&state).unwrap();
-        let back: FrontierState = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&state).expect("serde deserialization should succeed");
+        let back: FrontierState = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(state, back);
         assert_eq!(back.recent_ids.len(), 2);
     }
@@ -2679,15 +2679,15 @@ mod tests {
             },
             trace_id: "trace-42".into(),
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let back: FrontierEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let back: FrontierEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.trace_id, "trace-42");
     }
 
     #[test]
     fn in_memory_backend_load_nonexistent_returns_none() {
         let backend = InMemoryBackend::new();
-        assert!(backend.load("does-not-exist").unwrap().is_none());
+        assert!(backend.load("does-not-exist").expect("serde deserialization should succeed").is_none());
     }
 
     #[test]
@@ -2728,14 +2728,14 @@ mod tests {
             accept_count: 6,
             recent_ids: Vec::new(),
         };
-        backend.persist(&state).unwrap();
+        backend.persist(&state).expect("serde deserialization should succeed");
 
         let mut mgr = CheckpointFrontierManager::new(backend);
         assert!(mgr.get_frontier("zone-a").is_none());
 
-        let count = mgr.recover("t-recover").unwrap();
+        let count = mgr.recover("t-recover").expect("serde deserialization should succeed");
         assert_eq!(count, 1);
-        let loaded = mgr.get_frontier("zone-a").unwrap();
+        let loaded = mgr.get_frontier("zone-a").expect("serde deserialization should succeed");
         assert_eq!(loaded.frontier_seq, 5);
     }
 
@@ -2751,9 +2751,9 @@ mod tests {
             accept_count: 1,
             recent_ids: Vec::new(),
         };
-        backend.persist(&state).unwrap();
+        backend.persist(&state).expect("serde deserialization should succeed");
         assert_eq!(backend.persist_count, 1);
-        backend.persist(&state).unwrap();
+        backend.persist(&state).expect("serde deserialization should succeed");
         assert_eq!(backend.persist_count, 2);
     }
 
@@ -2766,9 +2766,9 @@ mod tests {
 
         let mut mgr = CheckpointFrontierManager::new(InMemoryBackend::new());
         mgr.accept_checkpoint("zone-a", &genesis_a, 1, std::slice::from_ref(&vk), "t-0")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         mgr.accept_checkpoint("zone-b", &genesis_b, 1, std::slice::from_ref(&vk), "t-1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let mut zones = mgr.zones();
         zones.sort();

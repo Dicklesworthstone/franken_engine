@@ -683,15 +683,15 @@ mod tests {
     #[test]
     fn partition_from_str_valid() {
         assert_eq!(
-            "smoke".parse::<OraclePartition>().unwrap(),
+            "smoke".parse::<OraclePartition>().expect("serde deserialization should succeed"),
             OraclePartition::Smoke
         );
         assert_eq!(
-            "full".parse::<OraclePartition>().unwrap(),
+            "full".parse::<OraclePartition>().expect("serde deserialization should succeed"),
             OraclePartition::Full
         );
         assert_eq!(
-            "nightly".parse::<OraclePartition>().unwrap(),
+            "nightly".parse::<OraclePartition>().expect("serde deserialization should succeed"),
             OraclePartition::Nightly
         );
     }
@@ -709,8 +709,8 @@ mod tests {
             OraclePartition::Full,
             OraclePartition::Nightly,
         ] {
-            let json = serde_json::to_string(&partition).unwrap();
-            let back: OraclePartition = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&partition).expect("serde deserialization should succeed");
+            let back: OraclePartition = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(back, partition);
         }
     }
@@ -728,11 +728,11 @@ mod tests {
     #[test]
     fn gate_mode_from_str_valid() {
         assert_eq!(
-            "report_only".parse::<OracleGateMode>().unwrap(),
+            "report_only".parse::<OracleGateMode>().expect("serde deserialization should succeed"),
             OracleGateMode::ReportOnly
         );
         assert_eq!(
-            "fail_closed".parse::<OracleGateMode>().unwrap(),
+            "fail_closed".parse::<OracleGateMode>().expect("serde deserialization should succeed"),
             OracleGateMode::FailClosed
         );
     }
@@ -746,8 +746,8 @@ mod tests {
     #[test]
     fn gate_mode_serde_roundtrip() {
         for mode in [OracleGateMode::ReportOnly, OracleGateMode::FailClosed] {
-            let json = serde_json::to_string(&mode).unwrap();
-            let back: OracleGateMode = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&mode).expect("serde deserialization should succeed");
+            let back: OracleGateMode = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(back, mode);
         }
     }
@@ -804,8 +804,8 @@ mod tests {
             DriftClass::HarnessNondeterminism,
             DriftClass::ArtifactIntegrityFailure,
         ] {
-            let json = serde_json::to_string(&class).unwrap();
-            let back: DriftClass = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&class).expect("serde deserialization should succeed");
+            let back: DriftClass = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(back, class);
         }
     }
@@ -823,8 +823,8 @@ mod tests {
     #[test]
     fn gate_action_serde_roundtrip() {
         for action in [GateAction::Promote, GateAction::Hold, GateAction::Reject] {
-            let json = serde_json::to_string(&action).unwrap();
-            let back: GateAction = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&action).expect("serde deserialization should succeed");
+            let back: GateAction = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(back, action);
         }
     }
@@ -839,7 +839,7 @@ mod tests {
         hash[0] = 0xab;
         hash[31] = 0xcd;
         let obs = ParseObservation::Hash(hash);
-        let hex_str = obs.hash_hex().unwrap();
+        let hex_str = obs.hash_hex().expect("serde deserialization should succeed");
         assert!(hex_str.starts_with("sha256:"));
         assert!(hex_str.contains("ab"));
         assert!(hex_str.contains("cd"));
@@ -854,7 +854,7 @@ mod tests {
     #[test]
     fn parse_observation_error_code_some() {
         let obs = ParseObservation::Error(ParseErrorCode::UnsupportedSyntax);
-        let code = obs.error_code().unwrap();
+        let code = obs.error_code().expect("serde deserialization should succeed");
         assert!(!code.is_empty());
     }
 
@@ -1102,7 +1102,7 @@ mod tests {
             decision
                 .fallback_reason
                 .as_deref()
-                .unwrap()
+                .expect("serde deserialization should succeed")
                 .contains("critical")
         );
     }
@@ -1118,7 +1118,7 @@ mod tests {
             decision
                 .fallback_reason
                 .as_deref()
-                .unwrap()
+                .expect("serde deserialization should succeed")
                 .contains("minor")
         );
     }
@@ -1218,7 +1218,7 @@ mod tests {
             expected_hash: String::new(),
         };
         assert_eq!(
-            parse_goal_from_fixture(&fixture).unwrap(),
+            parse_goal_from_fixture(&fixture).expect("serde deserialization should succeed"),
             ParseGoal::Script
         );
     }
@@ -1233,7 +1233,7 @@ mod tests {
             expected_hash: String::new(),
         };
         assert_eq!(
-            parse_goal_from_fixture(&fixture).unwrap(),
+            parse_goal_from_fixture(&fixture).expect("serde deserialization should succeed"),
             ParseGoal::Module
         );
     }
@@ -1421,7 +1421,7 @@ mod tests {
             latency_ns: 1000,
             replay_command: "cargo run ...".to_string(),
         };
-        let json = serde_json::to_string(&result).unwrap();
+        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
         assert!(json.contains("f-01"));
         assert!(json.contains("equivalent"));
     }
@@ -1455,7 +1455,7 @@ mod tests {
             fallback_triggered: false,
             fallback_reason: Some("minor drift".to_string()),
         };
-        let json = serde_json::to_string(&decision).unwrap();
+        let json = serde_json::to_string(&decision).expect("serde deserialization should succeed");
         assert!(json.contains("hold"));
         assert!(json.contains("minor drift"));
     }

@@ -2736,9 +2736,9 @@ mod tests {
             CampaignGeneratorConfig::default(),
             seed,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         // SAFETY: Test helper campaign generation with valid generator should succeed
-        generator.generate_campaign(complexity).unwrap()
+        generator.generate_campaign(complexity).expect("serde deserialization should succeed")
     }
 
     fn outcome_record(
@@ -2749,7 +2749,7 @@ mod tests {
         timestamp_ns: u64,
     ) -> CampaignOutcomeRecord {
         // SAFETY: Test helper with valid campaign execution result should produce valid score
-        let score = ExploitObjectiveScore::from_result(&result).unwrap();
+        let score = ExploitObjectiveScore::from_result(&result).expect("serde deserialization should succeed");
         CampaignOutcomeRecord {
             campaign,
             result,
@@ -2777,14 +2777,14 @@ mod tests {
         let config = CampaignGeneratorConfig::default();
 
         // SAFETY: Test creating generator with default grammar, config, and valid seed should succeed
-        let mut a = CampaignGenerator::new(grammar.clone(), config.clone(), 0xA11CE).unwrap();
+        let mut a = CampaignGenerator::new(grammar.clone(), config.clone(), 0xA11CE).expect("serde deserialization should succeed");
         // SAFETY: Test creating identical generator with same parameters should succeed
-        let mut b = CampaignGenerator::new(grammar, config, 0xA11CE).unwrap();
+        let mut b = CampaignGenerator::new(grammar, config, 0xA11CE).expect("serde deserialization should succeed");
 
         // SAFETY: Generator created with valid parameters should successfully generate campaigns
-        let first = a.generate_campaign(CampaignComplexity::MultiStage).unwrap();
+        let first = a.generate_campaign(CampaignComplexity::MultiStage).expect("serde deserialization should succeed");
         // SAFETY: Generator created with valid parameters should successfully generate campaigns
-        let second = b.generate_campaign(CampaignComplexity::MultiStage).unwrap();
+        let second = b.generate_campaign(CampaignComplexity::MultiStage).expect("serde deserialization should succeed");
         assert_eq!(first, second);
     }
 
@@ -2794,11 +2794,11 @@ mod tests {
         // SAFETY: Creating generator with default grammar, config, and valid seed should succeed
         let mut generator =
             CampaignGenerator::new(grammar.clone(), CampaignGeneratorConfig::default(), 0xA11CE)
-                .unwrap();
+                .expect("serde deserialization should succeed");
         // SAFETY: Generator created with valid parameters should successfully generate campaigns
         let base = generator
             .generate_campaign(CampaignComplexity::Probe)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let mutated = MutationEngine::mutate(
             &base,
@@ -2810,10 +2810,10 @@ mod tests {
             },
         )
         // SAFETY: MutationEngine with valid grammar and mutation request should succeed
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         // SAFETY: Mutated campaign from valid base should pass validation
-        mutated.validate().unwrap();
+        mutated.validate().expect("serde deserialization should succeed");
         for (idx, step) in mutated.steps.iter().enumerate() {
             assert_eq!(step.step_id as usize, idx);
         }
@@ -2821,8 +2821,8 @@ mod tests {
 
     #[test]
     fn exploit_scoring_is_deterministic() {
-        let score_a = ExploitObjectiveScore::from_result(&sample_result()).unwrap();
-        let score_b = ExploitObjectiveScore::from_result(&sample_result()).unwrap();
+        let score_a = ExploitObjectiveScore::from_result(&sample_result()).expect("serde deserialization should succeed");
+        let score_b = ExploitObjectiveScore::from_result(&sample_result()).expect("serde deserialization should succeed");
         assert_eq!(score_a, score_b);
         assert_eq!(score_a.difficulty, ContainmentDifficulty::Easy);
     }
@@ -2834,15 +2834,15 @@ mod tests {
             CampaignGeneratorConfig::default(),
             0xA11CE,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let campaign = generator
             .generate_campaign(CampaignComplexity::Apt)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let original_len = campaign.steps.len();
 
         let (minimized, proof) =
             AutoMinimizer::minimize_with(&campaign, |candidate| candidate.steps.len() >= 3)
-                .unwrap();
+                .expect("serde deserialization should succeed");
 
         assert!(minimized.steps.len() < original_len);
         assert!(minimized.steps.len() >= 3);
@@ -2861,7 +2861,7 @@ mod tests {
             },
             0xD00D,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let outputs = generator
             .run_cycle(CampaignComplexity::Probe, 0, |_campaign| {
@@ -2874,7 +2874,7 @@ mod tests {
                     novel_technique: true,
                 }
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert_eq!(outputs.len(), 1);
         assert!(!generator.regression_corpus().is_empty());
@@ -2905,7 +2905,7 @@ mod tests {
             },
             0xFACE,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         assert_eq!(generator.plan_campaign_count(5), 0);
         assert_eq!(generator.plan_campaign_count(4), 1);
@@ -2926,7 +2926,7 @@ mod tests {
 
         let mut integrator =
             RedBlueLoopIntegrator::new(RedBlueCalibrationConfig::default(), Default::default());
-        let classification = integrator.ingest_outcome(outcome).unwrap();
+        let classification = integrator.ingest_outcome(outcome).expect("serde deserialization should succeed");
 
         assert_eq!(classification.severity, CampaignSeverity::Blocking);
         assert_eq!(classification.subsystem, DefenseSubsystem::Containment);
@@ -2968,7 +2968,7 @@ mod tests {
                     false,
                     1_700_000_000_200 + idx,
                 ))
-                .unwrap();
+                .expect("serde deserialization should succeed");
         }
 
         let signing_key = [21u8; 32];
@@ -2977,8 +2977,8 @@ mod tests {
             .detection_threshold_millionths;
         let receipt = integrator
             .calibrate(&signing_key, 1_700_000_010_000)
-            .unwrap()
-            .unwrap();
+            .expect("serde deserialization should succeed")
+            .expect("serde deserialization should succeed");
         let new_threshold = integrator
             .calibration_state()
             .detection_threshold_millionths;
@@ -3019,7 +3019,7 @@ mod tests {
                     true,
                     1_700_000_000_300 + idx,
                 ))
-                .unwrap();
+                .expect("serde deserialization should succeed");
         }
 
         let signing_key = [22u8; 32];
@@ -3028,8 +3028,8 @@ mod tests {
             .detection_threshold_millionths;
         let _receipt = integrator
             .calibrate(&signing_key, 1_700_000_020_000)
-            .unwrap()
-            .unwrap();
+            .expect("serde deserialization should succeed")
+            .expect("serde deserialization should succeed");
         let new_threshold = integrator
             .calibration_state()
             .detection_threshold_millionths;
@@ -3061,11 +3061,11 @@ mod tests {
                 false,
                 1_700_000_000_400,
             ))
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let entry = integrator
             .promote_regression_fixture(&campaign_id, "containment", "late-detect", None)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(entry.campaign_id, campaign_id);
         assert_eq!(integrator.regression_suite().len(), 1);
 
@@ -3102,7 +3102,7 @@ mod tests {
                 false,
                 1_700_000_000_500,
             ))
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let hints = integrator.critical_counterfactual_hints();
         assert_eq!(hints.len(), 1);
@@ -3484,8 +3484,8 @@ mod tests {
             },
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let restored: CampaignError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let restored: CampaignError = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
             assert_eq!(*v, restored);
         }
     }
@@ -3497,8 +3497,8 @@ mod tests {
             CampaignComplexity::MultiStage,
             CampaignComplexity::Apt,
         ] {
-            let json = serde_json::to_string(&v).unwrap();
-            let restored: CampaignComplexity = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let restored: CampaignComplexity = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
             assert_eq!(v, restored);
         }
     }
@@ -3512,8 +3512,8 @@ mod tests {
             AttackDimension::PolicyEvasion,
             AttackDimension::Exfiltration,
         ] {
-            let json = serde_json::to_string(&v).unwrap();
-            let restored: AttackDimension = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let restored: AttackDimension = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
             assert_eq!(v, restored);
         }
     }
@@ -3527,8 +3527,8 @@ mod tests {
             MutationOperator::Deletion,
             MutationOperator::TemporalShift,
         ] {
-            let json = serde_json::to_string(&v).unwrap();
-            let restored: MutationOperator = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let restored: MutationOperator = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
             assert_eq!(v, restored);
         }
     }
@@ -3541,8 +3541,8 @@ mod tests {
             ContainmentDifficulty::Hard,
             ContainmentDifficulty::Critical,
         ] {
-            let json = serde_json::to_string(&v).unwrap();
-            let restored: ContainmentDifficulty = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let restored: ContainmentDifficulty = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
             assert_eq!(v, restored);
         }
     }
@@ -3555,8 +3555,8 @@ mod tests {
             CampaignSeverity::Critical,
             CampaignSeverity::Blocking,
         ] {
-            let json = serde_json::to_string(&v).unwrap();
-            let restored: CampaignSeverity = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let restored: CampaignSeverity = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
             assert_eq!(v, restored);
         }
     }
@@ -3569,8 +3569,8 @@ mod tests {
             DefenseSubsystem::EvidenceAccumulation,
             DefenseSubsystem::FleetConvergence,
         ] {
-            let json = serde_json::to_string(&v).unwrap();
-            let restored: DefenseSubsystem = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let restored: DefenseSubsystem = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
             assert_eq!(v, restored);
         }
     }
@@ -3584,8 +3584,8 @@ mod tests {
             ThreatCategory::Exfiltration,
             ThreatCategory::PolicyEvasion,
         ] {
-            let json = serde_json::to_string(&v).unwrap();
-            let restored: ThreatCategory = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let restored: ThreatCategory = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
             assert_eq!(v, restored);
         }
     }
@@ -3604,8 +3604,8 @@ mod tests {
 
     #[test]
     fn rng_deterministic() {
-        let mut a = DeterministicRng::new(42).unwrap();
-        let mut b = DeterministicRng::new(42).unwrap();
+        let mut a = DeterministicRng::new(42).expect("serde deserialization should succeed");
+        let mut b = DeterministicRng::new(42).expect("serde deserialization should succeed");
         for _ in 0..10 {
             assert_eq!(a.next_u64(), b.next_u64());
         }
@@ -3613,22 +3613,22 @@ mod tests {
 
     #[test]
     fn rng_choose_index_zero_len() {
-        let mut rng = DeterministicRng::new(1).unwrap();
+        let mut rng = DeterministicRng::new(1).expect("serde deserialization should succeed");
         assert_eq!(rng.choose_index(0), 0);
     }
 
     #[test]
     fn rng_range_degenerate() {
-        let mut rng = DeterministicRng::new(1).unwrap();
+        let mut rng = DeterministicRng::new(1).expect("serde deserialization should succeed");
         assert_eq!(rng.range_u64(5, 5), 5);
         assert_eq!(rng.range_u64(10, 3), 10); // end < start
     }
 
     #[test]
     fn rng_serde_roundtrip() {
-        let rng = DeterministicRng::new(42).unwrap();
-        let json = serde_json::to_string(&rng).unwrap();
-        let restored: DeterministicRng = serde_json::from_str(&json).unwrap();
+        let rng = DeterministicRng::new(42).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&rng).expect("serde deserialization should succeed");
+        let restored: DeterministicRng = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(rng, restored);
     }
 
@@ -3715,7 +3715,7 @@ mod tests {
             evidence_atoms_before_detection: 50,
             novel_technique: true,
         };
-        let score = ExploitObjectiveScore::from_result(&result).unwrap();
+        let score = ExploitObjectiveScore::from_result(&result).expect("serde deserialization should succeed");
         assert_eq!(score.difficulty, ContainmentDifficulty::Critical);
     }
 
@@ -3797,10 +3797,10 @@ mod tests {
         let grammar = AttackGrammar::default();
         let mut generator =
             CampaignGenerator::new(grammar.clone(), CampaignGeneratorConfig::default(), 0xF00D)
-                .unwrap();
+                .expect("serde deserialization should succeed");
         let mut campaign = generator
             .generate_campaign(CampaignComplexity::Probe)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         campaign.steps.truncate(1);
         campaign.steps[0].step_id = 0;
 
@@ -3828,8 +3828,8 @@ mod tests {
             CampaignRuntime::NodeLts,
             CampaignRuntime::BunStable,
         ] {
-            let json = serde_json::to_string(&v).unwrap();
-            let restored: CampaignRuntime = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let restored: CampaignRuntime = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
             assert_eq!(v, restored);
         }
     }
@@ -3837,8 +3837,8 @@ mod tests {
     #[test]
     fn campaign_attack_category_serde_roundtrip() {
         for v in CampaignAttackCategory::ALL {
-            let json = serde_json::to_string(&v).unwrap();
-            let restored: CampaignAttackCategory = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let restored: CampaignAttackCategory = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
             assert_eq!(v, restored);
         }
     }
@@ -3868,8 +3868,8 @@ mod tests {
             },
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let restored: AttackStepKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let restored: AttackStepKind = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
             assert_eq!(*v, restored);
         }
     }
@@ -3884,8 +3884,8 @@ mod tests {
             label: "motif_a".to_string(),
             weight: 10,
         };
-        let json = serde_json::to_string(&wp).unwrap();
-        let restored: WeightedProduction = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&wp).expect("serde deserialization should succeed");
+        let restored: WeightedProduction = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(wp, restored);
     }
 
@@ -3900,8 +3900,8 @@ mod tests {
                 chunk_count: 5,
             },
         };
-        let json = serde_json::to_string(&step).unwrap();
-        let restored: AttackStep = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&step).expect("serde deserialization should succeed");
+        let restored: AttackStep = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(step, restored);
     }
 
@@ -3915,8 +3915,8 @@ mod tests {
             evidence_atoms_before_detection: 3,
             novel_technique: true,
         };
-        let json = serde_json::to_string(&res).unwrap();
-        let restored: CampaignExecutionResult = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&res).expect("serde deserialization should succeed");
+        let restored: CampaignExecutionResult = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(res, restored);
     }
 
@@ -3933,8 +3933,8 @@ mod tests {
             campaign_id: "c-1".to_string(),
             composite_score_millionths: 500_000,
         };
-        let json = serde_json::to_string(&ev).unwrap();
-        let restored: CampaignEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
+        let restored: CampaignEvent = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(ev, restored);
     }
 
@@ -3949,8 +3949,8 @@ mod tests {
             containment_escape_report: false,
             near_miss_report: false,
         };
-        let json = serde_json::to_string(&cls).unwrap();
-        let restored: CampaignClassification = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&cls).expect("serde deserialization should succeed");
+        let restored: CampaignClassification = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(cls, restored);
     }
 
@@ -3964,8 +3964,8 @@ mod tests {
             detection_rate_millionths: 900_000,
             escape_rate_millionths: 50_000,
         };
-        let json = serde_json::to_string(&te).unwrap();
-        let restored: TechniqueEffectiveness = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&te).expect("serde deserialization should succeed");
+        let restored: TechniqueEffectiveness = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(te, restored);
     }
 
@@ -3976,8 +3976,8 @@ mod tests {
             evidence_weights_millionths: BTreeMap::new(),
             loss_matrix_millionths: BTreeMap::new(),
         };
-        let json = serde_json::to_string(&snap).unwrap();
-        let restored: CalibrationSnapshot = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&snap).expect("serde deserialization should succeed");
+        let restored: CalibrationSnapshot = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(snap, restored);
     }
 
@@ -3988,8 +3988,8 @@ mod tests {
             removed_steps: 3,
             is_fixed_point: true,
         };
-        let json = serde_json::to_string(&mp).unwrap();
-        let restored: MinimizationProof = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&mp).expect("serde deserialization should succeed");
+        let restored: MinimizationProof = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(mp, restored);
     }
 
@@ -4005,8 +4005,8 @@ mod tests {
             p_value_millionths: 1_000,
             statistically_significant: true,
         };
-        let json = serde_json::to_string(&cmp).unwrap();
-        let restored: SuppressionComparison = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&cmp).expect("serde deserialization should succeed");
+        let restored: SuppressionComparison = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(cmp, restored);
     }
 
@@ -4021,8 +4021,8 @@ mod tests {
             raw_log_ref: "ref-log".to_string(),
             repro_script_ref: "ref-repro".to_string(),
         };
-        let json = serde_json::to_string(&s).unwrap();
-        let restored: CampaignSuppressionSample = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+        let restored: CampaignSuppressionSample = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(s, restored);
     }
 
@@ -4172,8 +4172,8 @@ mod tests {
             timestamp_ns: 1_000_000_000,
             samples_evaluated: 42,
         };
-        let json = serde_json::to_string(&pt).unwrap();
-        let restored: CampaignTrendPoint = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&pt).expect("serde deserialization should succeed");
+        let restored: CampaignTrendPoint = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(pt, restored);
     }
 
@@ -4187,8 +4187,8 @@ mod tests {
             escalation_triggered: true,
             escalation_latency_seconds: Some(5),
         };
-        let json = serde_json::to_string(&rec).unwrap();
-        let restored: ExploitEscalationRecord = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&rec).expect("serde deserialization should succeed");
+        let restored: ExploitEscalationRecord = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(rec, restored);
     }
 
@@ -4214,8 +4214,8 @@ mod tests {
             }],
             escalations: vec![],
         };
-        let json = serde_json::to_string(&input).unwrap();
-        let restored: SuppressionGateInput = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
+        let restored: SuppressionGateInput = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(input, restored);
     }
 
@@ -4285,13 +4285,13 @@ mod tests {
 
     #[test]
     fn rng_range_u64_single_value() {
-        let mut rng = DeterministicRng::new(42).unwrap();
+        let mut rng = DeterministicRng::new(42).expect("serde deserialization should succeed");
         assert_eq!(rng.range_u64(7, 7), 7);
     }
 
     #[test]
     fn rng_choose_index_one_element() {
-        let mut rng = DeterministicRng::new(42).unwrap();
+        let mut rng = DeterministicRng::new(42).expect("serde deserialization should succeed");
         assert_eq!(rng.choose_index(1), 0);
     }
 
@@ -4370,8 +4370,8 @@ mod tests {
                 is_fixed_point: true,
             },
         );
-        let json = serde_json::to_string(&fixture).unwrap();
-        let restored: DeterministicReproFixture = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&fixture).expect("serde deserialization should succeed");
+        let restored: DeterministicReproFixture = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(fixture, restored);
     }
 
@@ -4381,8 +4381,8 @@ mod tests {
             campaign_id: "camp-abc".to_string(),
             passed: true,
         };
-        let json = serde_json::to_string(&r).unwrap();
-        let restored: RegressionReplayResult = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let restored: RegressionReplayResult = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(r, restored);
     }
 
@@ -4392,8 +4392,8 @@ mod tests {
             passed: false,
             failed_campaign_ids: vec!["camp-x".to_string()],
         };
-        let json = serde_json::to_string(&d).unwrap();
-        let restored: RegressionGateDecision = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
+        let restored: RegressionGateDecision = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(d, restored);
     }
 
@@ -4405,8 +4405,8 @@ mod tests {
             threshold_adjustment_needed_millionths: -50_000,
             would_previous_week_detect: true,
         };
-        let json = serde_json::to_string(&h).unwrap();
-        let restored: CounterfactualHint = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&h).expect("serde deserialization should succeed");
+        let restored: CounterfactualHint = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(h, restored);
     }
 
@@ -4423,8 +4423,8 @@ mod tests {
             campaign_id: Some("camp-1".to_string()),
             calibration_id: None,
         };
-        let json = serde_json::to_string(&ev).unwrap();
-        let restored: RedBlueIntegrationEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
+        let restored: RedBlueIntegrationEvent = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(ev, restored);
     }
 
@@ -4437,8 +4437,8 @@ mod tests {
             benign_false_positive_count: 1,
             near_miss_count: 3,
         };
-        let json = serde_json::to_string(&m).unwrap();
-        let restored: CalibrationJustificationMetrics = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
+        let restored: CalibrationJustificationMetrics = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(m, restored);
     }
 
@@ -4451,8 +4451,8 @@ mod tests {
             baseline_runtime: Some(CampaignRuntime::NodeLts),
             campaign_id: None,
         };
-        let json = serde_json::to_string(&f).unwrap();
-        let restored: SuppressionGateFailure = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&f).expect("serde deserialization should succeed");
+        let restored: SuppressionGateFailure = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(f, restored);
     }
 
@@ -4478,8 +4478,8 @@ mod tests {
             discovered_at_ns: 5000,
             calibration_id: Some("cal-1".to_string()),
         };
-        let json = serde_json::to_string(&entry).unwrap();
-        let restored: PolicyRegressionEntry = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let restored: PolicyRegressionEntry = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(entry, restored);
     }
 
@@ -4497,7 +4497,7 @@ mod tests {
             evidence_atoms_before_detection: 2,
             novel_technique: false,
         };
-        let score = ExploitObjectiveScore::from_result(&result).unwrap();
+        let score = ExploitObjectiveScore::from_result(&result).expect("serde deserialization should succeed");
         assert_eq!(score.difficulty, ContainmentDifficulty::Easy);
     }
 
@@ -4508,8 +4508,8 @@ mod tests {
     #[test]
     fn guardplane_calibration_state_serde_roundtrip() {
         let state = GuardplaneCalibrationState::default();
-        let json = serde_json::to_string(&state).unwrap();
-        let restored: GuardplaneCalibrationState = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&state).expect("serde deserialization should succeed");
+        let restored: GuardplaneCalibrationState = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(state, restored);
     }
 
@@ -4521,7 +4521,7 @@ mod tests {
     fn campaign_outcome_record_rejects_false_positive_without_benign_control() {
         let campaign = sample_campaign(CampaignComplexity::Probe, 99);
         let result = sample_result();
-        let score = ExploitObjectiveScore::from_result(&result).unwrap();
+        let score = ExploitObjectiveScore::from_result(&result).expect("serde deserialization should succeed");
         let record = CampaignOutcomeRecord {
             campaign,
             result,
@@ -4562,16 +4562,16 @@ mod tests {
             max_backpressure_queue: 48,
             promotion_threshold_millionths: 800_000,
         };
-        let json = serde_json::to_string(&config).unwrap();
-        let back: CampaignGeneratorConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let back: CampaignGeneratorConfig = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(config, back);
     }
 
     #[test]
     fn campaign_generator_config_default_serde_stable() {
         let config = CampaignGeneratorConfig::default();
-        let json = serde_json::to_string(&config).unwrap();
-        let back: CampaignGeneratorConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let back: CampaignGeneratorConfig = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(config, back);
     }
 
@@ -4584,7 +4584,7 @@ mod tests {
             max_backpressure_queue: 24,
             promotion_threshold_millionths: 700_000,
         };
-        let generator = CampaignGenerator::new(grammar, config, 42).unwrap();
+        let generator = CampaignGenerator::new(grammar, config, 42).expect("serde deserialization should succeed");
         assert_eq!(generator.plan_campaign_count(24), 0);
         assert_eq!(generator.plan_campaign_count(100), 0);
     }
@@ -4598,7 +4598,7 @@ mod tests {
             max_backpressure_queue: 24,
             promotion_threshold_millionths: 700_000,
         };
-        let generator = CampaignGenerator::new(grammar, config, 42).unwrap();
+        let generator = CampaignGenerator::new(grammar, config, 42).expect("serde deserialization should succeed");
         // capacity = 24 - 20 = 4, min(12, 4) = 4
         assert_eq!(generator.plan_campaign_count(20), 4);
     }
@@ -4612,7 +4612,7 @@ mod tests {
             max_backpressure_queue: 24,
             promotion_threshold_millionths: 700_000,
         };
-        let generator = CampaignGenerator::new(grammar, config, 42).unwrap();
+        let generator = CampaignGenerator::new(grammar, config, 42).expect("serde deserialization should succeed");
         // capacity = 24 - 0 = 24, min(12, 24) = 12
         assert_eq!(generator.plan_campaign_count(0), 12);
     }
@@ -4626,7 +4626,7 @@ mod tests {
             max_backpressure_queue: 24,
             promotion_threshold_millionths: 700_000,
         };
-        let err = CampaignGenerator::new(grammar, config, 42).err().unwrap();
+        let err = CampaignGenerator::new(grammar, config, 42).err().expect("serde deserialization should succeed");
         assert!(err.to_string().contains("policy_id"));
     }
 
@@ -4639,15 +4639,15 @@ mod tests {
             max_backpressure_queue: 24,
             promotion_threshold_millionths: 700_000,
         };
-        let err = CampaignGenerator::new(grammar, config, 42).err().unwrap();
+        let err = CampaignGenerator::new(grammar, config, 42).err().expect("serde deserialization should succeed");
         assert!(err.to_string().contains("campaigns_per_hour"));
     }
 
     #[test]
     fn policy_regression_suite_empty_serde_roundtrip() {
         let suite = PolicyRegressionSuite::default();
-        let json = serde_json::to_string(&suite).unwrap();
-        let back: PolicyRegressionSuite = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&suite).expect("serde deserialization should succeed");
+        let back: PolicyRegressionSuite = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(suite, back);
     }
 
@@ -4655,7 +4655,7 @@ mod tests {
     fn campaign_outcome_record_valid_passes() {
         let campaign = sample_campaign(CampaignComplexity::Probe, 99);
         let result = sample_result();
-        let score = ExploitObjectiveScore::from_result(&result).unwrap();
+        let score = ExploitObjectiveScore::from_result(&result).expect("serde deserialization should succeed");
         let record = CampaignOutcomeRecord {
             campaign,
             result,
@@ -4697,7 +4697,7 @@ mod tests {
         corpus.promote(fixture.clone());
         assert!(!corpus.is_empty());
         assert_eq!(corpus.len(), 1);
-        let retrieved = corpus.fixture(&campaign.campaign_id).unwrap();
+        let retrieved = corpus.fixture(&campaign.campaign_id).expect("serde deserialization should succeed");
         assert_eq!(retrieved.campaign_id, fixture.campaign_id);
     }
 
@@ -4795,7 +4795,7 @@ mod tests {
             evidence_atoms_before_detection: 25,
             novel_technique: true,
         };
-        let score = ExploitObjectiveScore::from_result(&result).unwrap();
+        let score = ExploitObjectiveScore::from_result(&result).expect("serde deserialization should succeed");
         assert_eq!(score.difficulty, ContainmentDifficulty::Moderate);
         assert!(score.composite_score_millionths >= 400_000);
         assert!(score.composite_score_millionths < 650_000);
@@ -4812,7 +4812,7 @@ mod tests {
             evidence_atoms_before_detection: 30,
             novel_technique: false,
         };
-        let score = ExploitObjectiveScore::from_result(&result).unwrap();
+        let score = ExploitObjectiveScore::from_result(&result).expect("serde deserialization should succeed");
         assert_eq!(score.difficulty, ContainmentDifficulty::Hard);
         assert!(score.composite_score_millionths >= 650_000);
         assert!(score.composite_score_millionths < 850_000);
@@ -4828,7 +4828,7 @@ mod tests {
             evidence_atoms_before_detection: 14,
             novel_technique: true,
         };
-        let score = ExploitObjectiveScore::from_result(&result).unwrap();
+        let score = ExploitObjectiveScore::from_result(&result).expect("serde deserialization should succeed");
         // evasion = (3/5) * 1_000_000 = 600_000
         assert_eq!(score.evasion_score_millionths, 600_000);
         // no containment escape
@@ -4851,7 +4851,7 @@ mod tests {
             evidence_atoms_before_detection: 5,
             novel_technique: false,
         };
-        let score = ExploitObjectiveScore::from_result(&result).unwrap();
+        let score = ExploitObjectiveScore::from_result(&result).expect("serde deserialization should succeed");
         assert_eq!(score.containment_escape_score_millionths, 1_000_000);
         assert_eq!(score.novel_technique_bonus_millionths, 0);
     }
@@ -4895,20 +4895,20 @@ mod tests {
         let config = CampaignGeneratorConfig::default();
         let result = CampaignGenerator::new(grammar, config, 0);
         assert!(result.is_err());
-        assert!(result.err().unwrap().to_string().contains("seed"));
+        assert!(result.err().expect("serde deserialization should succeed").to_string().contains("seed"));
     }
 
     #[test]
     fn campaign_generator_successive_campaigns_differ() {
         let grammar = AttackGrammar::default();
         let mut generator =
-            CampaignGenerator::new(grammar, CampaignGeneratorConfig::default(), 0xBEEF).unwrap();
+            CampaignGenerator::new(grammar, CampaignGeneratorConfig::default(), 0xBEEF).expect("serde deserialization should succeed");
         let first = generator
             .generate_campaign(CampaignComplexity::Probe)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let second = generator
             .generate_campaign(CampaignComplexity::Probe)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_ne!(first.campaign_id, second.campaign_id);
         assert_ne!(first.seed, second.seed);
     }
@@ -4917,16 +4917,16 @@ mod tests {
     fn campaign_generator_score_accessor_tracks_outcome() {
         let grammar = AttackGrammar::default();
         let mut generator =
-            CampaignGenerator::new(grammar, CampaignGeneratorConfig::default(), 0xCAFE).unwrap();
+            CampaignGenerator::new(grammar, CampaignGeneratorConfig::default(), 0xCAFE).expect("serde deserialization should succeed");
         let campaign = generator
             .generate_campaign(CampaignComplexity::Probe)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let result = sample_result();
-        let score = generator.score_campaign(&campaign, &result).unwrap();
+        let score = generator.score_campaign(&campaign, &result).expect("serde deserialization should succeed");
         generator
             .record_campaign_outcome(&campaign, &score)
-            .unwrap();
-        let stored = generator.score(&campaign.campaign_id).unwrap();
+            .expect("serde deserialization should succeed");
+        let stored = generator.score(&campaign.campaign_id).expect("serde deserialization should succeed");
         assert_eq!(*stored, score);
         assert!(generator.score("nonexistent-camp").is_none());
     }
@@ -4935,15 +4935,15 @@ mod tests {
     fn campaign_generator_drain_events_after_scoring() {
         let grammar = AttackGrammar::default();
         let mut generator =
-            CampaignGenerator::new(grammar, CampaignGeneratorConfig::default(), 0xDAD).unwrap();
+            CampaignGenerator::new(grammar, CampaignGeneratorConfig::default(), 0xDAD).expect("serde deserialization should succeed");
         let campaign = generator
             .generate_campaign(CampaignComplexity::Probe)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let result = sample_result();
-        let score = generator.score_campaign(&campaign, &result).unwrap();
+        let score = generator.score_campaign(&campaign, &result).expect("serde deserialization should succeed");
         generator
             .record_campaign_outcome(&campaign, &score)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let events = generator.drain_events();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].event, "campaign_scored");
@@ -4956,10 +4956,10 @@ mod tests {
         let grammar = AttackGrammar::default();
         let mut generator =
             CampaignGenerator::new(grammar.clone(), CampaignGeneratorConfig::default(), 0xA1)
-                .unwrap();
+                .expect("serde deserialization should succeed");
         let base = generator
             .generate_campaign(CampaignComplexity::MultiStage)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let original_len = base.steps.len();
         let mutated = MutationEngine::mutate(
             &base,
@@ -4970,9 +4970,9 @@ mod tests {
                 donor_campaign: None,
             },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(mutated.steps.len(), original_len);
-        mutated.validate().unwrap();
+        mutated.validate().expect("serde deserialization should succeed");
     }
 
     #[test]
@@ -4980,13 +4980,13 @@ mod tests {
         let grammar = AttackGrammar::default();
         let mut generator =
             CampaignGenerator::new(grammar.clone(), CampaignGeneratorConfig::default(), 0xA2)
-                .unwrap();
+                .expect("serde deserialization should succeed");
         let base = generator
             .generate_campaign(CampaignComplexity::Apt)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let donor = generator
             .generate_campaign(CampaignComplexity::MultiStage)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let mutated = MutationEngine::mutate(
             &base,
             &grammar,
@@ -4996,8 +4996,8 @@ mod tests {
                 donor_campaign: Some(donor),
             },
         )
-        .unwrap();
-        mutated.validate().unwrap();
+        .expect("serde deserialization should succeed");
+        mutated.validate().expect("serde deserialization should succeed");
         assert!(!mutated.steps.is_empty());
     }
 
@@ -5006,10 +5006,10 @@ mod tests {
         let grammar = AttackGrammar::default();
         let mut generator =
             CampaignGenerator::new(grammar.clone(), CampaignGeneratorConfig::default(), 0xA3)
-                .unwrap();
+                .expect("serde deserialization should succeed");
         let base = generator
             .generate_campaign(CampaignComplexity::Probe)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let err = MutationEngine::mutate(
             &base,
             &grammar,
@@ -5072,7 +5072,7 @@ mod tests {
             RedBlueLoopIntegrator::new(RedBlueCalibrationConfig::default(), Default::default());
         integrator
             .ingest_outcome(outcome_record(campaign.clone(), result, false, false, 1000))
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let effectiveness = integrator.technique_effectiveness();
         assert!(!effectiveness.is_empty());
@@ -5090,7 +5090,7 @@ mod tests {
         let mut integrator =
             RedBlueLoopIntegrator::new(RedBlueCalibrationConfig::default(), Default::default());
         let signing_key = [0u8; 32];
-        let result = integrator.calibrate(&signing_key, 1000).unwrap();
+        let result = integrator.calibrate(&signing_key, 1000).expect("serde deserialization should succeed");
         assert!(result.is_none());
     }
 
@@ -5161,7 +5161,7 @@ mod tests {
     fn campaign_outcome_record_rejects_score_result_mismatch() {
         let campaign = sample_campaign(CampaignComplexity::Probe, 0x9999);
         let result = sample_result();
-        let mut score = ExploitObjectiveScore::from_result(&result).unwrap();
+        let mut score = ExploitObjectiveScore::from_result(&result).expect("serde deserialization should succeed");
         // Tamper with the score
         score.composite_score_millionths += 1;
         let record = CampaignOutcomeRecord {
@@ -5300,8 +5300,8 @@ mod tests {
     #[test]
     fn suppression_gate_config_serde_roundtrip() {
         let config = SuppressionGateConfig::default();
-        let json = serde_json::to_string(&config).unwrap();
-        let back: SuppressionGateConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let back: SuppressionGateConfig = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(config, back);
     }
 
@@ -5330,16 +5330,16 @@ mod tests {
             timestamp_ns: 99_000,
             signature: vec![0xAB; 64],
         };
-        let json = serde_json::to_string(&receipt).unwrap();
-        let back: CalibrationReceipt = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
+        let back: CalibrationReceipt = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(receipt, back);
     }
 
     #[test]
     fn red_blue_calibration_config_serde_roundtrip() {
         let config = RedBlueCalibrationConfig::default();
-        let json = serde_json::to_string(&config).unwrap();
-        let back: RedBlueCalibrationConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let back: RedBlueCalibrationConfig = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(config, back);
     }
 
@@ -5389,7 +5389,7 @@ mod tests {
             calibration_id: None,
         });
         assert_eq!(suite.len(), 1);
-        let entry = suite.get(&campaign.campaign_id).unwrap();
+        let entry = suite.get(&campaign.campaign_id).expect("serde deserialization should succeed");
         assert_eq!(entry.severity, CampaignSeverity::Critical);
         assert_eq!(entry.fixture.actual_defense_response, "actual_v2");
     }
@@ -5416,7 +5416,7 @@ mod tests {
         let record2 = outcome_record(campaign2, result, false, false, 2000);
         let mut integrator =
             RedBlueLoopIntegrator::new(RedBlueCalibrationConfig::default(), Default::default());
-        let classifications = integrator.ingest_outcomes(&[record1, record2]).unwrap();
+        let classifications = integrator.ingest_outcomes(&[record1, record2]).expect("serde deserialization should succeed");
         assert_eq!(classifications.len(), 2);
         let events = integrator.drain_events();
         assert_eq!(events.len(), 2);
@@ -5457,7 +5457,7 @@ mod tests {
         };
         let result =
             evaluate_compromise_suppression_gate(&input, &SuppressionGateConfig::default())
-                .unwrap();
+                .expect("serde deserialization should succeed");
         assert!(!result.passed);
         assert!(
             result
@@ -5500,8 +5500,8 @@ mod tests {
             },
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: CampaignError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: CampaignError = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
             assert_eq!(*v, back);
         }
         assert_eq!(variants.len(), 6);
@@ -5515,8 +5515,8 @@ mod tests {
             CampaignComplexity::Apt,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: CampaignComplexity = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: CampaignComplexity = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
             assert_eq!(*v, back);
         }
     }
@@ -5531,8 +5531,8 @@ mod tests {
             AttackDimension::Exfiltration,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: AttackDimension = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: AttackDimension = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
             assert_eq!(*v, back);
         }
         assert_eq!(variants.len(), 5);
@@ -5541,8 +5541,8 @@ mod tests {
     #[test]
     fn attack_grammar_serde_roundtrip() {
         let g = AttackGrammar::default();
-        let json = serde_json::to_string(&g).unwrap();
-        let back: AttackGrammar = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&g).expect("serde deserialization should succeed");
+        let back: AttackGrammar = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(g, back);
     }
 
@@ -5571,8 +5571,8 @@ mod tests {
             },
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: AttackStepKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: AttackStepKind = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
             assert_eq!(*v, back);
         }
         assert_eq!(variants.len(), 5);
@@ -5602,8 +5602,8 @@ mod tests {
     #[test]
     fn adversarial_campaign_serde_roundtrip() {
         let c = make_test_campaign();
-        let json = serde_json::to_string(&c).unwrap();
-        let back: AdversarialCampaign = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let back: AdversarialCampaign = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(c, back);
     }
 
@@ -5616,8 +5616,8 @@ mod tests {
             ContainmentDifficulty::Critical,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: ContainmentDifficulty = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: ContainmentDifficulty = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
             assert_eq!(*v, back);
         }
     }
@@ -5633,8 +5633,8 @@ mod tests {
             composite_score_millionths: 350_000,
             difficulty: ContainmentDifficulty::Easy,
         };
-        let json = serde_json::to_string(&s).unwrap();
-        let back: ExploitObjectiveScore = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+        let back: ExploitObjectiveScore = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(s, back);
     }
 
@@ -5648,8 +5648,8 @@ mod tests {
             MutationOperator::TemporalShift,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: MutationOperator = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: MutationOperator = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
             assert_eq!(*v, back);
         }
         assert_eq!(variants.len(), 5);
@@ -5662,8 +5662,8 @@ mod tests {
             seed: 99,
             donor_campaign: Some(make_test_campaign()),
         };
-        let json = serde_json::to_string(&r).unwrap();
-        let back: MutationRequest = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let back: MutationRequest = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(r, back);
     }
 
@@ -5676,8 +5676,8 @@ mod tests {
             DefenseSubsystem::FleetConvergence,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: DefenseSubsystem = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: DefenseSubsystem = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
             assert_eq!(*v, back);
         }
     }
@@ -5692,8 +5692,8 @@ mod tests {
             ThreatCategory::PolicyEvasion,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: ThreatCategory = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: ThreatCategory = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
             assert_eq!(*v, back);
         }
         assert_eq!(variants.len(), 5);
@@ -5708,8 +5708,8 @@ mod tests {
             CampaignSeverity::Blocking,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: CampaignSeverity = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: CampaignSeverity = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
             assert_eq!(*v, back);
         }
     }
@@ -5732,8 +5732,8 @@ mod tests {
                 is_fixed_point: true,
             },
         });
-        let json = serde_json::to_string(&corpus).unwrap();
-        let back: RegressionCorpus = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&corpus).expect("serde deserialization should succeed");
+        let back: RegressionCorpus = serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(back.len(), 1);
         assert!(back.fixture("camp-001").is_some());
     }

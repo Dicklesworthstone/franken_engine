@@ -632,7 +632,7 @@ mod tests {
 
     fn test_registration(name: &str) -> ComputationRegistration {
         ComputationRegistration {
-            name: ComputationName::new(name).unwrap(),
+            name: ComputationName::new(name).expect("serde deserialization should succeed"),
             input_schema: test_input_schema(),
             output_schema: test_output_schema(),
             version: SchemaVersion::new(1, 0, 0),
@@ -670,20 +670,20 @@ mod tests {
 
     #[test]
     fn valid_computation_name() {
-        let name = ComputationName::new("revocation_propagate").unwrap();
+        let name = ComputationName::new("revocation_propagate").expect("serde deserialization should succeed");
         assert_eq!(name.as_str(), "revocation_propagate");
         assert_eq!(name.to_string(), "revocation_propagate");
     }
 
     #[test]
     fn computation_name_with_dots() {
-        let name = ComputationName::new("evidence.sync.v2").unwrap();
+        let name = ComputationName::new("evidence.sync.v2").expect("serde deserialization should succeed");
         assert_eq!(name.as_str(), "evidence.sync.v2");
     }
 
     #[test]
     fn computation_name_with_digits() {
-        let name = ComputationName::new("checkpoint_publish_3").unwrap();
+        let name = ComputationName::new("checkpoint_publish_3").expect("serde deserialization should succeed");
         assert_eq!(name.as_str(), "checkpoint_publish_3");
     }
 
@@ -767,7 +767,7 @@ mod tests {
     fn register_computation() {
         let mut reg = RemoteComputationRegistry::new();
         reg.register(test_registration("revocation_propagate"))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(reg.len(), 1);
         assert!(!reg.is_empty());
     }
@@ -775,7 +775,7 @@ mod tests {
     #[test]
     fn register_duplicate_rejected() {
         let mut reg = RemoteComputationRegistry::new();
-        reg.register(test_registration("evidence_sync")).unwrap();
+        reg.register(test_registration("evidence_sync")).expect("serde deserialization should succeed");
         assert!(matches!(
             reg.register(test_registration("evidence_sync")),
             Err(RegistryError::DuplicateRegistration { .. })
@@ -785,27 +785,27 @@ mod tests {
     #[test]
     fn register_multiple_computations() {
         let mut reg = RemoteComputationRegistry::new();
-        reg.register(test_registration("alpha")).unwrap();
-        reg.register(test_registration("beta")).unwrap();
-        reg.register(test_registration("gamma")).unwrap();
+        reg.register(test_registration("alpha")).expect("serde deserialization should succeed");
+        reg.register(test_registration("beta")).expect("serde deserialization should succeed");
+        reg.register(test_registration("gamma")).expect("serde deserialization should succeed");
         assert_eq!(reg.len(), 3);
     }
 
     #[test]
     fn computation_names_are_sorted() {
         let mut reg = RemoteComputationRegistry::new();
-        reg.register(test_registration("gamma")).unwrap();
-        reg.register(test_registration("alpha")).unwrap();
-        reg.register(test_registration("beta")).unwrap();
+        reg.register(test_registration("gamma")).expect("serde deserialization should succeed");
+        reg.register(test_registration("alpha")).expect("serde deserialization should succeed");
+        reg.register(test_registration("beta")).expect("serde deserialization should succeed");
         assert_eq!(reg.computation_names(), vec!["alpha", "beta", "gamma"]);
     }
 
     #[test]
     fn lookup_registered_computation() {
         let mut reg = RemoteComputationRegistry::new();
-        reg.register(test_registration("evidence_sync")).unwrap();
-        let name = ComputationName::new("evidence_sync").unwrap();
-        let found = reg.lookup(&name).unwrap();
+        reg.register(test_registration("evidence_sync")).expect("serde deserialization should succeed");
+        let name = ComputationName::new("evidence_sync").expect("serde deserialization should succeed");
+        let found = reg.lookup(&name).expect("serde deserialization should succeed");
         assert_eq!(found.name.as_str(), "evidence_sync");
         assert_eq!(found.version, SchemaVersion::new(1, 0, 0));
     }
@@ -813,7 +813,7 @@ mod tests {
     #[test]
     fn lookup_missing_computation() {
         let reg = RemoteComputationRegistry::new();
-        let name = ComputationName::new("nonexistent").unwrap();
+        let name = ComputationName::new("nonexistent").expect("serde deserialization should succeed");
         assert!(reg.lookup(&name).is_none());
     }
 
@@ -824,7 +824,7 @@ mod tests {
         let mut reg = RemoteComputationRegistry::new();
         let profile = CapabilityProfile::policy(); // has EvidenceEmit
         reg.hot_register(test_registration("late_addition"), &profile, "trace-hot")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(reg.len(), 1);
         let events = reg.drain_events();
         assert_eq!(events.len(), 1);
@@ -848,7 +848,7 @@ mod tests {
         let mut reg = RemoteComputationRegistry::new();
         let profile = CapabilityProfile::policy();
         reg.hot_register(test_registration("dup_hot"), &profile, "t1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(matches!(
             reg.hot_register(test_registration("dup_hot"), &profile, "t2"),
             Err(RegistryError::DuplicateRegistration { .. })
@@ -860,19 +860,19 @@ mod tests {
     #[test]
     fn validate_valid_input() {
         let mut reg = RemoteComputationRegistry::new();
-        reg.register(test_registration("test_comp")).unwrap();
-        let name = ComputationName::new("test_comp").unwrap();
+        reg.register(test_registration("test_comp")).expect("serde deserialization should succeed");
+        let name = ComputationName::new("test_comp").expect("serde deserialization should succeed");
         let hash = reg
             .validate_input(&name, &valid_input(), "trace-v")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(hash.as_bytes().len(), 32);
     }
 
     #[test]
     fn validate_input_missing_field() {
         let mut reg = RemoteComputationRegistry::new();
-        reg.register(test_registration("test_comp")).unwrap();
-        let name = ComputationName::new("test_comp").unwrap();
+        reg.register(test_registration("test_comp")).expect("serde deserialization should succeed");
+        let name = ComputationName::new("test_comp").expect("serde deserialization should succeed");
 
         let mut map = BTreeMap::new();
         map.insert(
@@ -889,8 +889,8 @@ mod tests {
     #[test]
     fn validate_input_undeclared_field() {
         let mut reg = RemoteComputationRegistry::new();
-        reg.register(test_registration("test_comp")).unwrap();
-        let name = ComputationName::new("test_comp").unwrap();
+        reg.register(test_registration("test_comp")).expect("serde deserialization should succeed");
+        let name = ComputationName::new("test_comp").expect("serde deserialization should succeed");
 
         let mut map = BTreeMap::new();
         map.insert(
@@ -914,8 +914,8 @@ mod tests {
     #[test]
     fn validate_input_not_a_map() {
         let mut reg = RemoteComputationRegistry::new();
-        reg.register(test_registration("test_comp")).unwrap();
-        let name = ComputationName::new("test_comp").unwrap();
+        reg.register(test_registration("test_comp")).expect("serde deserialization should succeed");
+        let name = ComputationName::new("test_comp").expect("serde deserialization should succeed");
 
         let input = CanonicalValue::String("not a map".to_string());
         let err = reg.validate_input(&name, &input, "trace-s").unwrap_err();
@@ -925,7 +925,7 @@ mod tests {
     #[test]
     fn validate_input_computation_not_found() {
         let mut reg = RemoteComputationRegistry::new();
-        let name = ComputationName::new("nonexistent").unwrap();
+        let name = ComputationName::new("nonexistent").expect("serde deserialization should succeed");
         assert!(matches!(
             reg.validate_input(&name, &valid_input(), "trace-nf"),
             Err(RegistryError::ComputationNotFound { .. })
@@ -936,7 +936,7 @@ mod tests {
 
     #[test]
     fn input_hash_is_deterministic() {
-        let name = ComputationName::new("test_comp").unwrap();
+        let name = ComputationName::new("test_comp").expect("serde deserialization should succeed");
         let input = valid_input();
         let h1 = RemoteComputationRegistry::compute_input_hash(&name, &input);
         let h2 = RemoteComputationRegistry::compute_input_hash(&name, &input);
@@ -945,7 +945,7 @@ mod tests {
 
     #[test]
     fn input_hash_differs_for_different_inputs() {
-        let name = ComputationName::new("test_comp").unwrap();
+        let name = ComputationName::new("test_comp").expect("serde deserialization should succeed");
 
         let mut map1 = BTreeMap::new();
         map1.insert(
@@ -974,8 +974,8 @@ mod tests {
 
     #[test]
     fn input_hash_differs_for_different_computation_names() {
-        let name_a = ComputationName::new("comp_a").unwrap();
-        let name_b = ComputationName::new("comp_b").unwrap();
+        let name_a = ComputationName::new("comp_a").expect("serde deserialization should succeed");
+        let name_b = ComputationName::new("comp_b").expect("serde deserialization should succeed");
         let input = valid_input();
         let h1 = RemoteComputationRegistry::compute_input_hash(&name_a, &input);
         let h2 = RemoteComputationRegistry::compute_input_hash(&name_b, &input);
@@ -987,8 +987,8 @@ mod tests {
     #[test]
     fn capability_check_passes_with_sufficient_profile() {
         let mut reg = RemoteComputationRegistry::new();
-        reg.register(test_registration("test_comp")).unwrap();
-        let name = ComputationName::new("test_comp").unwrap();
+        reg.register(test_registration("test_comp")).expect("serde deserialization should succeed");
+        let name = ComputationName::new("test_comp").expect("serde deserialization should succeed");
         // Remote profile has all capabilities needed for RemoteCaps
         assert!(
             reg.check_capability(&name, &remote_profile(), "trace-cap")
@@ -999,8 +999,8 @@ mod tests {
     #[test]
     fn capability_check_passes_with_full_profile() {
         let mut reg = RemoteComputationRegistry::new();
-        reg.register(test_registration("test_comp")).unwrap();
-        let name = ComputationName::new("test_comp").unwrap();
+        reg.register(test_registration("test_comp")).expect("serde deserialization should succeed");
+        let name = ComputationName::new("test_comp").expect("serde deserialization should succeed");
         assert!(
             reg.check_capability(&name, &full_profile(), "trace-full")
                 .is_ok()
@@ -1010,8 +1010,8 @@ mod tests {
     #[test]
     fn capability_check_denied_with_compute_only() {
         let mut reg = RemoteComputationRegistry::new();
-        reg.register(test_registration("test_comp")).unwrap();
-        let name = ComputationName::new("test_comp").unwrap();
+        reg.register(test_registration("test_comp")).expect("serde deserialization should succeed");
+        let name = ComputationName::new("test_comp").expect("serde deserialization should succeed");
         let err = reg
             .check_capability(&name, &compute_only_profile(), "trace-co")
             .unwrap_err();
@@ -1021,7 +1021,7 @@ mod tests {
     #[test]
     fn capability_check_computation_not_found() {
         let mut reg = RemoteComputationRegistry::new();
-        let name = ComputationName::new("missing").unwrap();
+        let name = ComputationName::new("missing").expect("serde deserialization should succeed");
         assert!(matches!(
             reg.check_capability(&name, &remote_profile(), "trace-nf"),
             Err(RegistryError::ComputationNotFound { .. })
@@ -1033,11 +1033,11 @@ mod tests {
     #[test]
     fn version_negotiation_compatible() {
         let mut reg = RemoteComputationRegistry::new();
-        reg.register(test_registration("test_comp")).unwrap();
-        let name = ComputationName::new("test_comp").unwrap();
+        reg.register(test_registration("test_comp")).expect("serde deserialization should succeed");
+        let name = ComputationName::new("test_comp").expect("serde deserialization should succeed");
         let result = reg
             .negotiate_version(&name, SchemaVersion::new(1, 2, 0))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(result.compatible);
         assert_eq!(result.local_version, SchemaVersion::new(1, 0, 0));
         assert_eq!(result.remote_version, SchemaVersion::new(1, 2, 0));
@@ -1046,22 +1046,22 @@ mod tests {
     #[test]
     fn version_negotiation_exact_match() {
         let mut reg = RemoteComputationRegistry::new();
-        reg.register(test_registration("test_comp")).unwrap();
-        let name = ComputationName::new("test_comp").unwrap();
+        reg.register(test_registration("test_comp")).expect("serde deserialization should succeed");
+        let name = ComputationName::new("test_comp").expect("serde deserialization should succeed");
         let result = reg
             .negotiate_version(&name, SchemaVersion::new(1, 0, 0))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(result.compatible);
     }
 
     #[test]
     fn version_negotiation_incompatible_major() {
         let mut reg = RemoteComputationRegistry::new();
-        reg.register(test_registration("test_comp")).unwrap();
-        let name = ComputationName::new("test_comp").unwrap();
+        reg.register(test_registration("test_comp")).expect("serde deserialization should succeed");
+        let name = ComputationName::new("test_comp").expect("serde deserialization should succeed");
         let result = reg
             .negotiate_version(&name, SchemaVersion::new(2, 0, 0))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(!result.compatible);
     }
 
@@ -1070,18 +1070,18 @@ mod tests {
         let mut reg = RemoteComputationRegistry::new();
         let mut comp = test_registration("test_comp");
         comp.version = SchemaVersion::new(1, 3, 0);
-        reg.register(comp).unwrap();
-        let name = ComputationName::new("test_comp").unwrap();
+        reg.register(comp).expect("serde deserialization should succeed");
+        let name = ComputationName::new("test_comp").expect("serde deserialization should succeed");
         let result = reg
             .negotiate_version(&name, SchemaVersion::new(1, 1, 0))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(!result.compatible);
     }
 
     #[test]
     fn version_negotiation_computation_not_found() {
         let reg = RemoteComputationRegistry::new();
-        let name = ComputationName::new("missing").unwrap();
+        let name = ComputationName::new("missing").expect("serde deserialization should succeed");
         assert!(matches!(
             reg.negotiate_version(&name, SchemaVersion::new(1, 0, 0)),
             Err(RegistryError::ComputationNotFound { .. })
@@ -1104,10 +1104,10 @@ mod tests {
     #[test]
     fn validation_emits_event() {
         let mut reg = RemoteComputationRegistry::new();
-        reg.register(test_registration("test_comp")).unwrap();
-        let name = ComputationName::new("test_comp").unwrap();
+        reg.register(test_registration("test_comp")).expect("serde deserialization should succeed");
+        let name = ComputationName::new("test_comp").expect("serde deserialization should succeed");
         reg.validate_input(&name, &valid_input(), "trace-ev")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let events = reg.drain_events();
         assert_eq!(events.len(), 1);
@@ -1121,8 +1121,8 @@ mod tests {
     #[test]
     fn validation_failure_emits_event() {
         let mut reg = RemoteComputationRegistry::new();
-        reg.register(test_registration("test_comp")).unwrap();
-        let name = ComputationName::new("test_comp").unwrap();
+        reg.register(test_registration("test_comp")).expect("serde deserialization should succeed");
+        let name = ComputationName::new("test_comp").expect("serde deserialization should succeed");
         let _ = reg.validate_input(
             &name,
             &CanonicalValue::String("bad".to_string()),
@@ -1137,9 +1137,9 @@ mod tests {
     #[test]
     fn drain_events_clears() {
         let mut reg = RemoteComputationRegistry::new();
-        reg.register(test_registration("test_comp")).unwrap();
-        let name = ComputationName::new("test_comp").unwrap();
-        reg.validate_input(&name, &valid_input(), "t").unwrap();
+        reg.register(test_registration("test_comp")).expect("serde deserialization should succeed");
+        let name = ComputationName::new("test_comp").expect("serde deserialization should succeed");
+        reg.validate_input(&name, &valid_input(), "t").expect("serde deserialization should succeed");
 
         let e1 = reg.drain_events();
         assert_eq!(e1.len(), 1);
@@ -1150,11 +1150,11 @@ mod tests {
     #[test]
     fn event_counts_track_outcomes() {
         let mut reg = RemoteComputationRegistry::new();
-        reg.register(test_registration("test_comp")).unwrap();
-        let name = ComputationName::new("test_comp").unwrap();
+        reg.register(test_registration("test_comp")).expect("serde deserialization should succeed");
+        let name = ComputationName::new("test_comp").expect("serde deserialization should succeed");
 
-        reg.validate_input(&name, &valid_input(), "t1").unwrap();
-        reg.validate_input(&name, &valid_input(), "t2").unwrap();
+        reg.validate_input(&name, &valid_input(), "t1").expect("serde deserialization should succeed");
+        reg.validate_input(&name, &valid_input(), "t2").expect("serde deserialization should succeed");
         let _ = reg.validate_input(&name, &CanonicalValue::String("bad".to_string()), "t3");
 
         assert_eq!(reg.event_counts().get("validation_success"), Some(&2));
@@ -1165,17 +1165,17 @@ mod tests {
 
     #[test]
     fn computation_name_serialization_round_trip() {
-        let name = ComputationName::new("evidence_sync").unwrap();
-        let json = serde_json::to_string(&name).unwrap();
-        let restored: ComputationName = serde_json::from_str(&json).unwrap();
+        let name = ComputationName::new("evidence_sync").expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&name).expect("serde deserialization should succeed");
+        let restored: ComputationName = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(name, restored);
     }
 
     #[test]
     fn schema_version_serialization_round_trip() {
         let v = SchemaVersion::new(2, 5, 0);
-        let json = serde_json::to_string(&v).unwrap();
-        let restored: SchemaVersion = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let restored: SchemaVersion = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, restored);
     }
 
@@ -1185,8 +1185,8 @@ mod tests {
             IdempotencyClass::NaturallyIdempotent,
             IdempotencyClass::RequiresKey,
         ] {
-            let json = serde_json::to_string(&class).unwrap();
-            let restored: IdempotencyClass = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&class).expect("serde deserialization should succeed");
+            let restored: IdempotencyClass = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(class, restored);
         }
     }
@@ -1194,8 +1194,8 @@ mod tests {
     #[test]
     fn registration_serialization_round_trip() {
         let reg = test_registration("evidence_sync");
-        let json = serde_json::to_string(&reg).unwrap();
-        let restored: ComputationRegistration = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&reg).expect("serde deserialization should succeed");
+        let restored: ComputationRegistration = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(reg, restored);
     }
 
@@ -1210,8 +1210,8 @@ mod tests {
             event: "schema_validation".to_string(),
             outcome: "success".to_string(),
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let restored: RegistryEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let restored: RegistryEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, restored);
     }
 
@@ -1233,8 +1233,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap();
-            let restored: RegistryError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let restored: RegistryError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, restored);
         }
     }
@@ -1242,13 +1242,13 @@ mod tests {
     #[test]
     fn version_negotiation_result_serialization_round_trip() {
         let result = VersionNegotiationResult {
-            computation_name: ComputationName::new("test_comp").unwrap(),
+            computation_name: ComputationName::new("test_comp").expect("serde deserialization should succeed"),
             compatible: true,
             local_version: SchemaVersion::new(1, 0, 0),
             remote_version: SchemaVersion::new(1, 2, 0),
         };
-        let json = serde_json::to_string(&result).unwrap();
-        let restored: VersionNegotiationResult = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let restored: VersionNegotiationResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, restored);
     }
 
@@ -1296,24 +1296,24 @@ mod tests {
 
         // 1. Register
         reg.register(test_registration("revocation_propagate"))
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
-        let name = ComputationName::new("revocation_propagate").unwrap();
+        let name = ComputationName::new("revocation_propagate").expect("serde deserialization should succeed");
 
         // 2. Check capability
         reg.check_capability(&name, &remote_profile(), "trace-1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // 3. Validate input
         let input_hash = reg
             .validate_input(&name, &valid_input(), "trace-2")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(input_hash.as_bytes().len(), 32);
 
         // 4. Negotiate version
         let negotiation = reg
             .negotiate_version(&name, SchemaVersion::new(1, 1, 0))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(negotiation.compatible);
 
         // 5. Compute idempotency hash
@@ -1334,8 +1334,8 @@ mod tests {
             IdempotencyClass::RequiresKey,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: IdempotencyClass = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: IdempotencyClass = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -1447,7 +1447,7 @@ mod tests {
 
     #[test]
     fn computation_name_debug_nonempty() {
-        let n = ComputationName::new("debug_test").unwrap();
+        let n = ComputationName::new("debug_test").expect("serde deserialization should succeed");
         let d = format!("{n:?}");
         assert!(!d.is_empty());
         assert!(d.contains("ComputationName"));
@@ -1472,7 +1472,7 @@ mod tests {
     #[test]
     fn version_negotiation_result_debug_nonempty() {
         let result = VersionNegotiationResult {
-            computation_name: ComputationName::new("x").unwrap(),
+            computation_name: ComputationName::new("x").expect("serde deserialization should succeed"),
             compatible: true,
             local_version: SchemaVersion::new(1, 0, 0),
             remote_version: SchemaVersion::new(1, 0, 0),
@@ -1514,7 +1514,7 @@ mod tests {
         ];
         let jsons: std::collections::BTreeSet<String> = variants
             .iter()
-            .map(|v| serde_json::to_string(v).unwrap())
+            .map(|v| serde_json::to_string(v).expect("serde deserialization should succeed"))
             .collect();
         // Each variant serialises to a distinct JSON string.
         assert_eq!(jsons.len(), variants.len());
@@ -1522,8 +1522,8 @@ mod tests {
 
     #[test]
     fn idempotency_class_serde_variants_distinct() {
-        let a = serde_json::to_string(&IdempotencyClass::NaturallyIdempotent).unwrap();
-        let b = serde_json::to_string(&IdempotencyClass::RequiresKey).unwrap();
+        let a = serde_json::to_string(&IdempotencyClass::NaturallyIdempotent).expect("serde deserialization should succeed");
+        let b = serde_json::to_string(&IdempotencyClass::RequiresKey).expect("serde deserialization should succeed");
         assert_ne!(a, b);
     }
 
@@ -1533,13 +1533,13 @@ mod tests {
 
     #[test]
     fn computation_name_clone_independence() {
-        let orig = ComputationName::new("clone_me").unwrap();
+        let orig = ComputationName::new("clone_me").expect("serde deserialization should succeed");
         let mut cloned = orig.clone();
         // Inner string is a clone; modifying cloned does not affect original.
         // We can only verify equality then check they're independent via serde.
         assert_eq!(orig, cloned);
-        let serialised = serde_json::to_string(&cloned).unwrap();
-        cloned = serde_json::from_str(&serialised).unwrap();
+        let serialised = serde_json::to_string(&cloned).expect("serde deserialization should succeed");
+        cloned = serde_json::from_str(&serialised).expect("serde deserialization should succeed");
         assert_eq!(orig, cloned);
     }
 
@@ -1596,7 +1596,7 @@ mod tests {
             event: "schema_validation".into(),
             outcome: "success".into(),
         };
-        let json = serde_json::to_string(&ev).unwrap();
+        let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
         assert!(json.contains("\"trace_id\""));
         assert!(json.contains("\"component\""));
         assert!(json.contains("\"computation_name\""));
@@ -1609,7 +1609,7 @@ mod tests {
     #[test]
     fn computation_registration_json_field_names() {
         let reg = test_registration("field_test");
-        let json = serde_json::to_string(&reg).unwrap();
+        let json = serde_json::to_string(&reg).expect("serde deserialization should succeed");
         assert!(json.contains("\"name\""));
         assert!(json.contains("\"input_schema\""));
         assert!(json.contains("\"output_schema\""));
@@ -1621,7 +1621,7 @@ mod tests {
     #[test]
     fn computation_schema_json_field_names() {
         let schema = test_input_schema();
-        let json = serde_json::to_string(&schema).unwrap();
+        let json = serde_json::to_string(&schema).expect("serde deserialization should succeed");
         assert!(json.contains("\"description\""));
         assert!(json.contains("\"schema_hash\""));
         assert!(json.contains("\"expected_fields\""));
@@ -1630,12 +1630,12 @@ mod tests {
     #[test]
     fn version_negotiation_result_json_field_names() {
         let result = VersionNegotiationResult {
-            computation_name: ComputationName::new("field_check").unwrap(),
+            computation_name: ComputationName::new("field_check").expect("serde deserialization should succeed"),
             compatible: false,
             local_version: SchemaVersion::new(1, 0, 0),
             remote_version: SchemaVersion::new(2, 0, 0),
         };
-        let json = serde_json::to_string(&result).unwrap();
+        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
         assert!(json.contains("\"computation_name\""));
         assert!(json.contains("\"compatible\""));
         assert!(json.contains("\"local_version\""));
@@ -1706,7 +1706,7 @@ mod tests {
 
     #[test]
     fn computation_name_display_matches_as_str() {
-        let n = ComputationName::new("display_check").unwrap();
+        let n = ComputationName::new("display_check").expect("serde deserialization should succeed");
         assert_eq!(n.to_string(), n.as_str());
     }
 
@@ -1718,7 +1718,7 @@ mod tests {
     fn computation_name_hash_consistent() {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
-        let n = ComputationName::new("hash_me").unwrap();
+        let n = ComputationName::new("hash_me").expect("serde deserialization should succeed");
         let mut h1 = DefaultHasher::new();
         n.hash(&mut h1);
         let mut h2 = DefaultHasher::new();
@@ -1730,8 +1730,8 @@ mod tests {
     fn computation_name_hash_distinct_for_different_names() {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
-        let n1 = ComputationName::new("alpha").unwrap();
-        let n2 = ComputationName::new("beta").unwrap();
+        let n1 = ComputationName::new("alpha").expect("serde deserialization should succeed");
+        let n2 = ComputationName::new("beta").expect("serde deserialization should succeed");
         let mut h1 = DefaultHasher::new();
         n1.hash(&mut h1);
         let mut h2 = DefaultHasher::new();
@@ -1741,7 +1741,7 @@ mod tests {
 
     #[test]
     fn input_hash_32_bytes() {
-        let name = ComputationName::new("hash_len_check").unwrap();
+        let name = ComputationName::new("hash_len_check").expect("serde deserialization should succeed");
         let input = valid_input();
         let h = RemoteComputationRegistry::compute_input_hash(&name, &input);
         assert_eq!(h.as_bytes().len(), 32);
@@ -1749,7 +1749,7 @@ mod tests {
 
     #[test]
     fn input_hash_scalar_differs_from_map() {
-        let name = ComputationName::new("scalar_vs_map").unwrap();
+        let name = ComputationName::new("scalar_vs_map").expect("serde deserialization should succeed");
         let map_input = valid_input();
         let scalar_input = CanonicalValue::U64(42);
         let h1 = RemoteComputationRegistry::compute_input_hash(&name, &map_input);
@@ -1763,7 +1763,7 @@ mod tests {
 
     #[test]
     fn computation_name_single_char_valid() {
-        let n = ComputationName::new("a").unwrap();
+        let n = ComputationName::new("a").expect("serde deserialization should succeed");
         assert_eq!(n.as_str(), "a");
     }
 
@@ -1798,8 +1798,8 @@ mod tests {
     #[test]
     fn validate_input_empty_map_missing_all_fields() {
         let mut reg = RemoteComputationRegistry::new();
-        reg.register(test_registration("empty_map_comp")).unwrap();
-        let name = ComputationName::new("empty_map_comp").unwrap();
+        reg.register(test_registration("empty_map_comp")).expect("serde deserialization should succeed");
+        let name = ComputationName::new("empty_map_comp").expect("serde deserialization should succeed");
         let empty = CanonicalValue::Map(BTreeMap::new());
         let err = reg.validate_input(&name, &empty, "t").unwrap_err();
         assert!(matches!(err, RegistryError::SchemaValidationFailed { .. }));
@@ -1808,8 +1808,8 @@ mod tests {
     #[test]
     fn validate_input_array_rejected_as_non_map() {
         let mut reg = RemoteComputationRegistry::new();
-        reg.register(test_registration("arr_comp")).unwrap();
-        let name = ComputationName::new("arr_comp").unwrap();
+        reg.register(test_registration("arr_comp")).expect("serde deserialization should succeed");
+        let name = ComputationName::new("arr_comp").expect("serde deserialization should succeed");
         let arr = CanonicalValue::Array(vec![CanonicalValue::U64(1)]);
         let err = reg.validate_input(&name, &arr, "t").unwrap_err();
         assert!(matches!(err, RegistryError::SchemaValidationFailed { .. }));
@@ -1818,8 +1818,8 @@ mod tests {
     #[test]
     fn validate_input_null_rejected_as_non_map() {
         let mut reg = RemoteComputationRegistry::new();
-        reg.register(test_registration("null_comp")).unwrap();
-        let name = ComputationName::new("null_comp").unwrap();
+        reg.register(test_registration("null_comp")).expect("serde deserialization should succeed");
+        let name = ComputationName::new("null_comp").expect("serde deserialization should succeed");
         let err = reg
             .validate_input(&name, &CanonicalValue::Null, "t")
             .unwrap_err();
@@ -1850,7 +1850,7 @@ mod tests {
         let mut reg = RemoteComputationRegistry::new();
         for i in 0..5u32 {
             let name = format!("comp_{i}");
-            reg.register(test_registration(&name)).unwrap();
+            reg.register(test_registration(&name)).expect("serde deserialization should succeed");
             assert_eq!(reg.len(), (i + 1) as usize);
         }
     }
@@ -1890,8 +1890,8 @@ mod tests {
             },
         ];
         for err in &variants {
-            let json = serde_json::to_string(err).unwrap();
-            let back: RegistryError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let back: RegistryError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, back);
         }
     }
@@ -1903,21 +1903,21 @@ mod tests {
             b"schema-definition-bytes",
             vec!["field_a".into(), "field_b".into(), "field_c".into()],
         );
-        let json = serde_json::to_string(&schema).unwrap();
-        let back: ComputationSchema = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&schema).expect("serde deserialization should succeed");
+        let back: ComputationSchema = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(schema, back);
     }
 
     #[test]
     fn version_negotiation_result_serde_incompatible_roundtrip() {
         let result = VersionNegotiationResult {
-            computation_name: ComputationName::new("incompat_rt").unwrap(),
+            computation_name: ComputationName::new("incompat_rt").expect("serde deserialization should succeed"),
             compatible: false,
             local_version: SchemaVersion::new(2, 0, 0),
             remote_version: SchemaVersion::new(1, 0, 0),
         };
-        let json = serde_json::to_string(&result).unwrap();
-        let back: VersionNegotiationResult = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let back: VersionNegotiationResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, back);
     }
 
@@ -1931,15 +1931,15 @@ mod tests {
             ProfileKind::ComputeOnly,
         ] {
             let reg = ComputationRegistration {
-                name: ComputationName::new("rt_comp").unwrap(),
+                name: ComputationName::new("rt_comp").expect("serde deserialization should succeed"),
                 input_schema: test_input_schema(),
                 output_schema: test_output_schema(),
                 version: SchemaVersion::new(1, 0, 0),
                 capability_required: kind,
                 idempotency_class: IdempotencyClass::NaturallyIdempotent,
             };
-            let json = serde_json::to_string(&reg).unwrap();
-            let back: ComputationRegistration = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&reg).expect("serde deserialization should succeed");
+            let back: ComputationRegistration = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(reg, back);
         }
     }
@@ -1951,15 +1951,15 @@ mod tests {
     #[test]
     fn event_count_registration_key_present() {
         let mut reg = RemoteComputationRegistry::new();
-        reg.register(test_registration("cnt_comp")).unwrap();
+        reg.register(test_registration("cnt_comp")).expect("serde deserialization should succeed");
         assert_eq!(reg.event_counts().get("registration"), Some(&1));
     }
 
     #[test]
     fn event_count_capability_denied_increments() {
         let mut reg = RemoteComputationRegistry::new();
-        reg.register(test_registration("cap_cnt")).unwrap();
-        let name = ComputationName::new("cap_cnt").unwrap();
+        reg.register(test_registration("cap_cnt")).expect("serde deserialization should succeed");
+        let name = ComputationName::new("cap_cnt").expect("serde deserialization should succeed");
         let _ = reg.check_capability(&name, &compute_only_profile(), "t");
         assert_eq!(reg.event_counts().get("capability_denied"), Some(&1));
     }
@@ -1967,9 +1967,9 @@ mod tests {
     #[test]
     fn event_count_capability_granted_increments() {
         let mut reg = RemoteComputationRegistry::new();
-        reg.register(test_registration("cap_grant")).unwrap();
-        let name = ComputationName::new("cap_grant").unwrap();
-        reg.check_capability(&name, &remote_profile(), "t").unwrap();
+        reg.register(test_registration("cap_grant")).expect("serde deserialization should succeed");
+        let name = ComputationName::new("cap_grant").expect("serde deserialization should succeed");
+        reg.check_capability(&name, &remote_profile(), "t").expect("serde deserialization should succeed");
         assert_eq!(reg.event_counts().get("capability_granted"), Some(&1));
     }
 
@@ -1978,7 +1978,7 @@ mod tests {
         let mut reg = RemoteComputationRegistry::new();
         let profile = CapabilityProfile::policy();
         reg.hot_register(test_registration("hot_cnt"), &profile, "t")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(reg.event_counts().get("hot_registration"), Some(&1));
     }
 
@@ -2000,8 +2000,8 @@ mod tests {
     #[test]
     fn capability_denied_emits_event() {
         let mut reg = RemoteComputationRegistry::new();
-        reg.register(test_registration("cap_ev")).unwrap();
-        let name = ComputationName::new("cap_ev").unwrap();
+        reg.register(test_registration("cap_ev")).expect("serde deserialization should succeed");
+        let name = ComputationName::new("cap_ev").expect("serde deserialization should succeed");
         let _ = reg.check_capability(&name, &compute_only_profile(), "trace-cap-ev");
         let events = reg.drain_events();
         assert_eq!(events.len(), 1);
@@ -2015,7 +2015,7 @@ mod tests {
         let mut reg = RemoteComputationRegistry::new();
         let names = ["zeta", "alpha", "mu", "delta", "beta"];
         for n in &names {
-            reg.register(test_registration(n)).unwrap();
+            reg.register(test_registration(n)).expect("serde deserialization should succeed");
         }
         let mut expected = names.to_vec();
         expected.sort_unstable();

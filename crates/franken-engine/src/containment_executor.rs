@@ -713,8 +713,8 @@ mod tests {
             ContainmentState::Terminated,
             ContainmentState::Quarantined,
         ] {
-            let json = serde_json::to_string(&state).unwrap();
-            let restored: ContainmentState = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&state).expect("serde deserialization should succeed");
+            let restored: ContainmentState = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(state, restored);
         }
     }
@@ -759,8 +759,8 @@ mod tests {
     #[test]
     fn sandbox_policy_serde_roundtrip() {
         let policy = SandboxPolicy::default();
-        let json = serde_json::to_string(&policy).unwrap();
-        let restored: SandboxPolicy = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
+        let restored: SandboxPolicy = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(policy, restored);
     }
 
@@ -800,7 +800,7 @@ mod tests {
         let ctx = test_context();
         let receipt = executor
             .execute(ContainmentAction::Allow, "ext-001", &ctx)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(receipt.action, ContainmentAction::Allow);
         assert_eq!(receipt.new_state, ContainmentState::Running);
         assert!(receipt.success);
@@ -816,7 +816,7 @@ mod tests {
         let ctx = test_context();
         let receipt = executor
             .execute(ContainmentAction::Challenge, "ext-001", &ctx)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(receipt.new_state, ContainmentState::Challenged);
         assert_eq!(
             executor.state("ext-001"),
@@ -834,7 +834,7 @@ mod tests {
         let ctx = test_context();
         let receipt = executor
             .execute(ContainmentAction::Sandbox, "ext-001", &ctx)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(receipt.new_state, ContainmentState::Sandboxed);
         assert!(executor.sandbox_policy("ext-001").is_some());
     }
@@ -849,7 +849,7 @@ mod tests {
         let ctx = test_context();
         let receipt = executor
             .execute(ContainmentAction::Suspend, "ext-001", &ctx)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(receipt.new_state, ContainmentState::Suspended);
         assert!(!ContainmentState::Suspended.is_alive());
     }
@@ -864,7 +864,7 @@ mod tests {
         let ctx = test_context();
         let receipt = executor
             .execute(ContainmentAction::Terminate, "ext-001", &ctx)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(receipt.new_state, ContainmentState::Terminated);
         assert!(!receipt.cooperative);
         assert!(ContainmentState::Terminated.is_dead());
@@ -876,10 +876,10 @@ mod tests {
         let ctx = test_context();
         executor
             .execute(ContainmentAction::Suspend, "ext-001", &ctx)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let receipt = executor
             .execute(ContainmentAction::Terminate, "ext-001", &ctx)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(receipt.previous_state, ContainmentState::Suspended);
         assert_eq!(receipt.new_state, ContainmentState::Terminated);
     }
@@ -894,7 +894,7 @@ mod tests {
         let ctx = test_context();
         let receipt = executor
             .execute(ContainmentAction::Quarantine, "ext-001", &ctx)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(receipt.new_state, ContainmentState::Quarantined);
         assert!(executor.forensic_snapshot("ext-001").is_some());
     }
@@ -905,8 +905,8 @@ mod tests {
         let ctx = test_context();
         executor
             .execute(ContainmentAction::Quarantine, "ext-001", &ctx)
-            .unwrap();
-        let snapshot = executor.forensic_snapshot("ext-001").unwrap();
+            .expect("serde deserialization should succeed");
+        let snapshot = executor.forensic_snapshot("ext-001").expect("serde deserialization should succeed");
         assert_eq!(snapshot.snapshot_ns, ctx.timestamp_ns);
     }
 
@@ -920,7 +920,7 @@ mod tests {
         let ctx = test_context();
         executor
             .execute(ContainmentAction::Terminate, "ext-001", &ctx)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let err = executor
             .execute(ContainmentAction::Sandbox, "ext-001", &ctx)
             .unwrap_err();
@@ -933,7 +933,7 @@ mod tests {
         let ctx = test_context();
         executor
             .execute(ContainmentAction::Suspend, "ext-001", &ctx)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let err = executor
             .execute(ContainmentAction::Sandbox, "ext-001", &ctx)
             .unwrap_err();
@@ -950,10 +950,10 @@ mod tests {
         let ctx = test_context();
         let r1 = executor
             .execute(ContainmentAction::Sandbox, "ext-001", &ctx)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let r2 = executor
             .execute(ContainmentAction::Sandbox, "ext-001", &ctx)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         // Second call returns existing receipt.
         assert_eq!(r1.receipt_id, r2.receipt_id);
     }
@@ -964,10 +964,10 @@ mod tests {
         let ctx = test_context();
         let r1 = executor
             .execute(ContainmentAction::Terminate, "ext-001", &ctx)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let r2 = executor
             .execute(ContainmentAction::Terminate, "ext-001", &ctx)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(r1.receipt_id, r2.receipt_id);
     }
 
@@ -995,7 +995,7 @@ mod tests {
         let ctx = test_context();
         let receipt = executor
             .execute(ContainmentAction::Sandbox, "ext-001", &ctx)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(receipt.verify_integrity());
     }
 
@@ -1005,7 +1005,7 @@ mod tests {
         let ctx = test_context();
         let mut receipt = executor
             .execute(ContainmentAction::Sandbox, "ext-001", &ctx)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         // Tamper with a field that IS part of canonical_bytes.
         // (duration_ns is deliberately excluded for replay determinism.)
         receipt.timestamp_ns = 999_999;
@@ -1018,7 +1018,7 @@ mod tests {
         let ctx = test_context();
         let mut receipt = executor
             .execute(ContainmentAction::Sandbox, "ext-001", &ctx)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let original_hash = receipt.content_hash;
         // Changing duration_ns must NOT invalidate the hash (it is
         // observational metadata excluded for deterministic replay).
@@ -1033,7 +1033,7 @@ mod tests {
         let ctx = test_context();
         let receipt = executor
             .execute(ContainmentAction::Sandbox, "ext-001", &ctx)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         // Duration must be measured, not simulated.
         // The exact value depends on machine speed, but it must not be zero.
         // (In-memory state transitions take at minimum a few nanoseconds.)
@@ -1053,10 +1053,10 @@ mod tests {
         let ctx = test_context();
         executor
             .execute(ContainmentAction::Sandbox, "ext-001", &ctx)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         executor
             .execute(ContainmentAction::Terminate, "ext-001", &ctx)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(executor.receipts("ext-001").len(), 2);
     }
 
@@ -1070,7 +1070,7 @@ mod tests {
         let ctx = test_context();
         executor
             .execute(ContainmentAction::Sandbox, "ext-001", &ctx)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let sandboxed = executor.by_state(ContainmentState::Sandboxed);
         assert_eq!(sandboxed, vec!["ext-001"]);
         let running = executor.by_state(ContainmentState::Running);
@@ -1087,8 +1087,8 @@ mod tests {
         let ctx = test_context();
         executor
             .execute(ContainmentAction::Suspend, "ext-001", &ctx)
-            .unwrap();
-        let receipt = executor.resume("ext-001", &ctx).unwrap();
+            .expect("serde deserialization should succeed");
+        let receipt = executor.resume("ext-001", &ctx).expect("serde deserialization should succeed");
         assert_eq!(receipt.new_state, ContainmentState::Running);
         assert_eq!(executor.state("ext-001"), Some(ContainmentState::Running));
     }
@@ -1112,7 +1112,7 @@ mod tests {
 
         executor
             .execute(ContainmentAction::Challenge, "ext-001", &ctx)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(
             executor.state("ext-001"),
             Some(ContainmentState::Challenged)
@@ -1120,12 +1120,12 @@ mod tests {
 
         executor
             .execute(ContainmentAction::Sandbox, "ext-001", &ctx)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(executor.state("ext-001"), Some(ContainmentState::Sandboxed));
 
         executor
             .execute(ContainmentAction::Terminate, "ext-001", &ctx)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(
             executor.state("ext-001"),
             Some(ContainmentState::Terminated)
@@ -1144,9 +1144,9 @@ mod tests {
         let ctx = test_context();
         let receipt = executor
             .execute(ContainmentAction::Sandbox, "ext-001", &ctx)
-            .unwrap();
-        let json = serde_json::to_string(&receipt).unwrap();
-        let restored: ContainmentReceipt = serde_json::from_str(&json).unwrap();
+            .expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
+        let restored: ContainmentReceipt = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(receipt, restored);
     }
 
@@ -1156,9 +1156,9 @@ mod tests {
         let ctx = test_context();
         executor
             .execute(ContainmentAction::Sandbox, "ext-001", &ctx)
-            .unwrap();
-        let json = serde_json::to_string(&executor).unwrap();
-        let restored: ContainmentExecutor = serde_json::from_str(&json).unwrap();
+            .expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&executor).expect("serde deserialization should succeed");
+        let restored: ContainmentExecutor = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(executor.extension_count(), restored.extension_count());
     }
 
@@ -1170,16 +1170,16 @@ mod tests {
             snapshot_ns: 1_000_000,
             manifest_hash: ContentHash::compute(b"manifest"),
         };
-        let json = serde_json::to_string(&snapshot).unwrap();
-        let restored: ForensicSnapshot = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&snapshot).expect("serde deserialization should succeed");
+        let restored: ForensicSnapshot = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(snapshot, restored);
     }
 
     #[test]
     fn context_serde_roundtrip() {
         let ctx = test_context();
-        let json = serde_json::to_string(&ctx).unwrap();
-        let restored: ContainmentContext = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&ctx).expect("serde deserialization should succeed");
+        let restored: ContainmentContext = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ctx.decision_id, restored.decision_id);
     }
 
@@ -1193,7 +1193,7 @@ mod tests {
         let ctx = test_context();
         let receipt = executor
             .execute(ContainmentAction::Sandbox, "ext-001", &ctx)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(
             receipt.metadata.get("decision_id"),
             Some(&"dec-001".to_string())
@@ -1217,7 +1217,7 @@ mod tests {
         let ctx = test_context();
         let receipt = executor
             .execute(ContainmentAction::Sandbox, "ext-001", &ctx)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(receipt.evidence_refs, vec!["ev-001".to_string()]);
     }
 
@@ -1302,8 +1302,8 @@ mod tests {
             },
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: ContainmentError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: ContainmentError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -1371,13 +1371,13 @@ mod tests {
 
         let r1 = executor
             .execute(ContainmentAction::Challenge, "ext-001", &ctx)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let r2 = executor
             .execute(ContainmentAction::Sandbox, "ext-001", &ctx)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let r3 = executor
             .execute(ContainmentAction::Terminate, "ext-001", &ctx)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let ids: BTreeSet<&str> = [
             r1.receipt_id.as_str(),
@@ -1395,8 +1395,8 @@ mod tests {
         let ctx = test_context();
         executor
             .execute(ContainmentAction::Suspend, "ext-001", &ctx)
-            .unwrap();
-        let receipt = executor.resume("ext-001", &ctx).unwrap();
+            .expect("serde deserialization should succeed");
+        let receipt = executor.resume("ext-001", &ctx).expect("serde deserialization should succeed");
         assert_eq!(receipt.metadata.get("resume"), Some(&"true".to_string()));
         assert!(receipt.verify_integrity());
     }
@@ -1409,9 +1409,9 @@ mod tests {
         let ctx = test_context();
         let receipt = executor
             .execute(ContainmentAction::Sandbox, "ext-001", &ctx)
-            .unwrap();
-        let json = serde_json::to_string(&receipt).unwrap();
-        let back: ContainmentReceipt = serde_json::from_str(&json).unwrap();
+            .expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
+        let back: ContainmentReceipt = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(receipt, back);
     }
 
@@ -1421,7 +1421,7 @@ mod tests {
         let ctx = test_context();
         let receipt = executor
             .execute(ContainmentAction::Challenge, "ext-001", &ctx)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let cloned = receipt.clone();
         assert_eq!(receipt, cloned);
         assert_eq!(receipt.receipt_id, cloned.receipt_id);
@@ -1434,7 +1434,7 @@ mod tests {
         let ctx = test_context();
         let receipt = executor
             .execute(ContainmentAction::Sandbox, "ext-001", &ctx)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(receipt.target_extension_id, "ext-001");
     }
 
@@ -1444,7 +1444,7 @@ mod tests {
         let ctx = test_context();
         executor
             .execute(ContainmentAction::Allow, "ext-001", &ctx)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let state = executor.state("ext-001");
         assert_eq!(state, Some(ContainmentState::Running));
     }
@@ -1455,14 +1455,14 @@ mod tests {
         let ctx = test_context();
         executor
             .execute(ContainmentAction::Challenge, "ext-001", &ctx)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(
             executor.state("ext-001"),
             Some(ContainmentState::Challenged)
         );
         executor
             .execute(ContainmentAction::Allow, "ext-001", &ctx)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(executor.state("ext-001"), Some(ContainmentState::Running));
     }
 
@@ -1477,8 +1477,8 @@ mod tests {
             ContainmentState::Quarantined,
         ];
         for s in &states {
-            let json = serde_json::to_string(s).unwrap();
-            let back: ContainmentState = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(s).expect("serde deserialization should succeed");
+            let back: ContainmentState = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*s, back);
         }
     }
@@ -1493,7 +1493,7 @@ mod tests {
     #[test]
     fn containment_context_serde_fields() {
         let ctx = test_context();
-        let json = serde_json::to_string(&ctx).unwrap();
+        let json = serde_json::to_string(&ctx).expect("serde deserialization should succeed");
         assert!(json.contains("\"decision_id\""));
         assert!(json.contains("\"timestamp_ns\""));
         assert!(json.contains("\"epoch\""));
@@ -1508,8 +1508,8 @@ mod tests {
             allow_process_spawn: false,
             max_memory_bytes: 4096,
         };
-        let json = serde_json::to_string(&policy).unwrap();
-        let back: SandboxPolicy = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
+        let back: SandboxPolicy = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(policy, back);
     }
 
@@ -1528,8 +1528,8 @@ mod tests {
         let ctx = test_context();
         let receipt = executor
             .execute(ContainmentAction::Sandbox, "ext-001", &ctx)
-            .unwrap();
-        let json = serde_json::to_string(&receipt).unwrap();
+            .expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
         assert!(json.contains("\"receipt_id\""));
         assert!(json.contains("\"target_extension_id\""));
         assert!(json.contains("\"action\""));
@@ -1544,7 +1544,7 @@ mod tests {
         executor.register("ext-b");
         executor
             .execute(ContainmentAction::Sandbox, "ext-a", &ctx)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(executor.state("ext-a"), Some(ContainmentState::Sandboxed));
         assert_eq!(executor.state("ext-b"), Some(ContainmentState::Running));
     }
@@ -1655,7 +1655,7 @@ mod tests {
         ];
         let set: BTreeSet<String> = variants
             .iter()
-            .map(|v| serde_json::to_string(v).unwrap())
+            .map(|v| serde_json::to_string(v).expect("serde deserialization should succeed"))
             .collect();
         assert_eq!(set.len(), variants.len(), "all states serialize distinctly");
     }
@@ -1665,7 +1665,7 @@ mod tests {
         use std::collections::BTreeSet;
         let set: BTreeSet<String> = ContainmentAction::ALL
             .iter()
-            .map(|a| serde_json::to_string(a).unwrap())
+            .map(|a| serde_json::to_string(a).expect("serde deserialization should succeed"))
             .collect();
         assert_eq!(
             set.len(),
@@ -1702,7 +1702,7 @@ mod tests {
         ];
         let set: BTreeSet<String> = variants
             .iter()
-            .map(|v| serde_json::to_string(v).unwrap())
+            .map(|v| serde_json::to_string(v).expect("serde deserialization should succeed"))
             .collect();
         assert_eq!(set.len(), variants.len());
     }
@@ -1759,7 +1759,7 @@ mod tests {
         let ctx = test_context();
         executor
             .execute(ContainmentAction::Sandbox, "ext-001", &ctx)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let mut cloned = executor.clone();
         // Mutate clone only.
         cloned.register("ext-clone-only");
@@ -1774,7 +1774,7 @@ mod tests {
     #[test]
     fn sandbox_policy_json_field_names() {
         let policy = SandboxPolicy::default();
-        let json = serde_json::to_string(&policy).unwrap();
+        let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
         assert!(json.contains("\"allowed_capabilities\""));
         assert!(json.contains("\"allow_network\""));
         assert!(json.contains("\"allow_fs_write\""));
@@ -1790,7 +1790,7 @@ mod tests {
             snapshot_ns: 0,
             manifest_hash: ContentHash::compute(b"mf"),
         };
-        let json = serde_json::to_string(&snap).unwrap();
+        let json = serde_json::to_string(&snap).expect("serde deserialization should succeed");
         assert!(json.contains("\"memory_hash\""));
         assert!(json.contains("\"hostcall_count\""));
         assert!(json.contains("\"snapshot_ns\""));
@@ -1800,7 +1800,7 @@ mod tests {
     #[test]
     fn containment_context_json_field_names() {
         let ctx = ContainmentContext::default();
-        let json = serde_json::to_string(&ctx).unwrap();
+        let json = serde_json::to_string(&ctx).expect("serde deserialization should succeed");
         assert!(json.contains("\"decision_id\""));
         assert!(json.contains("\"timestamp_ns\""));
         assert!(json.contains("\"epoch\""));
@@ -1816,8 +1816,8 @@ mod tests {
         let ctx = test_context();
         let receipt = executor
             .execute(ContainmentAction::Quarantine, "ext-001", &ctx)
-            .unwrap();
-        let json = serde_json::to_string(&receipt).unwrap();
+            .expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
         assert!(json.contains("\"receipt_id\""));
         assert!(json.contains("\"action\""));
         assert!(json.contains("\"target_extension_id\""));
@@ -2003,8 +2003,8 @@ mod tests {
             max_memory_bytes: u64::MAX,
         };
         assert_eq!(policy.max_memory_bytes, u64::MAX);
-        let json = serde_json::to_string(&policy).unwrap();
-        let back: SandboxPolicy = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
+        let back: SandboxPolicy = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.max_memory_bytes, u64::MAX);
     }
 
@@ -2040,7 +2040,7 @@ mod tests {
         let mut executor = setup_executor();
         let receipt = executor
             .execute(ContainmentAction::Sandbox, "ext-001", &ctx)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(receipt.evidence_refs.is_empty());
         assert!(receipt.verify_integrity());
     }
@@ -2058,7 +2058,7 @@ mod tests {
         let mut executor = setup_executor();
         let receipt = executor
             .execute(ContainmentAction::Challenge, "ext-001", &ctx)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(receipt.evidence_refs.len(), 3);
         assert!(receipt.verify_integrity());
     }
@@ -2072,8 +2072,8 @@ mod tests {
         };
         assert_eq!(ctx.grace_period_ns, u64::MAX);
         assert_eq!(ctx.challenge_timeout_ns, u64::MAX);
-        let json = serde_json::to_string(&ctx).unwrap();
-        let back: ContainmentContext = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&ctx).expect("serde deserialization should succeed");
+        let back: ContainmentContext = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.grace_period_ns, u64::MAX);
     }
 
@@ -2098,8 +2098,8 @@ mod tests {
                 max_memory_bytes: 65536,
             },
         };
-        let json = serde_json::to_string(&ctx).unwrap();
-        let back: ContainmentContext = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&ctx).expect("serde deserialization should succeed");
+        let back: ContainmentContext = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ctx.decision_id, back.decision_id);
         assert_eq!(ctx.timestamp_ns, back.timestamp_ns);
         assert_eq!(ctx.epoch, back.epoch);
@@ -2120,9 +2120,9 @@ mod tests {
         };
         let receipt = executor
             .execute(ContainmentAction::Quarantine, "ext-001", &ctx)
-            .unwrap();
-        let json = serde_json::to_string(&receipt).unwrap();
-        let back: ContainmentReceipt = serde_json::from_str(&json).unwrap();
+            .expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
+        let back: ContainmentReceipt = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(receipt, back);
         assert!(back.verify_integrity());
     }
@@ -2133,9 +2133,9 @@ mod tests {
         let ctx = test_context();
         let receipt = executor
             .execute(ContainmentAction::Terminate, "ext-001", &ctx)
-            .unwrap();
-        let json = serde_json::to_string(&receipt).unwrap();
-        let back: ContainmentReceipt = serde_json::from_str(&json).unwrap();
+            .expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
+        let back: ContainmentReceipt = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(receipt, back);
         assert!(!back.cooperative);
     }
@@ -2148,8 +2148,8 @@ mod tests {
             snapshot_ns: 123_456_789,
             manifest_hash: ContentHash::compute(b"manifest-hash-full"),
         };
-        let json = serde_json::to_string(&snap).unwrap();
-        let back: ForensicSnapshot = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&snap).expect("serde deserialization should succeed");
+        let back: ForensicSnapshot = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(snap, back);
     }
 
@@ -2162,12 +2162,12 @@ mod tests {
         executor.register("gamma");
         executor
             .execute(ContainmentAction::Sandbox, "alpha", &ctx)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         executor
             .execute(ContainmentAction::Terminate, "beta", &ctx)
-            .unwrap();
-        let json = serde_json::to_string(&executor).unwrap();
-        let back: ContainmentExecutor = serde_json::from_str(&json).unwrap();
+            .expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&executor).expect("serde deserialization should succeed");
+        let back: ContainmentExecutor = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(executor.extension_count(), back.extension_count());
         assert_eq!(back.state("alpha"), Some(ContainmentState::Sandboxed));
         assert_eq!(back.state("beta"), Some(ContainmentState::Terminated));
@@ -2207,7 +2207,7 @@ mod tests {
         let ctx = test_context();
         let receipt = executor
             .execute(ContainmentAction::Challenge, "ext-001", &ctx)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(!format!("{receipt:?}").is_empty());
     }
 
@@ -2227,11 +2227,11 @@ mod tests {
         let ctx = test_context();
         let r = executor
             .execute(ContainmentAction::Challenge, "ext-001", &ctx)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(r.cooperative);
         let r2 = executor
             .execute(ContainmentAction::Sandbox, "ext-001", &ctx)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(r2.cooperative);
     }
 
@@ -2243,11 +2243,11 @@ mod tests {
         executor.register("ext-q");
         let rt = executor
             .execute(ContainmentAction::Terminate, "ext-t", &ctx)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(!rt.cooperative);
         let rq = executor
             .execute(ContainmentAction::Quarantine, "ext-q", &ctx)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(!rq.cooperative);
     }
 
@@ -2257,10 +2257,10 @@ mod tests {
         let ctx = test_context();
         executor
             .execute(ContainmentAction::Challenge, "ext-001", &ctx)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let receipt = executor
             .execute(ContainmentAction::Quarantine, "ext-001", &ctx)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(receipt.previous_state, ContainmentState::Challenged);
         assert_eq!(receipt.new_state, ContainmentState::Quarantined);
         assert!(executor.forensic_snapshot("ext-001").is_some());
@@ -2273,10 +2273,10 @@ mod tests {
         let ctx = test_context();
         executor
             .execute(ContainmentAction::Sandbox, "ext-001", &ctx)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let receipt = executor
             .execute(ContainmentAction::Suspend, "ext-001", &ctx)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(receipt.previous_state, ContainmentState::Sandboxed);
         assert_eq!(receipt.new_state, ContainmentState::Suspended);
         assert!(receipt.verify_integrity());
@@ -2288,7 +2288,7 @@ mod tests {
         let ctx = test_context();
         executor
             .execute(ContainmentAction::Sandbox, "ext-001", &ctx)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let err = executor
             .execute(ContainmentAction::Challenge, "ext-001", &ctx)
             .unwrap_err();
@@ -2301,7 +2301,7 @@ mod tests {
         let ctx = test_context();
         executor
             .execute(ContainmentAction::Sandbox, "ext-001", &ctx)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let err = executor
             .execute(ContainmentAction::Allow, "ext-001", &ctx)
             .unwrap_err();
@@ -2314,7 +2314,7 @@ mod tests {
         let ctx = test_context();
         executor
             .execute(ContainmentAction::Quarantine, "ext-001", &ctx)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         for action in ContainmentAction::ALL {
             let result = executor.execute(action, "ext-001", &ctx);
             // Either idempotency (same Quarantine) or InvalidTransition.
@@ -2346,8 +2346,8 @@ mod tests {
         let mut executor = setup_executor();
         executor
             .execute(ContainmentAction::Sandbox, "ext-001", &ctx)
-            .unwrap();
-        let policy = executor.sandbox_policy("ext-001").unwrap();
+            .expect("serde deserialization should succeed");
+        let policy = executor.sandbox_policy("ext-001").expect("serde deserialization should succeed");
         assert_eq!(*policy, custom_policy);
         assert!(policy.is_allowed("custom-cap"));
     }
@@ -2371,7 +2371,7 @@ mod tests {
         let ctx = test_context();
         let receipt = executor
             .execute(ContainmentAction::Sandbox, "ext-001", &ctx)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(
             receipt.receipt_id.starts_with("cr-"),
             "receipt ID must start with 'cr-'"
@@ -2384,10 +2384,10 @@ mod tests {
         let ctx = test_context();
         let r1 = executor
             .execute(ContainmentAction::Challenge, "ext-001", &ctx)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let r2 = executor
             .execute(ContainmentAction::Sandbox, "ext-001", &ctx)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         // The second receipt ID should be strictly different from the first.
         assert_ne!(r1.receipt_id, r2.receipt_id);
     }

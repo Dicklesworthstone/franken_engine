@@ -2370,7 +2370,7 @@ fn build_collection_trace(
     mutated_keys: Vec<String>,
     events: Vec<CollectionMutationEvent>,
 ) -> CollectionMutationTrace {
-    let seed = serde_json::to_string(&events).unwrap();
+    let seed = serde_json::to_string(&events).expect("serde deserialization should succeed");
     let digest = hex::encode(Sha256::digest(
         format!(
             "{}|{}|{}|{}|{}|{}",
@@ -3753,8 +3753,8 @@ fn build_string_representation_receipt(
             segment_count,
             flatten_required,
             flatten_budget_exhausted,
-            serde_json::to_string(&kind).unwrap(),
-            serde_json::to_string(&observation_mode).unwrap(),
+            serde_json::to_string(&kind).expect("serde deserialization should succeed"),
+            serde_json::to_string(&observation_mode).expect("serde deserialization should succeed"),
             view_eligible
         )
         .as_bytes(),
@@ -5099,9 +5099,9 @@ mod tests {
         // Global object exists and has constructors.
         let obj_val = heap.get_property(env.global_object, &PropertyKey::from("Object"));
         assert!(obj_val.is_ok());
-        assert!(matches!(obj_val.unwrap(), JsValue::Object(_)));
+        assert!(matches!(obj_val.expect("serde deserialization should succeed"), JsValue::Object(_)));
         let global_this = heap.get_property(env.global_object, &PropertyKey::from("globalThis"));
-        assert_eq!(global_this.unwrap(), JsValue::Object(env.global_object));
+        assert_eq!(global_this.expect("serde deserialization should succeed"), JsValue::Object(env.global_object));
     }
 
     #[test]
@@ -5109,8 +5109,8 @@ mod tests {
         let mut heap = ObjectHeap::new();
         let env = install_stdlib(&mut heap);
         // Array.prototype has Object.prototype as its [[Prototype]].
-        let arr_proto = heap.get(env.prototypes.array_prototype).unwrap();
-        let arr_ordinary = arr_proto.as_ordinary().unwrap();
+        let arr_proto = heap.get(env.prototypes.array_prototype).expect("serde deserialization should succeed");
+        let arr_ordinary = arr_proto.as_ordinary().expect("serde deserialization should succeed");
         assert_eq!(
             arr_ordinary.prototype,
             Some(env.prototypes.object_prototype)
@@ -5122,12 +5122,12 @@ mod tests {
         let mut heap = ObjectHeap::new();
         let env = install_stdlib(&mut heap);
         // TypeError.prototype -> Error.prototype -> Object.prototype
-        let te_proto = heap.get(env.prototypes.type_error_prototype).unwrap();
-        let te_ord = te_proto.as_ordinary().unwrap();
+        let te_proto = heap.get(env.prototypes.type_error_prototype).expect("serde deserialization should succeed");
+        let te_ord = te_proto.as_ordinary().expect("serde deserialization should succeed");
         assert_eq!(te_ord.prototype, Some(env.prototypes.error_prototype));
 
-        let err_proto = heap.get(env.prototypes.error_prototype).unwrap();
-        let err_ord = err_proto.as_ordinary().unwrap();
+        let err_proto = heap.get(env.prototypes.error_prototype).expect("serde deserialization should succeed");
+        let err_ord = err_proto.as_ordinary().expect("serde deserialization should succeed");
         assert_eq!(err_ord.prototype, Some(env.prototypes.object_prototype));
     }
 
@@ -5135,9 +5135,9 @@ mod tests {
     fn test_install_stdlib_class_tags() {
         let mut heap = ObjectHeap::new();
         let env = install_stdlib(&mut heap);
-        let math_obj = heap.get(env.namespaces.math).unwrap();
+        let math_obj = heap.get(env.namespaces.math).expect("serde deserialization should succeed");
         assert_eq!(
-            math_obj.as_ordinary().unwrap().class_tag.as_deref(),
+            math_obj.as_ordinary().expect("serde deserialization should succeed").class_tag.as_deref(),
             Some("Math")
         );
     }
@@ -5148,7 +5148,7 @@ mod tests {
         let env = install_stdlib(&mut heap);
         let pi = heap
             .get_property(env.namespaces.math, &PropertyKey::from("PI"))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(pi, JsValue::Int(3_141_593));
     }
 
@@ -5162,7 +5162,7 @@ mod tests {
                 env.prototypes.array_prototype,
                 &PropertyKey::from("constructor"),
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(ctor, JsValue::Object(env.constructors.array_constructor));
     }
 
@@ -5172,7 +5172,7 @@ mod tests {
         let env = install_stdlib(&mut heap);
         let is_nan = heap
             .get_property(env.global_object, &PropertyKey::from("isNaN"))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(matches!(is_nan, JsValue::Function(_)));
     }
 
@@ -5189,11 +5189,11 @@ mod tests {
     #[test]
     fn test_math_abs() {
         assert_eq!(
-            exec_math(BuiltinId::MathAbs, &[JsValue::Int(-5 * FP_SCALE)]).unwrap(),
+            exec_math(BuiltinId::MathAbs, &[JsValue::Int(-5 * FP_SCALE)]).expect("serde deserialization should succeed"),
             JsValue::Int(5 * FP_SCALE)
         );
         assert_eq!(
-            exec_math(BuiltinId::MathAbs, &[JsValue::Int(3 * FP_SCALE)]).unwrap(),
+            exec_math(BuiltinId::MathAbs, &[JsValue::Int(3 * FP_SCALE)]).expect("serde deserialization should succeed"),
             JsValue::Int(3 * FP_SCALE)
         );
     }
@@ -5203,11 +5203,11 @@ mod tests {
         // 3.5 in fixed-point = 3_500_000
         let val = 3 * FP_SCALE + FP_SCALE / 2;
         assert_eq!(
-            exec_math(BuiltinId::MathFloor, &[JsValue::Int(val)]).unwrap(),
+            exec_math(BuiltinId::MathFloor, &[JsValue::Int(val)]).expect("serde deserialization should succeed"),
             JsValue::Int(3 * FP_SCALE)
         );
         assert_eq!(
-            exec_math(BuiltinId::MathCeil, &[JsValue::Int(val)]).unwrap(),
+            exec_math(BuiltinId::MathCeil, &[JsValue::Int(val)]).expect("serde deserialization should succeed"),
             JsValue::Int(4 * FP_SCALE)
         );
     }
@@ -5219,7 +5219,7 @@ mod tests {
                 BuiltinId::MathRound,
                 &[JsValue::Int(3 * FP_SCALE + FP_SCALE / 2)]
             )
-            .unwrap(),
+            .expect("serde deserialization should succeed"),
             JsValue::Int(4 * FP_SCALE)
         );
         assert_eq!(
@@ -5227,7 +5227,7 @@ mod tests {
                 BuiltinId::MathRound,
                 &[JsValue::Int(3 * FP_SCALE + FP_SCALE / 4)]
             )
-            .unwrap(),
+            .expect("serde deserialization should succeed"),
             JsValue::Int(3 * FP_SCALE)
         );
     }
@@ -5235,15 +5235,15 @@ mod tests {
     #[test]
     fn test_math_sign() {
         assert_eq!(
-            exec_math(BuiltinId::MathSign, &[JsValue::Int(42 * FP_SCALE)]).unwrap(),
+            exec_math(BuiltinId::MathSign, &[JsValue::Int(42 * FP_SCALE)]).expect("serde deserialization should succeed"),
             JsValue::Int(FP_SCALE)
         );
         assert_eq!(
-            exec_math(BuiltinId::MathSign, &[JsValue::Int(-7 * FP_SCALE)]).unwrap(),
+            exec_math(BuiltinId::MathSign, &[JsValue::Int(-7 * FP_SCALE)]).expect("serde deserialization should succeed"),
             JsValue::Int(-FP_SCALE)
         );
         assert_eq!(
-            exec_math(BuiltinId::MathSign, &[JsValue::Int(0)]).unwrap(),
+            exec_math(BuiltinId::MathSign, &[JsValue::Int(0)]).expect("serde deserialization should succeed"),
             JsValue::Int(0)
         );
     }
@@ -5256,11 +5256,11 @@ mod tests {
             JsValue::Int(FP_SCALE),
         ];
         assert_eq!(
-            exec_math(BuiltinId::MathMax, &args).unwrap(),
+            exec_math(BuiltinId::MathMax, &args).expect("serde deserialization should succeed"),
             JsValue::Int(7 * FP_SCALE)
         );
         assert_eq!(
-            exec_math(BuiltinId::MathMin, &args).unwrap(),
+            exec_math(BuiltinId::MathMin, &args).expect("serde deserialization should succeed"),
             JsValue::Int(FP_SCALE)
         );
     }
@@ -5268,7 +5268,7 @@ mod tests {
     #[test]
     fn test_math_max_no_args() {
         assert_eq!(
-            exec_math(BuiltinId::MathMax, &[]).unwrap(),
+            exec_math(BuiltinId::MathMax, &[]).expect("serde deserialization should succeed"),
             JsValue::Int(i64::MIN)
         );
     }
@@ -5276,7 +5276,7 @@ mod tests {
     #[test]
     fn test_math_clz32() {
         assert_eq!(
-            exec_math(BuiltinId::MathClz32, &[JsValue::Int(FP_SCALE)]).unwrap(),
+            exec_math(BuiltinId::MathClz32, &[JsValue::Int(FP_SCALE)]).expect("serde deserialization should succeed"),
             JsValue::Int(31 * FP_SCALE)
         );
     }
@@ -5285,7 +5285,7 @@ mod tests {
     fn test_math_imul() {
         let args = vec![JsValue::Int(3 * FP_SCALE), JsValue::Int(4 * FP_SCALE)];
         assert_eq!(
-            exec_math(BuiltinId::MathImul, &args).unwrap(),
+            exec_math(BuiltinId::MathImul, &args).expect("serde deserialization should succeed"),
             JsValue::Int(12 * FP_SCALE)
         );
     }
@@ -5300,7 +5300,7 @@ mod tests {
                 "hello",
                 &[JsValue::Int(0)]
             )
-            .unwrap(),
+            .expect("serde deserialization should succeed"),
             JsValue::Str("h".into())
         );
         assert_eq!(
@@ -5309,7 +5309,7 @@ mod tests {
                 "hello",
                 &[JsValue::Int(4 * FP_SCALE)]
             )
-            .unwrap(),
+            .expect("serde deserialization should succeed"),
             JsValue::Str("o".into())
         );
     }
@@ -5332,7 +5332,7 @@ mod tests {
                 "😀",
                 &[JsValue::Int(0)]
             )
-            .unwrap(),
+            .expect("serde deserialization should succeed"),
             JsValue::Int(i64::from(0xD83D_u16) * FP_SCALE)
         );
     }
@@ -5345,7 +5345,7 @@ mod tests {
                 "😀",
                 &[JsValue::Int(FP_SCALE)]
             )
-            .unwrap(),
+            .expect("serde deserialization should succeed"),
             JsValue::Int(i64::from(0xDE00_u16) * FP_SCALE)
         );
     }
@@ -5358,7 +5358,7 @@ mod tests {
                 "hello world",
                 &[JsValue::Str("world".into())]
             )
-            .unwrap(),
+            .expect("serde deserialization should succeed"),
             JsValue::Bool(true)
         );
         assert_eq!(
@@ -5367,7 +5367,7 @@ mod tests {
                 "hello",
                 &[JsValue::Str("xyz".into())]
             )
-            .unwrap(),
+            .expect("serde deserialization should succeed"),
             JsValue::Bool(false)
         );
     }
@@ -5380,7 +5380,7 @@ mod tests {
                 "hello",
                 &[JsValue::Str("hel".into())]
             )
-            .unwrap(),
+            .expect("serde deserialization should succeed"),
             JsValue::Bool(true)
         );
         assert_eq!(
@@ -5389,7 +5389,7 @@ mod tests {
                 "hello",
                 &[JsValue::Str("llo".into())]
             )
-            .unwrap(),
+            .expect("serde deserialization should succeed"),
             JsValue::Bool(true)
         );
     }
@@ -5427,7 +5427,7 @@ mod tests {
                 "hello world",
                 &[JsValue::Str("world".into())]
             )
-            .unwrap(),
+            .expect("serde deserialization should succeed"),
             JsValue::Int(6 * FP_SCALE)
         );
         assert_eq!(
@@ -5436,7 +5436,7 @@ mod tests {
                 "hello",
                 &[JsValue::Str("xyz".into())]
             )
-            .unwrap(),
+            .expect("serde deserialization should succeed"),
             JsValue::Int(-FP_SCALE)
         );
     }
@@ -5449,7 +5449,7 @@ mod tests {
                 "A😀B",
                 &[JsValue::Str("B".into())]
             )
-            .unwrap(),
+            .expect("serde deserialization should succeed"),
             JsValue::Int(3 * FP_SCALE)
         );
     }
@@ -5462,7 +5462,7 @@ mod tests {
                 "😀ab😀ab",
                 &[JsValue::Str("ab".into())]
             )
-            .unwrap(),
+            .expect("serde deserialization should succeed"),
             JsValue::Int(6 * FP_SCALE)
         );
     }
@@ -5475,7 +5475,7 @@ mod tests {
                 "hello world",
                 &[JsValue::Int(6 * FP_SCALE)]
             )
-            .unwrap(),
+            .expect("serde deserialization should succeed"),
             JsValue::Str("world".into())
         );
         assert_eq!(
@@ -5484,7 +5484,7 @@ mod tests {
                 "hello",
                 &[JsValue::Int(FP_SCALE), JsValue::Int(3 * FP_SCALE)]
             )
-            .unwrap(),
+            .expect("serde deserialization should succeed"),
             JsValue::Str("el".into())
         );
     }
@@ -5497,7 +5497,7 @@ mod tests {
                 "hello",
                 &[JsValue::Int(-3 * FP_SCALE)]
             )
-            .unwrap(),
+            .expect("serde deserialization should succeed"),
             JsValue::Str("llo".into())
         );
     }
@@ -5510,7 +5510,7 @@ mod tests {
                 "A😀B",
                 &[JsValue::Int(FP_SCALE), JsValue::Int(3 * FP_SCALE)]
             )
-            .unwrap(),
+            .expect("serde deserialization should succeed"),
             JsValue::Str("😀".into())
         );
     }
@@ -5532,15 +5532,15 @@ mod tests {
     #[test]
     fn test_string_trim() {
         assert_eq!(
-            exec_string_method(BuiltinId::StringPrototypeTrim, "  hello  ", &[]).unwrap(),
+            exec_string_method(BuiltinId::StringPrototypeTrim, "  hello  ", &[]).expect("serde deserialization should succeed"),
             JsValue::Str("hello".into())
         );
         assert_eq!(
-            exec_string_method(BuiltinId::StringPrototypeTrimStart, "  hello  ", &[]).unwrap(),
+            exec_string_method(BuiltinId::StringPrototypeTrimStart, "  hello  ", &[]).expect("serde deserialization should succeed"),
             JsValue::Str("hello  ".into())
         );
         assert_eq!(
-            exec_string_method(BuiltinId::StringPrototypeTrimEnd, "  hello  ", &[]).unwrap(),
+            exec_string_method(BuiltinId::StringPrototypeTrimEnd, "  hello  ", &[]).expect("serde deserialization should succeed"),
             JsValue::Str("  hello".into())
         );
     }
@@ -5553,7 +5553,7 @@ mod tests {
                 "5",
                 &[JsValue::Int(3 * FP_SCALE), JsValue::Str("0".into())]
             )
-            .unwrap(),
+            .expect("serde deserialization should succeed"),
             JsValue::Str("005".into())
         );
         assert_eq!(
@@ -5562,7 +5562,7 @@ mod tests {
                 "hi",
                 &[JsValue::Int(5 * FP_SCALE)]
             )
-            .unwrap(),
+            .expect("serde deserialization should succeed"),
             JsValue::Str("hi   ".into())
         );
     }
@@ -5575,7 +5575,7 @@ mod tests {
                 "ab",
                 &[JsValue::Int(3 * FP_SCALE)]
             )
-            .unwrap(),
+            .expect("serde deserialization should succeed"),
             JsValue::Str("ababab".into())
         );
     }
@@ -5595,11 +5595,11 @@ mod tests {
     #[test]
     fn test_string_case() {
         assert_eq!(
-            exec_string_method(BuiltinId::StringPrototypeToUpperCase, "hello", &[]).unwrap(),
+            exec_string_method(BuiltinId::StringPrototypeToUpperCase, "hello", &[]).expect("serde deserialization should succeed"),
             JsValue::Str("HELLO".into())
         );
         assert_eq!(
-            exec_string_method(BuiltinId::StringPrototypeToLowerCase, "HELLO", &[]).unwrap(),
+            exec_string_method(BuiltinId::StringPrototypeToLowerCase, "HELLO", &[]).expect("serde deserialization should succeed"),
             JsValue::Str("hello".into())
         );
     }
@@ -5612,7 +5612,7 @@ mod tests {
                 "hello",
                 &[JsValue::Str(" ".into()), JsValue::Str("world".into())]
             )
-            .unwrap(),
+            .expect("serde deserialization should succeed"),
             JsValue::Str("hello world".into())
         );
     }
@@ -5622,11 +5622,11 @@ mod tests {
     #[test]
     fn test_number_is_integer() {
         assert_eq!(
-            exec_number_method(BuiltinId::NumberIsInteger, 5 * FP_SCALE, &[]).unwrap(),
+            exec_number_method(BuiltinId::NumberIsInteger, 5 * FP_SCALE, &[]).expect("serde deserialization should succeed"),
             JsValue::Bool(true)
         );
         assert_eq!(
-            exec_number_method(BuiltinId::NumberIsInteger, 5 * FP_SCALE + 500_000, &[]).unwrap(),
+            exec_number_method(BuiltinId::NumberIsInteger, 5 * FP_SCALE + 500_000, &[]).expect("serde deserialization should succeed"),
             JsValue::Bool(false)
         );
     }
@@ -5639,7 +5639,7 @@ mod tests {
                 3_141_593,
                 &[JsValue::Int(2 * FP_SCALE)]
             )
-            .unwrap(),
+            .expect("serde deserialization should succeed"),
             JsValue::Str("3.14".into())
         );
     }
@@ -5647,11 +5647,11 @@ mod tests {
     #[test]
     fn test_number_to_string() {
         assert_eq!(
-            exec_number_method(BuiltinId::NumberPrototypeToString, 42 * FP_SCALE, &[]).unwrap(),
+            exec_number_method(BuiltinId::NumberPrototypeToString, 42 * FP_SCALE, &[]).expect("serde deserialization should succeed"),
             JsValue::Str("42".into())
         );
         assert_eq!(
-            exec_number_method(BuiltinId::NumberPrototypeToString, 3_141_593, &[]).unwrap(),
+            exec_number_method(BuiltinId::NumberPrototypeToString, 3_141_593, &[]).expect("serde deserialization should succeed"),
             JsValue::Str("3.141593".into())
         );
     }
@@ -5660,12 +5660,12 @@ mod tests {
 
     #[test]
     fn test_json_parse_primitives() {
-        assert_eq!(parse_json_value("null").unwrap(), JsValue::Null);
-        assert_eq!(parse_json_value("true").unwrap(), JsValue::Bool(true));
-        assert_eq!(parse_json_value("false").unwrap(), JsValue::Bool(false));
-        assert_eq!(parse_json_value("42").unwrap(), JsValue::Int(42 * FP_SCALE));
+        assert_eq!(parse_json_value("null").expect("serde deserialization should succeed"), JsValue::Null);
+        assert_eq!(parse_json_value("true").expect("serde deserialization should succeed"), JsValue::Bool(true));
+        assert_eq!(parse_json_value("false").expect("serde deserialization should succeed"), JsValue::Bool(false));
+        assert_eq!(parse_json_value("42").expect("serde deserialization should succeed"), JsValue::Int(42 * FP_SCALE));
         assert_eq!(
-            parse_json_value("\"hello\"").unwrap(),
+            parse_json_value("\"hello\"").expect("serde deserialization should succeed"),
             JsValue::Str("hello".into())
         );
     }
@@ -5673,11 +5673,11 @@ mod tests {
     #[test]
     fn test_json_parse_escape() {
         assert_eq!(
-            parse_json_value("\"hello\\nworld\"").unwrap(),
+            parse_json_value("\"hello\\nworld\"").expect("serde deserialization should succeed"),
             JsValue::Str("hello\nworld".into())
         );
         assert_eq!(
-            parse_json_value("\"tab\\there\"").unwrap(),
+            parse_json_value("\"tab\\there\"").expect("serde deserialization should succeed"),
             JsValue::Str("tab\there".into())
         );
     }
@@ -5686,19 +5686,19 @@ mod tests {
     fn test_json_stringify_primitives() {
         let heap = ObjectHeap::new();
         assert_eq!(
-            json_stringify(&heap, &JsValue::Null).unwrap(),
+            json_stringify(&heap, &JsValue::Null).expect("serde deserialization should succeed"),
             JsValue::Str("null".into())
         );
         assert_eq!(
-            json_stringify(&heap, &JsValue::Bool(true)).unwrap(),
+            json_stringify(&heap, &JsValue::Bool(true)).expect("serde deserialization should succeed"),
             JsValue::Str("true".into())
         );
         assert_eq!(
-            json_stringify(&heap, &JsValue::Int(42 * FP_SCALE)).unwrap(),
+            json_stringify(&heap, &JsValue::Int(42 * FP_SCALE)).expect("serde deserialization should succeed"),
             JsValue::Str("42".into())
         );
         assert_eq!(
-            json_stringify(&heap, &JsValue::Str("hello".into())).unwrap(),
+            json_stringify(&heap, &JsValue::Str("hello".into())).expect("serde deserialization should succeed"),
             JsValue::Str("\"hello\"".into())
         );
     }
@@ -5707,7 +5707,7 @@ mod tests {
     fn test_json_stringify_escape() {
         let heap = ObjectHeap::new();
         assert_eq!(
-            json_stringify(&heap, &JsValue::Str("line\nnewline".into())).unwrap(),
+            json_stringify(&heap, &JsValue::Str("line\nnewline".into())).expect("serde deserialization should succeed"),
             JsValue::Str("\"line\\nnewline\"".into())
         );
     }
@@ -5716,7 +5716,7 @@ mod tests {
     fn test_json_stringify_negative_fractional_number() {
         let heap = ObjectHeap::new();
         assert_eq!(
-            json_stringify(&heap, &JsValue::Int(-(FP_SCALE / 2))).unwrap(),
+            json_stringify(&heap, &JsValue::Int(-(FP_SCALE / 2))).expect("serde deserialization should succeed"),
             JsValue::Str("-0.5".into())
         );
     }
@@ -5725,7 +5725,7 @@ mod tests {
     fn test_json_stringify_undefined() {
         let heap = ObjectHeap::new();
         assert_eq!(
-            json_stringify(&heap, &JsValue::Undefined).unwrap(),
+            json_stringify(&heap, &JsValue::Undefined).expect("serde deserialization should succeed"),
             JsValue::Undefined
         );
     }
@@ -5734,9 +5734,9 @@ mod tests {
     fn test_json_stringify_object_traverses_runtime_state() {
         let mut heap = ObjectHeap::new();
         let env = install_stdlib(&mut heap);
-        let value = json_parse(&mut heap, &env, r#"{"answer":42,"nested":[1,null,"ok"]}"#).unwrap();
+        let value = json_parse(&mut heap, &env, r#"{"answer":42,"nested":[1,null,"ok"]}"#).expect("serde deserialization should succeed");
         assert_eq!(
-            json_stringify(&heap, &value).unwrap(),
+            json_stringify(&heap, &value).expect("serde deserialization should succeed"),
             JsValue::Str(r#"{"answer":42,"nested":[1,null,"ok"]}"#.into())
         );
     }
@@ -5745,12 +5745,12 @@ mod tests {
     fn test_json_stringify_rejects_circular_object_graphs() {
         let mut heap = ObjectHeap::new();
         let env = install_stdlib(&mut heap);
-        let value = json_parse(&mut heap, &env, "{}").unwrap();
+        let value = json_parse(&mut heap, &env, "{}").expect("serde deserialization should succeed");
         let JsValue::Object(handle) = value else {
             panic!("expected object handle");
         };
         heap.set_property(handle, PropertyKey::from("self"), JsValue::Object(handle))
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let err = json_stringify(&heap, &JsValue::Object(handle)).unwrap_err();
         assert!(
@@ -5814,7 +5814,7 @@ mod tests {
                 "hello",
                 &[JsValue::Int(3 * FP_SCALE), JsValue::Int(FP_SCALE)]
             )
-            .unwrap(),
+            .expect("serde deserialization should succeed"),
             JsValue::Str("el".into())
         );
     }
@@ -5822,11 +5822,11 @@ mod tests {
     #[test]
     fn test_math_trunc() {
         assert_eq!(
-            exec_math(BuiltinId::MathTrunc, &[JsValue::Int(3_700_000)]).unwrap(),
+            exec_math(BuiltinId::MathTrunc, &[JsValue::Int(3_700_000)]).expect("serde deserialization should succeed"),
             JsValue::Int(3 * FP_SCALE)
         );
         assert_eq!(
-            exec_math(BuiltinId::MathTrunc, &[JsValue::Int(-3_700_000)]).unwrap(),
+            exec_math(BuiltinId::MathTrunc, &[JsValue::Int(-3_700_000)]).expect("serde deserialization should succeed"),
             JsValue::Int(-3 * FP_SCALE)
         );
     }
@@ -5834,7 +5834,7 @@ mod tests {
     #[test]
     fn test_pad_string_no_op_when_already_long() {
         assert_eq!(
-            pad_string("hello", 3, " ", true, "padStart").unwrap(),
+            pad_string("hello", 3, " ", true, "padStart").expect("serde deserialization should succeed"),
             "hello"
         );
     }
@@ -5846,7 +5846,7 @@ mod tests {
             panic!("expected heap-backed array, got {result:?}");
         };
         assert_eq!(
-            read_array_elements(&heap, handle).unwrap(),
+            read_array_elements(&heap, handle).expect("serde deserialization should succeed"),
             vec![
                 JsValue::Int(FP_SCALE),
                 JsValue::Int(2 * FP_SCALE),
@@ -5874,11 +5874,11 @@ mod tests {
             panic!("expected array handle, got {array:?}");
         };
         assert_eq!(
-            heap.get_prototype_of(root).unwrap(),
+            heap.get_prototype_of(root).expect("serde deserialization should succeed"),
             Some(env.prototypes.object_prototype)
         );
         assert_eq!(
-            read_array_elements(&heap, array_handle).unwrap(),
+            read_array_elements(&heap, array_handle).expect("serde deserialization should succeed"),
             vec![
                 JsValue::Int(FP_SCALE),
                 JsValue::Str("two".into()),
@@ -5892,7 +5892,7 @@ mod tests {
     #[test]
     fn test_math_sqrt() {
         // sqrt(4) = 2
-        let result = exec_math(BuiltinId::MathSqrt, &[JsValue::Int(4 * FP_SCALE)]).unwrap();
+        let result = exec_math(BuiltinId::MathSqrt, &[JsValue::Int(4 * FP_SCALE)]).expect("serde deserialization should succeed");
         if let JsValue::Int(n) = result {
             assert!(
                 (n - 2 * FP_SCALE).abs() < 100,
@@ -5905,7 +5905,7 @@ mod tests {
 
     #[test]
     fn test_math_sqrt_one() {
-        let result = exec_math(BuiltinId::MathSqrt, &[JsValue::Int(FP_SCALE)]).unwrap();
+        let result = exec_math(BuiltinId::MathSqrt, &[JsValue::Int(FP_SCALE)]).expect("serde deserialization should succeed");
         if let JsValue::Int(n) = result {
             assert!((n - FP_SCALE).abs() < 100, "sqrt(1) should be ~1, got {n}");
         } else {
@@ -5921,7 +5921,7 @@ mod tests {
     #[test]
     fn test_math_log() {
         // ln(e) should be ~1
-        let result = exec_math(BuiltinId::MathLog, &[JsValue::Int(2_718_282)]).unwrap();
+        let result = exec_math(BuiltinId::MathLog, &[JsValue::Int(2_718_282)]).expect("serde deserialization should succeed");
         if let JsValue::Int(n) = result {
             assert!(
                 (n - FP_SCALE).abs() < 50_000,
@@ -5940,7 +5940,7 @@ mod tests {
     #[test]
     fn test_math_log2() {
         // log2(2) = 1
-        let result = exec_math(BuiltinId::MathLog2, &[JsValue::Int(2 * FP_SCALE)]).unwrap();
+        let result = exec_math(BuiltinId::MathLog2, &[JsValue::Int(2 * FP_SCALE)]).expect("serde deserialization should succeed");
         if let JsValue::Int(n) = result {
             assert!(
                 (n - FP_SCALE).abs() < 100_000,
@@ -5954,7 +5954,7 @@ mod tests {
     #[test]
     fn test_math_log10() {
         // log10(10) = 1
-        let result = exec_math(BuiltinId::MathLog10, &[JsValue::Int(10 * FP_SCALE)]).unwrap();
+        let result = exec_math(BuiltinId::MathLog10, &[JsValue::Int(10 * FP_SCALE)]).expect("serde deserialization should succeed");
         if let JsValue::Int(n) = result {
             assert!(
                 (n - FP_SCALE).abs() < 100_000,
@@ -5972,14 +5972,14 @@ mod tests {
             BuiltinId::MathHypot,
             &[JsValue::Int(3 * FP_SCALE), JsValue::Int(4 * FP_SCALE)],
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(result, JsValue::Int(5 * FP_SCALE));
     }
 
     #[test]
     fn test_math_hypot_no_args() {
         assert_eq!(
-            exec_math(BuiltinId::MathHypot, &[]).unwrap(),
+            exec_math(BuiltinId::MathHypot, &[]).expect("serde deserialization should succeed"),
             JsValue::Int(0)
         );
     }
@@ -5988,7 +5988,7 @@ mod tests {
     fn test_math_fround() {
         // fround rounds to nearest 1000 in our FP system.
         assert_eq!(
-            exec_math(BuiltinId::MathFround, &[JsValue::Int(3_141_593)]).unwrap(),
+            exec_math(BuiltinId::MathFround, &[JsValue::Int(3_141_593)]).expect("serde deserialization should succeed"),
             JsValue::Int(3_141_000)
         );
     }
@@ -5998,19 +5998,19 @@ mod tests {
     #[test]
     fn test_global_is_nan() {
         assert_eq!(
-            exec_global_function(BuiltinId::GlobalIsNaN, &[JsValue::Undefined]).unwrap(),
+            exec_global_function(BuiltinId::GlobalIsNaN, &[JsValue::Undefined]).expect("serde deserialization should succeed"),
             JsValue::Bool(true)
         );
         assert_eq!(
-            exec_global_function(BuiltinId::GlobalIsNaN, &[JsValue::Int(42 * FP_SCALE)]).unwrap(),
+            exec_global_function(BuiltinId::GlobalIsNaN, &[JsValue::Int(42 * FP_SCALE)]).expect("serde deserialization should succeed"),
             JsValue::Bool(false)
         );
         assert_eq!(
-            exec_global_function(BuiltinId::GlobalIsNaN, &[JsValue::Str("abc".into())]).unwrap(),
+            exec_global_function(BuiltinId::GlobalIsNaN, &[JsValue::Str("abc".into())]).expect("serde deserialization should succeed"),
             JsValue::Bool(true)
         );
         assert_eq!(
-            exec_global_function(BuiltinId::GlobalIsNaN, &[JsValue::Str("123".into())]).unwrap(),
+            exec_global_function(BuiltinId::GlobalIsNaN, &[JsValue::Str("123".into())]).expect("serde deserialization should succeed"),
             JsValue::Bool(false)
         );
     }
@@ -6019,11 +6019,11 @@ mod tests {
     fn test_global_is_finite() {
         assert_eq!(
             exec_global_function(BuiltinId::GlobalIsFinite, &[JsValue::Int(42 * FP_SCALE)])
-                .unwrap(),
+                .expect("serde deserialization should succeed"),
             JsValue::Bool(true)
         );
         assert_eq!(
-            exec_global_function(BuiltinId::GlobalIsFinite, &[JsValue::Undefined]).unwrap(),
+            exec_global_function(BuiltinId::GlobalIsFinite, &[JsValue::Undefined]).expect("serde deserialization should succeed"),
             JsValue::Bool(false)
         );
     }
@@ -6031,7 +6031,7 @@ mod tests {
     #[test]
     fn test_global_parse_int_decimal() {
         assert_eq!(
-            exec_global_function(BuiltinId::GlobalParseInt, &[JsValue::Str("42".into())]).unwrap(),
+            exec_global_function(BuiltinId::GlobalParseInt, &[JsValue::Str("42".into())]).expect("serde deserialization should succeed"),
             JsValue::Int(42 * FP_SCALE)
         );
     }
@@ -6043,7 +6043,7 @@ mod tests {
                 BuiltinId::GlobalParseInt,
                 &[JsValue::Str("ff".into()), JsValue::Int(16 * FP_SCALE)]
             )
-            .unwrap(),
+            .expect("serde deserialization should succeed"),
             JsValue::Int(255 * FP_SCALE)
         );
     }
@@ -6051,7 +6051,7 @@ mod tests {
     #[test]
     fn test_global_parse_int_negative() {
         assert_eq!(
-            exec_global_function(BuiltinId::GlobalParseInt, &[JsValue::Str("-10".into())]).unwrap(),
+            exec_global_function(BuiltinId::GlobalParseInt, &[JsValue::Str("-10".into())]).expect("serde deserialization should succeed"),
             JsValue::Int(-10 * FP_SCALE)
         );
     }
@@ -6061,7 +6061,7 @@ mod tests {
         // parseInt stops at first non-digit
         assert_eq!(
             exec_global_function(BuiltinId::GlobalParseInt, &[JsValue::Str("123abc".into())])
-                .unwrap(),
+                .expect("serde deserialization should succeed"),
             JsValue::Int(123 * FP_SCALE)
         );
     }
@@ -6070,7 +6070,7 @@ mod tests {
     fn test_global_parse_float() {
         assert_eq!(
             exec_global_function(BuiltinId::GlobalParseFloat, &[JsValue::Str("42".into())])
-                .unwrap(),
+                .expect("serde deserialization should succeed"),
             JsValue::Int(42 * FP_SCALE)
         );
     }
@@ -6081,7 +6081,7 @@ mod tests {
             BuiltinId::GlobalEncodeURIComponent,
             &[JsValue::Str("hello world!".into())],
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(encoded, JsValue::Str("hello%20world%21".into()));
 
         if let JsValue::Str(ref s) = encoded {
@@ -6089,7 +6089,7 @@ mod tests {
                 BuiltinId::GlobalDecodeURIComponent,
                 &[JsValue::Str(s.clone())],
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
             assert_eq!(decoded, JsValue::Str("hello world!".into()));
         }
     }
@@ -6100,7 +6100,7 @@ mod tests {
             BuiltinId::GlobalEncodeURI,
             &[JsValue::Str("https://example.com/path?q=1".into())],
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         // encodeURI preserves :, /, ?, =
         assert_eq!(encoded, JsValue::Str("https://example.com/path?q=1".into()));
     }
@@ -6110,11 +6110,11 @@ mod tests {
     #[test]
     fn test_boolean_to_string() {
         assert_eq!(
-            exec_boolean_method(BuiltinId::BooleanPrototypeToString, true).unwrap(),
+            exec_boolean_method(BuiltinId::BooleanPrototypeToString, true).expect("serde deserialization should succeed"),
             JsValue::Str("true".into())
         );
         assert_eq!(
-            exec_boolean_method(BuiltinId::BooleanPrototypeToString, false).unwrap(),
+            exec_boolean_method(BuiltinId::BooleanPrototypeToString, false).expect("serde deserialization should succeed"),
             JsValue::Str("false".into())
         );
     }
@@ -6122,11 +6122,11 @@ mod tests {
     #[test]
     fn test_boolean_value_of() {
         assert_eq!(
-            exec_boolean_method(BuiltinId::BooleanPrototypeValueOf, true).unwrap(),
+            exec_boolean_method(BuiltinId::BooleanPrototypeValueOf, true).expect("serde deserialization should succeed"),
             JsValue::Bool(true)
         );
         assert_eq!(
-            exec_boolean_method(BuiltinId::BooleanPrototypeValueOf, false).unwrap(),
+            exec_boolean_method(BuiltinId::BooleanPrototypeValueOf, false).expect("serde deserialization should succeed"),
             JsValue::Bool(false)
         );
     }
@@ -6140,7 +6140,7 @@ mod tests {
                 BuiltinId::ObjectIs,
                 &[JsValue::Int(FP_SCALE), JsValue::Int(FP_SCALE)]
             )
-            .unwrap(),
+            .expect("serde deserialization should succeed"),
             JsValue::Bool(true)
         );
         assert_eq!(
@@ -6148,15 +6148,15 @@ mod tests {
                 BuiltinId::ObjectIs,
                 &[JsValue::Int(FP_SCALE), JsValue::Int(2 * FP_SCALE)]
             )
-            .unwrap(),
+            .expect("serde deserialization should succeed"),
             JsValue::Bool(false)
         );
         assert_eq!(
-            exec_object_static(BuiltinId::ObjectIs, &[JsValue::Null, JsValue::Null]).unwrap(),
+            exec_object_static(BuiltinId::ObjectIs, &[JsValue::Null, JsValue::Null]).expect("serde deserialization should succeed"),
             JsValue::Bool(true)
         );
         assert_eq!(
-            exec_object_static(BuiltinId::ObjectIs, &[JsValue::Null, JsValue::Undefined]).unwrap(),
+            exec_object_static(BuiltinId::ObjectIs, &[JsValue::Null, JsValue::Undefined]).expect("serde deserialization should succeed"),
             JsValue::Bool(false)
         );
     }
@@ -6170,7 +6170,7 @@ mod tests {
                 BuiltinId::StringFromCharCode,
                 &[JsValue::Int(72 * FP_SCALE), JsValue::Int(105 * FP_SCALE)]
             )
-            .unwrap(),
+            .expect("serde deserialization should succeed"),
             JsValue::Str("Hi".into())
         );
     }
@@ -6185,7 +6185,7 @@ mod tests {
                     JsValue::Int(0xDE00_i64 * FP_SCALE),
                 ]
             )
-            .unwrap(),
+            .expect("serde deserialization should succeed"),
             JsValue::Str("😀".into())
         );
     }
@@ -6210,7 +6210,7 @@ mod tests {
                 BuiltinId::StringFromCodePoint,
                 &[JsValue::Int(9731 * FP_SCALE)]
             )
-            .unwrap(),
+            .expect("serde deserialization should succeed"),
             JsValue::Str("\u{2603}".into()) // snowman
         );
     }
@@ -6236,7 +6236,7 @@ mod tests {
                 "A",
                 &[JsValue::Int(0)]
             )
-            .unwrap(),
+            .expect("serde deserialization should succeed"),
             JsValue::Int(65 * FP_SCALE)
         );
         assert_eq!(
@@ -6245,7 +6245,7 @@ mod tests {
                 "hello",
                 &[JsValue::Int(99 * FP_SCALE)]
             )
-            .unwrap(),
+            .expect("serde deserialization should succeed"),
             JsValue::Undefined
         );
     }
@@ -6258,7 +6258,7 @@ mod tests {
                 "😀",
                 &[JsValue::Int(0)]
             )
-            .unwrap(),
+            .expect("serde deserialization should succeed"),
             JsValue::Int(0x1F600_i64 * FP_SCALE)
         );
         assert_eq!(
@@ -6267,7 +6267,7 @@ mod tests {
                 "😀",
                 &[JsValue::Int(FP_SCALE)]
             )
-            .unwrap(),
+            .expect("serde deserialization should succeed"),
             JsValue::Int(0xDE00_i64 * FP_SCALE)
         );
     }
@@ -6280,7 +6280,7 @@ mod tests {
                 "😀",
                 &[JsValue::Int(0)]
             )
-            .unwrap(),
+            .expect("serde deserialization should succeed"),
             JsValue::Int(0xD83D_i64 * FP_SCALE)
         );
         assert_eq!(
@@ -6289,7 +6289,7 @@ mod tests {
                 "😀",
                 &[JsValue::Int(FP_SCALE)]
             )
-            .unwrap(),
+            .expect("serde deserialization should succeed"),
             JsValue::Int(0xDE00_i64 * FP_SCALE)
         );
     }
@@ -6297,7 +6297,7 @@ mod tests {
     #[test]
     fn test_string_at_handles_negative_and_non_bmp() {
         assert_eq!(
-            exec_string_method(BuiltinId::StringPrototypeAt, "hello", &[JsValue::Int(0)]).unwrap(),
+            exec_string_method(BuiltinId::StringPrototypeAt, "hello", &[JsValue::Int(0)]).expect("serde deserialization should succeed"),
             JsValue::Str("h".into())
         );
         assert_eq!(
@@ -6306,11 +6306,11 @@ mod tests {
                 "hello",
                 &[JsValue::Int(-FP_SCALE)]
             )
-            .unwrap(),
+            .expect("serde deserialization should succeed"),
             JsValue::Str("o".into())
         );
         assert_eq!(
-            exec_string_method(BuiltinId::StringPrototypeAt, "😀", &[JsValue::Int(0)]).unwrap(),
+            exec_string_method(BuiltinId::StringPrototypeAt, "😀", &[JsValue::Int(0)]).expect("serde deserialization should succeed"),
             JsValue::Str("😀".into())
         );
         assert_eq!(
@@ -6319,7 +6319,7 @@ mod tests {
                 "hello",
                 &[JsValue::Int(5 * FP_SCALE)]
             )
-            .unwrap(),
+            .expect("serde deserialization should succeed"),
             JsValue::Undefined
         );
     }
@@ -6339,7 +6339,7 @@ mod tests {
                 &elements,
                 &[JsValue::Int(20 * FP_SCALE)]
             )
-            .unwrap(),
+            .expect("serde deserialization should succeed"),
             ArrayMethodResult::Value(JsValue::Int(FP_SCALE))
         );
         assert_eq!(
@@ -6348,7 +6348,7 @@ mod tests {
                 &elements,
                 &[JsValue::Int(99 * FP_SCALE)]
             )
-            .unwrap(),
+            .expect("serde deserialization should succeed"),
             ArrayMethodResult::Value(JsValue::Int(-FP_SCALE))
         );
     }
@@ -6366,7 +6366,7 @@ mod tests {
                 &elements,
                 &[JsValue::Int(10 * FP_SCALE)]
             )
-            .unwrap(),
+            .expect("serde deserialization should succeed"),
             ArrayMethodResult::Value(JsValue::Int(2 * FP_SCALE))
         );
     }
@@ -6379,7 +6379,7 @@ mod tests {
             JsValue::Int(30 * FP_SCALE),
         ];
         assert_eq!(
-            exec_array_method(BuiltinId::ArrayPrototypeAt, &elements, &[JsValue::Int(0)]).unwrap(),
+            exec_array_method(BuiltinId::ArrayPrototypeAt, &elements, &[JsValue::Int(0)]).expect("serde deserialization should succeed"),
             ArrayMethodResult::Value(JsValue::Int(10 * FP_SCALE))
         );
         assert_eq!(
@@ -6388,7 +6388,7 @@ mod tests {
                 &elements,
                 &[JsValue::Int(-FP_SCALE)]
             )
-            .unwrap(),
+            .expect("serde deserialization should succeed"),
             ArrayMethodResult::Value(JsValue::Int(30 * FP_SCALE))
         );
         assert_eq!(
@@ -6397,7 +6397,7 @@ mod tests {
                 &elements,
                 &[JsValue::Int(3 * FP_SCALE)]
             )
-            .unwrap(),
+            .expect("serde deserialization should succeed"),
             ArrayMethodResult::Value(JsValue::Undefined)
         );
     }
@@ -6415,7 +6415,7 @@ mod tests {
                 &elements,
                 &[JsValue::Str("b".into())]
             )
-            .unwrap(),
+            .expect("serde deserialization should succeed"),
             ArrayMethodResult::Value(JsValue::Bool(true))
         );
         assert_eq!(
@@ -6424,7 +6424,7 @@ mod tests {
                 &elements,
                 &[JsValue::Str("z".into())]
             )
-            .unwrap(),
+            .expect("serde deserialization should succeed"),
             ArrayMethodResult::Value(JsValue::Bool(false))
         );
     }
@@ -6437,7 +6437,7 @@ mod tests {
             JsValue::Str("c".into()),
         ];
         assert_eq!(
-            exec_array_method(BuiltinId::ArrayPrototypeJoin, &elements, &[]).unwrap(),
+            exec_array_method(BuiltinId::ArrayPrototypeJoin, &elements, &[]).expect("serde deserialization should succeed"),
             ArrayMethodResult::Value(JsValue::Str("a,b,c".into()))
         );
         assert_eq!(
@@ -6446,7 +6446,7 @@ mod tests {
                 &elements,
                 &[JsValue::Str(" - ".into())]
             )
-            .unwrap(),
+            .expect("serde deserialization should succeed"),
             ArrayMethodResult::Value(JsValue::Str("a - b - c".into()))
         );
     }
@@ -6459,7 +6459,7 @@ mod tests {
             JsValue::Int(3 * FP_SCALE),
         ];
         assert_eq!(
-            exec_array_method(BuiltinId::ArrayPrototypeReverse, &elements, &[]).unwrap(),
+            exec_array_method(BuiltinId::ArrayPrototypeReverse, &elements, &[]).expect("serde deserialization should succeed"),
             ArrayMethodResult::NewArray(vec![
                 JsValue::Int(3 * FP_SCALE),
                 JsValue::Int(2 * FP_SCALE),
@@ -6482,7 +6482,7 @@ mod tests {
                 &elements,
                 &[JsValue::Int(FP_SCALE), JsValue::Int(3 * FP_SCALE)]
             )
-            .unwrap(),
+            .expect("serde deserialization should succeed"),
             ArrayMethodResult::NewArray(vec![
                 JsValue::Int(20 * FP_SCALE),
                 JsValue::Int(30 * FP_SCALE),
@@ -6503,7 +6503,7 @@ mod tests {
                 &elements,
                 &[JsValue::Int(-2 * FP_SCALE)]
             )
-            .unwrap(),
+            .expect("serde deserialization should succeed"),
             ArrayMethodResult::NewArray(vec![
                 JsValue::Int(20 * FP_SCALE),
                 JsValue::Int(30 * FP_SCALE),
@@ -6529,7 +6529,7 @@ mod tests {
                     JsValue::Int(3 * FP_SCALE)
                 ]
             )
-            .unwrap(),
+            .expect("serde deserialization should succeed"),
             ArrayMethodResult::NewArray(vec![
                 JsValue::Int(FP_SCALE),
                 JsValue::Int(0),
@@ -6548,7 +6548,7 @@ mod tests {
                 &elements,
                 &[JsValue::Int(2 * FP_SCALE), JsValue::Int(3 * FP_SCALE)]
             )
-            .unwrap(),
+            .expect("serde deserialization should succeed"),
             ArrayMethodResult::NewArray(vec![
                 JsValue::Int(FP_SCALE),
                 JsValue::Int(2 * FP_SCALE),
@@ -6560,7 +6560,7 @@ mod tests {
     #[test]
     fn test_array_join_empty() {
         assert_eq!(
-            exec_array_method(BuiltinId::ArrayPrototypeJoin, &[], &[]).unwrap(),
+            exec_array_method(BuiltinId::ArrayPrototypeJoin, &[], &[]).expect("serde deserialization should succeed"),
             ArrayMethodResult::Value(JsValue::Str(String::new()))
         );
     }
@@ -6646,16 +6646,16 @@ mod tests {
             expected_max: 1,
             got: 0,
         };
-        let json = serde_json::to_string(&err).unwrap();
-        let restored: StdlibError = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let restored: StdlibError = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, restored);
     }
 
     #[test]
     fn test_array_method_result_serde_roundtrip() {
         let result = ArrayMethodResult::NewArray(vec![JsValue::Int(FP_SCALE)]);
-        let json = serde_json::to_string(&result).unwrap();
-        let restored: ArrayMethodResult = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let restored: ArrayMethodResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, restored);
     }
 
@@ -6663,8 +6663,8 @@ mod tests {
     fn test_global_environment_serde_roundtrip() {
         let mut heap = ObjectHeap::new();
         let env = install_stdlib(&mut heap);
-        let json = serde_json::to_string(&env).unwrap();
-        let restored: GlobalEnvironment = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&env).expect("serde deserialization should succeed");
+        let restored: GlobalEnvironment = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(env.registry.len(), restored.registry.len());
         assert_eq!(env.global_object, restored.global_object);
     }
@@ -6675,7 +6675,7 @@ mod tests {
         let env = install_stdlib(&mut heap);
         let sqrt = heap
             .get_property(env.namespaces.math, &PropertyKey::from("sqrt"))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(matches!(sqrt, JsValue::Function(_)));
     }
 
@@ -6685,7 +6685,7 @@ mod tests {
         let env = install_stdlib(&mut heap);
         let parse_int = heap
             .get_property(env.global_object, &PropertyKey::from("parseInt"))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(matches!(parse_int, JsValue::Function(_)));
     }
 
@@ -6698,7 +6698,7 @@ mod tests {
             "hello world",
             &[JsValue::Str("world".into()), JsValue::Str("rust".into())],
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(result, JsValue::Str("hello rust".into()));
     }
 
@@ -6709,7 +6709,7 @@ mod tests {
             "aaa",
             &[JsValue::Str("a".into()), JsValue::Str("b".into())],
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(result, JsValue::Str("baa".into()));
     }
 
@@ -6720,7 +6720,7 @@ mod tests {
             "hello",
             &[JsValue::Str("xyz".into()), JsValue::Str("!".into())],
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(result, JsValue::Str("hello".into()));
     }
 
@@ -6733,7 +6733,7 @@ mod tests {
             "hello world",
             &[JsValue::Str("world".into())],
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(result, JsValue::Int(6 * FP_SCALE));
     }
 
@@ -6744,7 +6744,7 @@ mod tests {
             "hello",
             &[JsValue::Str("xyz".into())],
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(result, JsValue::Int(-FP_SCALE));
     }
 
@@ -6755,7 +6755,7 @@ mod tests {
             "😀hello",
             &[JsValue::Str("hello".into())],
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(result, JsValue::Int(2 * FP_SCALE));
     }
 
@@ -6768,7 +6768,7 @@ mod tests {
             "hello world",
             &[JsValue::Str("world".into())],
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(result, JsValue::Str("world".into()));
     }
 
@@ -6779,7 +6779,7 @@ mod tests {
             "hello",
             &[JsValue::Str("xyz".into())],
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(result, JsValue::Null);
     }
 
@@ -6787,7 +6787,7 @@ mod tests {
 
     #[test]
     fn test_string_normalize_ascii() {
-        let result = exec_string_method(BuiltinId::StringPrototypeNormalize, "hello", &[]).unwrap();
+        let result = exec_string_method(BuiltinId::StringPrototypeNormalize, "hello", &[]).expect("serde deserialization should succeed");
         assert_eq!(result, JsValue::Str("hello".into()));
     }
 
@@ -6798,7 +6798,7 @@ mod tests {
             "a😀b",
             &[JsValue::Int(FP_SCALE), JsValue::Int(3 * FP_SCALE)],
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let receipt = traced.receipt.expect("string receipt");
         assert_eq!(traced.value, JsValue::Str("😀".into()));
         assert_eq!(receipt.kind, StringRepresentationKind::SliceView);
@@ -6821,7 +6821,7 @@ mod tests {
             "prefix-target-suffix",
             &[JsValue::Int(7 * FP_SCALE), JsValue::Int(13 * FP_SCALE)],
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let receipt = traced.receipt.expect("string receipt");
         assert_eq!(traced.value, JsValue::Str("target".into()));
         assert!(receipt.source_is_ascii);
@@ -6842,7 +6842,7 @@ mod tests {
             &left,
             &[JsValue::Str("y".repeat(80))],
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let receipt = traced.receipt.expect("string receipt");
         assert_eq!(receipt.kind, StringRepresentationKind::RopeCandidate);
         assert!(receipt.flatten_required);
@@ -6858,7 +6858,7 @@ mod tests {
             "hello",
             &[JsValue::Str("el".into())],
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(traced.value, JsValue::Bool(true));
         assert!(traced.receipt.is_none());
     }
@@ -6882,7 +6882,7 @@ mod tests {
             "a😀b",
             &[JsValue::Int(FP_SCALE), JsValue::Int(3 * FP_SCALE)],
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let receipt = traced.receipt.as_ref().expect("slice receipt");
         let err =
             require_string_fast_path_eligibility(StringFastPathConsumer::Optimizer, Some(receipt))
@@ -6903,22 +6903,22 @@ mod tests {
             "left",
             &[JsValue::Str("-right".into())],
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let traced_b = exec_string_method_with_receipt(
             BuiltinId::StringPrototypeConcat,
             "left",
             &[JsValue::Str("-right".into())],
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let receipt_a = traced_a.receipt.as_ref().expect("receipt a");
         let receipt_b = traced_b.receipt.as_ref().expect("receipt b");
         assert_eq!(receipt_a.stable_hash, receipt_b.stable_hash);
 
         let eligibility =
             require_string_fast_path_eligibility(StringFastPathConsumer::Cache, Some(receipt_a))
-                .unwrap();
-        let serialized = serde_json::to_string(&eligibility).unwrap();
-        let round_trip: StringFastPathEligibility = serde_json::from_str(&serialized).unwrap();
+                .expect("serde deserialization should succeed");
+        let serialized = serde_json::to_string(&eligibility).expect("serde deserialization should succeed");
+        let round_trip: StringFastPathEligibility = serde_json::from_str(&serialized).expect("serde deserialization should succeed");
         assert_eq!(round_trip, eligibility);
     }
 
@@ -6926,8 +6926,8 @@ mod tests {
 
     #[test]
     fn test_date_now_deterministic() {
-        let r1 = exec_date_method(BuiltinId::DateNow, None).unwrap();
-        let r2 = exec_date_method(BuiltinId::DateNow, None).unwrap();
+        let r1 = exec_date_method(BuiltinId::DateNow, None).expect("serde deserialization should succeed");
+        let r2 = exec_date_method(BuiltinId::DateNow, None).expect("serde deserialization should succeed");
         assert_eq!(r1, r2, "Date.now() must be deterministic");
         if let JsValue::Int(n) = r1 {
             assert!(n > 0, "Date.now() must be positive");
@@ -6939,21 +6939,21 @@ mod tests {
     #[test]
     fn test_date_get_time() {
         let ts = 1_000_000 * FP_SCALE; // 1 second in ms, scaled
-        let result = exec_date_method(BuiltinId::DatePrototypeGetTime, Some(ts)).unwrap();
+        let result = exec_date_method(BuiltinId::DatePrototypeGetTime, Some(ts)).expect("serde deserialization should succeed");
         assert_eq!(result, JsValue::Int(ts));
     }
 
     #[test]
     fn test_date_value_of() {
         let ts = 42 * FP_SCALE;
-        let result = exec_date_method(BuiltinId::DatePrototypeValueOf, Some(ts)).unwrap();
+        let result = exec_date_method(BuiltinId::DatePrototypeValueOf, Some(ts)).expect("serde deserialization should succeed");
         assert_eq!(result, JsValue::Int(ts));
     }
 
     #[test]
     fn test_date_to_string() {
         let ts = 1_500_000 * FP_SCALE; // 1500 seconds = 1.500s
-        let result = exec_date_method(BuiltinId::DatePrototypeToString, Some(ts)).unwrap();
+        let result = exec_date_method(BuiltinId::DatePrototypeToString, Some(ts)).expect("serde deserialization should succeed");
         if let JsValue::Str(s) = result {
             assert!(s.starts_with("Date("), "should start with Date(");
         } else {
@@ -6963,7 +6963,7 @@ mod tests {
 
     #[test]
     fn test_date_to_iso_string() {
-        let result = exec_date_method(BuiltinId::DatePrototypeToISOString, Some(0)).unwrap();
+        let result = exec_date_method(BuiltinId::DatePrototypeToISOString, Some(0)).expect("serde deserialization should succeed");
         if let JsValue::Str(s) = result {
             assert!(s.contains('T'), "ISO string should contain T");
             assert!(s.ends_with('Z'), "ISO string should end with Z");
@@ -6978,7 +6978,7 @@ mod tests {
     fn test_error_constructor_message() {
         let result =
             exec_error_constructor(BuiltinId::ErrorConstructor, &[JsValue::Str("oops".into())])
-                .unwrap();
+                .expect("serde deserialization should succeed");
         assert_eq!(result, JsValue::Str("Error: oops".into()));
     }
 
@@ -6988,7 +6988,7 @@ mod tests {
             BuiltinId::TypeErrorConstructor,
             &[JsValue::Str("not a function".into())],
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(result, JsValue::Str("TypeError: not a function".into()));
     }
 
@@ -6998,7 +6998,7 @@ mod tests {
             BuiltinId::RangeErrorConstructor,
             &[JsValue::Str("out of bounds".into())],
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(result, JsValue::Str("RangeError: out of bounds".into()));
     }
 
@@ -7008,7 +7008,7 @@ mod tests {
             BuiltinId::ReferenceErrorConstructor,
             &[JsValue::Str("x is not defined".into())],
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(
             result,
             JsValue::Str("ReferenceError: x is not defined".into())
@@ -7021,13 +7021,13 @@ mod tests {
             BuiltinId::SyntaxErrorConstructor,
             &[JsValue::Str("unexpected token".into())],
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(result, JsValue::Str("SyntaxError: unexpected token".into()));
     }
 
     #[test]
     fn test_error_constructor_no_message() {
-        let result = exec_error_constructor(BuiltinId::ErrorConstructor, &[]).unwrap();
+        let result = exec_error_constructor(BuiltinId::ErrorConstructor, &[]).expect("serde deserialization should succeed");
         assert_eq!(result, JsValue::Str("Error: ".into()));
     }
 
@@ -7037,7 +7037,7 @@ mod tests {
             BuiltinId::TypeErrorConstructor,
             &[JsValue::Int(42 * FP_SCALE)],
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(result, JsValue::Str("TypeError: 42".into()));
     }
 
@@ -7045,23 +7045,23 @@ mod tests {
 
     #[test]
     fn test_symbol_for_deterministic() {
-        let r1 = exec_symbol_static(BuiltinId::SymbolFor, &[JsValue::Str("test".into())]).unwrap();
-        let r2 = exec_symbol_static(BuiltinId::SymbolFor, &[JsValue::Str("test".into())]).unwrap();
+        let r1 = exec_symbol_static(BuiltinId::SymbolFor, &[JsValue::Str("test".into())]).expect("serde deserialization should succeed");
+        let r2 = exec_symbol_static(BuiltinId::SymbolFor, &[JsValue::Str("test".into())]).expect("serde deserialization should succeed");
         assert_eq!(r1, r2, "Symbol.for must be deterministic");
         assert!(matches!(r1, JsValue::Symbol(_)));
     }
 
     #[test]
     fn test_symbol_for_distinct_keys() {
-        let r1 = exec_symbol_static(BuiltinId::SymbolFor, &[JsValue::Str("alpha".into())]).unwrap();
-        let r2 = exec_symbol_static(BuiltinId::SymbolFor, &[JsValue::Str("beta".into())]).unwrap();
+        let r1 = exec_symbol_static(BuiltinId::SymbolFor, &[JsValue::Str("alpha".into())]).expect("serde deserialization should succeed");
+        let r2 = exec_symbol_static(BuiltinId::SymbolFor, &[JsValue::Str("beta".into())]).expect("serde deserialization should succeed");
         assert_ne!(r1, r2, "Different keys should produce different symbols");
     }
 
     #[test]
     fn test_symbol_key_for_returns_undefined() {
         let result =
-            exec_symbol_static(BuiltinId::SymbolKeyFor, &[JsValue::Symbol(SymbolId(42))]).unwrap();
+            exec_symbol_static(BuiltinId::SymbolKeyFor, &[JsValue::Symbol(SymbolId(42))]).expect("serde deserialization should succeed");
         assert_eq!(result, JsValue::Undefined);
     }
 
@@ -7070,7 +7070,7 @@ mod tests {
     #[test]
     fn test_boolean_to_string_true() {
         assert_eq!(
-            exec_boolean_method(BuiltinId::BooleanPrototypeToString, true).unwrap(),
+            exec_boolean_method(BuiltinId::BooleanPrototypeToString, true).expect("serde deserialization should succeed"),
             JsValue::Str("true".into())
         );
     }
@@ -7078,7 +7078,7 @@ mod tests {
     #[test]
     fn test_boolean_to_string_false() {
         assert_eq!(
-            exec_boolean_method(BuiltinId::BooleanPrototypeToString, false).unwrap(),
+            exec_boolean_method(BuiltinId::BooleanPrototypeToString, false).expect("serde deserialization should succeed"),
             JsValue::Str("false".into())
         );
     }
@@ -7091,7 +7091,7 @@ mod tests {
             BuiltinId::ObjectIs,
             &[JsValue::Int(5 * FP_SCALE), JsValue::Int(5 * FP_SCALE)],
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(result, JsValue::Bool(true));
     }
 
@@ -7101,14 +7101,14 @@ mod tests {
             BuiltinId::ObjectIs,
             &[JsValue::Int(FP_SCALE), JsValue::Int(2 * FP_SCALE)],
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(result, JsValue::Bool(false));
     }
 
     #[test]
     fn test_object_is_null_null() {
         let result =
-            exec_object_static(BuiltinId::ObjectIs, &[JsValue::Null, JsValue::Null]).unwrap();
+            exec_object_static(BuiltinId::ObjectIs, &[JsValue::Null, JsValue::Null]).expect("serde deserialization should succeed");
         assert_eq!(result, JsValue::Bool(true));
     }
 
@@ -7116,7 +7116,7 @@ mod tests {
 
     #[test]
     fn test_math_sqrt_perfect() {
-        let result = exec_math(BuiltinId::MathSqrt, &[JsValue::Int(4 * FP_SCALE)]).unwrap();
+        let result = exec_math(BuiltinId::MathSqrt, &[JsValue::Int(4 * FP_SCALE)]).expect("serde deserialization should succeed");
         // sqrt(4) = 2 in fixed-point
         if let JsValue::Int(n) = result {
             assert!(
@@ -7140,7 +7140,7 @@ mod tests {
     fn test_math_log_e() {
         // ln(e) should be ~1.0
         let e_fp = 2_718_282_i64; // e in FP_SCALE
-        let result = exec_math(BuiltinId::MathLog, &[JsValue::Int(e_fp)]).unwrap();
+        let result = exec_math(BuiltinId::MathLog, &[JsValue::Int(e_fp)]).expect("serde deserialization should succeed");
         if let JsValue::Int(n) = result {
             assert!(
                 (n - FP_SCALE).abs() < FP_SCALE / 10,
@@ -7167,7 +7167,7 @@ mod tests {
             BuiltinId::MathHypot,
             &[JsValue::Int(3 * FP_SCALE), JsValue::Int(4 * FP_SCALE)],
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         if let JsValue::Int(n) = result {
             assert_eq!(n, 5 * FP_SCALE, "hypot(3,4) should be 5");
         } else {
@@ -7183,7 +7183,7 @@ mod tests {
             BuiltinId::GlobalParseInt,
             &[JsValue::Str("ff".into()), JsValue::Int(16 * FP_SCALE)],
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(result, JsValue::Int(255 * FP_SCALE));
     }
 
@@ -7192,12 +7192,12 @@ mod tests {
     #[test]
     fn test_number_is_safe_integer() {
         assert_eq!(
-            exec_number_method(BuiltinId::NumberIsSafeInteger, 100 * FP_SCALE, &[]).unwrap(),
+            exec_number_method(BuiltinId::NumberIsSafeInteger, 100 * FP_SCALE, &[]).expect("serde deserialization should succeed"),
             JsValue::Bool(true)
         );
         // Non-integer (has fractional part)
         assert_eq!(
-            exec_number_method(BuiltinId::NumberIsSafeInteger, FP_SCALE / 2, &[]).unwrap(),
+            exec_number_method(BuiltinId::NumberIsSafeInteger, FP_SCALE / 2, &[]).expect("serde deserialization should succeed"),
             JsValue::Bool(false)
         );
     }
@@ -7210,7 +7210,7 @@ mod tests {
             BuiltinId::StringFromCharCode,
             &[JsValue::Int(72 * FP_SCALE), JsValue::Int(105 * FP_SCALE)],
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(result, JsValue::Str("Hi".into()));
     }
 
@@ -7223,7 +7223,7 @@ mod tests {
             "A",
             &[JsValue::Int(5 * FP_SCALE)],
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(result, JsValue::Undefined);
     }
 

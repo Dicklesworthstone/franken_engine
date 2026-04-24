@@ -1334,10 +1334,10 @@ mod tests {
         let v = ParityVerdict::PartialParity;
         // SAFETY: ParityVerdict derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&v).unwrap();
+        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid ParityVerdict,
         // so from_str back to ParityVerdict cannot fail (valid format + matching schema).
-        let back: ParityVerdict = serde_json::from_str(&json).unwrap();
+        let back: ParityVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, back);
     }
 
@@ -1412,10 +1412,10 @@ mod tests {
         let r = BlockingReason::CooldownActive { remaining_ns: 5000 };
         // SAFETY: BlockingReason derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&r).unwrap();
+        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid BlockingReason,
         // so from_str back to BlockingReason cannot fail (valid format + matching schema).
-        let back: BlockingReason = serde_json::from_str(&json).unwrap();
+        let back: BlockingReason = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 
@@ -1553,10 +1553,10 @@ mod tests {
         let c = GateConfig::default();
         // SAFETY: GateConfig derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&c).unwrap();
+        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid GateConfig,
         // so from_str back to GateConfig cannot fail (valid format + matching schema).
-        let back: GateConfig = serde_json::from_str(&json).unwrap();
+        let back: GateConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c, back);
     }
 
@@ -1653,7 +1653,7 @@ mod tests {
         let cold = good_cold_start();
         let d = g.evaluate("r-002", &parity, &cold, 100_000_000);
         assert_eq!(d, GateDecision::Denied);
-        let receipt = g.last_receipt().unwrap();
+        let receipt = g.last_receipt().expect("serde deserialization should succeed");
         assert!(
             receipt
                 .blocking_reasons
@@ -1669,7 +1669,7 @@ mod tests {
         let cold = regressing_cold_start();
         let d = g.evaluate("r-003", &parity, &cold, 100_000_000);
         assert_eq!(d, GateDecision::Denied);
-        let receipt = g.last_receipt().unwrap();
+        let receipt = g.last_receipt().expect("serde deserialization should succeed");
         assert!(
             receipt
                 .blocking_reasons
@@ -1752,7 +1752,7 @@ mod tests {
         let ts = (MAX_CONSECUTIVE_ROLLBACKS as u64 + 100) * 1_000_000_000;
         let d = g.evaluate("r-lockout", &parity, &cold, ts);
         assert_eq!(d, GateDecision::Denied);
-        let receipt = g.last_receipt().unwrap();
+        let receipt = g.last_receipt().expect("serde deserialization should succeed");
         assert!(
             receipt
                 .blocking_reasons
@@ -1868,7 +1868,7 @@ mod tests {
         let parity = full_parity_evidence(200);
         let cold = good_cold_start();
         g.evaluate("r-001", &parity, &cold, 100_000_000);
-        let receipt = g.last_receipt().unwrap();
+        let receipt = g.last_receipt().expect("serde deserialization should succeed");
         assert!(receipt.blocking_reasons.is_empty());
         assert_eq!(receipt.decision, GateDecision::Approved);
     }
@@ -1879,7 +1879,7 @@ mod tests {
         let parity = partial_parity_evidence(200, 10);
         let cold = good_cold_start();
         g.evaluate("r-002", &parity, &cold, 100_000_000);
-        let receipt = g.last_receipt().unwrap();
+        let receipt = g.last_receipt().expect("serde deserialization should succeed");
         assert!(!receipt.blocking_reasons.is_empty());
         assert_eq!(receipt.decision, GateDecision::Denied);
     }
@@ -1890,7 +1890,7 @@ mod tests {
         let parity = partial_parity_evidence(200, 5);
         let cold = good_cold_start();
         g.evaluate("r-003", &parity, &cold, 100_000_000);
-        let receipt = g.last_receipt().unwrap();
+        let receipt = g.last_receipt().expect("serde deserialization should succeed");
         assert_eq!(receipt.affected_packages.len(), 5);
     }
 
@@ -1903,8 +1903,8 @@ mod tests {
         g1.evaluate("r-001", &parity, &cold, 100_000_000);
         g2.evaluate("r-001", &parity, &cold, 100_000_000);
         assert_eq!(
-            g1.last_receipt().unwrap().content_hash,
-            g2.last_receipt().unwrap().content_hash,
+            g1.last_receipt().expect("serde deserialization should succeed").content_hash,
+            g2.last_receipt().expect("serde deserialization should succeed").content_hash,
         );
     }
 
@@ -2029,24 +2029,24 @@ mod tests {
         let parity = full_parity_evidence(200);
         let cold = good_cold_start();
         g.evaluate("r-001", &parity, &cold, 100_000_000);
-        let json = serde_json::to_string(&g).unwrap();
-        let back: ModuleIndexParityGate = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&g).expect("serde deserialization should succeed");
+        let back: ModuleIndexParityGate = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.evaluation_count(), 1);
     }
 
     #[test]
     fn test_parity_evidence_serde_roundtrip() {
         let ev = full_parity_evidence(200);
-        let json = serde_json::to_string(&ev).unwrap();
-        let back: ParityEvidence = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
+        let back: ParityEvidence = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ev.content_hash, back.content_hash);
     }
 
     #[test]
     fn test_cold_start_evidence_serde_roundtrip() {
         let ev = good_cold_start();
-        let json = serde_json::to_string(&ev).unwrap();
-        let back: ColdStartEvidence = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
+        let back: ColdStartEvidence = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ev.content_hash, back.content_hash);
     }
 
@@ -2061,8 +2061,8 @@ mod tests {
             },
             1_000_000_000,
         );
-        let json = serde_json::to_string(&r).unwrap();
-        let back: RollbackRecord = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let back: RollbackRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r.record_id, back.record_id);
     }
 

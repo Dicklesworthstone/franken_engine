@@ -232,7 +232,7 @@ impl DegradedModeOverride {
             &override_schema_id(),
             &canonical_bytes,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let mut token = Self {
             override_id,
@@ -716,7 +716,7 @@ mod tests {
             0xAF, 0xB0, 0xB1, 0xB2, 0xB3, 0xB4, 0xB5, 0xB6, 0xB7, 0xB8, 0xB9, 0xBA, 0xBB, 0xBC,
             0xBD, 0xBE, 0xBF, 0xC0,
         ])
-        .unwrap()
+        .expect("serde deserialization should succeed")
     }
 
     fn make_config() -> FreshnessConfig {
@@ -802,7 +802,7 @@ mod tests {
         let mut ctrl = make_controller();
         let result = ctrl.evaluate(OperationType::SafeOperation, "t-safe");
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), FreshnessDecision::Proceed);
+        assert_eq!(result.expect("serde deserialization should succeed"), FreshnessDecision::Proceed);
     }
 
     #[test]
@@ -813,7 +813,7 @@ mod tests {
 
         let result = ctrl.evaluate(OperationType::SafeOperation, "t-safe-deg");
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), FreshnessDecision::Proceed);
+        assert_eq!(result.expect("serde deserialization should succeed"), FreshnessDecision::Proceed);
     }
 
     #[test]
@@ -901,7 +901,7 @@ mod tests {
             "t-override",
         );
         assert!(result.is_ok());
-        match result.unwrap() {
+        match result.expect("serde deserialization should succeed") {
             FreshnessDecision::OverrideGranted { operator_id, .. } => {
                 assert_eq!(operator_id, "ops-admin-01");
             }
@@ -1004,7 +1004,7 @@ mod tests {
         ctrl.update_expected_head(10, "t-degrade");
 
         let override_token = make_override(OperationType::ExtensionActivation, 2000);
-        let wrong_vk = VerificationKey::from_bytes([0xFF; 32]).unwrap();
+        let wrong_vk = VerificationKey::from_bytes([0xFF; 32]).expect("serde deserialization should succeed");
 
         let result = ctrl.evaluate_with_override(
             OperationType::ExtensionActivation,
@@ -1192,7 +1192,7 @@ mod tests {
             &vk,
             "t-override-audit",
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let events = ctrl.drain_decision_events();
         assert_eq!(events.len(), 1);
@@ -1232,8 +1232,8 @@ mod tests {
             FreshnessState::Recovering,
         ];
         for s in &states {
-            let json = serde_json::to_string(s).unwrap();
-            let restored: FreshnessState = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(s).expect("serde deserialization should succeed");
+            let restored: FreshnessState = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*s, restored);
         }
     }
@@ -1248,8 +1248,8 @@ mod tests {
             OperationType::HealthCheck,
         ];
         for o in &ops {
-            let json = serde_json::to_string(o).unwrap();
-            let restored: OperationType = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(o).expect("serde deserialization should succeed");
+            let restored: OperationType = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*o, restored);
         }
     }
@@ -1262,24 +1262,24 @@ mod tests {
             expected_head_seq: 60,
             staleness_gap: 10,
         };
-        let json = serde_json::to_string(&denial).unwrap();
-        let restored: DegradedDenial = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&denial).expect("serde deserialization should succeed");
+        let restored: DegradedDenial = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(denial, restored);
     }
 
     #[test]
     fn override_token_serialization() {
         let token = make_override(OperationType::ExtensionActivation, 2000);
-        let json = serde_json::to_string(&token).unwrap();
-        let restored: DegradedModeOverride = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&token).expect("serde deserialization should succeed");
+        let restored: DegradedModeOverride = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(token, restored);
     }
 
     #[test]
     fn freshness_config_serialization() {
         let config = make_config();
-        let json = serde_json::to_string(&config).unwrap();
-        let restored: FreshnessConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let restored: FreshnessConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, restored);
     }
 
@@ -1295,8 +1295,8 @@ mod tests {
             trace_id: "t-ser".to_string(),
             timestamp: DeterministicTimestamp(1000),
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let restored: FreshnessStateChangeEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let restored: FreshnessStateChangeEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, restored);
     }
 
@@ -1312,8 +1312,8 @@ mod tests {
             trace_id: "t-ser".to_string(),
             timestamp: DeterministicTimestamp(1000),
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let restored: DegradedModeDecisionEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let restored: DegradedModeDecisionEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, restored);
     }
 
@@ -1440,8 +1440,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap();
-            let restored: OverrideError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let restored: OverrideError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, restored);
         }
     }
@@ -1497,8 +1497,8 @@ mod tests {
             },
         ];
         for d in &decisions {
-            let json = serde_json::to_string(d).unwrap();
-            let restored: FreshnessDecision = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(d).expect("serde deserialization should succeed");
+            let restored: FreshnessDecision = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*d, restored);
         }
     }
@@ -1734,7 +1734,7 @@ mod tests {
         ];
         let set: BTreeSet<String> = variants
             .iter()
-            .map(|v| serde_json::to_string(v).unwrap())
+            .map(|v| serde_json::to_string(v).expect("serde deserialization should succeed"))
             .collect();
         assert_eq!(set.len(), 4);
     }
@@ -1750,7 +1750,7 @@ mod tests {
         ];
         let set: BTreeSet<String> = variants
             .iter()
-            .map(|v| serde_json::to_string(v).unwrap())
+            .map(|v| serde_json::to_string(v).expect("serde deserialization should succeed"))
             .collect();
         assert_eq!(set.len(), 5);
     }
@@ -1778,7 +1778,7 @@ mod tests {
         ];
         let set: BTreeSet<String> = variants
             .iter()
-            .map(|v| serde_json::to_string(v).unwrap())
+            .map(|v| serde_json::to_string(v).expect("serde deserialization should succeed"))
             .collect();
         assert_eq!(set.len(), 5);
     }
@@ -1835,7 +1835,7 @@ mod tests {
             expected_head_seq: 5,
             staleness_gap: 5,
         };
-        let json = serde_json::to_string(&d).unwrap();
+        let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
         assert!(json.contains("\"operation_type\""));
         assert!(json.contains("\"local_head_seq\""));
         assert!(json.contains("\"expected_head_seq\""));
@@ -1845,7 +1845,7 @@ mod tests {
     #[test]
     fn freshness_config_json_field_names() {
         let c = FreshnessConfig::default();
-        let json = serde_json::to_string(&c).unwrap();
+        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
         assert!(json.contains("\"staleness_threshold\""));
         assert!(json.contains("\"holdoff_ticks\""));
         assert!(json.contains("\"override_eligible\""));
@@ -1864,7 +1864,7 @@ mod tests {
             trace_id: "t".to_string(),
             timestamp: DeterministicTimestamp(0),
         };
-        let json = serde_json::to_string(&e).unwrap();
+        let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
         assert!(json.contains("\"from_state\""));
         assert!(json.contains("\"to_state\""));
         assert!(json.contains("\"trace_id\""));
@@ -1960,8 +1960,8 @@ mod tests {
             FreshnessState::Degraded,
             FreshnessState::Recovering,
         ] {
-            let json = serde_json::to_string(&state).unwrap();
-            let back: FreshnessState = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&state).expect("serde deserialization should succeed");
+            let back: FreshnessState = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(state, back);
         }
     }
@@ -1969,8 +1969,8 @@ mod tests {
     #[test]
     fn freshness_config_serde_roundtrip() {
         let c = FreshnessConfig::default();
-        let json = serde_json::to_string(&c).unwrap();
-        let back: FreshnessConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let back: FreshnessConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c, back);
     }
 
@@ -1980,8 +1980,8 @@ mod tests {
             expiry: DeterministicTimestamp(100),
             current: DeterministicTimestamp(200),
         };
-        let json = serde_json::to_string(&e).unwrap();
-        let back: OverrideError = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
+        let back: OverrideError = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(e, back);
     }
 

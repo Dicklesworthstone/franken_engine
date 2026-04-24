@@ -607,7 +607,7 @@ mod tests {
 
     fn test_accountant() -> BudgetAccountant {
         // SAFETY: Test helper with valid AccountantConfig should always succeed
-        BudgetAccountant::new(test_config()).unwrap()
+        BudgetAccountant::new(test_config()).expect("serde deserialization should succeed")
     }
 
     fn test_accountant_advanced() -> BudgetAccountant {
@@ -616,7 +616,7 @@ mod tests {
             composition_method: CompositionMethod::Advanced,
             ..test_config()
         })
-        .unwrap()
+        .expect("serde deserialization should succeed")
     }
 
     // -- Construction tests --
@@ -678,7 +678,7 @@ mod tests {
         // SAFETY: Test with valid budget parameters should succeed
         let record = acc
             .consume(100_000, 10_000, "noise addition", 2_000_000_000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(record.operation_id, 1);
         assert_eq!(record.epsilon_consumed_millionths, 100_000);
         assert_eq!(record.composed_epsilon_millionths, 100_000); // basic = no change
@@ -693,7 +693,7 @@ mod tests {
         for i in 0..5 {
             // SAFETY: Test with valid budget parameters should succeed
             acc.consume(100_000, 10_000, &format!("op-{i}"), (i + 2) * 1_000_000_000)
-                .unwrap();
+                .expect("serde deserialization should succeed");
         }
         assert_eq!(acc.epoch_epsilon_remaining(), 500_000);
         assert_eq!(acc.total_operations(), 5);
@@ -714,7 +714,7 @@ mod tests {
         let mut acc = test_accountant();
         // Consume most of the budget.
         // SAFETY: Test with budget consumption within limits should succeed
-        acc.consume(900_000, 0, "big op", 2_000_000_000).unwrap();
+        acc.consume(900_000, 0, "big op", 2_000_000_000).expect("serde deserialization should succeed");
         // Next consumption would exceed budget -> exhaustion.
         let err = acc
             .consume(200_000, 0, "overflow", 3_000_000_000)
@@ -728,7 +728,7 @@ mod tests {
         let mut acc = test_accountant();
         // Force exhaustion.
         // SAFETY: Test with budget consumption within limits should succeed
-        acc.consume(900_000, 0, "big", 2_000_000_000).unwrap();
+        acc.consume(900_000, 0, "big", 2_000_000_000).expect("serde deserialization should succeed");
         let _ = acc.consume(200_000, 0, "overflow", 3_000_000_000);
         // Even small consumption is rejected.
         let err = acc.consume(1, 0, "tiny", 4_000_000_000).unwrap_err();
@@ -740,7 +740,7 @@ mod tests {
         let mut acc = test_accountant();
         // Delta budget is 100_000.
         // SAFETY: Test with delta budget consumption within limits should succeed
-        acc.consume(0, 90_000, "op1", 2_000_000_000).unwrap();
+        acc.consume(0, 90_000, "op1", 2_000_000_000).expect("serde deserialization should succeed");
         let err = acc
             .consume(0, 20_000, "overflow", 3_000_000_000)
             .unwrap_err();
@@ -755,10 +755,10 @@ mod tests {
             ..test_config()
         })
         // SAFETY: Test with valid AccountantConfig should succeed
-        .unwrap();
+        .expect("serde deserialization should succeed");
         // Consume within epoch budget but exceed lifetime.
         // SAFETY: Test with budget consumption within epoch limits should succeed
-        acc.consume(400_000, 0, "op1", 2_000_000_000).unwrap();
+        acc.consume(400_000, 0, "op1", 2_000_000_000).expect("serde deserialization should succeed");
         let err = acc.consume(200_000, 0, "op2", 3_000_000_000).unwrap_err();
         assert!(matches!(
             err,
@@ -775,10 +775,10 @@ mod tests {
     fn advance_epoch_ok() {
         let mut acc = test_accountant();
         // SAFETY: Test with budget consumption within limits should succeed
-        acc.consume(300_000, 30_000, "op1", 2_000_000_000).unwrap();
+        acc.consume(300_000, 30_000, "op1", 2_000_000_000).expect("serde deserialization should succeed");
         let summary = acc
             .advance_epoch(SecurityEpoch::from_raw(2), 10_000_000_000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(summary.epoch, SecurityEpoch::from_raw(1));
         assert_eq!(summary.total_epsilon_spent_millionths, 300_000);
         assert_eq!(summary.total_delta_spent_millionths, 30_000);
@@ -794,15 +794,15 @@ mod tests {
     fn advance_epoch_clears_exhaustion() {
         let mut acc = test_accountant();
         // Exhaust current epoch.
-        acc.consume(900_000, 0, "big", 2_000_000_000).unwrap();
+        acc.consume(900_000, 0, "big", 2_000_000_000).expect("serde deserialization should succeed");
         let _ = acc.consume(200_000, 0, "overflow", 3_000_000_000);
         assert!(acc.is_exhausted());
         // Advance epoch — fresh budget, exhaustion cleared.
         acc.advance_epoch(SecurityEpoch::from_raw(2), 10_000_000_000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(!acc.is_exhausted());
         acc.consume(100_000, 10_000, "fresh op", 11_000_000_000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
     }
 
     #[test]
@@ -818,7 +818,7 @@ mod tests {
     fn advance_epoch_rejects_lower() {
         let mut acc = test_accountant();
         acc.advance_epoch(SecurityEpoch::from_raw(5), 2_000_000_000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let err = acc
             .advance_epoch(SecurityEpoch::from_raw(3), 3_000_000_000)
             .unwrap_err();
@@ -829,9 +829,9 @@ mod tests {
     fn no_budget_rollover() {
         let mut acc = test_accountant();
         // Use only half the budget.
-        acc.consume(500_000, 50_000, "half", 2_000_000_000).unwrap();
+        acc.consume(500_000, 50_000, "half", 2_000_000_000).expect("serde deserialization should succeed");
         acc.advance_epoch(SecurityEpoch::from_raw(2), 10_000_000_000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         // New epoch has full budget, not 1.5x.
         assert_eq!(acc.epoch_epsilon_remaining(), 1_000_000);
         assert_eq!(acc.epoch_delta_remaining(), 100_000);
@@ -841,11 +841,11 @@ mod tests {
     fn lifetime_tracks_across_epochs() {
         let mut acc = test_accountant();
         acc.consume(300_000, 30_000, "ep1-op", 2_000_000_000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         acc.advance_epoch(SecurityEpoch::from_raw(2), 10_000_000_000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         acc.consume(200_000, 20_000, "ep2-op", 11_000_000_000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(acc.lifetime_epsilon_spent_millionths, 500_000);
         assert_eq!(acc.lifetime_delta_spent_millionths, 50_000);
     }
@@ -854,9 +854,9 @@ mod tests {
     fn epoch_summaries_retained() {
         let mut acc = test_accountant();
         acc.advance_epoch(SecurityEpoch::from_raw(2), 5_000_000_000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         acc.advance_epoch(SecurityEpoch::from_raw(3), 10_000_000_000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(acc.epoch_summaries().len(), 2);
         assert_eq!(acc.epoch_summaries()[0].epoch, SecurityEpoch::from_raw(1));
         assert_eq!(acc.epoch_summaries()[1].epoch, SecurityEpoch::from_raw(2));
@@ -869,11 +869,11 @@ mod tests {
         let mut acc = test_accountant_advanced();
         // First operation: full cost (k=0).
         // SAFETY: Test-only unwrap with valid budget consumption parameters
-        let r1 = acc.consume(100_000, 10_000, "op1", 2_000_000_000).unwrap();
+        let r1 = acc.consume(100_000, 10_000, "op1", 2_000_000_000).expect("serde deserialization should succeed");
         assert_eq!(r1.composed_epsilon_millionths, 100_000); // k=0, scale=1.0
         // Second operation: reduced cost.
         // SAFETY: Test-only unwrap with valid budget consumption parameters
-        let r2 = acc.consume(100_000, 10_000, "op2", 3_000_000_000).unwrap();
+        let r2 = acc.consume(100_000, 10_000, "op2", 3_000_000_000).expect("serde deserialization should succeed");
         assert!(r2.composed_epsilon_millionths < 100_000); // k=1, scale < 1.0
     }
 
@@ -884,8 +884,8 @@ mod tests {
             now_ns: 0,
             ..test_config()
         })
-        .unwrap();
-        let r = acc.consume(100_000, 10_000, "op", 1_000_000_000).unwrap();
+        .expect("serde deserialization should succeed");
+        let r = acc.consume(100_000, 10_000, "op", 1_000_000_000).expect("serde deserialization should succeed");
         assert_eq!(r.composed_epsilon_millionths, 80_000); // 80% of 100K
     }
 
@@ -896,15 +896,15 @@ mod tests {
             now_ns: 0,
             ..test_config()
         })
-        .unwrap();
-        let r = acc.consume(100_000, 10_000, "op", 1_000_000_000).unwrap();
+        .expect("serde deserialization should succeed");
+        let r = acc.consume(100_000, 10_000, "op", 1_000_000_000).expect("serde deserialization should succeed");
         assert_eq!(r.composed_epsilon_millionths, 70_000); // 70% of 100K
     }
 
     #[test]
     fn basic_composition_no_change() {
         let mut acc = test_accountant();
-        let r = acc.consume(100_000, 10_000, "op", 1_000_000_000).unwrap();
+        let r = acc.consume(100_000, 10_000, "op", 1_000_000_000).expect("serde deserialization should succeed");
         assert_eq!(r.composed_epsilon_millionths, 100_000);
         assert_eq!(r.composed_delta_millionths, 10_000);
     }
@@ -923,8 +923,8 @@ mod tests {
     #[test]
     fn forecast_with_consumption() {
         let mut acc = test_accountant();
-        acc.consume(100_000, 10_000, "op1", 2_000_000_000).unwrap();
-        acc.consume(100_000, 10_000, "op2", 3_000_000_000).unwrap();
+        acc.consume(100_000, 10_000, "op1", 2_000_000_000).expect("serde deserialization should succeed");
+        acc.consume(100_000, 10_000, "op2", 3_000_000_000).expect("serde deserialization should succeed");
         let fc = acc.forecast();
         assert_eq!(fc.epoch_epsilon_remaining_millionths, 800_000);
         // Avg eps per op = 100K, remaining = 800K -> ~8 ops remaining.
@@ -934,7 +934,7 @@ mod tests {
     #[test]
     fn forecast_after_exhaustion() {
         let mut acc = test_accountant();
-        acc.consume(900_000, 0, "big", 2_000_000_000).unwrap();
+        acc.consume(900_000, 0, "big", 2_000_000_000).expect("serde deserialization should succeed");
         let _ = acc.consume(200_000, 0, "overflow", 3_000_000_000);
         let fc = acc.forecast();
         assert!(fc.exhausted);
@@ -945,9 +945,9 @@ mod tests {
     #[test]
     fn accountant_serde_round_trip() {
         let mut acc = test_accountant();
-        acc.consume(100_000, 10_000, "op1", 2_000_000_000).unwrap();
-        let json = serde_json::to_string(&acc).unwrap();
-        let decoded: BudgetAccountant = serde_json::from_str(&json).unwrap();
+        acc.consume(100_000, 10_000, "op1", 2_000_000_000).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&acc).expect("serde deserialization should succeed");
+        let decoded: BudgetAccountant = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(acc, decoded);
     }
 
@@ -964,8 +964,8 @@ mod tests {
             closed_at_ns: 10_000_000_000,
             composition_method: CompositionMethod::Basic,
         };
-        let json = serde_json::to_string(&summary).unwrap();
-        let decoded: EpochSummary = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
+        let decoded: EpochSummary = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(summary, decoded);
     }
 
@@ -981,8 +981,8 @@ mod tests {
             timestamp_ns: 2_000_000_000,
             description: "test".into(),
         };
-        let json = serde_json::to_string(&record).unwrap();
-        let decoded: BudgetConsumption = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&record).expect("serde deserialization should succeed");
+        let decoded: BudgetConsumption = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(record, decoded);
     }
 
@@ -991,8 +991,8 @@ mod tests {
         let a1 = test_accountant();
         let a2 = test_accountant();
         assert_eq!(
-            serde_json::to_string(&a1).unwrap(),
-            serde_json::to_string(&a2).unwrap()
+            serde_json::to_string(&a1).expect("serde deserialization should succeed"),
+            serde_json::to_string(&a2).expect("serde deserialization should succeed")
         );
     }
 
@@ -1024,8 +1024,8 @@ mod tests {
         let err = AccountantError::InvalidConsumption {
             reason: "test".into(),
         };
-        let json = serde_json::to_string(&err).unwrap();
-        let decoded: AccountantError = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let decoded: AccountantError = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, decoded);
     }
 
@@ -1095,15 +1095,15 @@ mod tests {
             now_ns: 0,
             ..test_config()
         })
-        .unwrap();
+        .expect("serde deserialization should succeed");
         // Consume in epoch 1.
-        acc.consume(400_000, 40_000, "ep1", 1_000_000_000).unwrap();
+        acc.consume(400_000, 40_000, "ep1", 1_000_000_000).expect("serde deserialization should succeed");
         // Advance to epoch 2.
         acc.advance_epoch(SecurityEpoch::from_raw(2), 5_000_000_000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         // Consume in epoch 2.
         // SAFETY: Test-only unwrap with valid budget consumption parameters
-        acc.consume(400_000, 40_000, "ep2", 6_000_000_000).unwrap();
+        acc.consume(400_000, 40_000, "ep2", 6_000_000_000).expect("serde deserialization should succeed");
         // Lifetime is 800K eps, we've spent 800K. Next should fail.
         let err = acc
             .consume(100_000, 0, "over-lifetime", 7_000_000_000)
@@ -1148,7 +1148,7 @@ mod tests {
     #[test]
     fn consume_zero_epsilon_zero_delta_ok() {
         let mut acc = test_accountant();
-        let record = acc.consume(0, 0, "no-op", 2_000_000_000).unwrap();
+        let record = acc.consume(0, 0, "no-op", 2_000_000_000).expect("serde deserialization should succeed");
         assert_eq!(record.composed_epsilon_millionths, 0);
         assert_eq!(record.composed_delta_millionths, 0);
         assert_eq!(acc.epoch_epsilon_remaining(), 1_000_000);
@@ -1157,10 +1157,10 @@ mod tests {
     #[test]
     fn forecast_lifetime_remaining_tracks_across_epochs() {
         let mut acc = test_accountant();
-        acc.consume(300_000, 30_000, "ep1", 2_000_000_000).unwrap();
+        acc.consume(300_000, 30_000, "ep1", 2_000_000_000).expect("serde deserialization should succeed");
         acc.advance_epoch(SecurityEpoch::from_raw(2), 10_000_000_000)
-            .unwrap();
-        acc.consume(200_000, 20_000, "ep2", 11_000_000_000).unwrap();
+            .expect("serde deserialization should succeed");
+        acc.consume(200_000, 20_000, "ep2", 11_000_000_000).expect("serde deserialization should succeed");
         let fc = acc.forecast();
         assert_eq!(
             fc.lifetime_epsilon_remaining_millionths,
@@ -1180,9 +1180,9 @@ mod tests {
             exhausted: false,
         };
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&fc).unwrap();
+        let json = serde_json::to_string(&fc).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let decoded: BudgetForecast = serde_json::from_str(&json).unwrap();
+        let decoded: BudgetForecast = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(fc, decoded);
     }
 
@@ -1190,9 +1190,9 @@ mod tests {
     fn accountant_config_serde_roundtrip() {
         let cfg = test_config();
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&cfg).unwrap();
+        let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let decoded: AccountantConfig = serde_json::from_str(&json).unwrap();
+        let decoded: AccountantConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cfg, decoded);
     }
 
@@ -1209,8 +1209,8 @@ mod tests {
             created_at_ns: 42,
             exhausted: false,
         };
-        let json = serde_json::to_string(&eb).unwrap();
-        let decoded: EpochBudget = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&eb).expect("serde deserialization should succeed");
+        let decoded: EpochBudget = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(eb, decoded);
     }
 
@@ -1260,7 +1260,7 @@ mod tests {
                     &format!("op-{i}"),
                     (i + 2) as u64 * 1_000_000_000,
                 )
-                .unwrap();
+                .expect("serde deserialization should succeed");
             composed_costs.push(r.composed_epsilon_millionths);
         }
         // After the first operation, each subsequent should cost less or equal
@@ -1302,7 +1302,7 @@ mod tests {
                     &format!("op-{i}"),
                     (i + 2) as u64 * 1_000_000_000,
                 )
-                .unwrap();
+                .expect("serde deserialization should succeed");
             assert!(record.operation_id > prev_id);
             prev_id = record.operation_id;
         }
@@ -1313,10 +1313,10 @@ mod tests {
         let mut acc = test_accountant();
         // Exhaust the budget
         acc.consume(1_000_000, 0, "exhaust-eps", 2_000_000_000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         // Now advance epoch - summary should capture exhaustion state
         acc.advance_epoch(SecurityEpoch::from_raw(2), 10_000_000_000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let summaries = acc.epoch_summaries();
         assert_eq!(summaries.len(), 1);
         assert_eq!(summaries[0].total_epsilon_spent_millionths, 1_000_000);
@@ -1325,7 +1325,7 @@ mod tests {
     #[test]
     fn consumption_after_exhaustion_rejected() {
         let mut acc = test_accountant();
-        acc.consume(1_000_000, 0, "exhaust", 2_000_000_000).unwrap();
+        acc.consume(1_000_000, 0, "exhaust", 2_000_000_000).expect("serde deserialization should succeed");
         let err = acc.consume(1, 0, "over-budget", 3_000_000_000).unwrap_err();
         assert!(matches!(err, AccountantError::BudgetExhausted { .. }));
     }
@@ -1333,7 +1333,7 @@ mod tests {
     #[test]
     fn zone_preserved_in_accountant() {
         let acc = test_accountant();
-        let json = serde_json::to_string(&acc).unwrap();
+        let json = serde_json::to_string(&acc).expect("serde deserialization should succeed");
         assert!(json.contains("zone-A"));
     }
 
@@ -1361,7 +1361,7 @@ mod tests {
     #[test]
     fn forecast_estimated_operations_after_single_consume() {
         let mut acc = test_accountant();
-        acc.consume(200_000, 20_000, "op1", 2_000_000_000).unwrap();
+        acc.consume(200_000, 20_000, "op1", 2_000_000_000).expect("serde deserialization should succeed");
         let fc = acc.forecast();
         // Remaining: 800K eps. Avg per op = 200K. 800K/200K = 4
         assert_eq!(fc.estimated_remaining_operations, 4);
@@ -1370,9 +1370,9 @@ mod tests {
     #[test]
     fn epoch_summary_composition_method_preserved() {
         let mut acc = test_accountant_advanced();
-        acc.consume(100_000, 10_000, "op", 2_000_000_000).unwrap();
+        acc.consume(100_000, 10_000, "op", 2_000_000_000).expect("serde deserialization should succeed");
         acc.advance_epoch(SecurityEpoch::from_raw(2), 10_000_000_000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let summaries = acc.epoch_summaries();
         assert_eq!(summaries[0].composition_method, CompositionMethod::Advanced);
     }
@@ -1401,7 +1401,7 @@ mod tests {
         let mut acc = test_accountant();
         let record = acc
             .consume(10_000, 1_000, "my-unique-op-desc", 2_000_000_000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(record.description, "my-unique-op-desc");
     }
 
@@ -1409,7 +1409,7 @@ mod tests {
     fn consume_timestamp_preserved_in_record() {
         let mut acc = test_accountant();
         let ts = 42_000_000_000u64;
-        let record = acc.consume(10_000, 1_000, "ts-test", ts).unwrap();
+        let record = acc.consume(10_000, 1_000, "ts-test", ts).expect("serde deserialization should succeed");
         assert_eq!(record.timestamp_ns, ts);
     }
 
@@ -1423,9 +1423,9 @@ mod tests {
                 &format!("ep{epoch}-op"),
                 epoch * 1_000_000_000,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
             acc.advance_epoch(SecurityEpoch::from_raw(epoch), epoch * 5_000_000_000)
-                .unwrap();
+                .expect("serde deserialization should succeed");
         }
         assert_eq!(acc.epoch_summaries().len(), 4); // epochs 1-4 closed
     }
@@ -1434,9 +1434,9 @@ mod tests {
     fn deterministic_accountant_state_across_runs() {
         let run = || {
             let mut acc = test_accountant();
-            acc.consume(100_000, 10_000, "op1", 2_000_000_000).unwrap();
-            acc.consume(200_000, 20_000, "op2", 3_000_000_000).unwrap();
-            serde_json::to_string(&acc).unwrap()
+            acc.consume(100_000, 10_000, "op1", 2_000_000_000).expect("serde deserialization should succeed");
+            acc.consume(200_000, 20_000, "op2", 3_000_000_000).expect("serde deserialization should succeed");
+            serde_json::to_string(&acc).expect("serde deserialization should succeed")
         };
         assert_eq!(run(), run());
     }
@@ -1538,8 +1538,8 @@ mod tests {
             created_at_ns: 42,
             exhausted: false,
         };
-        let json = serde_json::to_string(&eb).unwrap();
-        let back: EpochBudget = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&eb).expect("serde deserialization should succeed");
+        let back: EpochBudget = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(eb, back);
     }
 
@@ -1555,8 +1555,8 @@ mod tests {
             timestamp_ns: 99_000,
             description: "serde-test".to_string(),
         };
-        let json = serde_json::to_string(&bc).unwrap();
-        let back: BudgetConsumption = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&bc).expect("serde deserialization should succeed");
+        let back: BudgetConsumption = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(bc, back);
     }
 
@@ -1570,8 +1570,8 @@ mod tests {
             estimated_remaining_operations: 15,
             exhausted: true,
         };
-        let json = serde_json::to_string(&fc).unwrap();
-        let back: BudgetForecast = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&fc).expect("serde deserialization should succeed");
+        let back: BudgetForecast = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(fc, back);
     }
 
@@ -1588,8 +1588,8 @@ mod tests {
             closed_at_ns: 5_000,
             composition_method: CompositionMethod::ZeroCdp,
         };
-        let json = serde_json::to_string(&es).unwrap();
-        let back: EpochSummary = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&es).expect("serde deserialization should succeed");
+        let back: EpochSummary = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(es, back);
     }
 
@@ -1613,8 +1613,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap();
-            let back: AccountantError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let back: AccountantError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, back);
         }
     }
@@ -1670,12 +1670,12 @@ mod tests {
             lifetime_delta_budget_millionths: 50_000,
             ..test_config()
         })
-        .unwrap();
+        .expect("serde deserialization should succeed");
         acc.consume(500_000, 50_000, "all-of-it", 2_000_000_000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         // Advance epoch; new epoch should start exhausted.
         acc.advance_epoch(SecurityEpoch::from_raw(2), 3_000_000_000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(acc.is_exhausted());
     }
 
@@ -1683,8 +1683,8 @@ mod tests {
     fn consumption_log_grows_with_operations() {
         let mut acc = test_accountant();
         assert!(acc.consumption_log().is_empty());
-        acc.consume(10_000, 1_000, "op1", 2_000_000_000).unwrap();
-        acc.consume(20_000, 2_000, "op2", 3_000_000_000).unwrap();
+        acc.consume(10_000, 1_000, "op1", 2_000_000_000).expect("serde deserialization should succeed");
+        acc.consume(20_000, 2_000, "op2", 3_000_000_000).expect("serde deserialization should succeed");
         assert_eq!(acc.consumption_log().len(), 2);
         assert_eq!(acc.consumption_log()[0].description, "op1");
         assert_eq!(acc.consumption_log()[1].description, "op2");
@@ -1693,9 +1693,9 @@ mod tests {
     #[test]
     fn operation_ids_are_monotonically_increasing() {
         let mut acc = test_accountant();
-        let r1 = acc.consume(10_000, 1_000, "op1", 2_000_000_000).unwrap();
-        let r2 = acc.consume(10_000, 1_000, "op2", 3_000_000_000).unwrap();
-        let r3 = acc.consume(10_000, 1_000, "op3", 4_000_000_000).unwrap();
+        let r1 = acc.consume(10_000, 1_000, "op1", 2_000_000_000).expect("serde deserialization should succeed");
+        let r2 = acc.consume(10_000, 1_000, "op2", 3_000_000_000).expect("serde deserialization should succeed");
+        let r3 = acc.consume(10_000, 1_000, "op3", 4_000_000_000).expect("serde deserialization should succeed");
         assert!(r1.operation_id < r2.operation_id);
         assert!(r2.operation_id < r3.operation_id);
     }

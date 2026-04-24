@@ -807,8 +807,8 @@ mod tests {
     #[test]
     fn category_serde_all() {
         for c in ClaimCategory::ALL {
-            let json = serde_json::to_string(c).unwrap();
-            let back: ClaimCategory = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(c).expect("serde deserialization should succeed");
+            let back: ClaimCategory = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*c, back);
         }
     }
@@ -839,8 +839,8 @@ mod tests {
     #[test]
     fn method_serde_all() {
         for m in IdentificationMethod::ALL {
-            let json = serde_json::to_string(m).unwrap();
-            let back: IdentificationMethod = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(m).expect("serde deserialization should succeed");
+            let back: IdentificationMethod = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*m, back);
         }
     }
@@ -910,8 +910,8 @@ mod tests {
             lower_millionths: -10_000,
             upper_millionths: 5_000,
         };
-        let json = serde_json::to_string(&r).unwrap();
-        let back: RejectionReason = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let back: RejectionReason = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 
@@ -946,8 +946,8 @@ mod tests {
     #[test]
     fn backing_serde() {
         let b = good_backing(ClaimCategory::Regression);
-        let json = serde_json::to_string(&b).unwrap();
-        let back: CausalBacking = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&b).expect("serde deserialization should succeed");
+        let back: CausalBacking = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(b, back);
     }
 
@@ -1010,8 +1010,8 @@ mod tests {
                 RejectionReason::NoAdjustmentPath,
             ],
         };
-        let json = serde_json::to_string(&v).unwrap();
-        let back: GateVerdict = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let back: GateVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, back);
     }
 
@@ -1042,8 +1042,8 @@ mod tests {
     #[test]
     fn config_serde() {
         let c = GateConfig::default();
-        let json = serde_json::to_string(&c).unwrap();
-        let back: GateConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let back: GateConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c, back);
     }
 
@@ -1266,8 +1266,8 @@ mod tests {
             },
         ];
         let r = GateReport::new(epoch(), verdicts);
-        let json = serde_json::to_string(&r).unwrap();
-        let back: GateReport = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let back: GateReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 

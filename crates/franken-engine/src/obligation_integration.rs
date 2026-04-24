@@ -682,9 +682,9 @@ mod tests {
             TwoPhaseCategory::EvidenceCommit,
         ] {
             // SAFETY: TwoPhaseCategory derives Serialize and has no non-serializable fields
-            let json = serde_json::to_string(&cat).unwrap();
+            let json = serde_json::to_string(&cat).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by valid TwoPhaseCategory serialization
-            let restored: TwoPhaseCategory = serde_json::from_str(&json).unwrap();
+            let restored: TwoPhaseCategory = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(cat, restored);
         }
     }
@@ -717,9 +717,9 @@ mod tests {
             OperationPhase::Leaked,
         ] {
             // SAFETY: OperationPhase derives Serialize and has no non-serializable fields
-            let json = serde_json::to_string(&phase).unwrap();
+            let json = serde_json::to_string(&phase).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by valid OperationPhase serialization
-            let restored: OperationPhase = serde_json::from_str(&json).unwrap();
+            let restored: OperationPhase = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(phase, restored);
         }
     }
@@ -762,9 +762,9 @@ mod tests {
             current_state: RegionState::Closed,
         };
         // SAFETY: ObligationIntegrationError derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&err).unwrap();
+        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid ObligationIntegrationError serialization
-        let restored: ObligationIntegrationError = serde_json::from_str(&json).unwrap();
+        let restored: ObligationIntegrationError = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, restored);
     }
 
@@ -836,7 +836,7 @@ mod tests {
             CancelReason::OperatorShutdown,
             DrainDeadline::default(),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let mut tracker = ObligationTracker::default();
         let err = tracker
@@ -891,9 +891,9 @@ mod tests {
         // SAFETY: Test-only unwrap expecting valid begin operation to succeed
         tracker
             .begin_operation(&mut cell, "op-1", TwoPhaseCategory::StateMutation, "tx")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         // SAFETY: Test-only unwrap expecting valid commit operation to succeed
-        tracker.commit_operation(&mut cell, "op-1").unwrap();
+        tracker.commit_operation(&mut cell, "op-1").expect("serde deserialization should succeed");
 
         let err = tracker.commit_operation(&mut cell, "op-1").unwrap_err();
         assert_eq!(err.error_code(), "obligation_already_resolved");
@@ -907,9 +907,9 @@ mod tests {
         // SAFETY: Test-only unwrap expecting valid begin operation to succeed
         tracker
             .begin_operation(&mut cell, "op-1", TwoPhaseCategory::StateMutation, "tx")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         // SAFETY: Test-only unwrap expecting valid abort operation to succeed
-        tracker.abort_operation(&mut cell, "op-1").unwrap();
+        tracker.abort_operation(&mut cell, "op-1").expect("serde deserialization should succeed");
 
         let err = tracker.abort_operation(&mut cell, "op-1").unwrap_err();
         assert_eq!(err.error_code(), "obligation_already_resolved");
@@ -933,7 +933,7 @@ mod tests {
                 TwoPhaseCategory::ResourceAlloc,
                 "will leak",
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Close the cell (obligation is force-aborted by drain timeout)
         // SAFETY: Test-only unwrap expecting cell close operation to succeed with valid parameters
@@ -942,7 +942,7 @@ mod tests {
             CancelReason::OperatorShutdown,
             DrainDeadline { max_ticks: 5 },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let leaks = tracker.detect_leaks(&cell);
         assert_eq!(leaks.len(), 1);
@@ -967,9 +967,9 @@ mod tests {
                 TwoPhaseCategory::EvidenceCommit,
                 "evidence",
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         // SAFETY: Test-only unwrap expecting valid commit operation to succeed
-        tracker.commit_operation(&mut cell, "op-1").unwrap();
+        tracker.commit_operation(&mut cell, "op-1").expect("serde deserialization should succeed");
 
         // SAFETY: Test-only unwrap expecting cell close operation to succeed with valid parameters
         cell.close(
@@ -977,7 +977,7 @@ mod tests {
             CancelReason::OperatorShutdown,
             DrainDeadline::default(),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let leaks = tracker.detect_leaks(&cell);
         assert!(leaks.is_empty());
@@ -997,7 +997,7 @@ mod tests {
                 TwoPhaseCategory::ResourceAlloc,
                 "pending",
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Cell still running — detect_leaks should not flag anything
         let leaks = tracker.detect_leaks(&cell);
@@ -1017,7 +1017,7 @@ mod tests {
                 TwoPhaseCategory::ResourceAlloc,
                 "alloc",
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         tracker
             .begin_operation(
                 &mut cell,
@@ -1025,14 +1025,14 @@ mod tests {
                 TwoPhaseCategory::PermissionGrant,
                 "perm",
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         cell.close(
             &mut cx,
             CancelReason::Quarantine,
             DrainDeadline { max_ticks: 5 },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let leaks = tracker.detect_leaks(&cell);
         assert_eq!(leaks.len(), 2);
@@ -1049,8 +1049,8 @@ mod tests {
 
         tracker
             .begin_operation(&mut cell, "op-1", TwoPhaseCategory::StateMutation, "tx")
-            .unwrap();
-        tracker.commit_operation(&mut cell, "op-1").unwrap();
+            .expect("serde deserialization should succeed");
+        tracker.commit_operation(&mut cell, "op-1").expect("serde deserialization should succeed");
 
         let events = tracker.events();
         assert_eq!(events.len(), 2);
@@ -1068,21 +1068,21 @@ mod tests {
 
         tracker
             .begin_operation(&mut cell, "op-1", TwoPhaseCategory::ResourceAlloc, "alloc")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         cell.close(
             &mut cx,
             CancelReason::OperatorShutdown,
             DrainDeadline { max_ticks: 5 },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         tracker.detect_leaks(&cell);
 
         let events = tracker.events();
         let leak_event = events.iter().find(|e| e.event == "leak_detected");
         assert!(leak_event.is_some());
-        assert_eq!(leak_event.unwrap().outcome, "leaked");
+        assert_eq!(leak_event.expect("serde deserialization should succeed").outcome, "leaked");
     }
 
     #[test]
@@ -1092,7 +1092,7 @@ mod tests {
 
         tracker
             .begin_operation(&mut cell, "op-1", TwoPhaseCategory::EvidenceCommit, "ev")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let events = tracker.drain_events();
         assert!(!events.is_empty());
@@ -1111,30 +1111,30 @@ mod tests {
         // SAFETY: Test scenario with valid operation parameters; begin_operation should succeed
         tracker
             .begin_operation(&mut cell, "alloc-1", TwoPhaseCategory::ResourceAlloc, "a1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         // SAFETY: Test scenario with valid operation parameters; begin_operation should succeed
         tracker
             .begin_operation(&mut cell, "alloc-2", TwoPhaseCategory::ResourceAlloc, "a2")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         // SAFETY: Test scenario with valid operation parameters; begin_operation should succeed
         tracker
             .begin_operation(&mut cell, "perm-1", TwoPhaseCategory::PermissionGrant, "p1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // SAFETY: Test scenario with valid operation ID that was previously begun
-        tracker.commit_operation(&mut cell, "alloc-1").unwrap();
+        tracker.commit_operation(&mut cell, "alloc-1").expect("serde deserialization should succeed");
         // SAFETY: Test scenario with valid operation ID that was previously begun
-        tracker.abort_operation(&mut cell, "alloc-2").unwrap();
+        tracker.abort_operation(&mut cell, "alloc-2").expect("serde deserialization should succeed");
 
         let stats = tracker.category_stats();
         // SAFETY: Test scenario verifying category that was used in operations above
-        let alloc_stats = stats.get(&TwoPhaseCategory::ResourceAlloc).unwrap();
+        let alloc_stats = stats.get(&TwoPhaseCategory::ResourceAlloc).expect("serde deserialization should succeed");
         assert_eq!(alloc_stats.started, 2);
         assert_eq!(alloc_stats.committed, 1);
         assert_eq!(alloc_stats.aborted, 1);
 
         // SAFETY: Test scenario verifying category that was used in operations above
-        let perm_stats = stats.get(&TwoPhaseCategory::PermissionGrant).unwrap();
+        let perm_stats = stats.get(&TwoPhaseCategory::PermissionGrant).expect("serde deserialization should succeed");
         assert_eq!(perm_stats.started, 1);
         assert_eq!(perm_stats.committed, 0);
     }
@@ -1163,13 +1163,13 @@ mod tests {
 
         tracker
             .begin_operation(&mut cell, "op-lab", TwoPhaseCategory::ResourceAlloc, "leak")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         cell.close(
             &mut cx,
             CancelReason::OperatorShutdown,
             DrainDeadline { max_ticks: 1 },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         tracker.detect_leaks(&cell);
         assert!(tracker.should_fail_run());
@@ -1193,13 +1193,13 @@ mod tests {
                 TwoPhaseCategory::PermissionGrant,
                 "leak",
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         cell.close(
             &mut cx,
             CancelReason::OperatorShutdown,
             DrainDeadline { max_ticks: 1 },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         tracker.detect_leaks(&cell);
         assert!(!tracker.should_fail_run());
@@ -1226,7 +1226,7 @@ mod tests {
                 TwoPhaseCategory::ResourceAlloc,
                 "buffer",
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         tracker
             .begin_operation(
                 &mut cell,
@@ -1234,7 +1234,7 @@ mod tests {
                 TwoPhaseCategory::StateMutation,
                 "update config",
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         tracker
             .begin_operation(
                 &mut cell,
@@ -1242,14 +1242,14 @@ mod tests {
                 TwoPhaseCategory::EvidenceCommit,
                 "evidence batch",
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert_eq!(tracker.active_count(), 3);
         assert_eq!(cell.pending_obligations(), 3);
 
-        tracker.commit_operation(&mut cell, "alloc-1").unwrap();
-        tracker.commit_operation(&mut cell, "tx-1").unwrap();
-        tracker.commit_operation(&mut cell, "ev-1").unwrap();
+        tracker.commit_operation(&mut cell, "alloc-1").expect("serde deserialization should succeed");
+        tracker.commit_operation(&mut cell, "tx-1").expect("serde deserialization should succeed");
+        tracker.commit_operation(&mut cell, "ev-1").expect("serde deserialization should succeed");
 
         assert_eq!(tracker.active_count(), 0);
         assert_eq!(cell.pending_obligations(), 0);
@@ -1272,7 +1272,7 @@ mod tests {
                 TwoPhaseCategory::ResourceAlloc,
                 "buffer",
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Initiate close with short drain deadline
         cell.initiate_close(
@@ -1280,12 +1280,12 @@ mod tests {
             CancelReason::Quarantine,
             DrainDeadline { max_ticks: 10 },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         // Resolve obligation during drain
-        tracker.commit_operation(&mut cell, "alloc-1").unwrap();
+        tracker.commit_operation(&mut cell, "alloc-1").expect("serde deserialization should succeed");
 
-        let result = cell.finalize().unwrap();
+        let result = cell.finalize().expect("serde deserialization should succeed");
         assert!(result.success);
         assert_eq!(result.obligations_committed, 1);
     }
@@ -1307,12 +1307,12 @@ mod tests {
                     TwoPhaseCategory::ResourceAlloc,
                     "buffer",
                 )
-                .unwrap();
+                .expect("serde deserialization should succeed");
             tracker
                 .begin_operation(&mut cell, "tx-1", TwoPhaseCategory::StateMutation, "config")
-                .unwrap();
-            tracker.commit_operation(&mut cell, "alloc-1").unwrap();
-            tracker.abort_operation(&mut cell, "tx-1").unwrap();
+                .expect("serde deserialization should succeed");
+            tracker.commit_operation(&mut cell, "alloc-1").expect("serde deserialization should succeed");
+            tracker.abort_operation(&mut cell, "tx-1").expect("serde deserialization should succeed");
             tracker.drain_events()
         };
 
@@ -1336,9 +1336,9 @@ mod tests {
             phase: OperationPhase::Phase1Active,
         };
         // SAFETY: TwoPhaseOperation derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&op).unwrap();
+        let json = serde_json::to_string(&op).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid TwoPhaseOperation serialization
-        let restored: TwoPhaseOperation = serde_json::from_str(&json).unwrap();
+        let restored: TwoPhaseOperation = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(op, restored);
     }
 
@@ -1356,9 +1356,9 @@ mod tests {
             phase: OperationPhase::Phase1Active,
         };
         // SAFETY: ObligationEvent derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&event).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid ObligationEvent serialization
-        let restored: ObligationEvent = serde_json::from_str(&json).unwrap();
+        let restored: ObligationEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, restored);
     }
 
@@ -1372,9 +1372,9 @@ mod tests {
             description: "leaked buffer".to_string(),
         };
         // SAFETY: LeakRecord derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&leak).unwrap();
+        let json = serde_json::to_string(&leak).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid LeakRecord serialization
-        let restored: LeakRecord = serde_json::from_str(&json).unwrap();
+        let restored: LeakRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(leak, restored);
     }
 
@@ -1386,8 +1386,8 @@ mod tests {
             aborted: 1,
             leaked: 1,
         };
-        let json = serde_json::to_string(&stats).unwrap();
-        let restored: CategoryStats = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&stats).expect("serde deserialization should succeed");
+        let restored: CategoryStats = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(stats, restored);
     }
 
@@ -1409,7 +1409,7 @@ mod tests {
                 TwoPhaseCategory::ResourceAlloc,
                 "buffer not freed",
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Close the cell — obligation force-aborted by timeout
         cell.close(
@@ -1417,7 +1417,7 @@ mod tests {
             CancelReason::OperatorShutdown,
             DrainDeadline { max_ticks: 5 },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         // Detect leaks — lab mode
         let leaks = tracker.detect_leaks(&cell);
@@ -1449,7 +1449,7 @@ mod tests {
                 TwoPhaseCategory::PermissionGrant,
                 "grant revoked",
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Close the cell (cancel + drain + finalize)
         cell.close(
@@ -1457,7 +1457,7 @@ mod tests {
             CancelReason::Revocation,
             DrainDeadline { max_ticks: 5 },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         // Attempt to commit after close — cell obligation already resolved
         let result = tracker.commit_operation(&mut cell, "op-cancel");
@@ -1477,7 +1477,7 @@ mod tests {
             CancelReason::OperatorShutdown,
             DrainDeadline { max_ticks: 100 },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         // Attempt to begin new obligation during drain
         let result = tracker.begin_operation(
@@ -1515,10 +1515,10 @@ mod tests {
                 TwoPhaseCategory::ResourceAlloc,
                 "extension buffer",
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Create a session cell
-        let mut session_cell = ext_cell.create_session("sess-1", "t").unwrap();
+        let mut session_cell = ext_cell.create_session("sess-1", "t").expect("serde deserialization should succeed");
 
         tracker
             .begin_operation(
@@ -1527,19 +1527,19 @@ mod tests {
                 TwoPhaseCategory::ResourceAlloc,
                 "session buffer",
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert_eq!(tracker.active_count(), 2);
 
         // Commit only the session obligation
         tracker
             .commit_operation(&mut session_cell, "sess-alloc")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert_eq!(tracker.active_count(), 1);
 
         // The remaining active one belongs to ext_cell
-        let op = tracker.get_operation("ext-alloc").unwrap();
+        let op = tracker.get_operation("ext-alloc").expect("serde deserialization should succeed");
         assert_eq!(op.phase, OperationPhase::Phase1Active);
     }
 
@@ -1560,16 +1560,16 @@ mod tests {
         for (id, cat, desc) in &categories {
             tracker
                 .begin_operation(&mut cell, *id, *cat, *desc)
-                .unwrap();
+                .expect("serde deserialization should succeed");
         }
         assert_eq!(tracker.active_count(), 4);
         assert_eq!(cell.pending_obligations(), 4);
 
         // Commit first two, abort the rest
-        tracker.commit_operation(&mut cell, "res-1").unwrap();
-        tracker.commit_operation(&mut cell, "perm-1").unwrap();
-        tracker.abort_operation(&mut cell, "state-1").unwrap();
-        tracker.abort_operation(&mut cell, "ev-1").unwrap();
+        tracker.commit_operation(&mut cell, "res-1").expect("serde deserialization should succeed");
+        tracker.commit_operation(&mut cell, "perm-1").expect("serde deserialization should succeed");
+        tracker.abort_operation(&mut cell, "state-1").expect("serde deserialization should succeed");
+        tracker.abort_operation(&mut cell, "ev-1").expect("serde deserialization should succeed");
 
         assert_eq!(tracker.active_count(), 0);
         assert_eq!(cell.pending_obligations(), 0);
@@ -1580,7 +1580,7 @@ mod tests {
             CancelReason::OperatorShutdown,
             DrainDeadline::default(),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let leaks = tracker.detect_leaks(&cell);
         assert!(leaks.is_empty());
@@ -1607,14 +1607,14 @@ mod tests {
                 TwoPhaseCategory::PermissionGrant,
                 "grant with metadata",
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         cell.close(
             &mut cx,
             CancelReason::Quarantine,
             DrainDeadline { max_ticks: 5 },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let leaks = tracker.detect_leaks(&cell);
         assert_eq!(leaks.len(), 1);
@@ -1631,7 +1631,7 @@ mod tests {
 
         tracker
             .begin_operation(&mut cell, "op-1", TwoPhaseCategory::ResourceAlloc, "alloc")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         for event in tracker.events() {
             assert_eq!(event.component, "obligation_integration");
@@ -1651,27 +1651,27 @@ mod tests {
                 TwoPhaseCategory::ResourceAlloc,
                 "will leak",
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         cell.close(
             &mut cx,
             CancelReason::OperatorShutdown,
             DrainDeadline { max_ticks: 5 },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         tracker.detect_leaks(&cell);
 
         // Verify the operation phase is Leaked
-        let op = tracker.get_operation("op-leak").unwrap();
+        let op = tracker.get_operation("op-leak").expect("serde deserialization should succeed");
         assert_eq!(op.phase, OperationPhase::Leaked);
     }
 
     #[test]
     fn leak_policy_serde_roundtrip() {
         for policy in [LeakPolicy::Lab, LeakPolicy::Production] {
-            let json = serde_json::to_string(&policy).unwrap();
-            let restored: LeakPolicy = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
+            let restored: LeakPolicy = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(policy, restored);
         }
     }
@@ -1797,8 +1797,8 @@ mod tests {
     #[test]
     fn leak_policy_serde_all_variants() {
         for policy in [LeakPolicy::Lab, LeakPolicy::Production] {
-            let json = serde_json::to_string(&policy).unwrap();
-            let back: LeakPolicy = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
+            let back: LeakPolicy = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(policy, back);
         }
     }
@@ -1822,8 +1822,8 @@ mod tests {
                 component: "obligation_integration".to_string(),
                 phase,
             };
-            let json = serde_json::to_string(&event).unwrap();
-            let back: ObligationEvent = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+            let back: ObligationEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(event.phase, back.phase);
         }
     }
@@ -1900,7 +1900,7 @@ mod tests {
                 TwoPhaseCategory::ResourceAlloc,
                 "will leak",
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         // Close cell without resolving
         let mut cx = mock_cx(100);
         let _ = cell.close(
@@ -1922,11 +1922,11 @@ mod tests {
 
         tracker
             .begin_operation(&mut cell, "op1", TwoPhaseCategory::ResourceAlloc, "a")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(tracker.active_count(), 1);
         assert_eq!(tracker.total_count(), 1);
 
-        tracker.commit_operation(&mut cell, "op1").unwrap();
+        tracker.commit_operation(&mut cell, "op1").expect("serde deserialization should succeed");
         assert_eq!(tracker.active_count(), 0);
         assert_eq!(tracker.total_count(), 1);
     }
@@ -1939,8 +1939,8 @@ mod tests {
             aborted: 2,
             leaked: 1,
         };
-        let json = serde_json::to_string(&stats).unwrap();
-        let back: CategoryStats = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&stats).expect("serde deserialization should succeed");
+        let back: CategoryStats = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(stats.started, back.started);
         assert_eq!(stats.committed, back.committed);
         assert_eq!(stats.aborted, back.aborted);
@@ -1958,8 +1958,8 @@ mod tests {
                 TwoPhaseCategory::StateMutation,
                 "test",
             )
-            .unwrap();
-        let op = tracker.get_operation("op-check").unwrap();
+            .expect("serde deserialization should succeed");
+        let op = tracker.get_operation("op-check").expect("serde deserialization should succeed");
         assert!(matches!(op.phase, OperationPhase::Phase1Active));
         assert_eq!(op.category, TwoPhaseCategory::StateMutation);
     }
@@ -2055,7 +2055,7 @@ mod tests {
             trace_id: "trace-json".to_string(),
             phase: OperationPhase::Committed,
         };
-        let json = serde_json::to_value(&op).unwrap();
+        let json = serde_json::to_value(&op).expect("serde deserialization should succeed");
         assert_eq!(json["operation_id"], "op-json");
         assert_eq!(json["cell_id"], "cell-json");
         assert_eq!(json["category"], "PermissionGrant");
@@ -2077,7 +2077,7 @@ mod tests {
             component: "obligation_integration".to_string(),
             phase: OperationPhase::Phase1Active,
         };
-        let json = serde_json::to_value(&event).unwrap();
+        let json = serde_json::to_value(&event).expect("serde deserialization should succeed");
         assert_eq!(json["trace_id"], "t-1");
         assert_eq!(json["cell_id"], "c-1");
         assert_eq!(json["cell_kind"], "Session");
@@ -2098,7 +2098,7 @@ mod tests {
             trace_id: "trace-leak".to_string(),
             description: "leaked resource".to_string(),
         };
-        let json = serde_json::to_value(&leak).unwrap();
+        let json = serde_json::to_value(&leak).expect("serde deserialization should succeed");
         assert_eq!(json["operation_id"], "op-leak");
         assert_eq!(json["cell_id"], "cell-leak");
         assert_eq!(json["category"], "ResourceAlloc");
@@ -2136,7 +2136,7 @@ mod tests {
             aborted: 10,
             leaked: 2,
         };
-        let json = serde_json::to_value(&stats).unwrap();
+        let json = serde_json::to_value(&stats).expect("serde deserialization should succeed");
         assert_eq!(json["started"], 42);
         assert_eq!(json["committed"], 30);
         assert_eq!(json["aborted"], 10);
@@ -2184,8 +2184,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap();
-            let back: ObligationIntegrationError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let back: ObligationIntegrationError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, back);
         }
     }
@@ -2216,8 +2216,8 @@ mod tests {
         let mut tracker = ObligationTracker::default();
         tracker
             .begin_operation(&mut cell, "op-1", TwoPhaseCategory::ResourceAlloc, "res")
-            .unwrap();
-        tracker.abort_operation(&mut cell, "op-1").unwrap();
+            .expect("serde deserialization should succeed");
+        tracker.abort_operation(&mut cell, "op-1").expect("serde deserialization should succeed");
         let err = tracker.commit_operation(&mut cell, "op-1").unwrap_err();
         assert_eq!(err.error_code(), "obligation_already_resolved");
         match err {
@@ -2239,8 +2239,8 @@ mod tests {
                 TwoPhaseCategory::PermissionGrant,
                 "perm",
             )
-            .unwrap();
-        tracker.abort_operation(&mut cell, "op-abort-ev").unwrap();
+            .expect("serde deserialization should succeed");
+        tracker.abort_operation(&mut cell, "op-abort-ev").expect("serde deserialization should succeed");
 
         let events = tracker.events();
         assert_eq!(events.len(), 2);
@@ -2264,19 +2264,19 @@ mod tests {
                 TwoPhaseCategory::EvidenceCommit,
                 "evidence",
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         cell.close(
             &mut cx,
             CancelReason::OperatorShutdown,
             DrainDeadline { max_ticks: 5 },
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         tracker.detect_leaks(&cell);
 
         let stats = tracker.category_stats();
-        let ev_stats = stats.get(&TwoPhaseCategory::EvidenceCommit).unwrap();
+        let ev_stats = stats.get(&TwoPhaseCategory::EvidenceCommit).expect("serde deserialization should succeed");
         assert_eq!(ev_stats.started, 1);
         assert_eq!(ev_stats.leaked, 1);
         assert_eq!(ev_stats.committed, 0);
@@ -2295,7 +2295,7 @@ mod tests {
                 TwoPhaseCategory::ResourceAlloc,
                 "alloc",
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Call detect_leaks multiple times on running cell — no leaks each time
         for _ in 0..3 {

@@ -607,7 +607,7 @@ mod tests {
         let result = runner.run_gate(&gate, &policy, &evidence);
         assert!(result.is_ok());
 
-        let receipt = result.unwrap();
+        let receipt = result.expect("serde deserialization should succeed");
         assert_eq!(receipt.verdict, GateVerdict::Approved);
         assert_eq!(receipt.gate_id, "example-gate");
         assert_eq!(receipt.schema_version, SCHEMA_VERSION);
@@ -635,7 +635,7 @@ mod tests {
         let result = runner.run_gate_batch(&gates, &policy, &evidence);
         assert!(result.is_ok());
 
-        let receipts = result.unwrap();
+        let receipts = result.expect("serde deserialization should succeed");
         assert_eq!(receipts.len(), 2);
         assert!(receipts.iter().all(|r| r.verdict == GateVerdict::Approved));
     }
@@ -739,8 +739,8 @@ mod tests {
         ];
 
         for verdict in verdicts {
-            let json = serde_json::to_string(&verdict).unwrap();
-            let deserialized: GateVerdict = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&verdict).expect("serde deserialization should succeed");
+            let deserialized: GateVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(verdict, deserialized);
         }
     }
@@ -755,8 +755,8 @@ mod tests {
         ];
 
         for severity in severities {
-            let json = serde_json::to_string(&severity).unwrap();
-            let deserialized: GateSeverity = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&severity).expect("serde deserialization should succeed");
+            let deserialized: GateSeverity = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(severity, deserialized);
         }
     }

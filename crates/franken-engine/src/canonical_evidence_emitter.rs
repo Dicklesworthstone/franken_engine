@@ -667,7 +667,7 @@ mod tests {
                 test_witnesses(),
                 test_metadata(),
             )
-            .unwrap()
+            .expect("serde deserialization should succeed")
     }
 
     // -----------------------------------------------------------------------
@@ -737,9 +737,9 @@ mod tests {
     fn action_serde_roundtrip() {
         for action in &HighImpactAction::ALL {
             // SAFETY: HighImpactAction derives Serialize and has no non-serializable fields
-            let json = serde_json::to_string(action).unwrap();
+            let json = serde_json::to_string(action).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by valid HighImpactAction serialization
-            let restored: HighImpactAction = serde_json::from_str(&json).unwrap();
+            let restored: HighImpactAction = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*action, restored);
         }
     }
@@ -771,9 +771,9 @@ mod tests {
     fn policy_serde_roundtrip() {
         let policy = EmissionPolicy::default();
         // SAFETY: EmissionPolicy derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&policy).unwrap();
+        let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid EmissionPolicy serialization
-        let restored: EmissionPolicy = serde_json::from_str(&json).unwrap();
+        let restored: EmissionPolicy = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(policy, restored);
     }
 
@@ -1004,7 +1004,7 @@ mod tests {
                 test_witnesses(),
                 BTreeMap::new(),
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let mut ctx2 = test_context(HighImpactAction::Terminate);
         ctx2.decision_id = "dec-002".to_string();
@@ -1019,7 +1019,7 @@ mod tests {
                 test_witnesses(),
                 BTreeMap::new(),
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // 3rd should fail.
         let mut ctx3 = test_context(HighImpactAction::Suspend);
@@ -1115,7 +1115,7 @@ mod tests {
 
         let entry = &emitter.ledger()[0];
         // SAFETY: Test with valid evidence entry should successfully verify integrity
-        let recomputed = emitter.verify_integrity(entry).unwrap();
+        let recomputed = emitter.verify_integrity(entry).expect("serde deserialization should succeed");
         assert_eq!(recomputed, receipt.artifact_hash);
     }
 
@@ -1128,7 +1128,7 @@ mod tests {
         tampered.chosen_action.rationale = "tampered rationale".to_string();
 
         // SAFETY: Test with tampered evidence entry should successfully compute hash (different from original)
-        let recomputed = emitter.verify_integrity(&tampered).unwrap();
+        let recomputed = emitter.verify_integrity(&tampered).expect("serde deserialization should succeed");
         assert_ne!(recomputed, receipt.artifact_hash);
     }
 
@@ -1151,7 +1151,7 @@ mod tests {
                 test_witnesses(),
                 BTreeMap::new(),
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let mut ctx2 = test_context(HighImpactAction::ExtensionLoad);
         ctx2.decision_id = "dec-002".to_string();
@@ -1164,7 +1164,7 @@ mod tests {
                 test_witnesses(),
                 BTreeMap::new(),
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert_eq!(
             emitter.entries_by_type(DecisionType::SecurityAction).len(),
@@ -1194,7 +1194,7 @@ mod tests {
                 test_witnesses(),
                 BTreeMap::new(),
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let mut ctx2 = test_context(HighImpactAction::Terminate);
         ctx2.trace_id = "trace-B".to_string();
@@ -1208,7 +1208,7 @@ mod tests {
                 test_witnesses(),
                 BTreeMap::new(),
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert_eq!(emitter.entries_by_trace("trace-A").len(), 1);
         assert_eq!(emitter.entries_by_trace("trace-B").len(), 1);
@@ -1236,7 +1236,7 @@ mod tests {
                 test_witnesses(), // 2 witnesses
                 BTreeMap::new(),
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert_eq!(emitter.ledger()[0].witnesses.len(), 1);
     }
@@ -1258,7 +1258,7 @@ mod tests {
                 test_witnesses(),
                 BTreeMap::new(),
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert_eq!(emitter.ledger()[0].candidates.len(), 2);
     }
@@ -1324,7 +1324,7 @@ mod tests {
                     test_witnesses(),
                     BTreeMap::new(),
                 )
-                .unwrap();
+                .expect("serde deserialization should succeed");
         }
 
         assert_eq!(emitter.ledger_len(), 5);
@@ -1354,7 +1354,7 @@ mod tests {
                     test_witnesses(),
                     BTreeMap::new(),
                 )
-                .unwrap();
+                .expect("serde deserialization should succeed");
         }
 
         assert_eq!(emitter.ledger_len(), 20);
@@ -1367,8 +1367,8 @@ mod tests {
     #[test]
     fn emission_context_serde_roundtrip() {
         let ctx = test_context(HighImpactAction::Sandbox);
-        let json = serde_json::to_string(&ctx).unwrap();
-        let restored: EmissionContext = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&ctx).expect("serde deserialization should succeed");
+        let restored: EmissionContext = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ctx, restored);
     }
 
@@ -1390,8 +1390,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap();
-            let restored: EmissionError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let restored: EmissionError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, restored);
         }
     }
@@ -1400,8 +1400,8 @@ mod tests {
     fn emission_receipt_serde_roundtrip() {
         let mut emitter = CanonicalEvidenceEmitter::with_defaults();
         let receipt = emit_standard(&mut emitter);
-        let json = serde_json::to_string(&receipt).unwrap();
-        let restored: EmissionReceipt = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
+        let restored: EmissionReceipt = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(receipt, restored);
     }
 
@@ -1416,8 +1416,8 @@ mod tests {
             outcome: "success".to_string(),
             error_code: None,
         };
-        let json = serde_json::to_string(&log).unwrap();
-        let restored: StructuredLogEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&log).expect("serde deserialization should succeed");
+        let restored: StructuredLogEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(log, restored);
     }
 
@@ -1467,7 +1467,7 @@ mod tests {
                 vec![],
                 BTreeMap::new(),
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert_eq!(emitter.ledger_len(), 1);
         assert!(emitter.ledger()[0].candidates.is_empty());
@@ -1529,8 +1529,8 @@ mod tests {
     #[test]
     fn high_impact_action_all_serde_roundtrip() {
         for action in HighImpactAction::ALL {
-            let json = serde_json::to_string(&action).unwrap();
-            let restored: HighImpactAction = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&action).expect("serde deserialization should succeed");
+            let restored: HighImpactAction = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(action, restored);
         }
     }
@@ -1547,8 +1547,8 @@ mod tests {
     #[test]
     fn emission_policy_serde_roundtrip() {
         let policy = EmissionPolicy::default();
-        let json = serde_json::to_string(&policy).unwrap();
-        let restored: EmissionPolicy = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
+        let restored: EmissionPolicy = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(policy, restored);
     }
 
@@ -1567,7 +1567,7 @@ mod tests {
                     test_witnesses(),
                     BTreeMap::new(),
                 )
-                .unwrap();
+                .expect("serde deserialization should succeed");
         }
         assert_eq!(emitter.receipts().len(), 3);
     }
@@ -1597,7 +1597,7 @@ mod tests {
                 test_witnesses(),
                 metadata,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let entry = &emitter.ledger()[0];
         assert_eq!(entry.metadata.get("key"), Some(&"value".to_string()));
@@ -1737,7 +1737,7 @@ mod tests {
                 test_witnesses(),
                 BTreeMap::new(),
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(emitter.ledger_len(), 1);
     }
 
@@ -1754,7 +1754,7 @@ mod tests {
                 test_witnesses(),
                 BTreeMap::new(),
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         // Sandbox maps to SecurityAction; RemoteAuthorization entries should be empty.
         let filtered = emitter.entries_by_type(DecisionType::RemoteAuthorization);
         assert!(filtered.is_empty());
@@ -1773,7 +1773,7 @@ mod tests {
                 test_witnesses(),
                 BTreeMap::new(),
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let filtered = emitter.entries_by_trace("nonexistent-trace");
         assert!(filtered.is_empty());
     }
@@ -1878,7 +1878,7 @@ mod tests {
     fn high_impact_action_serde_all_distinct_json() {
         let mut seen = std::collections::BTreeSet::new();
         for action in HighImpactAction::ALL {
-            let json = serde_json::to_string(&action).unwrap();
+            let json = serde_json::to_string(&action).expect("serde deserialization should succeed");
             assert!(seen.insert(json.clone()), "duplicate JSON for {action:?}");
         }
         assert_eq!(seen.len(), 20);
@@ -1897,7 +1897,7 @@ mod tests {
         ];
         let mut jsons = std::collections::BTreeSet::new();
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
             jsons.insert(json);
         }
         assert_eq!(jsons.len(), 5);
@@ -1984,9 +1984,9 @@ mod tests {
     #[test]
     fn emission_context_json_field_names() {
         let ctx = test_context(HighImpactAction::Sandbox);
-        let json = serde_json::to_string(&ctx).unwrap();
-        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
-        let obj = v.as_object().unwrap();
+        let json = serde_json::to_string(&ctx).expect("serde deserialization should succeed");
+        let v: serde_json::Value = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let obj = v.as_object().expect("serde deserialization should succeed");
         assert!(obj.contains_key("trace_id"));
         assert!(obj.contains_key("decision_id"));
         assert!(obj.contains_key("policy_id"));
@@ -2000,9 +2000,9 @@ mod tests {
     #[test]
     fn emission_policy_json_field_names() {
         let policy = EmissionPolicy::default();
-        let json = serde_json::to_string(&policy).unwrap();
-        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
-        let obj = v.as_object().unwrap();
+        let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
+        let v: serde_json::Value = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let obj = v.as_object().expect("serde deserialization should succeed");
         assert!(obj.contains_key("mandatory_actions"));
         assert!(obj.contains_key("max_witnesses"));
         assert!(obj.contains_key("max_candidates"));
@@ -2015,9 +2015,9 @@ mod tests {
     fn emission_receipt_json_field_names() {
         let mut emitter = CanonicalEvidenceEmitter::with_defaults();
         let receipt = emit_standard(&mut emitter);
-        let json = serde_json::to_string(&receipt).unwrap();
-        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
-        let obj = v.as_object().unwrap();
+        let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
+        let v: serde_json::Value = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let obj = v.as_object().expect("serde deserialization should succeed");
         assert!(obj.contains_key("entry_id"));
         assert!(obj.contains_key("artifact_hash"));
         assert!(obj.contains_key("decision_type"));
@@ -2037,9 +2037,9 @@ mod tests {
             outcome: "o".into(),
             error_code: None,
         };
-        let json = serde_json::to_string(&log).unwrap();
-        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
-        let obj = v.as_object().unwrap();
+        let json = serde_json::to_string(&log).expect("serde deserialization should succeed");
+        let v: serde_json::Value = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let obj = v.as_object().expect("serde deserialization should succeed");
         assert!(obj.contains_key("trace_id"));
         assert!(obj.contains_key("decision_id"));
         assert!(obj.contains_key("policy_id"));
@@ -2057,9 +2057,9 @@ mod tests {
     #[test]
     fn emission_error_missing_field_json_field_names() {
         let err = EmissionError::MissingField { field: "x".into() };
-        let json = serde_json::to_string(&err).unwrap();
-        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
-        let obj = v.as_object().unwrap();
+        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let v: serde_json::Value = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let obj = v.as_object().expect("serde deserialization should succeed");
         assert!(
             obj.contains_key("MissingField"),
             "JSON should have MissingField key"
@@ -2069,9 +2069,9 @@ mod tests {
     #[test]
     fn emission_error_buffer_full_json_field_names() {
         let err = EmissionError::BufferFull { capacity: 99 };
-        let json = serde_json::to_string(&err).unwrap();
-        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
-        let obj = v.as_object().unwrap();
+        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let v: serde_json::Value = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let obj = v.as_object().expect("serde deserialization should succeed");
         assert!(
             obj.contains_key("BufferFull"),
             "JSON should have BufferFull key"
@@ -2198,8 +2198,8 @@ mod tests {
     fn emission_context_max_timestamp_ns() {
         let mut ctx = test_context(HighImpactAction::Sandbox);
         ctx.timestamp_ns = u64::MAX;
-        let json = serde_json::to_string(&ctx).unwrap();
-        let restored: EmissionContext = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&ctx).expect("serde deserialization should succeed");
+        let restored: EmissionContext = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(restored.timestamp_ns, u64::MAX);
     }
 
@@ -2207,8 +2207,8 @@ mod tests {
     fn emission_context_zero_timestamp_ns() {
         let mut ctx = test_context(HighImpactAction::Sandbox);
         ctx.timestamp_ns = 0;
-        let json = serde_json::to_string(&ctx).unwrap();
-        let restored: EmissionContext = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&ctx).expect("serde deserialization should succeed");
+        let restored: EmissionContext = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(restored.timestamp_ns, 0);
     }
 
@@ -2259,7 +2259,7 @@ mod tests {
                 test_witnesses(),
                 BTreeMap::new(),
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(emitter.ledger()[0].witnesses.is_empty());
     }
 
@@ -2279,7 +2279,7 @@ mod tests {
                 test_witnesses(),
                 BTreeMap::new(),
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(emitter.ledger()[0].candidates.is_empty());
     }
 
@@ -2299,7 +2299,7 @@ mod tests {
                 test_witnesses(),
                 BTreeMap::new(),
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let mut ctx2 = test_context(HighImpactAction::Terminate);
         ctx2.decision_id = "dec-002".into();
         let err = emitter
@@ -2327,7 +2327,7 @@ mod tests {
                 test_witnesses(),
                 BTreeMap::new(),
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         // Metadata still has injected fields (action, target_id, component).
         let entry = &emitter.ledger()[0];
         assert!(entry.metadata.contains_key("action"));
@@ -2351,7 +2351,7 @@ mod tests {
                 test_witnesses(),
                 BTreeMap::new(),
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let entry = &emitter.ledger()[0];
         // When include_metadata is false, injected fields should NOT be present.
         assert!(!entry.metadata.contains_key("action"));
@@ -2371,8 +2371,8 @@ mod tests {
             action: HighImpactAction::Sandbox,
             target_id: long.clone(),
         };
-        let json = serde_json::to_string(&ctx).unwrap();
-        let restored: EmissionContext = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&ctx).expect("serde deserialization should succeed");
+        let restored: EmissionContext = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ctx, restored);
     }
 
@@ -2393,8 +2393,8 @@ mod tests {
     fn emission_context_all_actions_serde_roundtrip() {
         for action in HighImpactAction::ALL {
             let ctx = test_context(action);
-            let json = serde_json::to_string(&ctx).unwrap();
-            let restored: EmissionContext = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&ctx).expect("serde deserialization should succeed");
+            let restored: EmissionContext = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(ctx, restored, "roundtrip failed for action {action:?}");
         }
     }
@@ -2408,8 +2408,8 @@ mod tests {
             include_metadata: false,
             buffer_capacity: 3,
         };
-        let json = serde_json::to_string(&policy).unwrap();
-        let restored: EmissionPolicy = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
+        let restored: EmissionPolicy = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(policy, restored);
     }
 
@@ -2417,8 +2417,8 @@ mod tests {
     fn emission_error_not_required_all_actions_roundtrip() {
         for action in HighImpactAction::ALL {
             let err = EmissionError::NotRequired { action };
-            let json = serde_json::to_string(&err).unwrap();
-            let restored: EmissionError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+            let restored: EmissionError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(err, restored);
         }
     }
@@ -2434,8 +2434,8 @@ mod tests {
             outcome: "failure".into(),
             error_code: Some("BUFFER_OVERFLOW".into()),
         };
-        let json = serde_json::to_string(&log).unwrap();
-        let restored: StructuredLogEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&log).expect("serde deserialization should succeed");
+        let restored: StructuredLogEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(log, restored);
     }
 
@@ -2493,7 +2493,7 @@ mod tests {
                     test_witnesses(),
                     BTreeMap::new(),
                 )
-                .unwrap();
+                .expect("serde deserialization should succeed");
         }
         let found = emitter.entries_by_trace("shared-trace");
         assert_eq!(found.len(), 3);
@@ -2514,7 +2514,7 @@ mod tests {
                     test_witnesses(),
                     BTreeMap::new(),
                 )
-                .unwrap();
+                .expect("serde deserialization should succeed");
         }
         assert_eq!(emitter.receipts().len(), emitter.ledger_len());
         for (receipt, entry) in emitter.receipts().iter().zip(emitter.ledger().iter()) {
@@ -2538,10 +2538,10 @@ mod tests {
                     test_witnesses(),
                     BTreeMap::new(),
                 )
-                .unwrap();
+                .expect("serde deserialization should succeed");
         }
         for (entry, receipt) in emitter.ledger().iter().zip(emitter.receipts().iter()) {
-            let hash = emitter.verify_integrity(entry).unwrap();
+            let hash = emitter.verify_integrity(entry).expect("serde deserialization should succeed");
             assert_eq!(hash, receipt.artifact_hash);
         }
     }
@@ -2561,7 +2561,7 @@ mod tests {
                     test_witnesses(),
                     BTreeMap::new(),
                 )
-                .unwrap();
+                .expect("serde deserialization should succeed");
         }
         // Each successful emission produces one log event.
         assert_eq!(emitter.log_events().len(), 4);
@@ -2587,7 +2587,7 @@ mod tests {
                 test_witnesses(),
                 BTreeMap::new(),
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let mut ctx2 = test_context(HighImpactAction::Terminate);
         ctx2.decision_id = "dec-002".into();
         let _ = emitter.emit(
@@ -2600,7 +2600,7 @@ mod tests {
         );
         // The buffer_full attempt should also produce a log event.
         assert!(emitter.log_events().len() >= 2);
-        let last = emitter.log_events().last().unwrap();
+        let last = emitter.log_events().last().expect("serde deserialization should succeed");
         assert_eq!(last.event, "buffer_full");
     }
 
@@ -2681,8 +2681,8 @@ mod tests {
             action: HighImpactAction::PolicyUpdate,
             target_id: "\u{0410}\u{0411}\u{0412}".into(),
         };
-        let json = serde_json::to_string(&ctx).unwrap();
-        let restored: EmissionContext = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&ctx).expect("serde deserialization should succeed");
+        let restored: EmissionContext = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ctx, restored);
     }
 }

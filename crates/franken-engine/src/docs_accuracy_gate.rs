@@ -860,10 +860,10 @@ mod tests {
         let s = DocSource::OperatorDocs;
         // SAFETY: DocSource derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&s).unwrap();
+        let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid DocSource,
         // so from_str back to DocSource cannot fail (valid format + matching schema).
-        let back: DocSource = serde_json::from_str(&json).unwrap();
+        let back: DocSource = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(s, back);
     }
 
@@ -902,10 +902,10 @@ mod tests {
         let d = DriftClass::BrokenExample;
         // SAFETY: DriftClass derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&d).unwrap();
+        let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid DriftClass,
         // so from_str back to DriftClass cannot fail (valid format + matching schema).
-        let back: DriftClass = serde_json::from_str(&json).unwrap();
+        let back: DriftClass = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(d, back);
     }
 
@@ -920,14 +920,14 @@ mod tests {
     fn add_surface() {
         let mut inv = DocsAccuracyInventory::new();
         // SAFETY: Test helper creates valid surface; add_surface succeeds for new surface in controlled test.
-        inv.add_surface(aligned_surface("s1")).unwrap();
+        inv.add_surface(aligned_surface("s1")).expect("serde deserialization should succeed");
         assert_eq!(inv.surface_count(), 1);
     }
 
     #[test]
     fn duplicate_surface_rejected() {
         let mut inv = DocsAccuracyInventory::new();
-        inv.add_surface(aligned_surface("s1")).unwrap();
+        inv.add_surface(aligned_surface("s1")).expect("serde deserialization should succeed");
         let err = inv.add_surface(aligned_surface("s1")).unwrap_err();
         assert!(matches!(err, GateError::DuplicateSurface { .. }));
     }
@@ -935,22 +935,22 @@ mod tests {
     #[test]
     fn drifted_surfaces_filtered() {
         let mut inv = DocsAccuracyInventory::new();
-        inv.add_surface(aligned_surface("s1")).unwrap();
+        inv.add_surface(aligned_surface("s1")).expect("serde deserialization should succeed");
         inv.add_surface(drifted_surface("s2", DriftClass::AspirationalClaim))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(inv.drifted_surfaces().len(), 1);
     }
 
     #[test]
     fn surfaces_by_drift() {
         let mut inv = DocsAccuracyInventory::new();
-        inv.add_surface(aligned_surface("s1")).unwrap();
-        inv.add_surface(aligned_surface("s2")).unwrap();
+        inv.add_surface(aligned_surface("s1")).expect("serde deserialization should succeed");
+        inv.add_surface(aligned_surface("s2")).expect("serde deserialization should succeed");
         inv.add_surface(drifted_surface("s3", DriftClass::BrokenExample))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let dist = inv.surfaces_by_drift();
-        assert_eq!(*dist.get(&DriftClass::Aligned).unwrap(), 2);
-        assert_eq!(*dist.get(&DriftClass::BrokenExample).unwrap(), 1);
+        assert_eq!(*dist.get(&DriftClass::Aligned).expect("serde deserialization should succeed"), 2);
+        assert_eq!(*dist.get(&DriftClass::BrokenExample).expect("serde deserialization should succeed"), 1);
     }
 
     #[test]
@@ -964,7 +964,7 @@ mod tests {
     fn content_hash_changes() {
         let i1 = build_seed_inventory();
         let mut i2 = build_seed_inventory();
-        i2.add_surface(aligned_surface("extra")).unwrap();
+        i2.add_surface(aligned_surface("extra")).expect("serde deserialization should succeed");
         assert_ne!(i1.content_hash(), i2.content_hash());
     }
 
@@ -996,8 +996,8 @@ mod tests {
     #[test]
     fn inventory_serde_roundtrip() {
         let inv = build_seed_inventory();
-        let json = serde_json::to_string(&inv).unwrap();
-        let back: DocsAccuracyInventory = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&inv).expect("serde deserialization should succeed");
+        let back: DocsAccuracyInventory = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(inv.surface_count(), back.surface_count());
         assert_eq!(inv.content_hash(), back.content_hash());
     }
@@ -1047,9 +1047,9 @@ mod tests {
     #[test]
     fn aspirational_claim_fails_strict() {
         let mut inv = DocsAccuracyInventory::new();
-        inv.add_surface(aligned_surface("s1")).unwrap();
+        inv.add_surface(aligned_surface("s1")).expect("serde deserialization should succeed");
         inv.add_surface(drifted_surface("s2", DriftClass::AspirationalClaim))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let gate = DocsAccuracyGate::with_defaults();
         let report = gate.evaluate(&inv);
         assert!(!report.verdict.is_pass());
@@ -1058,9 +1058,9 @@ mod tests {
     #[test]
     fn contradictory_behavior_fails() {
         let mut inv = DocsAccuracyInventory::new();
-        inv.add_surface(aligned_surface("s1")).unwrap();
+        inv.add_surface(aligned_surface("s1")).expect("serde deserialization should succeed");
         inv.add_surface(drifted_surface("s2", DriftClass::ContradictoryBehavior))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let gate = DocsAccuracyGate::with_defaults();
         let report = gate.evaluate(&inv);
         assert!(!report.verdict.is_pass());
@@ -1071,8 +1071,8 @@ mod tests {
         let gate = DocsAccuracyGate::with_defaults();
         let inv = build_seed_inventory();
         let report = gate.evaluate(&inv);
-        let json = serde_json::to_string(&report).unwrap();
-        let back: GateReport = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let back: GateReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report.total_surfaces, back.total_surfaces);
     }
 
@@ -1087,8 +1087,8 @@ mod tests {
     #[test]
     fn config_serde_roundtrip() {
         let config = GateConfig::default();
-        let json = serde_json::to_string(&config).unwrap();
-        let back: GateConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let back: GateConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, back);
     }
 
@@ -1137,8 +1137,8 @@ mod tests {
             planned_support: true,
             tracking_bead: Some("bd-future".to_string()),
         };
-        let json = serde_json::to_string(&c).unwrap();
-        let back: UnsupportedSurfaceContract = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let back: UnsupportedSurfaceContract = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c, back);
     }
 }

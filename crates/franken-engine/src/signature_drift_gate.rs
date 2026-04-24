@@ -1085,9 +1085,9 @@ mod tests {
             50,
         );
         // SAFETY: SignatureSnapshot derives Serialize and has no non-serializable fields.
-        let json = serde_json::to_string(&s).unwrap();
+        let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid SignatureSnapshot serialization.
-        let back: SignatureSnapshot = serde_json::from_str(&json).unwrap();
+        let back: SignatureSnapshot = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(s, back);
     }
 
@@ -1164,9 +1164,9 @@ mod tests {
         let cur = snapshot("cur", normal_regime(), &[("cpu", 200_000)], 100);
         let drift = compute_drift(&bl, &cur);
         // SAFETY: DriftMeasurement derives Serialize and has no non-serializable fields.
-        let json = serde_json::to_string(&drift).unwrap();
+        let json = serde_json::to_string(&drift).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid DriftMeasurement serialization.
-        let back: DriftMeasurement = serde_json::from_str(&json).unwrap();
+        let back: DriftMeasurement = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(drift, back);
     }
 
@@ -1257,9 +1257,9 @@ mod tests {
     fn downgrade_reason_serde() {
         let r = DowngradeReason::ExcessiveL1Drift;
         // SAFETY: to_string cannot fail on derived Serialize enum
-        let json = serde_json::to_string(&r).unwrap();
+        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let back: DowngradeReason = serde_json::from_str(&json).unwrap();
+        let back: DowngradeReason = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 
@@ -1277,9 +1277,9 @@ mod tests {
     fn gate_verdict_serde() {
         let v = GateVerdict::Pass;
         // SAFETY: to_string cannot fail on derived Serialize enum
-        let json = serde_json::to_string(&v).unwrap();
+        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let back: GateVerdict = serde_json::from_str(&json).unwrap();
+        let back: GateVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, back);
     }
 
@@ -1471,8 +1471,8 @@ mod tests {
             &default_config(),
             test_epoch(),
         );
-        let json = serde_json::to_string(&decision).unwrap();
-        let back: GateDecision = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&decision).expect("serde deserialization should succeed");
+        let back: GateDecision = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(decision, back);
     }
 
@@ -1536,8 +1536,8 @@ mod tests {
         let bl = snapshot("bl", normal_regime(), &[("cpu", 500_000)], 100);
         let budget = TransitionBudgetTracker::new(10, test_epoch());
         let result = batch_evaluate(&["c1"], &bl, &bl, &budget, &default_config(), test_epoch());
-        let json = serde_json::to_string(&result).unwrap();
-        let back: BatchGateResult = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let back: BatchGateResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result.decisions.len(), back.decisions.len());
     }
 
@@ -1587,7 +1587,7 @@ mod tests {
         ledger.apply_decision(&decision);
 
         // SAFETY: get_record cannot fail for claim ID we just applied decision for
-        let record = ledger.get_record("c1").unwrap();
+        let record = ledger.get_record("c1").expect("serde deserialization should succeed");
         assert!(record.active);
         assert!(record.max_passing_drift_millionths > 0);
     }
@@ -1615,7 +1615,7 @@ mod tests {
         ledger.apply_decision(&decision);
 
         // SAFETY: get_record cannot fail for claim ID we just applied decision for
-        let record = ledger.get_record("c1").unwrap();
+        let record = ledger.get_record("c1").expect("serde deserialization should succeed");
         assert!(!record.active);
         assert!(record.deactivation_reason.is_some());
     }
@@ -1671,8 +1671,8 @@ mod tests {
     fn evidence_corpus_specimen_serde() {
         let (specimens, _) = run_evidence_corpus(test_epoch());
         for s in &specimens {
-            let json = serde_json::to_string(s).unwrap();
-            let back: DriftGateSpecimen = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(s).expect("serde deserialization should succeed");
+            let back: DriftGateSpecimen = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*s, back);
         }
     }

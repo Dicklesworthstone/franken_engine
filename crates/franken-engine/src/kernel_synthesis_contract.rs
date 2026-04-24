@@ -540,7 +540,7 @@ pub fn run_kernel_synth_evidence() -> KernelSynthEvidenceManifest {
 // ---------------------------------------------------------------------------
 
 fn compute_structural_hash<T: Serialize>(value: &T) -> ContentHash {
-    let bytes = serde_json::to_vec(value).unwrap();
+    let bytes = serde_json::to_vec(value).expect("serde deserialization should succeed");
     ContentHash::compute(&bytes)
 }
 
@@ -884,9 +884,9 @@ mod tests {
     #[test]
     fn test_kernel_family_serde_roundtrip() {
         let family = KernelFamily::PropertyAccess;
-        let json = serde_json::to_string(&family).unwrap();
+        let json = serde_json::to_string(&family).expect("serde deserialization should succeed");
         assert_eq!(json, "\"property_access\"");
-        let back: KernelFamily = serde_json::from_str(&json).unwrap();
+        let back: KernelFamily = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, family);
     }
 
@@ -912,9 +912,9 @@ mod tests {
     #[test]
     fn test_forbidden_reason_serde_roundtrip() {
         let reason = ForbiddenReason::PolicyRestriction;
-        let json = serde_json::to_string(&reason).unwrap();
+        let json = serde_json::to_string(&reason).expect("serde deserialization should succeed");
         assert_eq!(json, "\"policy_restriction\"");
-        let back: ForbiddenReason = serde_json::from_str(&json).unwrap();
+        let back: ForbiddenReason = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, reason);
     }
 
@@ -927,8 +927,8 @@ mod tests {
             ProofRequirement::BestEffort,
             ProofRequirement::Mandatory,
         ] {
-            let json = serde_json::to_string(&pr).unwrap();
-            let back: ProofRequirement = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&pr).expect("serde deserialization should succeed");
+            let back: ProofRequirement = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(back, pr);
         }
     }
@@ -938,8 +938,8 @@ mod tests {
     #[test]
     fn test_eligibility_status_serde_eligible() {
         let status = EligibilityStatus::Eligible;
-        let json = serde_json::to_string(&status).unwrap();
-        let back: EligibilityStatus = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&status).expect("serde deserialization should succeed");
+        let back: EligibilityStatus = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, status);
     }
 
@@ -948,8 +948,8 @@ mod tests {
         let status = EligibilityStatus::Conditional {
             requirements: vec!["purity >= 80%".into()],
         };
-        let json = serde_json::to_string(&status).unwrap();
-        let back: EligibilityStatus = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&status).expect("serde deserialization should succeed");
+        let back: EligibilityStatus = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, status);
     }
 
@@ -958,8 +958,8 @@ mod tests {
         let status = EligibilityStatus::Deferred {
             reason: "waiting for profiling data".into(),
         };
-        let json = serde_json::to_string(&status).unwrap();
-        let back: EligibilityStatus = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&status).expect("serde deserialization should succeed");
+        let back: EligibilityStatus = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, status);
     }
 
@@ -1417,8 +1417,8 @@ mod tests {
             KernelSynthError::InvalidSchema { reason: "s".into() },
         ];
         for e in errors {
-            let json = serde_json::to_string(&e).unwrap();
-            let back: KernelSynthError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
+            let back: KernelSynthError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(back, e);
         }
     }
@@ -1433,8 +1433,8 @@ mod tests {
             time_budget_millionths: 10 * MILLIONTHS,
             proof_requirement: ProofRequirement::Mandatory,
         };
-        let json = serde_json::to_string(&budget).unwrap();
-        let back: SynthesisBudget = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&budget).expect("serde deserialization should succeed");
+        let back: SynthesisBudget = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, budget);
     }
 
@@ -1443,8 +1443,8 @@ mod tests {
     #[test]
     fn test_kernel_schema_serde_roundtrip() {
         let schema = sample_eligible_schema();
-        let json = serde_json::to_string(&schema).unwrap();
-        let back: KernelSchema = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&schema).expect("serde deserialization should succeed");
+        let back: KernelSchema = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, schema);
     }
 
@@ -1453,8 +1453,8 @@ mod tests {
     #[test]
     fn test_eligibility_decision_serde_roundtrip() {
         let decision = evaluate_eligibility(&sample_eligible_schema());
-        let json = serde_json::to_string(&decision).unwrap();
-        let back: EligibilityDecision = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&decision).expect("serde deserialization should succeed");
+        let back: EligibilityDecision = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, decision);
     }
 
@@ -1464,8 +1464,8 @@ mod tests {
     fn test_certificate_serde_roundtrip() {
         let manifest = run_kernel_synth_evidence();
         let cert = &manifest.certificates[0];
-        let json = serde_json::to_string(cert).unwrap();
-        let back: KernelSynthCertificate = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(cert).expect("serde deserialization should succeed");
+        let back: KernelSynthCertificate = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(&back, cert);
     }
 

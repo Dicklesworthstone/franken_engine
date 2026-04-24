@@ -379,7 +379,7 @@ impl GuardplaneCalibrationEngine {
         // 6. Update dimension history for trend analysis
         let effectiveness = self.integrator.technique_effectiveness();
         for (dim, eff) in &effectiveness {
-            let key = serde_json::to_string(&dim).unwrap();
+            let key = serde_json::to_string(&dim).expect("serde deserialization should succeed");
             self.dimension_history
                 .entry(key)
                 .or_default()
@@ -394,7 +394,7 @@ impl GuardplaneCalibrationEngine {
         let evidence_weights: BTreeMap<String, u64> = cal_state
             .evidence_weights_millionths
             .iter()
-            .map(|(k, v)| (serde_json::to_string(&k).unwrap(), *v))
+            .map(|(k, v)| (serde_json::to_string(&k).expect("serde deserialization should succeed"), *v))
             .collect();
 
         let state_digest = compute_state_digest(cal_state);
@@ -512,7 +512,7 @@ impl GuardplaneCalibrationEngine {
                 self.alerts.push(CalibrationAlert {
                     alert_id: alert_id.clone(),
                     severity: "critical".to_string(),
-                    subsystem: serde_json::to_string(&subsystem).unwrap(),
+                    subsystem: serde_json::to_string(&subsystem).expect("serde deserialization should succeed"),
                     threat_category: "evasion".to_string(),
                     description: format!(
                         "evasion rate {:.1}% exceeds threshold {:.1}% for {subsystem:?}",
@@ -567,7 +567,7 @@ impl GuardplaneCalibrationEngine {
         let mut result = BTreeMap::new();
 
         for (dim, eff) in &effectiveness {
-            let key = serde_json::to_string(&dim).unwrap();
+            let key = serde_json::to_string(&dim).expect("serde deserialization should succeed");
             let trend = if let Some(history) = self.dimension_history.get(&key) {
                 compute_trend(history)
             } else {
@@ -635,19 +635,19 @@ fn classify_outcomes(
         // Severity from score
         let severity = classify_severity(&o.score);
         *severity_counts
-            .entry(serde_json::to_string(&severity).unwrap())
+            .entry(serde_json::to_string(&severity).expect("serde deserialization should succeed"))
             .or_default() += 1;
 
         // Defense subsystem
         let subsystem = classify_defense_subsystem(o);
         *subsystem_counts
-            .entry(serde_json::to_string(&subsystem).unwrap())
+            .entry(serde_json::to_string(&subsystem).expect("serde deserialization should succeed"))
             .or_default() += 1;
 
         // Threat category from campaign
         let threat = classify_threat_category(o);
         *threat_counts
-            .entry(serde_json::to_string(&threat).unwrap())
+            .entry(serde_json::to_string(&threat).expect("serde deserialization should succeed"))
             .or_default() += 1;
     }
 
@@ -770,7 +770,7 @@ fn fnv1a64(data: &[u8]) -> u64 {
 }
 
 fn compute_state_digest(state: &GuardplaneCalibrationState) -> String {
-    let serialized = serde_json::to_vec(state).unwrap();
+    let serialized = serde_json::to_vec(state).expect("serde deserialization should succeed");
     format!("{:016x}", fnv1a64(&serialized))
 }
 
@@ -846,7 +846,7 @@ mod tests {
     ) -> CampaignOutcomeRecord {
         let campaign = make_campaign(dim, total);
         let result = make_result(undetected, total, escaped, 200_000, 5, false);
-        let score = ExploitObjectiveScore::from_result(&result).unwrap();
+        let score = ExploitObjectiveScore::from_result(&result).expect("serde deserialization should succeed");
         CampaignOutcomeRecord {
             campaign,
             result,
@@ -895,7 +895,7 @@ mod tests {
         let ctx = test_ctx();
         let outcomes = vec![make_outcome(AttackDimension::Exfiltration, 2, 10, false)];
 
-        let result = engine.run_calibration_cycle(&outcomes, &ctx).unwrap();
+        let result = engine.run_calibration_cycle(&outcomes, &ctx).expect("serde deserialization should succeed");
         assert_eq!(result.campaigns_ingested, 1);
         assert_eq!(
             result.calibration_epoch,
@@ -915,7 +915,7 @@ mod tests {
             make_outcome(AttackDimension::PolicyEvasion, 5, 5, true),
         ];
 
-        let result = engine.run_calibration_cycle(&outcomes, &ctx).unwrap();
+        let result = engine.run_calibration_cycle(&outcomes, &ctx).expect("serde deserialization should succeed");
         assert_eq!(result.campaigns_ingested, 3);
         assert!(!result.severity_counts.is_empty());
         assert!(!result.subsystem_counts.is_empty());
@@ -928,8 +928,8 @@ mod tests {
         let ctx = test_ctx();
         let outcomes = vec![make_outcome(AttackDimension::Exfiltration, 0, 5, false)];
 
-        let r1 = engine.run_calibration_cycle(&outcomes, &ctx).unwrap();
-        let r2 = engine.run_calibration_cycle(&outcomes, &ctx).unwrap();
+        let r1 = engine.run_calibration_cycle(&outcomes, &ctx).expect("serde deserialization should succeed");
+        let r2 = engine.run_calibration_cycle(&outcomes, &ctx).expect("serde deserialization should succeed");
 
         assert_eq!(r1.cycle_id, "gcal-0001");
         assert_eq!(r2.cycle_id, "gcal-0002");
@@ -943,12 +943,12 @@ mod tests {
     fn severity_classification_thresholds() {
         // Advisory: composite < 200K
         let low_result = make_result(0, 10, false, 50_000, 2, false);
-        let low_score = ExploitObjectiveScore::from_result(&low_result).unwrap();
+        let low_score = ExploitObjectiveScore::from_result(&low_result).expect("serde deserialization should succeed");
         assert_eq!(classify_severity(&low_score), CampaignSeverity::Advisory);
 
         // Blocking: composite >= 800K (all evasions + escape + high evidence + novel)
         let high_result = make_result(10, 10, true, 900_000, 50, true);
-        let high_score = ExploitObjectiveScore::from_result(&high_result).unwrap();
+        let high_score = ExploitObjectiveScore::from_result(&high_result).expect("serde deserialization should succeed");
         assert_eq!(classify_severity(&high_score), CampaignSeverity::Blocking);
     }
 
@@ -1012,7 +1012,7 @@ mod tests {
             make_outcome(AttackDimension::Exfiltration, 3, 10, false), // evasion
         ];
 
-        engine.run_calibration_cycle(&outcomes, &ctx).unwrap();
+        engine.run_calibration_cycle(&outcomes, &ctx).expect("serde deserialization should succeed");
         let eff = engine.defense_effectiveness();
 
         assert_eq!(eff.total_campaigns, 2);
@@ -1036,7 +1036,7 @@ mod tests {
             make_outcome(AttackDimension::Exfiltration, 3, 10, false),
         ];
 
-        engine.run_calibration_cycle(&outcomes, &ctx).unwrap();
+        engine.run_calibration_cycle(&outcomes, &ctx).expect("serde deserialization should succeed");
 
         assert!(!engine.alerts().is_empty());
         assert!(
@@ -1057,7 +1057,7 @@ mod tests {
             make_outcome(AttackDimension::Exfiltration, 0, 10, false), // no evasion
         ];
 
-        engine.run_calibration_cycle(&outcomes, &ctx).unwrap();
+        engine.run_calibration_cycle(&outcomes, &ctx).expect("serde deserialization should succeed");
 
         // No evasion alerts should fire (0% evasion < 90% threshold)
         let evasion_alerts: Vec<_> = engine
@@ -1078,7 +1078,7 @@ mod tests {
             make_outcome(AttackDimension::Exfiltration, 5, 10, true), // escaped
         ];
 
-        engine.run_calibration_cycle(&outcomes, &ctx).unwrap();
+        engine.run_calibration_cycle(&outcomes, &ctx).expect("serde deserialization should succeed");
 
         assert!(
             engine
@@ -1098,7 +1098,7 @@ mod tests {
         let ctx = test_ctx();
         let outcomes = vec![make_outcome(AttackDimension::Exfiltration, 0, 5, false)];
 
-        engine.run_calibration_cycle(&outcomes, &ctx).unwrap();
+        engine.run_calibration_cycle(&outcomes, &ctx).expect("serde deserialization should succeed");
 
         let events = engine.events();
         assert!(events.iter().any(|e| e.event == "campaigns_ingested"));
@@ -1113,7 +1113,7 @@ mod tests {
         let ctx = test_ctx();
         let outcomes = vec![make_outcome(AttackDimension::Exfiltration, 0, 5, false)];
 
-        engine.run_calibration_cycle(&outcomes, &ctx).unwrap();
+        engine.run_calibration_cycle(&outcomes, &ctx).expect("serde deserialization should succeed");
         let drained = engine.drain_events();
         assert!(!drained.is_empty());
         assert!(engine.events().is_empty());
@@ -1181,8 +1181,8 @@ mod tests {
             calibration_epoch: 2,
             state_digest: "abc123".to_string(),
         };
-        let json = serde_json::to_string(&result).unwrap();
-        let parsed: CalibrationCycleResult = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let parsed: CalibrationCycleResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, parsed);
     }
 
@@ -1198,8 +1198,8 @@ mod tests {
             evasion_rate_millionths: 300_000,
             cycle_id: "gcal-0001".to_string(),
         };
-        let json = serde_json::to_string(&alert).unwrap();
-        let parsed: CalibrationAlert = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&alert).expect("serde deserialization should succeed");
+        let parsed: CalibrationAlert = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(alert, parsed);
     }
 
@@ -1214,8 +1214,8 @@ mod tests {
             per_dimension: BTreeMap::new(),
             weakest_dimension: Some("PolicyEvasion".to_string()),
         };
-        let json = serde_json::to_string(&summary).unwrap();
-        let parsed: DefenseEffectivenessSummary = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
+        let parsed: DefenseEffectivenessSummary = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(summary, parsed);
     }
 
@@ -1230,8 +1230,8 @@ mod tests {
             outcome: "ok".to_string(),
             error_code: None,
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let parsed: CalibrationEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let parsed: CalibrationEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, parsed);
     }
 
@@ -1298,8 +1298,8 @@ mod tests {
             },
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: CalibrationError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: CalibrationError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, v);
         }
     }
@@ -1307,8 +1307,8 @@ mod tests {
     #[test]
     fn calibration_context_serde_roundtrip() {
         let ctx = test_ctx();
-        let json = serde_json::to_string(&ctx).unwrap();
-        let back: CalibrationContext = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&ctx).expect("serde deserialization should succeed");
+        let back: CalibrationContext = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, ctx);
     }
 
@@ -1319,8 +1319,8 @@ mod tests {
             EffectivenessTrend::Stable,
             EffectivenessTrend::Degrading,
         ] {
-            let json = serde_json::to_string(&v).unwrap();
-            let back: EffectivenessTrend = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let back: EffectivenessTrend = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(back, v);
         }
     }
@@ -1334,8 +1334,8 @@ mod tests {
             trend: EffectivenessTrend::Improving,
             sample_count: 42,
         };
-        let json = serde_json::to_string(&de).unwrap();
-        let back: DimensionEffectiveness = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&de).expect("serde deserialization should succeed");
+        let back: DimensionEffectiveness = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, de);
     }
 
@@ -1399,8 +1399,8 @@ mod tests {
             make_outcome(AttackDimension::PolicyEvasion, 3, 6, true),
         ];
 
-        engine.run_calibration_cycle(&outcomes1, &ctx).unwrap();
-        engine.run_calibration_cycle(&outcomes2, &ctx).unwrap();
+        engine.run_calibration_cycle(&outcomes1, &ctx).expect("serde deserialization should succeed");
+        engine.run_calibration_cycle(&outcomes2, &ctx).expect("serde deserialization should succeed");
 
         assert_eq!(engine.cycle_count(), 2);
         assert_eq!(engine.total_campaigns_ingested(), 3);
@@ -1460,10 +1460,10 @@ mod tests {
         let ctx = test_ctx();
 
         let outcomes = vec![make_outcome(AttackDimension::Exfiltration, 5, 10, false)];
-        engine.run_calibration_cycle(&outcomes, &ctx).unwrap();
+        engine.run_calibration_cycle(&outcomes, &ctx).expect("serde deserialization should succeed");
         let alerts_after_first = engine.alerts().len();
 
-        engine.run_calibration_cycle(&outcomes, &ctx).unwrap();
+        engine.run_calibration_cycle(&outcomes, &ctx).expect("serde deserialization should succeed");
         assert!(engine.alerts().len() >= alerts_after_first);
     }
 
@@ -1532,8 +1532,8 @@ mod tests {
         let ctx = test_ctx();
         let outcomes = vec![make_outcome(AttackDimension::Exfiltration, 2, 10, false)];
 
-        let r1 = engine.run_calibration_cycle(&outcomes, &ctx).unwrap();
-        let r2 = engine.run_calibration_cycle(&outcomes, &ctx).unwrap();
+        let r1 = engine.run_calibration_cycle(&outcomes, &ctx).expect("serde deserialization should succeed");
+        let r2 = engine.run_calibration_cycle(&outcomes, &ctx).expect("serde deserialization should succeed");
 
         // Digest is deterministic — same input produces same calibration state
         assert!(!r1.state_digest.is_empty());
@@ -1550,7 +1550,7 @@ mod tests {
             make_outcome(AttackDimension::PrivilegeEscalation, 5, 10, false),
         ];
 
-        let result = engine.run_calibration_cycle(&outcomes, &ctx).unwrap();
+        let result = engine.run_calibration_cycle(&outcomes, &ctx).expect("serde deserialization should succeed");
         let total_severity: usize = result.severity_counts.values().sum();
         assert_eq!(
             total_severity, 2,
@@ -1569,7 +1569,7 @@ mod tests {
             make_outcome(AttackDimension::PolicyEvasion, 0, 10, false),
         ];
 
-        engine.run_calibration_cycle(&outcomes, &ctx).unwrap();
+        engine.run_calibration_cycle(&outcomes, &ctx).expect("serde deserialization should succeed");
         let eff = engine.defense_effectiveness();
         assert_eq!(eff.total_campaigns, 3);
         assert_eq!(eff.total_evasions, 0);
@@ -1606,7 +1606,7 @@ mod tests {
             make_outcome(AttackDimension::PolicyEvasion, 10, 10, false),
             make_outcome(AttackDimension::PrivilegeEscalation, 5, 5, false),
         ];
-        engine.run_calibration_cycle(&outcomes, &ctx).unwrap();
+        engine.run_calibration_cycle(&outcomes, &ctx).expect("serde deserialization should succeed");
         let eff = engine.defense_effectiveness();
         // Evasions are counted per-campaign (not per-step)
         assert_eq!(eff.total_evasions, 2);
@@ -1619,7 +1619,7 @@ mod tests {
         let mut engine = GuardplaneCalibrationEngine::new();
         engine.set_evasion_alert_threshold(0);
         let outcomes = vec![make_outcome(AttackDimension::PolicyEvasion, 1, 10, false)];
-        engine.run_calibration_cycle(&outcomes, &ctx).unwrap();
+        engine.run_calibration_cycle(&outcomes, &ctx).expect("serde deserialization should succeed");
         // With threshold 0, any evasion should trigger alert
         assert!(!engine.alerts().is_empty());
     }
@@ -1630,7 +1630,7 @@ mod tests {
         let mut engine = GuardplaneCalibrationEngine::new();
         engine.set_evasion_alert_threshold(1_000_001);
         let outcomes = vec![make_outcome(AttackDimension::PolicyEvasion, 10, 10, false)];
-        engine.run_calibration_cycle(&outcomes, &ctx).unwrap();
+        engine.run_calibration_cycle(&outcomes, &ctx).expect("serde deserialization should succeed");
         // Even 100% evasion rate shouldn't alert
         assert!(engine.alerts().is_empty());
     }
@@ -1641,9 +1641,9 @@ mod tests {
         let mut engine = GuardplaneCalibrationEngine::new();
         assert_eq!(engine.cycle_count(), 0);
         let outcomes = vec![make_outcome(AttackDimension::PolicyEvasion, 0, 5, false)];
-        engine.run_calibration_cycle(&outcomes, &ctx).unwrap();
+        engine.run_calibration_cycle(&outcomes, &ctx).expect("serde deserialization should succeed");
         assert_eq!(engine.cycle_count(), 1);
-        engine.run_calibration_cycle(&outcomes, &ctx).unwrap();
+        engine.run_calibration_cycle(&outcomes, &ctx).expect("serde deserialization should succeed");
         assert_eq!(engine.cycle_count(), 2);
     }
 
@@ -1662,8 +1662,8 @@ mod tests {
             trend: EffectivenessTrend::Stable,
             sample_count: 10,
         };
-        let json = serde_json::to_string(&de).unwrap();
-        let back: DimensionEffectiveness = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&de).expect("serde deserialization should succeed");
+        let back: DimensionEffectiveness = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(de.detection_rate_millionths, back.detection_rate_millionths);
         assert_eq!(de.evasion_rate_millionths, back.evasion_rate_millionths);
     }
@@ -1679,8 +1679,8 @@ mod tests {
             outcome: "ok".to_string(),
             error_code: None,
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let back: CalibrationEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let back: CalibrationEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert!(back.error_code.is_none());
     }
 
@@ -1699,8 +1699,8 @@ mod tests {
             calibration_epoch: 0,
             state_digest: "test".to_string(),
         };
-        let json = serde_json::to_string(&result).unwrap();
-        let back: CalibrationCycleResult = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let back: CalibrationCycleResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, back);
     }
 
@@ -1712,7 +1712,7 @@ mod tests {
             make_outcome(AttackDimension::PolicyEvasion, 5, 10, false),
             make_outcome(AttackDimension::PrivilegeEscalation, 0, 10, false),
         ];
-        engine.run_calibration_cycle(&outcomes, &ctx).unwrap();
+        engine.run_calibration_cycle(&outcomes, &ctx).expect("serde deserialization should succeed");
         let eff = engine.defense_effectiveness();
         // Weakest dimension should be the one with higher evasion rate
         assert!(eff.weakest_dimension.is_some());
@@ -1785,7 +1785,7 @@ mod tests {
         ];
         let set: BTreeSet<String> = variants
             .iter()
-            .map(|v| serde_json::to_string(v).unwrap())
+            .map(|v| serde_json::to_string(v).expect("serde deserialization should succeed"))
             .collect();
         assert_eq!(set.len(), variants.len());
     }
@@ -1807,7 +1807,7 @@ mod tests {
         ];
         let set: BTreeSet<String> = variants
             .iter()
-            .map(|v| serde_json::to_string(v).unwrap())
+            .map(|v| serde_json::to_string(v).expect("serde deserialization should succeed"))
             .collect();
         assert_eq!(set.len(), variants.len());
     }
@@ -1960,7 +1960,7 @@ mod tests {
             calibration_epoch: 0,
             state_digest: "d".to_string(),
         };
-        let json = serde_json::to_string(&result).unwrap();
+        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
         assert!(json.contains("\"cycle_id\""));
         assert!(json.contains("\"campaigns_ingested\""));
         assert!(json.contains("\"severity_counts\""));
@@ -1986,7 +1986,7 @@ mod tests {
             evasion_rate_millionths: 0,
             cycle_id: "c".to_string(),
         };
-        let json = serde_json::to_string(&alert).unwrap();
+        let json = serde_json::to_string(&alert).expect("serde deserialization should succeed");
         assert!(json.contains("\"alert_id\""));
         assert!(json.contains("\"severity\""));
         assert!(json.contains("\"subsystem\""));
@@ -2008,7 +2008,7 @@ mod tests {
             outcome: "o".to_string(),
             error_code: Some("ec".to_string()),
         };
-        let json = serde_json::to_string(&event).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
         assert!(json.contains("\"trace_id\""));
         assert!(json.contains("\"decision_id\""));
         assert!(json.contains("\"policy_id\""));
@@ -2021,7 +2021,7 @@ mod tests {
     #[test]
     fn calibration_context_json_field_names() {
         let ctx = test_ctx();
-        let json = serde_json::to_string(&ctx).unwrap();
+        let json = serde_json::to_string(&ctx).expect("serde deserialization should succeed");
         assert!(json.contains("\"trace_id\""));
         assert!(json.contains("\"decision_id\""));
         assert!(json.contains("\"policy_id\""));
@@ -2040,7 +2040,7 @@ mod tests {
             per_dimension: BTreeMap::new(),
             weakest_dimension: None,
         };
-        let json = serde_json::to_string(&summary).unwrap();
+        let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
         assert!(json.contains("\"total_campaigns\""));
         assert!(json.contains("\"total_evasions\""));
         assert!(json.contains("\"total_containment_escapes\""));
@@ -2059,7 +2059,7 @@ mod tests {
             trend: EffectivenessTrend::Stable,
             sample_count: 0,
         };
-        let json = serde_json::to_string(&de).unwrap();
+        let json = serde_json::to_string(&de).expect("serde deserialization should succeed");
         assert!(json.contains("\"dimension\""));
         assert!(json.contains("\"detection_rate_millionths\""));
         assert!(json.contains("\"evasion_rate_millionths\""));
@@ -2153,8 +2153,8 @@ mod tests {
             calibration_epoch: u64::MAX,
             state_digest: String::new(),
         };
-        let json = serde_json::to_string(&result).unwrap();
-        let back: CalibrationCycleResult = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let back: CalibrationCycleResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.calibration_epoch, u64::MAX);
         assert_eq!(back.detection_threshold_millionths, u64::MAX);
     }
@@ -2171,8 +2171,8 @@ mod tests {
             evasion_rate_millionths: 0,
             cycle_id: String::new(),
         };
-        let json = serde_json::to_string(&alert).unwrap();
-        let back: CalibrationAlert = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&alert).expect("serde deserialization should succeed");
+        let back: CalibrationAlert = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(alert, back);
     }
 
@@ -2187,8 +2187,8 @@ mod tests {
             outcome: "error".to_string(),
             error_code: Some("FE-GCAL-9999".to_string()),
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let back: CalibrationEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let back: CalibrationEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.error_code, Some("FE-GCAL-9999".to_string()));
     }
 
@@ -2201,8 +2201,8 @@ mod tests {
             signing_key: [0u8; 32],
             timestamp_ns: 0,
         };
-        let json = serde_json::to_string(&ctx).unwrap();
-        let back: CalibrationContext = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&ctx).expect("serde deserialization should succeed");
+        let back: CalibrationContext = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.timestamp_ns, 0);
     }
 
@@ -2215,8 +2215,8 @@ mod tests {
             signing_key: [255u8; 32],
             timestamp_ns: u64::MAX,
         };
-        let json = serde_json::to_string(&ctx).unwrap();
-        let back: CalibrationContext = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&ctx).expect("serde deserialization should succeed");
+        let back: CalibrationContext = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.timestamp_ns, u64::MAX);
         assert_eq!(back.signing_key, [255u8; 32]);
     }
@@ -2232,8 +2232,8 @@ mod tests {
             per_dimension: BTreeMap::new(),
             weakest_dimension: None,
         };
-        let json = serde_json::to_string(&summary).unwrap();
-        let back: DefenseEffectivenessSummary = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
+        let back: DefenseEffectivenessSummary = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert!(back.weakest_dimension.is_none());
         assert!(back.per_dimension.is_empty());
     }
@@ -2268,8 +2268,8 @@ mod tests {
             trend: EffectivenessTrend::Stable,
             sample_count: 0,
         };
-        let json = serde_json::to_string(&de).unwrap();
-        let back: DimensionEffectiveness = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&de).expect("serde deserialization should succeed");
+        let back: DimensionEffectiveness = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(de, back);
     }
 
@@ -2282,8 +2282,8 @@ mod tests {
             trend: EffectivenessTrend::Degrading,
             sample_count: usize::MAX,
         };
-        let json = serde_json::to_string(&de).unwrap();
-        let back: DimensionEffectiveness = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&de).expect("serde deserialization should succeed");
+        let back: DimensionEffectiveness = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.detection_rate_millionths, u64::MAX);
         assert_eq!(back.evasion_rate_millionths, u64::MAX);
     }
@@ -2324,8 +2324,8 @@ mod tests {
             per_dimension: per_dim,
             weakest_dimension: Some("PolicyEvasion".to_string()),
         };
-        let json = serde_json::to_string(&summary).unwrap();
-        let back: DefenseEffectivenessSummary = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
+        let back: DefenseEffectivenessSummary = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(summary, back);
         assert_eq!(back.per_dimension.len(), 2);
     }
@@ -2356,8 +2356,8 @@ mod tests {
             calibration_epoch: 42,
             state_digest: "deadbeef12345678".to_string(),
         };
-        let json = serde_json::to_string(&result).unwrap();
-        let back: CalibrationCycleResult = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let back: CalibrationCycleResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, back);
         assert_eq!(back.severity_counts.len(), 2);
         assert_eq!(back.evidence_weights_millionths.len(), 2);
@@ -2480,7 +2480,7 @@ mod tests {
     fn severity_classification_advisory_boundary() {
         // Score just below 200K => Advisory
         let r = make_result(0, 10, false, 100_000, 1, false);
-        let s = ExploitObjectiveScore::from_result(&r).unwrap();
+        let s = ExploitObjectiveScore::from_result(&r).expect("serde deserialization should succeed");
         assert_eq!(classify_severity(&s), CampaignSeverity::Advisory);
     }
 
@@ -2488,7 +2488,7 @@ mod tests {
     fn severity_classification_moderate_boundary() {
         // Build a result with high evasion and damage to push composite >= 200K
         let r = make_result(7, 10, false, 600_000, 15, false);
-        let s = ExploitObjectiveScore::from_result(&r).unwrap();
+        let s = ExploitObjectiveScore::from_result(&r).expect("serde deserialization should succeed");
         let sev = classify_severity(&s);
         assert!(
             sev == CampaignSeverity::Moderate
@@ -2519,7 +2519,7 @@ mod tests {
         // Not escaped, no undetected steps, but high evidence atoms
         let campaign = make_campaign(AttackDimension::Exfiltration, 5);
         let result = make_result(0, 5, false, 100_000, 15, false);
-        let score = ExploitObjectiveScore::from_result(&result).unwrap();
+        let score = ExploitObjectiveScore::from_result(&result).expect("serde deserialization should succeed");
         let outcome = CampaignOutcomeRecord {
             campaign,
             result,
@@ -2539,7 +2539,7 @@ mod tests {
         // Not escaped, no undetected steps, low evidence atoms
         let campaign = make_campaign(AttackDimension::Exfiltration, 5);
         let result = make_result(0, 5, false, 100_000, 3, false);
-        let score = ExploitObjectiveScore::from_result(&result).unwrap();
+        let score = ExploitObjectiveScore::from_result(&result).expect("serde deserialization should succeed");
         let outcome = CampaignOutcomeRecord {
             campaign,
             result,
@@ -2632,7 +2632,7 @@ mod tests {
         let mut engine = GuardplaneCalibrationEngine::new();
         let ctx = test_ctx();
         let outcomes = vec![make_outcome(AttackDimension::Exfiltration, 0, 5, false)];
-        engine.run_calibration_cycle(&outcomes, &ctx).unwrap();
+        engine.run_calibration_cycle(&outcomes, &ctx).expect("serde deserialization should succeed");
 
         let first_drain = engine.drain_events();
         assert!(!first_drain.is_empty());
@@ -2647,7 +2647,7 @@ mod tests {
         // Create a campaign with high score (Critical/Blocking)
         let campaign = make_campaign(AttackDimension::Exfiltration, 10);
         let result = make_result(10, 10, true, 900_000, 50, true);
-        let score = ExploitObjectiveScore::from_result(&result).unwrap();
+        let score = ExploitObjectiveScore::from_result(&result).expect("serde deserialization should succeed");
         let outcome = CampaignOutcomeRecord {
             campaign,
             result,
@@ -2657,7 +2657,7 @@ mod tests {
             timestamp_ns: 1_000_000_000,
         };
 
-        let r = engine.run_calibration_cycle(&[outcome], &ctx).unwrap();
+        let r = engine.run_calibration_cycle(&[outcome], &ctx).expect("serde deserialization should succeed");
         assert!(r.regression_fixtures_added > 0);
     }
 
@@ -2667,7 +2667,7 @@ mod tests {
         engine.set_evasion_alert_threshold(1_000_001);
         let ctx = test_ctx();
         let outcomes = vec![make_outcome(AttackDimension::Exfiltration, 5, 10, false)];
-        engine.run_calibration_cycle(&outcomes, &ctx).unwrap();
+        engine.run_calibration_cycle(&outcomes, &ctx).expect("serde deserialization should succeed");
         // Even 100% per-subsystem evasion rate < 100.0001% threshold => no alert
         let evasion_alerts: Vec<_> = engine
             .alerts()
@@ -2683,7 +2683,7 @@ mod tests {
         engine.set_containment_escape_alert_threshold(999_999);
         let ctx = test_ctx();
         let outcomes = vec![make_outcome(AttackDimension::Exfiltration, 5, 10, true)];
-        engine.run_calibration_cycle(&outcomes, &ctx).unwrap();
+        engine.run_calibration_cycle(&outcomes, &ctx).expect("serde deserialization should succeed");
         // 100% escape rate > 99.9999% => alert fires
         let escape_alerts: Vec<_> = engine
             .alerts()

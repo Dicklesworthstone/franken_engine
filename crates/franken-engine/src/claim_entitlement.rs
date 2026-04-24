@@ -713,7 +713,7 @@ impl ClaimEntitlementContract {
                 let atom_morphisms = target_morphisms
                     .get(atom.atom_id.as_str())
                     .cloned()
-                    .unwrap();
+                    .expect("serde deserialization should succeed");
 
                 let satisfying_morphisms = atom_morphisms
                     .iter()
@@ -1339,7 +1339,7 @@ mod tests {
         let shipped = verdicts
             .iter()
             .find(|v| v.atom_id == "atom-shipped")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(shipped.state, ClaimVerdictState::Entitled);
         assert!(
             shipped
@@ -1370,7 +1370,7 @@ mod tests {
         let shipped = verdicts
             .iter()
             .find(|v| v.atom_id == "atom-shipped")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(shipped.state, ClaimVerdictState::NotYetProven);
     }
 
@@ -1400,7 +1400,7 @@ mod tests {
         let shipped = verdicts
             .iter()
             .find(|v| v.atom_id == "atom-shipped")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(shipped.state, ClaimVerdictState::BlockedByMissingEvidence);
     }
 
@@ -1430,7 +1430,7 @@ mod tests {
         let shipped = verdicts
             .iter()
             .find(|v| v.atom_id == "atom-shipped")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(
             shipped.state,
             ClaimVerdictState::CurrentlyFalseUnderActiveCounterexample
@@ -1519,7 +1519,7 @@ mod tests {
         let cutsets = &outputs.missing_evidence_cutsets.evaluated_scenarios[0].cutsets;
         let shipped_cutset = cutsets.iter().find(|c| c.atom_id == "atom-shipped");
         assert!(shipped_cutset.is_some());
-        let cs = shipped_cutset.unwrap();
+        let cs = shipped_cutset.expect("serde deserialization should succeed");
         assert!(
             cs.missing_constraint_ids
                 .contains(&"constraint-top".to_string())
@@ -1696,9 +1696,9 @@ mod tests {
         let contract = minimal_contract();
         let scenarios = minimal_scenario_set();
         let out1 = serde_json::to_string(&contract.evaluate_scenarios(&scenarios).expect("run 1"))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let out2 = serde_json::to_string(&contract.evaluate_scenarios(&scenarios).expect("run 2"))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(out1, out2);
     }
 
@@ -1729,28 +1729,28 @@ mod tests {
     #[test]
     fn claim_domain_serde_exact_snake_case_strings() {
         assert_eq!(
-            serde_json::to_string(&ClaimDomain::Compatibility).unwrap(),
+            serde_json::to_string(&ClaimDomain::Compatibility).expect("serde deserialization should succeed"),
             "\"compatibility\""
         );
         assert_eq!(
-            serde_json::to_string(&ClaimDomain::ShippedSurface).unwrap(),
+            serde_json::to_string(&ClaimDomain::ShippedSurface).expect("serde deserialization should succeed"),
             "\"shipped_surface\""
         );
         assert_eq!(
-            serde_json::to_string(&ClaimDomain::React).unwrap(),
+            serde_json::to_string(&ClaimDomain::React).expect("serde deserialization should succeed"),
             "\"react\""
         );
         assert_eq!(
-            serde_json::to_string(&ClaimDomain::Supremacy).unwrap(),
+            serde_json::to_string(&ClaimDomain::Supremacy).expect("serde deserialization should succeed"),
             "\"supremacy\""
         );
         assert_eq!(
-            serde_json::to_string(&ClaimDomain::Rollout).unwrap(),
+            serde_json::to_string(&ClaimDomain::Rollout).expect("serde deserialization should succeed"),
             "\"rollout\""
         );
-        assert_eq!(serde_json::to_string(&ClaimDomain::Ga).unwrap(), "\"ga\"");
+        assert_eq!(serde_json::to_string(&ClaimDomain::Ga).expect("serde deserialization should succeed"), "\"ga\"");
         assert_eq!(
-            serde_json::to_string(&ClaimDomain::SupportSurface).unwrap(),
+            serde_json::to_string(&ClaimDomain::SupportSurface).expect("serde deserialization should succeed"),
             "\"support_surface\""
         );
     }
@@ -1758,19 +1758,19 @@ mod tests {
     #[test]
     fn claim_tier_serde_exact_snake_case_strings() {
         assert_eq!(
-            serde_json::to_string(&ClaimTier::ShippedFact).unwrap(),
+            serde_json::to_string(&ClaimTier::ShippedFact).expect("serde deserialization should succeed"),
             "\"shipped_fact\""
         );
         assert_eq!(
-            serde_json::to_string(&ClaimTier::ScopedObserved).unwrap(),
+            serde_json::to_string(&ClaimTier::ScopedObserved).expect("serde deserialization should succeed"),
             "\"scoped_observed\""
         );
         assert_eq!(
-            serde_json::to_string(&ClaimTier::FrontierAmbition).unwrap(),
+            serde_json::to_string(&ClaimTier::FrontierAmbition).expect("serde deserialization should succeed"),
             "\"frontier_ambition\""
         );
         assert_eq!(
-            serde_json::to_string(&ClaimTier::UnsupportedSurface).unwrap(),
+            serde_json::to_string(&ClaimTier::UnsupportedSurface).expect("serde deserialization should succeed"),
             "\"unsupported_surface\""
         );
     }
@@ -1778,15 +1778,15 @@ mod tests {
     #[test]
     fn morphism_effect_serde_exact_snake_case_strings() {
         assert_eq!(
-            serde_json::to_string(&MorphismEffect::Supports).unwrap(),
+            serde_json::to_string(&MorphismEffect::Supports).expect("serde deserialization should succeed"),
             "\"supports\""
         );
         assert_eq!(
-            serde_json::to_string(&MorphismEffect::Constrains).unwrap(),
+            serde_json::to_string(&MorphismEffect::Constrains).expect("serde deserialization should succeed"),
             "\"constrains\""
         );
         assert_eq!(
-            serde_json::to_string(&MorphismEffect::Disqualifies).unwrap(),
+            serde_json::to_string(&MorphismEffect::Disqualifies).expect("serde deserialization should succeed"),
             "\"disqualifies\""
         );
     }
@@ -1794,19 +1794,19 @@ mod tests {
     #[test]
     fn disqualifier_verdict_serde_exact_snake_case_strings() {
         assert_eq!(
-            serde_json::to_string(&DisqualifierVerdict::Forbid).unwrap(),
+            serde_json::to_string(&DisqualifierVerdict::Forbid).expect("serde deserialization should succeed"),
             "\"forbid\""
         );
         assert_eq!(
-            serde_json::to_string(&DisqualifierVerdict::DowngradeToScoped).unwrap(),
+            serde_json::to_string(&DisqualifierVerdict::DowngradeToScoped).expect("serde deserialization should succeed"),
             "\"downgrade_to_scoped\""
         );
         assert_eq!(
-            serde_json::to_string(&DisqualifierVerdict::DowngradeToTarget).unwrap(),
+            serde_json::to_string(&DisqualifierVerdict::DowngradeToTarget).expect("serde deserialization should succeed"),
             "\"downgrade_to_target\""
         );
         assert_eq!(
-            serde_json::to_string(&DisqualifierVerdict::RequireOperatorGuidance).unwrap(),
+            serde_json::to_string(&DisqualifierVerdict::RequireOperatorGuidance).expect("serde deserialization should succeed"),
             "\"require_operator_guidance\""
         );
     }
@@ -1814,11 +1814,11 @@ mod tests {
     #[test]
     fn evidence_state_serde_exact_snake_case_strings() {
         assert_eq!(
-            serde_json::to_string(&EvidenceState::Fresh).unwrap(),
+            serde_json::to_string(&EvidenceState::Fresh).expect("serde deserialization should succeed"),
             "\"fresh\""
         );
         assert_eq!(
-            serde_json::to_string(&EvidenceState::Stale).unwrap(),
+            serde_json::to_string(&EvidenceState::Stale).expect("serde deserialization should succeed"),
             "\"stale\""
         );
     }
@@ -1826,20 +1826,20 @@ mod tests {
     #[test]
     fn claim_verdict_state_serde_exact_snake_case_strings() {
         assert_eq!(
-            serde_json::to_string(&ClaimVerdictState::Entitled).unwrap(),
+            serde_json::to_string(&ClaimVerdictState::Entitled).expect("serde deserialization should succeed"),
             "\"entitled\""
         );
         assert_eq!(
-            serde_json::to_string(&ClaimVerdictState::NotYetProven).unwrap(),
+            serde_json::to_string(&ClaimVerdictState::NotYetProven).expect("serde deserialization should succeed"),
             "\"not_yet_proven\""
         );
         assert_eq!(
-            serde_json::to_string(&ClaimVerdictState::BlockedByMissingEvidence).unwrap(),
+            serde_json::to_string(&ClaimVerdictState::BlockedByMissingEvidence).expect("serde deserialization should succeed"),
             "\"blocked_by_missing_evidence\""
         );
         assert_eq!(
             serde_json::to_string(&ClaimVerdictState::CurrentlyFalseUnderActiveCounterexample)
-                .unwrap(),
+                .expect("serde deserialization should succeed"),
             "\"currently_false_under_active_counterexample\""
         );
     }
@@ -2270,7 +2270,7 @@ mod tests {
         let shipped = verdicts
             .iter()
             .find(|v| v.atom_id == "atom-shipped")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         // Should NOT be entitled because Disqualifies morphisms are filtered out
         assert_ne!(shipped.state, ClaimVerdictState::Entitled);
     }
@@ -2318,7 +2318,7 @@ mod tests {
         let shipped = verdicts
             .iter()
             .find(|v| v.atom_id == "atom-shipped")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(shipped.state, ClaimVerdictState::BlockedByMissingEvidence);
         // The cutset should mention the blocking rule
         let cutsets = &outputs.missing_evidence_cutsets.evaluated_scenarios[0].cutsets;
@@ -2326,7 +2326,7 @@ mod tests {
         assert!(shipped_cutset.is_some());
         assert!(
             shipped_cutset
-                .unwrap()
+                .expect("serde deserialization should succeed")
                 .blocking_rule_ids
                 .contains(&"rule-downgrade".to_string())
         );
@@ -2375,7 +2375,7 @@ mod tests {
         let shipped_cutset = cutsets
             .iter()
             .find(|c| c.atom_id == "atom-shipped")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         // cost = 1 (missing evidence) + 1 (missing constraint-top) + 1 (blocking rule) = 3
         assert_eq!(shipped_cutset.cost, 3);
         assert_eq!(shipped_cutset.missing_evidence_kinds.len(), 1);
@@ -2521,8 +2521,8 @@ mod tests {
         let contract = minimal_contract();
         let cloned = contract.clone();
         assert_eq!(contract, cloned);
-        let json1 = serde_json::to_string(&contract).unwrap();
-        let json2 = serde_json::to_string(&cloned).unwrap();
+        let json1 = serde_json::to_string(&contract).expect("serde deserialization should succeed");
+        let json2 = serde_json::to_string(&cloned).expect("serde deserialization should succeed");
         assert_eq!(json1, json2);
     }
 
@@ -2549,7 +2549,7 @@ mod tests {
             .evaluate_scenarios(&scenarios)
             .expect("should succeed");
         let certs = &outputs.impossibility_certificates.evaluated_scenarios[0].certificates;
-        let cert = certs.iter().find(|c| c.atom_id == "atom-shipped").unwrap();
+        let cert = certs.iter().find(|c| c.atom_id == "atom-shipped").expect("serde deserialization should succeed");
         assert_eq!(cert.certificate_id, "scen-123::atom-shipped::rule-forbid");
     }
 
@@ -2575,7 +2575,7 @@ mod tests {
         let shipped_cutset = cutsets
             .iter()
             .find(|c| c.atom_id == "atom-shipped")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(
             shipped_cutset.cutset_id,
             "scen-456::atom-shipped::morph-compat"
@@ -2588,7 +2588,7 @@ mod tests {
         let scenarios = minimal_scenario_set();
         let baseline =
             serde_json::to_string(&contract.evaluate_scenarios(&scenarios).expect("baseline"))
-                .unwrap();
+                .expect("serde deserialization should succeed");
         for i in 0..10 {
             let run = serde_json::to_string(
                 &contract.evaluate_scenarios(&scenarios).unwrap_or_else(|_| {
@@ -2597,7 +2597,7 @@ mod tests {
                     panic!("run {i}")
                 }),
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
             assert_eq!(baseline, run, "determinism failed on run {i}");
         }
     }

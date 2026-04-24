@@ -855,11 +855,11 @@ pub fn write_cache_oblivious_evidence_bundle(
 
     std::fs::write(
         &inventory_path,
-        serde_json::to_string_pretty(&inventory).unwrap(),
+        serde_json::to_string_pretty(&inventory).expect("serde deserialization should succeed"),
     )?;
     std::fs::write(
         &manifest_path,
-        serde_json::to_string_pretty(&manifest).unwrap(),
+        serde_json::to_string_pretty(&manifest).expect("serde deserialization should succeed"),
     )?;
 
     let mut events_content = String::new();
@@ -871,7 +871,7 @@ pub fn write_cache_oblivious_evidence_bundle(
             specimen_id: evidence.specimen_id.clone(),
             verdict: evidence.verdict,
         };
-        events_content.push_str(&serde_json::to_string(&event).unwrap());
+        events_content.push_str(&serde_json::to_string(&event).expect("serde deserialization should succeed"));
         events_content.push('\n');
     }
     std::fs::write(&events_path, events_content)?;
@@ -929,7 +929,7 @@ mod tests {
         let mut orch = SubstrateOrchestrator::with_defaults(test_epoch());
         let sel = orch
             .select_substrate(MetadataStructureKind::ShapeTable)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(sel.seq, 1);
         assert_eq!(sel.structure_kind, MetadataStructureKind::ShapeTable);
     }
@@ -939,7 +939,7 @@ mod tests {
         let mut orch = SubstrateOrchestrator::with_defaults(test_epoch());
         let sel = orch
             .select_substrate(MetadataStructureKind::StringTable)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(sel.structure_kind, MetadataStructureKind::StringTable);
     }
 
@@ -948,7 +948,7 @@ mod tests {
         let mut orch = SubstrateOrchestrator::with_defaults(test_epoch());
         let sel = orch
             .select_substrate(MetadataStructureKind::InlineCacheTable)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(sel.seq, 1);
     }
 
@@ -957,7 +957,7 @@ mod tests {
         let mut orch = SubstrateOrchestrator::with_defaults(test_epoch());
         let sel = orch
             .select_substrate(MetadataStructureKind::GcMetadata)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(sel.structure_kind, MetadataStructureKind::GcMetadata);
     }
 
@@ -991,7 +991,7 @@ mod tests {
         let mut orch = SubstrateOrchestrator::new(test_epoch(), config);
         let sel = orch
             .select_substrate(MetadataStructureKind::ShapeTable)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(sel.active_substrate, OptSubstrateKind::GenericFallback);
     }
 
@@ -1002,7 +1002,7 @@ mod tests {
         let mut orch = SubstrateOrchestrator::with_defaults(test_epoch());
         let sel = orch
             .select_substrate(MetadataStructureKind::ShapeTable)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         // Governance should pass for standard substrates.
         assert!(!sel.governance_overridden);
     }
@@ -1016,7 +1016,7 @@ mod tests {
         let mut orch = SubstrateOrchestrator::new(test_epoch(), config);
         let sel = orch
             .select_substrate(MetadataStructureKind::ShapeTable)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(!sel.governance_overridden);
     }
 
@@ -1035,10 +1035,10 @@ mod tests {
         let mut orch = SubstrateOrchestrator::with_defaults(test_epoch());
         let _ = orch
             .select_substrate(MetadataStructureKind::ShapeTable)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let _ = orch
             .select_substrate(MetadataStructureKind::StringTable)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let summary = orch.summary();
         assert_eq!(summary.total_decisions, 2);
         assert_eq!(summary.kinds_covered, 2);
@@ -1049,7 +1049,7 @@ mod tests {
         let mut orch = SubstrateOrchestrator::with_defaults(test_epoch());
         let _ = orch
             .select_substrate(MetadataStructureKind::ShapeTable)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let s1 = orch.summary();
         let s2 = orch.summary();
         assert_eq!(s1.content_hash, s2.content_hash);
@@ -1062,7 +1062,7 @@ mod tests {
         let mut orch = SubstrateOrchestrator::with_defaults(test_epoch());
         let _ = orch
             .select_substrate(MetadataStructureKind::ShapeTable)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(orch.history().len(), 1);
     }
 
@@ -1075,7 +1075,7 @@ mod tests {
         let mut orch = SubstrateOrchestrator::new(test_epoch(), config);
         let _ = orch
             .select_substrate(MetadataStructureKind::ShapeTable)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(orch.history().is_empty());
     }
 
@@ -1097,7 +1097,7 @@ mod tests {
         let mut orch = SubstrateOrchestrator::with_defaults(test_epoch());
         let _ = orch
             .select_substrate(MetadataStructureKind::ShapeTable)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(
             orch.get_selection(MetadataStructureKind::ShapeTable)
                 .is_some()
@@ -1138,7 +1138,7 @@ mod tests {
         orch.reset(SecurityEpoch::from_raw(2));
         let sel = orch
             .select_substrate(MetadataStructureKind::ShapeTable)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(sel.seq, 1);
     }
 
@@ -1262,10 +1262,10 @@ mod tests {
         let mut orch = SubstrateOrchestrator::with_defaults(test_epoch());
         let s1 = orch
             .select_substrate(MetadataStructureKind::ShapeTable)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let s2 = orch
             .select_substrate(MetadataStructureKind::StringTable)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(s1.seq, 1);
         assert_eq!(s2.seq, 2);
     }
@@ -1277,7 +1277,7 @@ mod tests {
         let mut orch = SubstrateOrchestrator::with_defaults(test_epoch());
         let sel = orch
             .select_substrate(MetadataStructureKind::ShapeTable)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         // Content hash bytes should not be all zero.
         assert_ne!(sel.content_hash, ContentHash::compute(b""));
     }

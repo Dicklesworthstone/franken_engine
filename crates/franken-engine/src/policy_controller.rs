@@ -401,7 +401,7 @@ impl PolicyController {
                     .iter()
                     .find(|(a, _)| a == action)
                     .map(|(_, r)| format!("blocked by guardrail: {r}"))
-                    .unwrap();
+                    .expect("serde deserialization should succeed");
                 builder = builder.candidate(CandidateAction::filtered(action, el, reason));
             } else {
                 builder = builder.candidate(CandidateAction::new(action, el));
@@ -696,9 +696,9 @@ mod tests {
         let epoch = SecurityEpoch::from_raw(1);
 
         assert_eq!(ctrl.decision_count(), 0);
-        ctrl.select_action(&posterior, epoch, "t1").unwrap();
+        ctrl.select_action(&posterior, epoch, "t1").expect("serde deserialization should succeed");
         assert_eq!(ctrl.decision_count(), 1);
-        ctrl.select_action(&posterior, epoch, "t2").unwrap();
+        ctrl.select_action(&posterior, epoch, "t2").expect("serde deserialization should succeed");
         assert_eq!(ctrl.decision_count(), 2);
         assert_eq!(ctrl.decisions().len(), 2);
     }
@@ -752,8 +752,8 @@ mod tests {
         let mut m = LossMatrix::new();
         m.set("s1", "a1", 100);
         m.set("s2", "a2", 200);
-        let json = serde_json::to_string(&m).unwrap();
-        let restored: LossMatrix = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
+        let restored: LossMatrix = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(m, restored);
     }
 
@@ -766,8 +766,8 @@ mod tests {
             guardrail_rejections: vec![("low".to_string(), "cost-cap".to_string())],
             decision_id: "mon-ctrl-000001".to_string(),
         };
-        let json = serde_json::to_string(&sel).unwrap();
-        let restored: ActionSelection = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&sel).expect("serde deserialization should succeed");
+        let restored: ActionSelection = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(sel, restored);
     }
 
@@ -780,8 +780,8 @@ mod tests {
             safe_default: "high".to_string(),
             policy_id: "p-1".to_string(),
         };
-        let json = serde_json::to_string(&config).unwrap();
-        let restored: ControllerConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let restored: ControllerConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, restored);
     }
 
@@ -798,8 +798,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap();
-            let restored: PolicyControllerError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let restored: PolicyControllerError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, restored);
         }
     }
@@ -813,16 +813,16 @@ mod tests {
             description: "limits spending".to_string(),
             blocked_actions: vec!["expensive".to_string(), "risky".to_string()],
         };
-        let json = serde_json::to_string(&g).unwrap();
-        let restored: Guardrail = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&g).expect("serde deserialization should succeed");
+        let restored: Guardrail = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(g, restored);
     }
 
     #[test]
     fn posterior_serde_roundtrip() {
         let p = normal_posterior();
-        let json = serde_json::to_string(&p).unwrap();
-        let restored: Posterior = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
+        let restored: Posterior = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(p, restored);
     }
 
@@ -986,7 +986,7 @@ mod tests {
         let posterior = normal_posterior();
         let sel = ctrl
             .select_action(&posterior, SecurityEpoch::from_raw(1), "t")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         // medium: 0.9*300k + 0.1*1M = 270k + 100k = 370k
         assert_eq!(sel.expected_loss, 370_000);
     }
@@ -997,7 +997,7 @@ mod tests {
         let posterior = normal_posterior();
         let sel = ctrl
             .select_action(&posterior, SecurityEpoch::from_raw(1), "t")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(sel.decision_id, "mon-ctrl-000001");
     }
 
@@ -1006,8 +1006,8 @@ mod tests {
         let mut ctrl = monitoring_controller();
         let posterior = normal_posterior();
         let epoch = SecurityEpoch::from_raw(1);
-        let s1 = ctrl.select_action(&posterior, epoch, "t1").unwrap();
-        let s2 = ctrl.select_action(&posterior, epoch, "t2").unwrap();
+        let s1 = ctrl.select_action(&posterior, epoch, "t1").expect("serde deserialization should succeed");
+        let s2 = ctrl.select_action(&posterior, epoch, "t2").expect("serde deserialization should succeed");
         assert_eq!(s1.decision_id, "mon-ctrl-000001");
         assert_eq!(s2.decision_id, "mon-ctrl-000002");
     }
@@ -1017,8 +1017,8 @@ mod tests {
         let mut ctrl = monitoring_controller();
         let posterior = normal_posterior();
         let epoch = SecurityEpoch::from_raw(1);
-        let s1 = ctrl.select_action(&posterior, epoch, "t1").unwrap();
-        let s2 = ctrl.select_action(&posterior, epoch, "t2").unwrap();
+        let s1 = ctrl.select_action(&posterior, epoch, "t1").expect("serde deserialization should succeed");
+        let s2 = ctrl.select_action(&posterior, epoch, "t2").expect("serde deserialization should succeed");
         let history = ctrl.decisions();
         assert_eq!(history.len(), 2);
         assert_eq!(history[0], s1);
@@ -1043,7 +1043,7 @@ mod tests {
         let posterior = normal_posterior();
         let sel = ctrl
             .select_action(&posterior, SecurityEpoch::from_raw(1), "t")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         // Both low and medium blocked, only high left
         assert_eq!(sel.action, "high");
         assert!(!sel.is_safe_default);
@@ -1062,8 +1062,8 @@ mod tests {
         });
         let posterior = normal_posterior();
         let epoch = SecurityEpoch::from_raw(1);
-        let sel = ctrl.select_action(&posterior, epoch, "t").unwrap();
-        let entry = ctrl.build_evidence(&sel, &posterior, epoch, "t").unwrap();
+        let sel = ctrl.select_action(&posterior, epoch, "t").expect("serde deserialization should succeed");
+        let entry = ctrl.build_evidence(&sel, &posterior, epoch, "t").expect("serde deserialization should succeed");
         assert_eq!(entry.constraints.len(), 1);
         assert_eq!(entry.constraints[0].constraint_id, "g1");
         assert!(entry.constraints[0].active);
@@ -1079,8 +1079,8 @@ mod tests {
         });
         let posterior = normal_posterior();
         let epoch = SecurityEpoch::from_raw(1);
-        let sel = ctrl.select_action(&posterior, epoch, "t").unwrap();
-        let entry = ctrl.build_evidence(&sel, &posterior, epoch, "t").unwrap();
+        let sel = ctrl.select_action(&posterior, epoch, "t").expect("serde deserialization should succeed");
+        let entry = ctrl.build_evidence(&sel, &posterior, epoch, "t").expect("serde deserialization should succeed");
         assert!(entry.chosen_action.rationale.contains("safe default"));
     }
 
@@ -1089,8 +1089,8 @@ mod tests {
         let mut ctrl = monitoring_controller();
         let posterior = normal_posterior();
         let epoch = SecurityEpoch::from_raw(1);
-        let sel = ctrl.select_action(&posterior, epoch, "t").unwrap();
-        let entry = ctrl.build_evidence(&sel, &posterior, epoch, "t").unwrap();
+        let sel = ctrl.select_action(&posterior, epoch, "t").expect("serde deserialization should succeed");
+        let entry = ctrl.build_evidence(&sel, &posterior, epoch, "t").expect("serde deserialization should succeed");
         assert!(
             entry
                 .chosen_action
@@ -1113,7 +1113,7 @@ mod tests {
         let p = Posterior::new(probs);
         let sel = ctrl
             .select_action(&p, SecurityEpoch::from_raw(1), "t")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         // All actions have 0 expected loss except if they have entries in new matrix
         // "low" has loss 1 for state "s" which isn't in posterior, so all are 0
         // Ties go to first in action_set order (deterministic)
@@ -1128,7 +1128,7 @@ mod tests {
         let posterior = Posterior::new(BTreeMap::new());
         let sel = ctrl
             .select_action(&posterior, SecurityEpoch::from_raw(1), "t")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(sel.expected_loss, 0);
         // With zero expected loss for all, picks first in action_set order
         assert_eq!(sel.action, "low");
@@ -1143,7 +1143,7 @@ mod tests {
         let posterior = Posterior::new(probs);
         let sel = ctrl
             .select_action(&posterior, SecurityEpoch::from_raw(1), "t")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         // low:  0.5*100k + 0.5*5M = 50k + 2500k = 2550k
         // med:  0.5*300k + 0.5*1M = 150k + 500k = 650k
         // high: 0.5*800k + 0.5*200k = 400k + 100k = 500k
@@ -1161,11 +1161,11 @@ mod tests {
             safe_default: "only".to_string(),
             policy_id: "p".to_string(),
         };
-        let mut ctrl = PolicyController::new(config, matrix).unwrap();
+        let mut ctrl = PolicyController::new(config, matrix).expect("serde deserialization should succeed");
         let posterior = normal_posterior();
         let sel = ctrl
             .select_action(&posterior, SecurityEpoch::from_raw(1), "t")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(sel.action, "only");
         assert!(!sel.is_safe_default);
     }
@@ -1176,9 +1176,9 @@ mod tests {
         let posterior = normal_posterior();
         let epoch = SecurityEpoch::from_raw(1);
         for _ in 0..999_999 {
-            ctrl.select_action(&posterior, epoch, "t").unwrap();
+            ctrl.select_action(&posterior, epoch, "t").expect("serde deserialization should succeed");
         }
-        let sel = ctrl.select_action(&posterior, epoch, "t").unwrap();
+        let sel = ctrl.select_action(&posterior, epoch, "t").expect("serde deserialization should succeed");
         assert_eq!(sel.decision_id, "mon-ctrl-1000000");
         assert_eq!(ctrl.decision_count(), 1_000_000);
     }
@@ -1195,7 +1195,7 @@ mod tests {
         let posterior = anomalous_posterior();
         let sel = ctrl
             .select_action(&posterior, SecurityEpoch::from_raw(1), "t")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         // "high" blocked, so picks next best among "low" and "medium"
         // medium: 0.2*300k + 0.8*1M = 60k + 800k = 860k
         // low:    0.2*100k + 0.8*5M = 20k + 4000k = 4020k
@@ -1208,8 +1208,8 @@ mod tests {
         let mut ctrl = monitoring_controller();
         let posterior = normal_posterior();
         let epoch = SecurityEpoch::from_raw(1);
-        let sel = ctrl.select_action(&posterior, epoch, "t").unwrap();
-        let entry = ctrl.build_evidence(&sel, &posterior, epoch, "t").unwrap();
+        let sel = ctrl.select_action(&posterior, epoch, "t").expect("serde deserialization should succeed");
+        let entry = ctrl.build_evidence(&sel, &posterior, epoch, "t").expect("serde deserialization should succeed");
         assert_eq!(entry.candidates.len(), ctrl.config().action_set.len());
     }
 
@@ -1225,13 +1225,13 @@ mod tests {
             safe_default: "bad".to_string(),
             policy_id: "p".to_string(),
         };
-        let mut ctrl = PolicyController::new(config, matrix).unwrap();
+        let mut ctrl = PolicyController::new(config, matrix).expect("serde deserialization should succeed");
         let mut probs = BTreeMap::new();
         probs.insert("s".to_string(), 1_000_000);
         let posterior = Posterior::new(probs);
         let sel = ctrl
             .select_action(&posterior, SecurityEpoch::from_raw(1), "t")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(sel.action, "good");
         assert_eq!(sel.expected_loss, -500_000);
     }
@@ -1246,8 +1246,8 @@ mod tests {
         });
         let posterior = normal_posterior();
         let epoch = SecurityEpoch::from_raw(1);
-        let sel = ctrl.select_action(&posterior, epoch, "t").unwrap();
-        let entry = ctrl.build_evidence(&sel, &posterior, epoch, "t").unwrap();
+        let sel = ctrl.select_action(&posterior, epoch, "t").expect("serde deserialization should succeed");
+        let entry = ctrl.build_evidence(&sel, &posterior, epoch, "t").expect("serde deserialization should succeed");
         // Guardrail should be present but inactive
         assert_eq!(entry.constraints.len(), 1);
         assert!(!entry.constraints[0].active);
@@ -1265,13 +1265,13 @@ mod tests {
             safe_default: "alpha".to_string(),
             policy_id: "p".to_string(),
         };
-        let mut ctrl = PolicyController::new(config, matrix).unwrap();
+        let mut ctrl = PolicyController::new(config, matrix).expect("serde deserialization should succeed");
         let mut probs = BTreeMap::new();
         probs.insert("s".to_string(), 1_000_000);
         let posterior = Posterior::new(probs);
         let sel1 = ctrl
             .select_action(&posterior, SecurityEpoch::from_raw(1), "t1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         // min_by_key picks first minimum — deterministic
         let mut ctrl2 = {
             let mut m = LossMatrix::new();
@@ -1284,11 +1284,11 @@ mod tests {
                 safe_default: "alpha".to_string(),
                 policy_id: "p".to_string(),
             };
-            PolicyController::new(c, m).unwrap()
+            PolicyController::new(c, m).expect("serde deserialization should succeed")
         };
         let sel2 = ctrl2
             .select_action(&posterior, SecurityEpoch::from_raw(1), "t1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(sel1.action, sel2.action);
     }
 
@@ -1313,8 +1313,8 @@ mod tests {
     #[test]
     fn posterior_normal_serde_roundtrip() {
         let p = normal_posterior();
-        let json = serde_json::to_string(&p).unwrap();
-        let back: Posterior = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
+        let back: Posterior = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(p, back);
     }
 
@@ -1323,8 +1323,8 @@ mod tests {
         let mut m = LossMatrix::new();
         m.set("normal", "low", 100_000);
         m.set("anomalous", "high", 200_000);
-        let json = serde_json::to_string(&m).unwrap();
-        let back: LossMatrix = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
+        let back: LossMatrix = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(m, back);
     }
 
@@ -1332,8 +1332,8 @@ mod tests {
     fn controller_config_serde_roundtrip() {
         let ctrl = monitoring_controller();
         let config = ctrl.config().clone();
-        let json = serde_json::to_string(&config).unwrap();
-        let back: ControllerConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let back: ControllerConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, back);
     }
 
@@ -1343,9 +1343,9 @@ mod tests {
         let posterior = normal_posterior();
         let sel = ctrl
             .select_action(&posterior, SecurityEpoch::from_raw(1), "t")
-            .unwrap();
-        let json = serde_json::to_string(&sel).unwrap();
-        let back: ActionSelection = serde_json::from_str(&json).unwrap();
+            .expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&sel).expect("serde deserialization should succeed");
+        let back: ActionSelection = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(sel, back);
     }
 
@@ -1356,8 +1356,8 @@ mod tests {
             description: "desc".to_string(),
             blocked_actions: vec!["a".to_string(), "b".to_string()],
         };
-        let json = serde_json::to_string(&g).unwrap();
-        let back: Guardrail = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&g).expect("serde deserialization should succeed");
+        let back: Guardrail = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(g, back);
     }
 
@@ -1390,7 +1390,7 @@ mod tests {
         let posterior = normal_posterior();
         let sel = ctrl
             .select_action(&posterior, SecurityEpoch::from_raw(1), "t")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(sel.is_safe_default);
         assert_eq!(sel.action, "high"); // safe_default
     }
@@ -1401,7 +1401,7 @@ mod tests {
         let posterior = normal_posterior();
         let sel = ctrl
             .select_action(&posterior, SecurityEpoch::from_raw(1), "t")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let cloned = sel.clone();
         assert_eq!(sel, cloned);
     }
@@ -1414,7 +1414,7 @@ mod tests {
             let epoch = SecurityEpoch::from_raw(1);
             for i in 0..5 {
                 ctrl.select_action(&posterior, epoch, &format!("t{i}"))
-                    .unwrap();
+                    .expect("serde deserialization should succeed");
             }
             ctrl.decisions().to_vec()
         };
@@ -1427,7 +1427,7 @@ mod tests {
         let posterior = anomalous_posterior();
         let sel = ctrl
             .select_action(&posterior, SecurityEpoch::from_raw(1), "t")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         // high: 0.2*800k + 0.8*200k = 160k + 160k = 320k  (lowest)
         // medium: 0.2*300k + 0.8*1M = 60k + 800k = 860k
         // low: 0.2*100k + 0.8*5M = 20k + 4M = 4020k
@@ -1439,8 +1439,8 @@ mod tests {
     fn guardrail_rejection_tuple_serde() {
         // Guardrail rejections are stored as Vec<(action, guardrail_id)>
         let rejections: Vec<(String, String)> = vec![("low".to_string(), "cost-cap".to_string())];
-        let json = serde_json::to_string(&rejections).unwrap();
-        let back: Vec<(String, String)> = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&rejections).expect("serde deserialization should succeed");
+        let back: Vec<(String, String)> = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(rejections, back);
     }
 
@@ -1449,8 +1449,8 @@ mod tests {
         let mut ctrl = monitoring_controller();
         let posterior = normal_posterior();
         let epoch = SecurityEpoch::from_raw(1);
-        let sel = ctrl.select_action(&posterior, epoch, "t").unwrap();
-        let entry = ctrl.build_evidence(&sel, &posterior, epoch, "t").unwrap();
+        let sel = ctrl.select_action(&posterior, epoch, "t").expect("serde deserialization should succeed");
+        let entry = ctrl.build_evidence(&sel, &posterior, epoch, "t").expect("serde deserialization should succeed");
         assert!(!entry.chosen_action.action_name.is_empty());
         assert!(entry.chosen_action.expected_loss_millionths >= 0);
     }

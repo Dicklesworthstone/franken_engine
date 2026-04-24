@@ -945,8 +945,8 @@ mod tests {
     #[test]
     fn artifact_family_serde_roundtrip() {
         for fam in ArtifactFamily::ALL {
-            let json = serde_json::to_string(fam).unwrap();
-            let back: ArtifactFamily = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(fam).expect("serde deserialization should succeed");
+            let back: ArtifactFamily = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*fam, back);
         }
     }
@@ -976,8 +976,8 @@ mod tests {
     #[test]
     fn transformation_serde_roundtrip() {
         for t in EquivalenceTransformation::ALL {
-            let json = serde_json::to_string(t).unwrap();
-            let back: EquivalenceTransformation = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(t).expect("serde deserialization should succeed");
+            let back: EquivalenceTransformation = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*t, back);
         }
     }
@@ -1030,8 +1030,8 @@ mod tests {
             left_epoch: 10,
             right_epoch: 20,
         };
-        let json = serde_json::to_string(&reason).unwrap();
-        let back: RefusalReason = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&reason).expect("serde deserialization should succeed");
+        let back: RefusalReason = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(reason, back);
     }
 
@@ -1123,8 +1123,8 @@ mod tests {
             }],
             test_epoch(),
         );
-        let json = serde_json::to_string(&r).unwrap();
-        let back: IdentificationRefusal = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let back: IdentificationRefusal = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 
@@ -1133,8 +1133,8 @@ mod tests {
     #[test]
     fn orbit_step_serde_roundtrip() {
         let step = make_orbit_step(0, EquivalenceTransformation::AlphaRenaming);
-        let json = serde_json::to_string(&step).unwrap();
-        let back: OrbitStep = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&step).expect("serde deserialization should succeed");
+        let back: OrbitStep = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(step, back);
     }
 
@@ -1195,8 +1195,8 @@ mod tests {
                 EquivalenceTransformation::ScopeFlattening,
             )],
         );
-        let json = serde_json::to_string(&orbit).unwrap();
-        let back: OrbitReduction = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&orbit).expect("serde deserialization should succeed");
+        let back: OrbitReduction = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(orbit, back);
     }
 
@@ -1240,8 +1240,8 @@ mod tests {
     #[test]
     fn representative_serde_roundtrip() {
         let r = make_representative(ArtifactFamily::ModuleSnapshot, "ms");
-        let json = serde_json::to_string(&r).unwrap();
-        let back: CanonicalRepresentative = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let back: CanonicalRepresentative = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 
@@ -1397,8 +1397,8 @@ mod tests {
             )],
         )];
         let basis = make_basis(classes);
-        let json = serde_json::to_string(&basis).unwrap();
-        let back: SemanticCanonicalBasis = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&basis).expect("serde deserialization should succeed");
+        let back: SemanticCanonicalBasis = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(basis, back);
     }
 
@@ -1419,7 +1419,7 @@ mod tests {
         let cls = make_class(ArtifactFamily::Ir1Fragment, "canon", orbits);
         let basis = make_basis(vec![cls]);
         let result = query_identification(&basis, ArtifactFamily::Ir1Fragment, "a", "b");
-        assert_eq!(result.unwrap(), "canon");
+        assert_eq!(result.expect("serde deserialization should succeed"), "canon");
     }
 
     #[test]

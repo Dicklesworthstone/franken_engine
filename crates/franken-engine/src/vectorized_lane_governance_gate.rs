@@ -1043,8 +1043,8 @@ mod tests {
     #[test]
     fn builtin_family_serde_round_trip() {
         for family in BuiltinFamily::ALL {
-            let json = serde_json::to_string(family).unwrap();
-            let back: BuiltinFamily = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(family).expect("serde deserialization should succeed");
+            let back: BuiltinFamily = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*family, back);
         }
     }
@@ -1073,8 +1073,8 @@ mod tests {
     #[test]
     fn lane_verdict_serde_round_trip() {
         for v in LaneVerdict::ALL {
-            let json = serde_json::to_string(v).unwrap();
-            let back: LaneVerdict = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: LaneVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -1110,8 +1110,8 @@ mod tests {
     #[test]
     fn cold_start_impact_serde_round_trip() {
         for impact in ColdStartImpact::ALL {
-            let json = serde_json::to_string(impact).unwrap();
-            let back: ColdStartImpact = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(impact).expect("serde deserialization should succeed");
+            let back: ColdStartImpact = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*impact, back);
         }
     }
@@ -1147,8 +1147,8 @@ mod tests {
     #[test]
     fn parity_evidence_serde_round_trip() {
         let ev = good_parity();
-        let json = serde_json::to_string(&ev).unwrap();
-        let back: ParityEvidence = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
+        let back: ParityEvidence = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ev, back);
     }
 
@@ -1561,8 +1561,8 @@ mod tests {
     fn decision_receipt_serde_round_trip() {
         let evidence_hash = compute_content_hash(b"test-evidence");
         let receipt = DecisionReceipt::new(epoch(), LaneVerdict::Approved, evidence_hash);
-        let json = serde_json::to_string(&receipt).unwrap();
-        let back: DecisionReceipt = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
+        let back: DecisionReceipt = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(receipt, back);
     }
 

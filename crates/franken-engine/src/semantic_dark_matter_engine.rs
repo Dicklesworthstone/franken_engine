@@ -694,7 +694,7 @@ mod tests {
             make_candidate("b", CandidateKind::Program, 200_000),
         ];
         // SAFETY: Test creates valid candidates; discover succeeds in controlled test environment.
-        let result = engine.discover(&candidates).unwrap();
+        let result = engine.discover(&candidates).expect("serde deserialization should succeed");
         assert_eq!(result.seq, 1);
         assert_eq!(result.candidates_evaluated, 2);
     }
@@ -713,7 +713,7 @@ mod tests {
         let mut engine = DarkMatterEngineOrchestrator::with_defaults(test_epoch());
         let candidates = vec![make_candidate("h", CandidateKind::Program, 900_000)];
         // SAFETY: Test creates valid high-scoring candidate; discover succeeds in controlled test environment.
-        let result = engine.discover(&candidates).unwrap();
+        let result = engine.discover(&candidates).expect("serde deserialization should succeed");
         assert_eq!(result.candidates_promoted, 1);
         assert_eq!(result.candidates_rejected, 0);
     }
@@ -723,7 +723,7 @@ mod tests {
         let mut engine = DarkMatterEngineOrchestrator::with_defaults(test_epoch());
         let candidates = vec![make_candidate("l", CandidateKind::Program, 100_000)];
         // SAFETY: Test creates valid low-scoring candidate; discover succeeds in controlled test environment.
-        let result = engine.discover(&candidates).unwrap();
+        let result = engine.discover(&candidates).expect("serde deserialization should succeed");
         assert_eq!(result.candidates_promoted, 0);
         assert_eq!(result.candidates_rejected, 1);
     }
@@ -736,7 +736,7 @@ mod tests {
             make_candidate("b", CandidateKind::Program, 700_000),
         ];
         // SAFETY: Test creates valid candidates with different novelty scores; discover succeeds in controlled test environment.
-        let result = engine.discover(&candidates).unwrap();
+        let result = engine.discover(&candidates).expect("serde deserialization should succeed");
         assert_eq!(result.max_novelty_millionths, 700_000);
     }
 
@@ -903,7 +903,7 @@ mod tests {
             make_candidate("h4", CandidateKind::Program, 600_000),
         ];
         // SAFETY: Test creates valid candidates; discover succeeds in controlled test environment.
-        let result = engine.discover(&candidates).unwrap();
+        let result = engine.discover(&candidates).expect("serde deserialization should succeed");
         assert_eq!(result.candidates_promoted, 2);
         assert_eq!(result.candidates_rejected, 2);
     }
@@ -917,7 +917,7 @@ mod tests {
             make_candidate("c", CandidateKind::Program, 600_000),
         ];
         // SAFETY: Test creates valid candidates; discover succeeds in controlled test environment.
-        let result = engine.discover(&candidates).unwrap();
+        let result = engine.discover(&candidates).expect("serde deserialization should succeed");
         assert_eq!(result.avg_novelty_millionths, 400_000);
     }
 
@@ -927,11 +927,11 @@ mod tests {
         // SAFETY: Test creates valid candidate; discover succeeds in controlled test environment.
         let r1 = engine
             .discover(&[make_candidate("c1", CandidateKind::Program, 800_000)])
-            .unwrap();
+            .expect("serde deserialization should succeed");
         // SAFETY: Test creates valid candidate; discover succeeds in controlled test environment.
         let r2 = engine
             .discover(&[make_candidate("c2", CandidateKind::Program, 800_000)])
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_ne!(r1.content_hash, r2.content_hash);
     }
 
@@ -942,7 +942,7 @@ mod tests {
         // SAFETY: Test creates valid candidate; discover succeeds in controlled test environment.
         let result = engine
             .discover(&[make_candidate("x", CandidateKind::Program, 800_000)])
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(result.epoch, epoch);
     }
 
@@ -955,7 +955,7 @@ mod tests {
             make_candidate("h3", CandidateKind::ReactComponent, 700_000),
         ];
         // SAFETY: Test creates valid candidates; discover succeeds in controlled test environment.
-        let _ = engine.discover(&candidates).unwrap();
+        let _ = engine.discover(&candidates).expect("serde deserialization should succeed");
         assert_eq!(*engine.board_state(), BoardState::Saturated);
     }
 
@@ -968,7 +968,7 @@ mod tests {
             make_candidate("l3", CandidateKind::Program, 300_000),
         ];
         // SAFETY: Test creates valid candidates; discover succeeds in controlled test environment.
-        let _ = engine.discover(&candidates).unwrap();
+        let _ = engine.discover(&candidates).expect("serde deserialization should succeed");
         assert_eq!(*engine.board_state(), BoardState::Stale);
     }
 
@@ -1078,7 +1078,7 @@ mod tests {
         // SAFETY: Test creates valid candidate; discover succeeds in controlled test environment.
         let result = engine
             .discover(&[make_candidate("solo", CandidateKind::Program, 800_000)])
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(result.candidates_evaluated, 1);
         assert_eq!(result.max_novelty_millionths, 800_000);
     }
@@ -1094,7 +1094,7 @@ mod tests {
             make_candidate("p5", CandidateKind::WorkloadTrace, 400_000),
         ];
         // SAFETY: Test creates valid candidates; discover succeeds in controlled test environment.
-        let result = engine.discover(&candidates).unwrap();
+        let result = engine.discover(&candidates).expect("serde deserialization should succeed");
         assert_eq!(result.candidates_evaluated, 5);
     }
 }

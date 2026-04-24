@@ -1066,8 +1066,8 @@ mod tests {
             SubstrateKind::GenericFallback,
         ];
         for kind in &all {
-            let json = serde_json::to_string(kind).unwrap();
-            let back: SubstrateKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(kind).expect("serde deserialization should succeed");
+            let back: SubstrateKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*kind, back);
         }
     }
@@ -1082,8 +1082,8 @@ mod tests {
             OptimizationLevel::FullySwizzled,
         ];
         for level in &all {
-            let json = serde_json::to_string(level).unwrap();
-            let back: OptimizationLevel = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(level).expect("serde deserialization should succeed");
+            let back: OptimizationLevel = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*level, back);
         }
     }
@@ -1098,8 +1098,8 @@ mod tests {
             FallbackPath::Abstain,
         ];
         for fb in &all {
-            let json = serde_json::to_string(fb).unwrap();
-            let back: FallbackPath = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(fb).expect("serde deserialization should succeed");
+            let back: FallbackPath = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*fb, back);
         }
     }
@@ -1108,8 +1108,8 @@ mod tests {
     fn test_decision_serde_roundtrip() {
         let profile = hot_profile("test_s", SubstrateKind::FlatArray, 200_000);
         let decision = evaluate_substrate(&profile, None);
-        let json = serde_json::to_string(&decision).unwrap();
-        let back: OptimizationDecision = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&decision).expect("serde deserialization should succeed");
+        let back: OptimizationDecision = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(decision, back);
     }
 
@@ -1118,8 +1118,8 @@ mod tests {
         let profile = hot_profile("cert_s", SubstrateKind::FlatArray, 200_000);
         let decision = evaluate_substrate(&profile, None);
         let cert = certify_substrate(&profile, &decision);
-        let json = serde_json::to_string(&cert).unwrap();
-        let back: SubstrateCertificate = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&cert).expect("serde deserialization should succeed");
+        let back: SubstrateCertificate = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cert, back);
     }
 
@@ -1446,8 +1446,8 @@ mod tests {
             RollbackStrategy::NoRollback,
         ];
         for rs in &all {
-            let json = serde_json::to_string(rs).unwrap();
-            let back: RollbackStrategy = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(rs).expect("serde deserialization should succeed");
+            let back: RollbackStrategy = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*rs, back);
         }
     }
@@ -1463,8 +1463,8 @@ mod tests {
             TransitionTrigger::PortabilityCheck,
         ];
         for tt in &all {
-            let json = serde_json::to_string(tt).unwrap();
-            let back: TransitionTrigger = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(tt).expect("serde deserialization should succeed");
+            let back: TransitionTrigger = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*tt, back);
         }
     }
@@ -1485,8 +1485,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap();
-            let back: SubstrateError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let back: SubstrateError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, back);
         }
     }
@@ -1502,8 +1502,8 @@ mod tests {
             memory_bytes: 524_288,
             is_hot: true,
         };
-        let json = serde_json::to_string(&profile).unwrap();
-        let back: SubstrateProfile = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&profile).expect("serde deserialization should succeed");
+        let back: SubstrateProfile = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(profile, back);
     }
 
@@ -1516,8 +1516,8 @@ mod tests {
             disable_optimization: false,
             debug_mode: true,
         };
-        let json = serde_json::to_string(&config).unwrap();
-        let back: OverrideConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let back: OverrideConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, back);
     }
 
@@ -1529,24 +1529,24 @@ mod tests {
             trigger: TransitionTrigger::HotnessThreshold,
             cost_millionths: 300_000,
         };
-        let json = serde_json::to_string(&transition).unwrap();
-        let back: SubstrateTransition = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&transition).expect("serde deserialization should succeed");
+        let back: SubstrateTransition = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(transition, back);
     }
 
     #[test]
     fn test_inventory_report_serde_roundtrip() {
         let report = build_canonical_inventory();
-        let json = serde_json::to_string(&report).unwrap();
-        let back: SubstrateInventoryReport = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let back: SubstrateInventoryReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report, back);
     }
 
     #[test]
     fn test_evidence_manifest_serde_roundtrip() {
         let manifest = run_substrate_evidence();
-        let json = serde_json::to_string(&manifest).unwrap();
-        let back: SubstrateEvidenceManifest = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&manifest).expect("serde deserialization should succeed");
+        let back: SubstrateEvidenceManifest = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(manifest, back);
     }
 
@@ -2344,15 +2344,15 @@ mod tests {
     fn test_substrate_kind_serde_snake_case_field_values() {
         // Verify that serde(rename_all = "snake_case") produces expected JSON strings.
         assert_eq!(
-            serde_json::to_string(&SubstrateKind::SwissTable).unwrap(),
+            serde_json::to_string(&SubstrateKind::SwissTable).expect("serde deserialization should succeed"),
             "\"swiss_table\""
         );
         assert_eq!(
-            serde_json::to_string(&SubstrateKind::GenericFallback).unwrap(),
+            serde_json::to_string(&SubstrateKind::GenericFallback).expect("serde deserialization should succeed"),
             "\"generic_fallback\""
         );
         assert_eq!(
-            serde_json::to_string(&SubstrateKind::InlineCache).unwrap(),
+            serde_json::to_string(&SubstrateKind::InlineCache).expect("serde deserialization should succeed"),
             "\"inline_cache\""
         );
     }
@@ -2360,15 +2360,15 @@ mod tests {
     #[test]
     fn test_optimization_level_serde_snake_case_field_values() {
         assert_eq!(
-            serde_json::to_string(&OptimizationLevel::LocalityAware).unwrap(),
+            serde_json::to_string(&OptimizationLevel::LocalityAware).expect("serde deserialization should succeed"),
             "\"locality_aware\""
         );
         assert_eq!(
-            serde_json::to_string(&OptimizationLevel::FullySwizzled).unwrap(),
+            serde_json::to_string(&OptimizationLevel::FullySwizzled).expect("serde deserialization should succeed"),
             "\"fully_swizzled\""
         );
         assert_eq!(
-            serde_json::to_string(&OptimizationLevel::CacheLine).unwrap(),
+            serde_json::to_string(&OptimizationLevel::CacheLine).expect("serde deserialization should succeed"),
             "\"cache_line\""
         );
     }
@@ -2376,15 +2376,15 @@ mod tests {
     #[test]
     fn test_fallback_path_serde_snake_case_field_values() {
         assert_eq!(
-            serde_json::to_string(&FallbackPath::GenericScan).unwrap(),
+            serde_json::to_string(&FallbackPath::GenericScan).expect("serde deserialization should succeed"),
             "\"generic_scan\""
         );
         assert_eq!(
-            serde_json::to_string(&FallbackPath::BTreeLookup).unwrap(),
+            serde_json::to_string(&FallbackPath::BTreeLookup).expect("serde deserialization should succeed"),
             "\"b_tree_lookup\""
         );
         assert_eq!(
-            serde_json::to_string(&FallbackPath::LinearProbe).unwrap(),
+            serde_json::to_string(&FallbackPath::LinearProbe).expect("serde deserialization should succeed"),
             "\"linear_probe\""
         );
     }
@@ -2392,19 +2392,19 @@ mod tests {
     #[test]
     fn test_rollback_strategy_serde_snake_case_field_values() {
         assert_eq!(
-            serde_json::to_string(&RollbackStrategy::SnapshotRestore).unwrap(),
+            serde_json::to_string(&RollbackStrategy::SnapshotRestore).expect("serde deserialization should succeed"),
             "\"snapshot_restore\""
         );
         assert_eq!(
-            serde_json::to_string(&RollbackStrategy::EpochInvalidate).unwrap(),
+            serde_json::to_string(&RollbackStrategy::EpochInvalidate).expect("serde deserialization should succeed"),
             "\"epoch_invalidate\""
         );
         assert_eq!(
-            serde_json::to_string(&RollbackStrategy::CowClone).unwrap(),
+            serde_json::to_string(&RollbackStrategy::CowClone).expect("serde deserialization should succeed"),
             "\"cow_clone\""
         );
         assert_eq!(
-            serde_json::to_string(&RollbackStrategy::NoRollback).unwrap(),
+            serde_json::to_string(&RollbackStrategy::NoRollback).expect("serde deserialization should succeed"),
             "\"no_rollback\""
         );
     }
@@ -2412,15 +2412,15 @@ mod tests {
     #[test]
     fn test_transition_trigger_serde_snake_case_field_values() {
         assert_eq!(
-            serde_json::to_string(&TransitionTrigger::HotnessThreshold).unwrap(),
+            serde_json::to_string(&TransitionTrigger::HotnessThreshold).expect("serde deserialization should succeed"),
             "\"hotness_threshold\""
         );
         assert_eq!(
-            serde_json::to_string(&TransitionTrigger::FallbackTriggered).unwrap(),
+            serde_json::to_string(&TransitionTrigger::FallbackTriggered).expect("serde deserialization should succeed"),
             "\"fallback_triggered\""
         );
         assert_eq!(
-            serde_json::to_string(&TransitionTrigger::PortabilityCheck).unwrap(),
+            serde_json::to_string(&TransitionTrigger::PortabilityCheck).expect("serde deserialization should succeed"),
             "\"portability_check\""
         );
     }
@@ -2428,9 +2428,9 @@ mod tests {
     #[test]
     fn test_serde_deserialize_from_known_json_substrate_kind() {
         // Backwards compatibility: deserialize from a known JSON string.
-        let kind: SubstrateKind = serde_json::from_str("\"compact_bitmap\"").unwrap();
+        let kind: SubstrateKind = serde_json::from_str("\"compact_bitmap\"").expect("serde deserialization should succeed");
         assert_eq!(kind, SubstrateKind::CompactBitmap);
-        let kind2: SubstrateKind = serde_json::from_str("\"art_tree\"").unwrap();
+        let kind2: SubstrateKind = serde_json::from_str("\"art_tree\"").expect("serde deserialization should succeed");
         assert_eq!(kind2, SubstrateKind::ArtTree);
     }
 
@@ -2940,8 +2940,8 @@ mod tests {
         let profile = hot_profile("cert_serde_hash", SubstrateKind::ArtTree, 300_000);
         let decision = evaluate_substrate(&profile, None);
         let cert = certify_substrate(&profile, &decision);
-        let json = serde_json::to_string(&cert).unwrap();
-        let back: SubstrateCertificate = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&cert).expect("serde deserialization should succeed");
+        let back: SubstrateCertificate = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cert.certificate_hash, back.certificate_hash);
         assert_eq!(
             cert.certificate_hash.to_hex(),

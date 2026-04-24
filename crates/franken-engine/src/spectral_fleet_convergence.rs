@@ -797,11 +797,11 @@ mod tests {
     fn make_complete_graph(n: usize) -> GossipTopology {
         let node_ids: Vec<String> = (0..n).map(|i| format!("node_{i}")).collect();
         // SAFETY: Test helper with valid node IDs should succeed topology creation
-        let mut topo = GossipTopology::new(node_ids).unwrap();
+        let mut topo = GossipTopology::new(node_ids).expect("serde deserialization should succeed");
         for i in 0..n {
             for j in (i + 1)..n {
                 // SAFETY: Test helper with valid node indices should succeed edge addition
-                topo.add_edge(i, j, MILLION).unwrap();
+                topo.add_edge(i, j, MILLION).expect("serde deserialization should succeed");
             }
         }
         topo
@@ -810,10 +810,10 @@ mod tests {
     fn make_cycle_graph(n: usize) -> GossipTopology {
         let node_ids: Vec<String> = (0..n).map(|i| format!("node_{i}")).collect();
         // SAFETY: Test helper with valid node IDs should succeed topology creation
-        let mut topo = GossipTopology::new(node_ids).unwrap();
+        let mut topo = GossipTopology::new(node_ids).expect("serde deserialization should succeed");
         for i in 0..n {
             // SAFETY: Test helper with valid node indices should succeed edge addition
-            topo.add_edge(i, (i + 1) % n, MILLION).unwrap();
+            topo.add_edge(i, (i + 1) % n, MILLION).expect("serde deserialization should succeed");
         }
         topo
     }
@@ -821,10 +821,10 @@ mod tests {
     fn make_path_graph(n: usize) -> GossipTopology {
         let node_ids: Vec<String> = (0..n).map(|i| format!("node_{i}")).collect();
         // SAFETY: Test helper with valid node IDs should succeed topology creation
-        let mut topo = GossipTopology::new(node_ids).unwrap();
+        let mut topo = GossipTopology::new(node_ids).expect("serde deserialization should succeed");
         for i in 0..n - 1 {
             // SAFETY: Test helper with valid node indices should succeed edge addition
-            topo.add_edge(i, i + 1, MILLION).unwrap();
+            topo.add_edge(i, i + 1, MILLION).expect("serde deserialization should succeed");
         }
         topo
     }
@@ -842,11 +842,11 @@ mod tests {
     fn disconnected_graph_detected() {
         let node_ids: Vec<String> = (0..4).map(|i| format!("node_{i}")).collect();
         // SAFETY: Test with valid node IDs should succeed topology creation
-        let mut topo = GossipTopology::new(node_ids).unwrap();
+        let mut topo = GossipTopology::new(node_ids).expect("serde deserialization should succeed");
         // SAFETY: Test with valid node indices should succeed edge addition
-        topo.add_edge(0, 1, MILLION).unwrap();
+        topo.add_edge(0, 1, MILLION).expect("serde deserialization should succeed");
         // SAFETY: Test with valid node indices should succeed edge addition
-        topo.add_edge(2, 3, MILLION).unwrap();
+        topo.add_edge(2, 3, MILLION).expect("serde deserialization should succeed");
         // 0-1 and 2-3 are disconnected.
         assert!(!topo.is_connected());
         assert_eq!(topo.connected_components(), 2);
@@ -868,7 +868,7 @@ mod tests {
 
     #[test]
     fn node_out_of_bounds() {
-        let topo = GossipTopology::new(vec!["a".into(), "b".into()]).unwrap();
+        let topo = GossipTopology::new(vec!["a".into(), "b".into()]).expect("serde deserialization should succeed");
         let mut topo = topo;
         assert!(matches!(
             topo.add_edge(0, 5, MILLION),
@@ -878,7 +878,7 @@ mod tests {
 
     #[test]
     fn nonpositive_edge_weight_rejected() {
-        let mut topo = GossipTopology::new(vec!["a".into(), "b".into()]).unwrap();
+        let mut topo = GossipTopology::new(vec!["a".into(), "b".into()]).expect("serde deserialization should succeed");
         assert!(matches!(
             topo.add_edge(0, 1, 0),
             Err(SpectralError::InvalidEdgeWeight { .. })
@@ -891,9 +891,9 @@ mod tests {
 
     #[test]
     fn degree_computation() {
-        let mut topo = GossipTopology::new(vec!["a".into(), "b".into(), "c".into()]).unwrap();
-        topo.add_edge(0, 1, MILLION).unwrap();
-        topo.add_edge(0, 2, 500_000).unwrap();
+        let mut topo = GossipTopology::new(vec!["a".into(), "b".into(), "c".into()]).expect("serde deserialization should succeed");
+        topo.add_edge(0, 1, MILLION).expect("serde deserialization should succeed");
+        topo.add_edge(0, 2, 500_000).expect("serde deserialization should succeed");
         assert_eq!(topo.degree(0), 1_500_000);
         assert_eq!(topo.degree(1), MILLION);
     }
@@ -903,7 +903,7 @@ mod tests {
     #[test]
     fn laplacian_row_sums_to_zero() {
         let topo = make_complete_graph(4);
-        let laplacian = LaplacianMatrix::from_topology(&topo).unwrap();
+        let laplacian = LaplacianMatrix::from_topology(&topo).expect("serde deserialization should succeed");
         for i in 0..4 {
             let row_sum: i64 = (0..4).map(|j| laplacian.get(i, j)).sum();
             assert_eq!(row_sum, 0, "row {i} should sum to zero");
@@ -913,7 +913,7 @@ mod tests {
     #[test]
     fn laplacian_is_symmetric() {
         let topo = make_cycle_graph(5);
-        let laplacian = LaplacianMatrix::from_topology(&topo).unwrap();
+        let laplacian = LaplacianMatrix::from_topology(&topo).expect("serde deserialization should succeed");
         for i in 0..5 {
             for j in 0..5 {
                 assert_eq!(
@@ -928,7 +928,7 @@ mod tests {
     #[test]
     fn laplacian_diagonal_is_degree() {
         let topo = make_complete_graph(3);
-        let laplacian = LaplacianMatrix::from_topology(&topo).unwrap();
+        let laplacian = LaplacianMatrix::from_topology(&topo).expect("serde deserialization should succeed");
         // In complete graph K3, each node has degree 2 (two edges of weight 1M).
         for i in 0..3 {
             assert_eq!(laplacian.get(i, i), 2 * MILLION);
@@ -938,8 +938,8 @@ mod tests {
     #[test]
     fn laplacian_content_hash_deterministic() {
         let topo = make_complete_graph(3);
-        let l1 = LaplacianMatrix::from_topology(&topo).unwrap();
-        let l2 = LaplacianMatrix::from_topology(&topo).unwrap();
+        let l1 = LaplacianMatrix::from_topology(&topo).expect("serde deserialization should succeed");
+        let l2 = LaplacianMatrix::from_topology(&topo).expect("serde deserialization should succeed");
         assert_eq!(l1.content_hash(), l2.content_hash());
     }
 
@@ -949,7 +949,7 @@ mod tests {
     fn complete_graph_spectral_analysis() {
         let topo = make_complete_graph(4);
         let analyzer = SpectralAnalyzer::default();
-        let analysis = analyzer.analyze(&topo).unwrap();
+        let analysis = analyzer.analyze(&topo).expect("serde deserialization should succeed");
 
         assert_eq!(analysis.num_nodes, 4);
         // Complete graph has high algebraic connectivity.
@@ -971,8 +971,8 @@ mod tests {
         let path = make_path_graph(6);
         let analyzer = SpectralAnalyzer::default();
 
-        let complete_analysis = analyzer.analyze(&complete).unwrap();
-        let path_analysis = analyzer.analyze(&path).unwrap();
+        let complete_analysis = analyzer.analyze(&complete).expect("serde deserialization should succeed");
+        let path_analysis = analyzer.analyze(&path).expect("serde deserialization should succeed");
 
         // Path graph should have higher mixing time than complete graph.
         assert!(
@@ -986,8 +986,8 @@ mod tests {
     #[test]
     fn disconnected_graph_rejected() {
         let node_ids: Vec<String> = (0..4).map(|i| format!("node_{i}")).collect();
-        let mut topo = GossipTopology::new(node_ids).unwrap();
-        topo.add_edge(0, 1, MILLION).unwrap();
+        let mut topo = GossipTopology::new(node_ids).expect("serde deserialization should succeed");
+        topo.add_edge(0, 1, MILLION).expect("serde deserialization should succeed");
         // 2 and 3 are isolated.
         let analyzer = SpectralAnalyzer::default();
         assert!(matches!(
@@ -1000,20 +1000,20 @@ mod tests {
     fn fiedler_vector_partitions_barbell() {
         // Barbell: 0-1-2 connected, 3-4-5 connected, with one bridge 2-3.
         let node_ids: Vec<String> = (0..6).map(|i| format!("node_{i}")).collect();
-        let mut topo = GossipTopology::new(node_ids).unwrap();
+        let mut topo = GossipTopology::new(node_ids).expect("serde deserialization should succeed");
         // Clique 1.
-        topo.add_edge(0, 1, MILLION).unwrap();
-        topo.add_edge(1, 2, MILLION).unwrap();
-        topo.add_edge(0, 2, MILLION).unwrap();
+        topo.add_edge(0, 1, MILLION).expect("serde deserialization should succeed");
+        topo.add_edge(1, 2, MILLION).expect("serde deserialization should succeed");
+        topo.add_edge(0, 2, MILLION).expect("serde deserialization should succeed");
         // Bridge.
-        topo.add_edge(2, 3, MILLION).unwrap();
+        topo.add_edge(2, 3, MILLION).expect("serde deserialization should succeed");
         // Clique 2.
-        topo.add_edge(3, 4, MILLION).unwrap();
-        topo.add_edge(4, 5, MILLION).unwrap();
-        topo.add_edge(3, 5, MILLION).unwrap();
+        topo.add_edge(3, 4, MILLION).expect("serde deserialization should succeed");
+        topo.add_edge(4, 5, MILLION).expect("serde deserialization should succeed");
+        topo.add_edge(3, 5, MILLION).expect("serde deserialization should succeed");
 
         let analyzer = SpectralAnalyzer::default();
-        let analysis = analyzer.analyze(&topo).unwrap();
+        let analysis = analyzer.analyze(&topo).expect("serde deserialization should succeed");
 
         // Fiedler vector should partition into two groups roughly {0,1,2} and {3,4,5}.
         assert!(!analysis.partition_a.is_empty());
@@ -1026,7 +1026,7 @@ mod tests {
     fn convergence_certificate_from_analysis() {
         let topo = make_complete_graph(5);
         let analyzer = SpectralAnalyzer::default();
-        let analysis = analyzer.analyze(&topo).unwrap();
+        let analysis = analyzer.analyze(&topo).expect("serde deserialization should succeed");
         let cert = ConvergenceCertificate::from_analysis(&analysis, SecurityEpoch::from_raw(1));
 
         assert_eq!(cert.num_nodes, 5);
@@ -1043,7 +1043,7 @@ mod tests {
     fn convergence_certificate_sla_check() {
         let topo = make_complete_graph(5);
         let analyzer = SpectralAnalyzer::default();
-        let analysis = analyzer.analyze(&topo).unwrap();
+        let analysis = analyzer.analyze(&topo).expect("serde deserialization should succeed");
         let cert = ConvergenceCertificate::from_analysis(&analysis, SecurityEpoch::from_raw(1));
 
         // Complete graph should meet a generous SLA.
@@ -1054,11 +1054,11 @@ mod tests {
     fn convergence_certificate_serde_roundtrip() {
         let topo = make_complete_graph(4);
         let analyzer = SpectralAnalyzer::default();
-        let analysis = analyzer.analyze(&topo).unwrap();
+        let analysis = analyzer.analyze(&topo).expect("serde deserialization should succeed");
         let cert = ConvergenceCertificate::from_analysis(&analysis, SecurityEpoch::from_raw(42));
 
-        let json = serde_json::to_string(&cert).unwrap();
-        let restored: ConvergenceCertificate = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&cert).expect("serde deserialization should succeed");
+        let restored: ConvergenceCertificate = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cert, restored);
     }
 
@@ -1066,10 +1066,10 @@ mod tests {
     fn spectral_analysis_serde_roundtrip() {
         let topo = make_complete_graph(3);
         let analyzer = SpectralAnalyzer::default();
-        let analysis = analyzer.analyze(&topo).unwrap();
+        let analysis = analyzer.analyze(&topo).expect("serde deserialization should succeed");
 
-        let json = serde_json::to_string(&analysis).unwrap();
-        let restored: SpectralAnalysis = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&analysis).expect("serde deserialization should succeed");
+        let restored: SpectralAnalysis = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(analysis, restored);
     }
 
@@ -1079,7 +1079,7 @@ mod tests {
     fn cheeger_bounds_consistent() {
         let topo = make_complete_graph(5);
         let analyzer = SpectralAnalyzer::default();
-        let analysis = analyzer.analyze(&topo).unwrap();
+        let analysis = analyzer.analyze(&topo).expect("serde deserialization should succeed");
 
         // λ₂_norm / 2 ≤ h ≤ sqrt(2 * λ₂_norm)
         assert!(analysis.cheeger_lower_bound_millionths >= 0);
@@ -1090,7 +1090,7 @@ mod tests {
 
     #[test]
     fn single_node_graph() {
-        let topo = GossipTopology::new(vec!["solo".into()]).unwrap();
+        let topo = GossipTopology::new(vec!["solo".into()]).expect("serde deserialization should succeed");
         assert!(topo.is_connected());
         // Spectral analysis on 1-node graph: no edges, but connected.
         // Laplacian is [0], which has spectral gap issues.
@@ -1102,10 +1102,10 @@ mod tests {
 
     #[test]
     fn two_node_graph() {
-        let mut topo = GossipTopology::new(vec!["a".into(), "b".into()]).unwrap();
-        topo.add_edge(0, 1, MILLION).unwrap();
+        let mut topo = GossipTopology::new(vec!["a".into(), "b".into()]).expect("serde deserialization should succeed");
+        topo.add_edge(0, 1, MILLION).expect("serde deserialization should succeed");
         let analyzer = SpectralAnalyzer::default();
-        let analysis = analyzer.analyze(&topo).unwrap();
+        let analysis = analyzer.analyze(&topo).expect("serde deserialization should succeed");
 
         assert_eq!(analysis.num_nodes, 2);
         assert!(analysis.algebraic_connectivity_millionths > 0);
@@ -1115,12 +1115,12 @@ mod tests {
 
     #[test]
     fn mixing_time_bound_avoids_overflow_on_large_weights() {
-        let mut topo = GossipTopology::new(vec!["a".into(), "b".into(), "c".into()]).unwrap();
+        let mut topo = GossipTopology::new(vec!["a".into(), "b".into(), "c".into()]).expect("serde deserialization should succeed");
         let w = i64::MAX / 16;
-        topo.add_edge(0, 1, w).unwrap();
-        topo.add_edge(1, 2, w).unwrap();
+        topo.add_edge(0, 1, w).expect("serde deserialization should succeed");
+        topo.add_edge(1, 2, w).expect("serde deserialization should succeed");
         let analyzer = SpectralAnalyzer::default();
-        let analysis = analyzer.analyze(&topo).unwrap();
+        let analysis = analyzer.analyze(&topo).expect("serde deserialization should succeed");
         assert!(analysis.mixing_time_bound >= 1);
     }
 
@@ -1189,8 +1189,8 @@ mod tests {
     #[test]
     fn topology_serde_roundtrip() {
         let topo = make_complete_graph(3);
-        let json = serde_json::to_string(&topo).unwrap();
-        let restored: GossipTopology = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&topo).expect("serde deserialization should succeed");
+        let restored: GossipTopology = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(topo, restored);
     }
 
@@ -1237,8 +1237,8 @@ mod tests {
             SpectralError::DegenerateSpectralGap,
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap();
-            let back: SpectralError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let back: SpectralError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, back);
         }
     }
@@ -1270,8 +1270,8 @@ mod tests {
     #[test]
     fn cycle_lower_connectivity_than_complete() {
         let analyzer = SpectralAnalyzer::default();
-        let complete = analyzer.analyze(&make_complete_graph(6)).unwrap();
-        let cycle = analyzer.analyze(&make_cycle_graph(6)).unwrap();
+        let complete = analyzer.analyze(&make_complete_graph(6)).expect("serde deserialization should succeed");
+        let cycle = analyzer.analyze(&make_cycle_graph(6)).expect("serde deserialization should succeed");
         assert!(
             cycle.algebraic_connectivity_millionths < complete.algebraic_connectivity_millionths,
             "cycle ({}) should have lower λ₂ than complete ({})",
@@ -1288,7 +1288,7 @@ mod tests {
     fn convergence_certificate_fails_tight_sla() {
         let topo = make_path_graph(10);
         let analyzer = SpectralAnalyzer::default();
-        let analysis = analyzer.analyze(&topo).unwrap();
+        let analysis = analyzer.analyze(&topo).expect("serde deserialization should succeed");
         let cert = ConvergenceCertificate::from_analysis(&analysis, SecurityEpoch::from_raw(1));
         // Path graph with 10 nodes has slow mixing — should fail SLA of 1 round.
         assert!(
@@ -1305,9 +1305,9 @@ mod tests {
     #[test]
     fn laplacian_matrix_serde_roundtrip() {
         let topo = make_complete_graph(3);
-        let lap = LaplacianMatrix::from_topology(&topo).unwrap();
-        let json = serde_json::to_string(&lap).unwrap();
-        let back: LaplacianMatrix = serde_json::from_str(&json).unwrap();
+        let lap = LaplacianMatrix::from_topology(&topo).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&lap).expect("serde deserialization should succeed");
+        let back: LaplacianMatrix = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(lap, back);
     }
 
@@ -1317,7 +1317,7 @@ mod tests {
 
     #[test]
     fn self_loop_accepted_or_handled() {
-        let mut topo = GossipTopology::new(vec!["a".into(), "b".into()]).unwrap();
+        let mut topo = GossipTopology::new(vec!["a".into(), "b".into()]).expect("serde deserialization should succeed");
         // Self-loop: edge from node 0 to itself.
         // Depending on implementation, either rejected or added.
         let result = topo.add_edge(0, 0, MILLION);
@@ -1343,7 +1343,7 @@ mod tests {
     fn cheeger_bounds_for_path_graph() {
         let topo = make_path_graph(6);
         let analyzer = SpectralAnalyzer::default();
-        let analysis = analyzer.analyze(&topo).unwrap();
+        let analysis = analyzer.analyze(&topo).expect("serde deserialization should succeed");
         assert!(analysis.cheeger_lower_bound_millionths >= 0);
         assert!(analysis.cheeger_upper_bound_millionths >= analysis.cheeger_lower_bound_millionths);
     }
@@ -1356,8 +1356,8 @@ mod tests {
     fn spectral_analysis_deterministic() {
         let analyzer = SpectralAnalyzer::default();
         let topo = make_complete_graph(5);
-        let a1 = analyzer.analyze(&topo).unwrap();
-        let a2 = analyzer.analyze(&topo).unwrap();
+        let a1 = analyzer.analyze(&topo).expect("serde deserialization should succeed");
+        let a2 = analyzer.analyze(&topo).expect("serde deserialization should succeed");
         assert_eq!(a1, a2);
     }
 
@@ -1391,13 +1391,13 @@ mod tests {
     #[test]
     fn non_uniform_weights_analysis() {
         let node_ids: Vec<String> = (0..4).map(|i| format!("node_{i}")).collect();
-        let mut topo = GossipTopology::new(node_ids).unwrap();
+        let mut topo = GossipTopology::new(node_ids).expect("serde deserialization should succeed");
         // Strong connections in one group, weak bridge
-        topo.add_edge(0, 1, 10 * MILLION).unwrap();
-        topo.add_edge(2, 3, 10 * MILLION).unwrap();
-        topo.add_edge(1, 2, MILLION / 10).unwrap(); // weak bridge
+        topo.add_edge(0, 1, 10 * MILLION).expect("serde deserialization should succeed");
+        topo.add_edge(2, 3, 10 * MILLION).expect("serde deserialization should succeed");
+        topo.add_edge(1, 2, MILLION / 10).expect("serde deserialization should succeed"); // weak bridge
         let analyzer = SpectralAnalyzer::default();
-        let analysis = analyzer.analyze(&topo).unwrap();
+        let analysis = analyzer.analyze(&topo).expect("serde deserialization should succeed");
         assert!(analysis.algebraic_connectivity_millionths > 0);
         // Weak bridge should produce low connectivity
         assert!(analysis.algebraic_connectivity_millionths < 5 * MILLION);
@@ -1411,14 +1411,14 @@ mod tests {
     fn star_graph_connected_analysis() {
         let n = 5;
         let node_ids: Vec<String> = (0..n).map(|i| format!("node_{i}")).collect();
-        let mut topo = GossipTopology::new(node_ids).unwrap();
+        let mut topo = GossipTopology::new(node_ids).expect("serde deserialization should succeed");
         // Node 0 is the center, connected to all others
         for i in 1..n {
-            topo.add_edge(0, i, MILLION).unwrap();
+            topo.add_edge(0, i, MILLION).expect("serde deserialization should succeed");
         }
         assert!(topo.is_connected());
         let analyzer = SpectralAnalyzer::default();
-        let analysis = analyzer.analyze(&topo).unwrap();
+        let analysis = analyzer.analyze(&topo).expect("serde deserialization should succeed");
         assert!(analysis.algebraic_connectivity_millionths > 0);
         assert_eq!(analysis.num_nodes, n);
     }
@@ -1431,7 +1431,7 @@ mod tests {
     fn fiedler_vector_length_matches_nodes() {
         let topo = make_complete_graph(6);
         let analyzer = SpectralAnalyzer::default();
-        let analysis = analyzer.analyze(&topo).unwrap();
+        let analysis = analyzer.analyze(&topo).expect("serde deserialization should succeed");
         assert_eq!(analysis.fiedler_vector_millionths.len(), 6);
     }
 
@@ -1443,7 +1443,7 @@ mod tests {
     fn partitions_cover_all_nodes() {
         let topo = make_path_graph(8);
         let analyzer = SpectralAnalyzer::default();
-        let analysis = analyzer.analyze(&topo).unwrap();
+        let analysis = analyzer.analyze(&topo).expect("serde deserialization should succeed");
         assert_eq!(
             analysis.partition_a.len() + analysis.partition_b.len(),
             8,
@@ -1459,7 +1459,7 @@ mod tests {
     fn certificate_epoch_stored() {
         let topo = make_complete_graph(4);
         let analyzer = SpectralAnalyzer::default();
-        let analysis = analyzer.analyze(&topo).unwrap();
+        let analysis = analyzer.analyze(&topo).expect("serde deserialization should succeed");
         let cert = ConvergenceCertificate::from_analysis(&analysis, SecurityEpoch::from_raw(99));
         assert_eq!(cert.epoch, SecurityEpoch::from_raw(99));
     }
@@ -1472,7 +1472,7 @@ mod tests {
     fn certificate_hash_deterministic() {
         let topo = make_complete_graph(4);
         let analyzer = SpectralAnalyzer::default();
-        let analysis = analyzer.analyze(&topo).unwrap();
+        let analysis = analyzer.analyze(&topo).expect("serde deserialization should succeed");
         let cert1 = ConvergenceCertificate::from_analysis(&analysis, SecurityEpoch::from_raw(1));
         let cert2 = ConvergenceCertificate::from_analysis(&analysis, SecurityEpoch::from_raw(1));
         assert_eq!(cert1.certificate_hash, cert2.certificate_hash);
@@ -1486,7 +1486,7 @@ mod tests {
     fn certificate_partition_field() {
         let topo = make_path_graph(6);
         let analyzer = SpectralAnalyzer::default();
-        let analysis = analyzer.analyze(&topo).unwrap();
+        let analysis = analyzer.analyze(&topo).expect("serde deserialization should succeed");
         let cert = ConvergenceCertificate::from_analysis(&analysis, SecurityEpoch::from_raw(1));
         // Path graph always produces a natural partition
         assert!(cert.has_natural_partition);
@@ -1500,7 +1500,7 @@ mod tests {
 
     #[test]
     fn degree_of_isolated_node_is_zero() {
-        let topo = GossipTopology::new(vec!["a".into(), "b".into(), "c".into()]).unwrap();
+        let topo = GossipTopology::new(vec!["a".into(), "b".into(), "c".into()]).expect("serde deserialization should succeed");
         // No edges added — all nodes isolated
         assert_eq!(topo.degree(0), 0);
         assert_eq!(topo.degree(1), 0);
@@ -1513,7 +1513,7 @@ mod tests {
 
     #[test]
     fn all_isolated_nodes_components() {
-        let topo = GossipTopology::new(vec!["a".into(), "b".into(), "c".into()]).unwrap();
+        let topo = GossipTopology::new(vec!["a".into(), "b".into(), "c".into()]).expect("serde deserialization should succeed");
         assert!(!topo.is_connected());
         assert_eq!(topo.connected_components(), 3);
     }
@@ -1581,7 +1581,7 @@ mod tests {
     fn analysis_schema_field_set() {
         let topo = make_complete_graph(3);
         let analyzer = SpectralAnalyzer::default();
-        let analysis = analyzer.analyze(&topo).unwrap();
+        let analysis = analyzer.analyze(&topo).expect("serde deserialization should succeed");
         assert_eq!(analysis.schema, SPECTRAL_SCHEMA_VERSION);
     }
 
@@ -1620,7 +1620,7 @@ mod tests {
         ];
         let set: std::collections::BTreeSet<String> = variants
             .iter()
-            .map(|v| serde_json::to_string(v).unwrap())
+            .map(|v| serde_json::to_string(v).expect("serde deserialization should succeed"))
             .collect();
         assert_eq!(set.len(), 7);
     }
@@ -1699,8 +1699,8 @@ mod tests {
 
     #[test]
     fn gossip_topology_json_field_names() {
-        let t = GossipTopology::new(vec!["a".to_string()]).unwrap();
-        let json = serde_json::to_string(&t).unwrap();
+        let t = GossipTopology::new(vec!["a".to_string()]).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&t).expect("serde deserialization should succeed");
         assert!(json.contains("\"num_nodes\""));
         assert!(json.contains("\"node_ids\""));
         assert!(json.contains("\"adjacency\""));
@@ -1710,7 +1710,7 @@ mod tests {
     fn spectral_analysis_clone_independence() {
         let topo = make_complete_graph(3);
         let analyzer = SpectralAnalyzer::default();
-        let analysis = analyzer.analyze(&topo).unwrap();
+        let analysis = analyzer.analyze(&topo).expect("serde deserialization should succeed");
         let clone = analysis.clone();
         assert_eq!(analysis, clone);
     }
@@ -1719,8 +1719,8 @@ mod tests {
     fn spectral_analysis_json_field_names() {
         let topo = make_complete_graph(3);
         let analyzer = SpectralAnalyzer::default();
-        let analysis = analyzer.analyze(&topo).unwrap();
-        let json = serde_json::to_string(&analysis).unwrap();
+        let analysis = analyzer.analyze(&topo).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&analysis).expect("serde deserialization should succeed");
         assert!(json.contains("\"schema\""));
         assert!(json.contains("\"num_nodes\""));
         assert!(json.contains("\"algebraic_connectivity_millionths\""));
@@ -1737,9 +1737,9 @@ mod tests {
     fn spectral_analysis_serde_roundtrip_enriched() {
         let topo = make_complete_graph(3);
         let analyzer = SpectralAnalyzer::default();
-        let analysis = analyzer.analyze(&topo).unwrap();
-        let json = serde_json::to_string(&analysis).unwrap();
-        let back: SpectralAnalysis = serde_json::from_str(&json).unwrap();
+        let analysis = analyzer.analyze(&topo).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&analysis).expect("serde deserialization should succeed");
+        let back: SpectralAnalysis = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(analysis, back);
     }
 
@@ -1756,7 +1756,7 @@ mod tests {
     #[test]
     fn spectral_analyzer_json_field_names() {
         let a = SpectralAnalyzer::default();
-        let json = serde_json::to_string(&a).unwrap();
+        let json = serde_json::to_string(&a).expect("serde deserialization should succeed");
         assert!(json.contains("\"max_iterations\""));
         assert!(json.contains("\"convergence_threshold_millionths\""));
     }
@@ -1764,7 +1764,7 @@ mod tests {
     #[test]
     fn laplacian_matrix_clone_independence() {
         let topo = make_complete_graph(3);
-        let l = LaplacianMatrix::from_topology(&topo).unwrap();
+        let l = LaplacianMatrix::from_topology(&topo).expect("serde deserialization should succeed");
         let l2 = l.clone();
         assert_eq!(l, l2);
     }
@@ -1772,16 +1772,16 @@ mod tests {
     #[test]
     fn laplacian_matrix_serde_roundtrip_enriched() {
         let topo = make_complete_graph(3);
-        let l = LaplacianMatrix::from_topology(&topo).unwrap();
-        let json = serde_json::to_string(&l).unwrap();
-        let back: LaplacianMatrix = serde_json::from_str(&json).unwrap();
+        let l = LaplacianMatrix::from_topology(&topo).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&l).expect("serde deserialization should succeed");
+        let back: LaplacianMatrix = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(l, back);
     }
 
     #[test]
     fn laplacian_content_hash_deterministic_enriched() {
         let topo = make_complete_graph(3);
-        let l = LaplacianMatrix::from_topology(&topo).unwrap();
+        let l = LaplacianMatrix::from_topology(&topo).expect("serde deserialization should succeed");
         let h1 = l.content_hash();
         let h2 = l.content_hash();
         assert_eq!(h1, h2);
@@ -1794,14 +1794,14 @@ mod tests {
 
     #[test]
     fn debug_nonempty_gossip_topology() {
-        let t = GossipTopology::new(vec!["a".to_string()]).unwrap();
+        let t = GossipTopology::new(vec!["a".to_string()]).expect("serde deserialization should succeed");
         assert!(!format!("{t:?}").is_empty());
     }
 
     #[test]
     fn debug_nonempty_laplacian_matrix() {
         let topo = make_complete_graph(2);
-        let l = LaplacianMatrix::from_topology(&topo).unwrap();
+        let l = LaplacianMatrix::from_topology(&topo).expect("serde deserialization should succeed");
         assert!(!format!("{l:?}").is_empty());
     }
 
@@ -1814,13 +1814,13 @@ mod tests {
     fn debug_nonempty_spectral_analysis() {
         let topo = make_complete_graph(3);
         let analyzer = SpectralAnalyzer::default();
-        let a = analyzer.analyze(&topo).unwrap();
+        let a = analyzer.analyze(&topo).expect("serde deserialization should succeed");
         assert!(!format!("{a:?}").is_empty());
     }
 
     #[test]
     fn boundary_single_node_graph() {
-        let topo = GossipTopology::new(vec!["solo".to_string()]).unwrap();
+        let topo = GossipTopology::new(vec!["solo".to_string()]).expect("serde deserialization should succeed");
         assert!(topo.is_connected());
         assert_eq!(topo.connected_components(), 1);
         assert_eq!(topo.degree(0), 0);
@@ -1828,14 +1828,14 @@ mod tests {
 
     #[test]
     fn boundary_self_loop_edge() {
-        let mut topo = GossipTopology::new(vec!["a".to_string()]).unwrap();
-        topo.add_edge(0, 0, MILLION).unwrap();
+        let mut topo = GossipTopology::new(vec!["a".to_string()]).expect("serde deserialization should succeed");
+        topo.add_edge(0, 0, MILLION).expect("serde deserialization should succeed");
         assert_eq!(topo.degree(0), MILLION);
     }
 
     #[test]
     fn boundary_edge_weight_zero_rejected() {
-        let mut topo = GossipTopology::new(vec!["a".to_string(), "b".to_string()]).unwrap();
+        let mut topo = GossipTopology::new(vec!["a".to_string(), "b".to_string()]).expect("serde deserialization should succeed");
         let err = topo.add_edge(0, 1, 0).unwrap_err();
         assert!(matches!(
             err,
@@ -1847,7 +1847,7 @@ mod tests {
 
     #[test]
     fn boundary_negative_edge_weight_rejected() {
-        let mut topo = GossipTopology::new(vec!["a".to_string(), "b".to_string()]).unwrap();
+        let mut topo = GossipTopology::new(vec!["a".to_string(), "b".to_string()]).expect("serde deserialization should succeed");
         let err = topo.add_edge(0, 1, -1).unwrap_err();
         assert!(matches!(
             err,
@@ -1859,7 +1859,7 @@ mod tests {
 
     #[test]
     fn boundary_node_out_of_bounds_from() {
-        let mut topo = GossipTopology::new(vec!["a".to_string()]).unwrap();
+        let mut topo = GossipTopology::new(vec!["a".to_string()]).expect("serde deserialization should succeed");
         let err = topo.add_edge(5, 0, MILLION).unwrap_err();
         assert!(matches!(
             err,
@@ -1869,7 +1869,7 @@ mod tests {
 
     #[test]
     fn boundary_node_out_of_bounds_to() {
-        let mut topo = GossipTopology::new(vec!["a".to_string()]).unwrap();
+        let mut topo = GossipTopology::new(vec!["a".to_string()]).expect("serde deserialization should succeed");
         let err = topo.add_edge(0, 5, MILLION).unwrap_err();
         assert!(matches!(
             err,
@@ -1879,7 +1879,7 @@ mod tests {
 
     #[test]
     fn disconnected_graph_analysis_error() {
-        let topo = GossipTopology::new(vec!["a".to_string(), "b".to_string()]).unwrap();
+        let topo = GossipTopology::new(vec!["a".to_string(), "b".to_string()]).expect("serde deserialization should succeed");
         assert!(!topo.is_connected());
         assert_eq!(topo.connected_components(), 2);
         let analyzer = SpectralAnalyzer::default();
@@ -1899,7 +1899,7 @@ mod tests {
     fn partitions_cover_all_nodes_k4() {
         let topo = make_complete_graph(4);
         let analyzer = SpectralAnalyzer::default();
-        let analysis = analyzer.analyze(&topo).unwrap();
+        let analysis = analyzer.analyze(&topo).expect("serde deserialization should succeed");
         let total = analysis.partition_a.len() + analysis.partition_b.len();
         assert_eq!(total, 4);
     }
@@ -1921,8 +1921,8 @@ mod tests {
             SpectralError::DegenerateSpectralGap,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: SpectralError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: SpectralError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -1931,7 +1931,7 @@ mod tests {
     fn complete_graph_k4_positive_algebraic_connectivity() {
         let topo = make_complete_graph(4);
         let analyzer = SpectralAnalyzer::default();
-        let analysis = analyzer.analyze(&topo).unwrap();
+        let analysis = analyzer.analyze(&topo).expect("serde deserialization should succeed");
         assert!(analysis.algebraic_connectivity_millionths > 0);
         assert!(analysis.mixing_time_bound >= 1);
     }
@@ -1940,23 +1940,23 @@ mod tests {
     fn complete_graph_k4_cheeger_bounds_ordered() {
         let topo = make_complete_graph(4);
         let analyzer = SpectralAnalyzer::default();
-        let analysis = analyzer.analyze(&topo).unwrap();
+        let analysis = analyzer.analyze(&topo).expect("serde deserialization should succeed");
         assert!(analysis.cheeger_lower_bound_millionths <= analysis.cheeger_upper_bound_millionths);
     }
 
     #[test]
     fn gossip_topology_serde_roundtrip() {
         let topo = make_complete_graph(3);
-        let json = serde_json::to_string(&topo).unwrap();
-        let back: GossipTopology = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&topo).expect("serde deserialization should succeed");
+        let back: GossipTopology = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(topo, back);
     }
 
     #[test]
     fn spectral_analyzer_serde_roundtrip() {
         let a = SpectralAnalyzer::default();
-        let json = serde_json::to_string(&a).unwrap();
-        let back: SpectralAnalyzer = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&a).expect("serde deserialization should succeed");
+        let back: SpectralAnalyzer = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(a.max_iterations, back.max_iterations);
         assert_eq!(
             a.convergence_threshold_millionths,
@@ -1977,9 +1977,9 @@ mod tests {
 
     #[test]
     fn laplacian_diagonal_equals_degree() {
-        let mut topo = GossipTopology::new(vec!["a".to_string(), "b".to_string()]).unwrap();
-        topo.add_edge(0, 1, 500_000).unwrap();
-        let l = LaplacianMatrix::from_topology(&topo).unwrap();
+        let mut topo = GossipTopology::new(vec!["a".to_string(), "b".to_string()]).expect("serde deserialization should succeed");
+        topo.add_edge(0, 1, 500_000).expect("serde deserialization should succeed");
+        let l = LaplacianMatrix::from_topology(&topo).expect("serde deserialization should succeed");
         assert_eq!(l.get(0, 0), 500_000);
         assert_eq!(l.get(1, 1), 500_000);
         assert_eq!(l.get(0, 1), -500_000);
@@ -1990,7 +1990,7 @@ mod tests {
     fn analysis_fiedler_residual_is_small() {
         let topo = make_complete_graph(4);
         let analyzer = SpectralAnalyzer::default();
-        let analysis = analyzer.analyze(&topo).unwrap();
+        let analysis = analyzer.analyze(&topo).expect("serde deserialization should succeed");
         // Residual should be small for well-converged solutions
         assert!(analysis.fiedler_residual_millionths < 100_000);
     }

@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 mod _support;
-use _support::test262_common::{RequirementLevel, ExpectedResult, execute_test262_case};
+use _support::test262_common::{ExpectedResult, RequirementLevel, execute_test262_case};
 
 // ---------------------------------------------------------------------------
 // Test262 Arrow Function Conformance Suite

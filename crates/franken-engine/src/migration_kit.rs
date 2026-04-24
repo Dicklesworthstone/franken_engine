@@ -1245,7 +1245,7 @@ pub fn analyze_package(
     api_entries.sort_by(|a, b| a.api_name.cmp(&b.api_name));
     dependency_entries.sort_by(|a, b| a.name.cmp(&b.name));
 
-    let report_bytes = serde_json::to_vec(&(&api_entries, &dependency_entries)).unwrap();
+    let report_bytes = serde_json::to_vec(&(&api_entries, &dependency_entries)).expect("serde deserialization should succeed");
     let report_content_hash = ContentHash::compute(&report_bytes);
 
     Ok(CompatibilityReport {
@@ -1314,7 +1314,7 @@ pub fn infer_capabilities(
 
     inferred_capabilities.sort_by_key(|c| std::cmp::Reverse(c.confidence_millionths));
 
-    let bytes = serde_json::to_vec(&(&inferred_capabilities, &minimum_capability_set)).unwrap();
+    let bytes = serde_json::to_vec(&(&inferred_capabilities, &minimum_capability_set)).expect("serde deserialization should succeed");
     let capability_hash = ContentHash::compute(&bytes);
 
     Ok(CapabilityInferenceResult {
@@ -1435,7 +1435,7 @@ pub fn validate_behavior(
 
     divergences.sort_by_key(|d| d.severity);
 
-    let report_bytes = serde_json::to_vec(&(&passing_count, &divergences)).unwrap();
+    let report_bytes = serde_json::to_vec(&(&passing_count, &divergences)).expect("serde deserialization should succeed");
     let report_content_hash = ContentHash::compute(&report_bytes);
 
     Ok(BehaviorValidationReport {
@@ -1711,7 +1711,7 @@ pub fn generate_manifest(
         readiness,
         input.epoch.as_u64(),
     ))
-    .unwrap();
+    .expect("serde deserialization should succeed");
     let manifest_content_hash = ContentHash::compute(&manifest_bytes);
 
     Ok(MigrationManifest {
@@ -1834,7 +1834,7 @@ mod tests {
 
     #[test]
     fn test_analyze_minimal_package() {
-        let report = analyze_package(&minimal_package_json(), &default_config()).unwrap();
+        let report = analyze_package(&minimal_package_json(), &default_config()).expect("serde deserialization should succeed");
         assert_eq!(report.source_runtime, SourceRuntime::Node);
         assert!(report.total_apis_used > 0);
         assert!(report.compatibility_score_millionths > 0);
@@ -1842,7 +1842,7 @@ mod tests {
 
     #[test]
     fn test_analyze_complex_package() {
-        let report = analyze_package(&complex_package_json(), &default_config()).unwrap();
+        let report = analyze_package(&complex_package_json(), &default_config()).expect("serde deserialization should succeed");
         assert!(report.dependency_entries.len() >= 6);
         let incompatible: Vec<_> = report
             .dependency_entries
@@ -1854,7 +1854,7 @@ mod tests {
 
     #[test]
     fn test_analyze_empty_package() {
-        let report = analyze_package("{}", &default_config()).unwrap();
+        let report = analyze_package("{}", &default_config()).expect("serde deserialization should succeed");
         assert_eq!(report.total_apis_used, 0);
         assert_eq!(report.compatibility_score_millionths, 1_000_000);
     }
@@ -1874,7 +1874,7 @@ mod tests {
     #[test]
     fn test_analyze_no_dependencies() {
         let json = r#"{"name": "bare", "version": "0.0.1"}"#;
-        let report = analyze_package(json, &default_config()).unwrap();
+        let report = analyze_package(json, &default_config()).expect("serde deserialization should succeed");
         assert!(report.dependency_entries.is_empty());
     }
 
@@ -1884,14 +1884,14 @@ mod tests {
             analyze_dependencies: false,
             ..default_config()
         };
-        let report = analyze_package(&complex_package_json(), &config).unwrap();
+        let report = analyze_package(&complex_package_json(), &config).expect("serde deserialization should succeed");
         assert!(report.dependency_entries.is_empty());
     }
 
     #[test]
     fn test_analyze_esm_entry_point() {
         let json = r#"{"name": "esm-pkg", "version": "1.0.0", "module": "dist/index.mjs"}"#;
-        let report = analyze_package(json, &default_config()).unwrap();
+        let report = analyze_package(json, &default_config()).expect("serde deserialization should succeed");
         let esm_entries: Vec<_> = report
             .api_entries
             .iter()
@@ -1904,7 +1904,7 @@ mod tests {
     fn test_analyze_scripts_with_node_cli() {
         let json =
             r#"{"name": "cli-pkg", "version": "1.0.0", "scripts": {"start": "node server.js"}}"#;
-        let report = analyze_package(json, &default_config()).unwrap();
+        let report = analyze_package(json, &default_config()).expect("serde deserialization should succeed");
         let cli_entries: Vec<_> = report
             .api_entries
             .iter()
@@ -1916,12 +1916,12 @@ mod tests {
     #[test]
     fn test_analyze_known_incompatible_dependency() {
         let json = r#"{"name": "x", "version": "1.0.0", "dependencies": {"sharp": "^0.33.0"}}"#;
-        let report = analyze_package(json, &default_config()).unwrap();
+        let report = analyze_package(json, &default_config()).expect("serde deserialization should succeed");
         let sharp = report
             .dependency_entries
             .iter()
             .find(|d| d.name == "sharp")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(!sharp.compatible);
     }
 
@@ -1929,20 +1929,20 @@ mod tests {
     fn test_analyze_unknown_dependency() {
         let json =
             r#"{"name": "x", "version": "1.0.0", "dependencies": {"my-custom-lib": "^1.0.0"}}"#;
-        let report = analyze_package(json, &default_config()).unwrap();
+        let report = analyze_package(json, &default_config()).expect("serde deserialization should succeed");
         let custom = report
             .dependency_entries
             .iter()
             .find(|d| d.name == "my-custom-lib")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(custom.compatible);
         assert!(custom.migration_notes.contains("manual review"));
     }
 
     #[test]
     fn test_analyze_deterministic() {
-        let report1 = analyze_package(&complex_package_json(), &default_config()).unwrap();
-        let report2 = analyze_package(&complex_package_json(), &default_config()).unwrap();
+        let report1 = analyze_package(&complex_package_json(), &default_config()).expect("serde deserialization should succeed");
+        let report2 = analyze_package(&complex_package_json(), &default_config()).expect("serde deserialization should succeed");
         assert_eq!(report1.report_content_hash, report2.report_content_hash);
         assert_eq!(
             report1.compatibility_score_millionths,
@@ -1958,7 +1958,7 @@ mod tests {
             "index.js",
             "const fs = require('fs');\nfs.readFile('test.txt');",
         )];
-        let result = infer_capabilities(&files, &default_config()).unwrap();
+        let result = infer_capabilities(&files, &default_config()).expect("serde deserialization should succeed");
         assert!(result.minimum_capability_set.contains("cap:fs"));
     }
 
@@ -1968,7 +1968,7 @@ mod tests {
             "server.js",
             "const http = require('http');\nhttp.createServer();",
         )];
-        let result = infer_capabilities(&files, &default_config()).unwrap();
+        let result = infer_capabilities(&files, &default_config()).expect("serde deserialization should succeed");
         assert!(result.minimum_capability_set.contains("cap:net"));
     }
 
@@ -1978,7 +1978,7 @@ mod tests {
             "auth.js",
             "const crypto = require('crypto');\ncrypto.createHash('sha256');",
         )];
-        let result = infer_capabilities(&files, &default_config()).unwrap();
+        let result = infer_capabilities(&files, &default_config()).expect("serde deserialization should succeed");
         assert!(result.minimum_capability_set.contains("cap:crypto"));
     }
 
@@ -1988,7 +1988,7 @@ mod tests {
             "runner.js",
             "const { exec } = require('child_process');",
         )];
-        let result = infer_capabilities(&files, &default_config()).unwrap();
+        let result = infer_capabilities(&files, &default_config()).expect("serde deserialization should succeed");
         assert!(result.minimum_capability_set.contains("cap:process:child"));
     }
 
@@ -1998,14 +1998,14 @@ mod tests {
             "config.js",
             "const port = process.env.PORT || 3000;",
         )];
-        let result = infer_capabilities(&files, &default_config()).unwrap();
+        let result = infer_capabilities(&files, &default_config()).expect("serde deserialization should succeed");
         assert!(result.minimum_capability_set.contains("cap:env"));
     }
 
     #[test]
     fn test_infer_no_capabilities_from_empty() {
         let files = vec![make_source_file("empty.js", "// empty file")];
-        let result = infer_capabilities(&files, &default_config()).unwrap();
+        let result = infer_capabilities(&files, &default_config()).expect("serde deserialization should succeed");
         assert!(result.minimum_capability_set.is_empty());
     }
 
@@ -2020,7 +2020,7 @@ mod tests {
             const port = process.env.PORT;
             "#,
         )];
-        let result = infer_capabilities(&files, &default_config()).unwrap();
+        let result = infer_capabilities(&files, &default_config()).expect("serde deserialization should succeed");
         assert!(result.minimum_capability_set.len() >= 4);
     }
 
@@ -2030,7 +2030,7 @@ mod tests {
             make_source_file("a.js", "const fs = require('fs');"),
             make_source_file("b.js", "const http = require('http');"),
         ];
-        let result = infer_capabilities(&files, &default_config()).unwrap();
+        let result = infer_capabilities(&files, &default_config()).expect("serde deserialization should succeed");
         assert!(result.minimum_capability_set.contains("cap:fs"));
         assert!(result.minimum_capability_set.contains("cap:net"));
     }
@@ -2041,7 +2041,7 @@ mod tests {
             "wasm.js",
             "const instance = await WebAssembly.instantiate(buffer);",
         )];
-        let result = infer_capabilities(&files, &default_config()).unwrap();
+        let result = infer_capabilities(&files, &default_config()).expect("serde deserialization should succeed");
         assert!(result.minimum_capability_set.contains("cap:wasm"));
     }
 
@@ -2051,15 +2051,15 @@ mod tests {
             "worker.js",
             "const sab = new SharedArrayBuffer(1024);",
         )];
-        let result = infer_capabilities(&files, &default_config()).unwrap();
+        let result = infer_capabilities(&files, &default_config()).expect("serde deserialization should succeed");
         assert!(result.minimum_capability_set.contains("cap:shared-memory"));
     }
 
     #[test]
     fn test_infer_deterministic() {
         let files = vec![make_source_file("a.js", "const fs = require('fs');")];
-        let r1 = infer_capabilities(&files, &default_config()).unwrap();
-        let r2 = infer_capabilities(&files, &default_config()).unwrap();
+        let r1 = infer_capabilities(&files, &default_config()).expect("serde deserialization should succeed");
+        let r2 = infer_capabilities(&files, &default_config()).expect("serde deserialization should succeed");
         assert_eq!(r1.capability_hash, r2.capability_hash);
     }
 
@@ -2071,7 +2071,7 @@ mod tests {
             make_test_result("test1", "ok", "ok"),
             make_test_result("test2", "42", "42"),
         ];
-        let report = validate_behavior(&results, &default_config()).unwrap();
+        let report = validate_behavior(&results, &default_config()).expect("serde deserialization should succeed");
         assert_eq!(report.passing_count, 2);
         assert_eq!(report.divergence_count, 0);
         assert_eq!(report.parity_score_millionths, 1_000_000);
@@ -2083,7 +2083,7 @@ mod tests {
             make_test_result("test1", "ok", "ok"),
             make_test_result("test2", "expected", "different"),
         ];
-        let report = validate_behavior(&results, &default_config()).unwrap();
+        let report = validate_behavior(&results, &default_config()).expect("serde deserialization should succeed");
         assert_eq!(report.passing_count, 1);
         assert_eq!(report.divergence_count, 1);
         assert_eq!(report.parity_score_millionths, 500_000);
@@ -2100,7 +2100,7 @@ mod tests {
             node_duration_us: 100,
             franken_duration_us: 100,
         }];
-        let report = validate_behavior(&results, &default_config()).unwrap();
+        let report = validate_behavior(&results, &default_config()).expect("serde deserialization should succeed");
         assert_eq!(report.divergence_count, 1);
         assert_eq!(
             report.divergences[0].kind,
@@ -2119,7 +2119,7 @@ mod tests {
             node_duration_us: 100,
             franken_duration_us: 100,
         }];
-        let report = validate_behavior(&results, &default_config()).unwrap();
+        let report = validate_behavior(&results, &default_config()).expect("serde deserialization should succeed");
         assert_eq!(report.divergences[0].severity, DivergenceSeverity::Critical);
     }
 
@@ -2136,7 +2136,7 @@ mod tests {
             make_test_result("t2", "c", "d"),
             make_test_result("t3", "e", "f"),
         ];
-        let report = validate_behavior(&results, &default_config()).unwrap();
+        let report = validate_behavior(&results, &default_config()).expect("serde deserialization should succeed");
         assert_eq!(report.passing_count, 0);
         assert_eq!(report.divergence_count, 3);
         assert_eq!(report.parity_score_millionths, 0);
@@ -2148,8 +2148,8 @@ mod tests {
             make_test_result("t1", "ok", "ok"),
             make_test_result("t2", "a", "b"),
         ];
-        let r1 = validate_behavior(&results, &default_config()).unwrap();
-        let r2 = validate_behavior(&results, &default_config()).unwrap();
+        let r1 = validate_behavior(&results, &default_config()).expect("serde deserialization should succeed");
+        let r2 = validate_behavior(&results, &default_config()).expect("serde deserialization should succeed");
         assert_eq!(r1.report_content_hash, r2.report_content_hash);
     }
 
@@ -2191,7 +2191,7 @@ mod tests {
             capability_hash: ContentHash::compute(b"test"),
         };
 
-        let steps = generate_remediation(&compat, &behavior, &caps).unwrap();
+        let steps = generate_remediation(&compat, &behavior, &caps).expect("serde deserialization should succeed");
         assert_eq!(steps.len(), 1);
         assert_eq!(steps[0].category, RemediationCategory::ApiReplacement);
     }
@@ -2231,7 +2231,7 @@ mod tests {
             capability_hash: ContentHash::compute(b"test"),
         };
 
-        let steps = generate_remediation(&compat, &behavior, &caps).unwrap();
+        let steps = generate_remediation(&compat, &behavior, &caps).expect("serde deserialization should succeed");
         assert_eq!(steps.len(), 1);
         assert_eq!(steps[0].category, RemediationCategory::DependencySwap);
     }
@@ -2266,7 +2266,7 @@ mod tests {
             capability_hash: ContentHash::compute(b"test"),
         };
 
-        let steps = generate_remediation(&compat, &behavior, &caps).unwrap();
+        let steps = generate_remediation(&compat, &behavior, &caps).expect("serde deserialization should succeed");
         assert!(steps.is_empty());
     }
 
@@ -2312,7 +2312,7 @@ mod tests {
             capabilities: caps,
             epoch: SecurityEpoch::from_raw(1),
         })
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         assert_eq!(manifest.source_package_name, "my-extension");
         assert_eq!(manifest.franken_extension_name, "my-extension");
@@ -2360,7 +2360,7 @@ mod tests {
             capabilities: caps,
             epoch: SecurityEpoch::from_raw(5),
         })
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         assert_eq!(manifest.franken_extension_name, "myorg__my-pkg");
         assert_eq!(manifest.source_runtime, SourceRuntime::Bun);
@@ -2475,7 +2475,7 @@ mod tests {
             &schema_id,
             b"test-div",
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let compat = CompatibilityReport {
             source_runtime: SourceRuntime::Node,
@@ -2635,7 +2635,7 @@ mod tests {
 
     #[test]
     fn test_lookup_known_api() {
-        let api = lookup_api("fs", "readFile").unwrap();
+        let api = lookup_api("fs", "readFile").expect("serde deserialization should succeed");
         assert_eq!(api.support_level, ApiSupportLevel::FullySupported);
     }
 
@@ -2656,8 +2656,8 @@ mod tests {
     #[test]
     fn test_serde_roundtrip_config() {
         let config = MigrationConfig::default();
-        let json = serde_json::to_string(&config).unwrap();
-        let roundtripped: MigrationConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let roundtripped: MigrationConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, roundtripped);
     }
 
@@ -2666,16 +2666,16 @@ mod tests {
         let err = MigrationKitError::AnalysisFailed {
             detail: "test error".to_string(),
         };
-        let json = serde_json::to_string(&err).unwrap();
-        let roundtripped: MigrationKitError = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let roundtripped: MigrationKitError = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, roundtripped);
     }
 
     #[test]
     fn test_serde_roundtrip_compatibility_report() {
-        let report = analyze_package(&minimal_package_json(), &default_config()).unwrap();
-        let json = serde_json::to_string(&report).unwrap();
-        let roundtripped: CompatibilityReport = serde_json::from_str(&json).unwrap();
+        let report = analyze_package(&minimal_package_json(), &default_config()).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let roundtripped: CompatibilityReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report, roundtripped);
     }
 
@@ -2760,8 +2760,8 @@ mod tests {
     #[test]
     fn source_runtime_serde_roundtrip() {
         for rt in [SourceRuntime::Node, SourceRuntime::Bun] {
-            let json = serde_json::to_string(&rt).unwrap();
-            let restored: SourceRuntime = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&rt).expect("serde deserialization should succeed");
+            let restored: SourceRuntime = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(rt, restored);
         }
     }
@@ -2775,8 +2775,8 @@ mod tests {
             ApiSupportLevel::Deprecated,
             ApiSupportLevel::RequiresPolyfill,
         ] {
-            let json = serde_json::to_string(&level).unwrap();
-            let restored: ApiSupportLevel = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&level).expect("serde deserialization should succeed");
+            let restored: ApiSupportLevel = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(level, restored);
         }
     }
@@ -2791,8 +2791,8 @@ mod tests {
             DivergenceKind::MissingFeature,
             DivergenceKind::SecurityPolicyDifference,
         ] {
-            let json = serde_json::to_string(&kind).unwrap();
-            let restored: DivergenceKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
+            let restored: DivergenceKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(kind, restored);
         }
     }
@@ -2806,8 +2806,8 @@ mod tests {
             DivergenceSeverity::Low,
             DivergenceSeverity::Informational,
         ] {
-            let json = serde_json::to_string(&sev).unwrap();
-            let restored: DivergenceSeverity = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&sev).expect("serde deserialization should succeed");
+            let restored: DivergenceSeverity = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(sev, restored);
         }
     }
@@ -2828,8 +2828,8 @@ mod tests {
             InferredCapabilityKind::SharedMemory,
             InferredCapabilityKind::NativeAddon,
         ] {
-            let json = serde_json::to_string(&kind).unwrap();
-            let restored: InferredCapabilityKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
+            let restored: InferredCapabilityKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(kind, restored);
         }
     }
@@ -2845,8 +2845,8 @@ mod tests {
             RemediationCategory::SecurityPolicyUpdate,
             RemediationCategory::FeatureDisable,
         ] {
-            let json = serde_json::to_string(&cat).unwrap();
-            let restored: RemediationCategory = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&cat).expect("serde deserialization should succeed");
+            let restored: RemediationCategory = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(cat, restored);
         }
     }
@@ -2860,8 +2860,8 @@ mod tests {
             RemediationEffort::High,
             RemediationEffort::Significant,
         ] {
-            let json = serde_json::to_string(&effort).unwrap();
-            let restored: RemediationEffort = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&effort).expect("serde deserialization should succeed");
+            let restored: RemediationEffort = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(effort, restored);
         }
     }
@@ -2901,8 +2901,8 @@ mod tests {
             MigrationKitError::InternalError { detail: "p".into() },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap();
-            let restored: MigrationKitError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let restored: MigrationKitError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, restored);
         }
     }
@@ -3090,8 +3090,8 @@ mod tests {
             error_code: Some("FE-MK-0001".to_string()),
             details: BTreeMap::from([("k".to_string(), "v".to_string())]),
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let restored: MigrationEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let restored: MigrationEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, restored);
     }
 
@@ -3106,8 +3106,8 @@ mod tests {
             node_duration_us: 100,
             franken_duration_us: 200,
         };
-        let json = serde_json::to_string(&r).unwrap();
-        let restored: LockstepTestResult = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let restored: LockstepTestResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, restored);
     }
 
@@ -3117,8 +3117,8 @@ mod tests {
             path: "index.js".to_string(),
             content: "console.log('hi');".to_string(),
         };
-        let json = serde_json::to_string(&sf).unwrap();
-        let restored: SourceFile = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&sf).expect("serde deserialization should succeed");
+        let restored: SourceFile = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(sf, restored);
     }
 
@@ -3131,8 +3131,8 @@ mod tests {
             support_level: ApiSupportLevel::FullySupported,
             notes: "sandboxed".to_string(),
         };
-        let json = serde_json::to_string(&entry).unwrap();
-        let restored: ApiUsageEntry = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let restored: ApiUsageEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, restored);
     }
 
@@ -3144,8 +3144,8 @@ mod tests {
             compatible: true,
             migration_notes: "pure JS".to_string(),
         };
-        let json = serde_json::to_string(&de).unwrap();
-        let restored: DependencyEntry = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&de).expect("serde deserialization should succeed");
+        let restored: DependencyEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(de, restored);
     }
 
@@ -3318,7 +3318,7 @@ mod tests {
             content: "setTimeout(fn, 1000)".into(),
         }];
         let config = MigrationConfig::default();
-        let result = infer_capabilities(&files, &config).unwrap();
+        let result = infer_capabilities(&files, &config).expect("serde deserialization should succeed");
         assert!(
             result
                 .inferred_capabilities
@@ -3335,7 +3335,7 @@ mod tests {
             content: "setInterval(() => {}, 5000)".into(),
         }];
         let config = MigrationConfig::default();
-        let result = infer_capabilities(&files, &config).unwrap();
+        let result = infer_capabilities(&files, &config).expect("serde deserialization should succeed");
         assert!(
             result
                 .inferred_capabilities
@@ -3351,7 +3351,7 @@ mod tests {
             content: r#"const mod = await import("./plugin.js")"#.into(),
         }];
         let config = MigrationConfig::default();
-        let result = infer_capabilities(&files, &config).unwrap();
+        let result = infer_capabilities(&files, &config).expect("serde deserialization should succeed");
         assert!(
             result
                 .inferred_capabilities
@@ -3368,7 +3368,7 @@ mod tests {
             content: "node-gyp rebuild".into(),
         }];
         let config = MigrationConfig::default();
-        let result = infer_capabilities(&files, &config).unwrap();
+        let result = infer_capabilities(&files, &config).expect("serde deserialization should succeed");
         assert!(
             result
                 .inferred_capabilities
@@ -3384,7 +3384,7 @@ mod tests {
             content: "const binding = require('napi-module')".into(),
         }];
         let config = MigrationConfig::default();
-        let result = infer_capabilities(&files, &config).unwrap();
+        let result = infer_capabilities(&files, &config).expect("serde deserialization should succeed");
         assert!(
             result
                 .inferred_capabilities
@@ -3400,7 +3400,7 @@ mod tests {
             content: r#"const { Worker } = require("worker_threads")"#.into(),
         }];
         let config = MigrationConfig::default();
-        let result = infer_capabilities(&files, &config).unwrap();
+        let result = infer_capabilities(&files, &config).expect("serde deserialization should succeed");
         assert!(
             result
                 .inferred_capabilities
@@ -3417,12 +3417,12 @@ mod tests {
             content: "const w = new Worker('./w.js')".into(),
         }];
         let config = MigrationConfig::default();
-        let result = infer_capabilities(&files, &config).unwrap();
+        let result = infer_capabilities(&files, &config).expect("serde deserialization should succeed");
         let cap = result
             .inferred_capabilities
             .iter()
             .find(|c| c.kind == InferredCapabilityKind::WorkerThreads)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(cap.confidence_millionths, 700_000);
         // 700_000 < 800_000 threshold => NOT in minimum set
         assert!(!result.minimum_capability_set.contains("cap:worker"));
@@ -3437,7 +3437,7 @@ mod tests {
             content: "WebAssembly.instantiate(buffer)".into(),
         }];
         let config = MigrationConfig::default();
-        let result = infer_capabilities(&files, &config).unwrap();
+        let result = infer_capabilities(&files, &config).expect("serde deserialization should succeed");
         assert!(
             result
                 .inferred_capabilities
@@ -3454,7 +3454,7 @@ mod tests {
             content: "const buf = new SharedArrayBuffer(1024)".into(),
         }];
         let config = MigrationConfig::default();
-        let result = infer_capabilities(&files, &config).unwrap();
+        let result = infer_capabilities(&files, &config).expect("serde deserialization should succeed");
         assert!(
             result
                 .inferred_capabilities
@@ -3471,7 +3471,7 @@ mod tests {
             content: r#"import { readFile } from "fs""#.into(),
         }];
         let config = MigrationConfig::default();
-        let result = infer_capabilities(&files, &config).unwrap();
+        let result = infer_capabilities(&files, &config).expect("serde deserialization should succeed");
         assert!(
             result
                 .inferred_capabilities
@@ -3487,7 +3487,7 @@ mod tests {
             content: r#"import { randomBytes } from "crypto""#.into(),
         }];
         let config = MigrationConfig::default();
-        let result = infer_capabilities(&files, &config).unwrap();
+        let result = infer_capabilities(&files, &config).expect("serde deserialization should succeed");
         assert!(
             result
                 .inferred_capabilities
@@ -3525,7 +3525,7 @@ mod tests {
             node_duration_us: 100,
             franken_duration_us: 500, // >2x
         }];
-        let report = validate_behavior(&results, &config).unwrap();
+        let report = validate_behavior(&results, &config).expect("serde deserialization should succeed");
         assert_eq!(report.divergence_count, 1);
         assert_eq!(report.divergences[0].kind, DivergenceKind::TimingDifference);
     }
@@ -3542,7 +3542,7 @@ mod tests {
             node_duration_us: 100,
             franken_duration_us: 120, // within 2x
         }];
-        let report = validate_behavior(&results, &config).unwrap();
+        let report = validate_behavior(&results, &config).expect("serde deserialization should succeed");
         assert_eq!(report.divergence_count, 1);
         assert_eq!(
             report.divergences[0].kind,
@@ -3562,7 +3562,7 @@ mod tests {
             node_duration_us: 100,
             franken_duration_us: 100,
         }];
-        let report = validate_behavior(&results, &config).unwrap();
+        let report = validate_behavior(&results, &config).expect("serde deserialization should succeed");
         assert_eq!(report.divergence_count, 1);
         assert_eq!(
             report.divergences[0].kind,
@@ -3583,7 +3583,7 @@ mod tests {
             node_duration_us: 100,
             franken_duration_us: 100,
         }];
-        let report = validate_behavior(&results, &config).unwrap();
+        let report = validate_behavior(&results, &config).expect("serde deserialization should succeed");
         assert_eq!(report.divergence_count, 1);
         assert_eq!(
             report.divergences[0].kind,
@@ -3615,7 +3615,7 @@ mod tests {
                 franken_duration_us: 50,
             },
         ];
-        let report = validate_behavior(&results, &config).unwrap();
+        let report = validate_behavior(&results, &config).expect("serde deserialization should succeed");
         assert_eq!(report.total_test_cases, 2);
         assert_eq!(report.passing_count, 1);
         assert_eq!(report.divergence_count, 1);
@@ -3661,7 +3661,7 @@ mod tests {
             recommended_capability_set: BTreeSet::new(),
             capability_hash: ContentHash::compute(b"test"),
         };
-        let steps = generate_remediation(&compatibility, &behavior, &caps).unwrap();
+        let steps = generate_remediation(&compatibility, &behavior, &caps).expect("serde deserialization should succeed");
         assert_eq!(steps.len(), 1);
         assert_eq!(steps[0].category, RemediationCategory::ApiReplacement);
         assert_eq!(steps[0].effort, RemediationEffort::Low);
@@ -3677,7 +3677,7 @@ mod tests {
             &schema_id,
             b"test-div",
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let compatibility = CompatibilityReport {
             source_runtime: SourceRuntime::Node,
             total_apis_used: 0,
@@ -3714,7 +3714,7 @@ mod tests {
             recommended_capability_set: BTreeSet::new(),
             capability_hash: ContentHash::compute(b"test"),
         };
-        let steps = generate_remediation(&compatibility, &behavior, &caps).unwrap();
+        let steps = generate_remediation(&compatibility, &behavior, &caps).expect("serde deserialization should succeed");
         assert_eq!(steps.len(), 1);
         assert_eq!(steps[0].category, RemediationCategory::CodeRefactor);
         assert_eq!(steps[0].effort, RemediationEffort::Significant);
@@ -3735,7 +3735,7 @@ mod tests {
             &schema_id,
             b"test-div-high",
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let compatibility = CompatibilityReport {
             source_runtime: SourceRuntime::Node,
             total_apis_used: 0,
@@ -3772,7 +3772,7 @@ mod tests {
             recommended_capability_set: BTreeSet::new(),
             capability_hash: ContentHash::compute(b"test"),
         };
-        let steps = generate_remediation(&compatibility, &behavior, &caps).unwrap();
+        let steps = generate_remediation(&compatibility, &behavior, &caps).expect("serde deserialization should succeed");
         assert_eq!(steps.len(), 1);
         assert_eq!(steps[0].effort, RemediationEffort::Medium);
     }
@@ -3786,7 +3786,7 @@ mod tests {
             &schema_id,
             b"test-div-low",
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let compatibility = CompatibilityReport {
             source_runtime: SourceRuntime::Node,
             total_apis_used: 0,
@@ -3823,7 +3823,7 @@ mod tests {
             recommended_capability_set: BTreeSet::new(),
             capability_hash: ContentHash::compute(b"test"),
         };
-        let steps = generate_remediation(&compatibility, &behavior, &caps).unwrap();
+        let steps = generate_remediation(&compatibility, &behavior, &caps).expect("serde deserialization should succeed");
         assert!(steps.is_empty());
     }
 
@@ -3870,7 +3870,7 @@ mod tests {
             capabilities: caps,
             epoch: SecurityEpoch::from_raw(1),
         };
-        let manifest = generate_manifest(input).unwrap();
+        let manifest = generate_manifest(input).expect("serde deserialization should succeed");
         assert_eq!(manifest.franken_extension_name, "scope__my-pkg");
         assert_eq!(manifest.franken_extension_version, "0.1.0");
     }
@@ -3916,8 +3916,8 @@ mod tests {
                 epoch: SecurityEpoch::from_raw(5),
             }
         };
-        let m1 = generate_manifest(mk_input()).unwrap();
-        let m2 = generate_manifest(mk_input()).unwrap();
+        let m1 = generate_manifest(mk_input()).expect("serde deserialization should succeed");
+        let m2 = generate_manifest(mk_input()).expect("serde deserialization should succeed");
         assert_eq!(m1.manifest_id, m2.manifest_id);
         assert_eq!(m1.manifest_content_hash, m2.manifest_content_hash);
     }
@@ -3962,7 +3962,7 @@ mod tests {
             &schema_id,
             b"crit",
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let compatibility = CompatibilityReport {
             source_runtime: SourceRuntime::Node,
             total_apis_used: 1,
@@ -4009,7 +4009,7 @@ mod tests {
             ..MigrationConfig::default()
         };
         let pkg = r#"{"name":"bun-pkg","dependencies":{"express":"^4"}}"#;
-        let report = analyze_package(pkg, &config).unwrap();
+        let report = analyze_package(pkg, &config).expect("serde deserialization should succeed");
         assert_eq!(report.source_runtime, SourceRuntime::Bun);
     }
 
@@ -4017,7 +4017,7 @@ mod tests {
     fn analyze_package_peer_deps() {
         let config = MigrationConfig::default();
         let pkg = r#"{"name":"test","peerDependencies":{"react":"^18"}}"#;
-        let report = analyze_package(pkg, &config).unwrap();
+        let report = analyze_package(pkg, &config).expect("serde deserialization should succeed");
         assert!(!report.dependency_entries.is_empty());
         assert_eq!(report.dependency_entries[0].name, "react");
     }
@@ -4026,7 +4026,7 @@ mod tests {
     fn analyze_package_ts_entry_as_esm() {
         let config = MigrationConfig::default();
         let pkg = r#"{"name":"ts-app","main":"index.ts"}"#;
-        let report = analyze_package(pkg, &config).unwrap();
+        let report = analyze_package(pkg, &config).expect("serde deserialization should succeed");
         let esm_entry = report
             .api_entries
             .iter()
@@ -4038,7 +4038,7 @@ mod tests {
     fn analyze_package_mjs_entry_as_esm() {
         let config = MigrationConfig::default();
         let pkg = r#"{"name":"esm-app","module":"dist/index.mjs"}"#;
-        let report = analyze_package(pkg, &config).unwrap();
+        let report = analyze_package(pkg, &config).expect("serde deserialization should succeed");
         let esm_entry = report
             .api_entries
             .iter()
@@ -4050,7 +4050,7 @@ mod tests {
     fn analyze_package_cjs_entry() {
         let config = MigrationConfig::default();
         let pkg = r#"{"name":"cjs-app","main":"dist/index.js"}"#;
-        let report = analyze_package(pkg, &config).unwrap();
+        let report = analyze_package(pkg, &config).expect("serde deserialization should succeed");
         let cjs_entry = report
             .api_entries
             .iter()
@@ -4062,7 +4062,7 @@ mod tests {
     fn analyze_package_node_cli_scripts() {
         let config = MigrationConfig::default();
         let pkg = r#"{"name":"cli","scripts":{"build":"node build.js","test":"npx jest"}}"#;
-        let report = analyze_package(pkg, &config).unwrap();
+        let report = analyze_package(pkg, &config).expect("serde deserialization should succeed");
         let cli_entries: Vec<_> = report
             .api_entries
             .iter()
@@ -4114,9 +4114,9 @@ mod tests {
             capabilities: caps,
             epoch: SecurityEpoch::from_raw(1),
         };
-        let manifest = generate_manifest(input).unwrap();
-        let json = serde_json::to_string(&manifest).unwrap();
-        let back: MigrationManifest = serde_json::from_str(&json).unwrap();
+        let manifest = generate_manifest(input).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&manifest).expect("serde deserialization should succeed");
+        let back: MigrationManifest = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(manifest, back);
     }
 
@@ -4132,9 +4132,9 @@ mod tests {
             node_duration_us: 10,
             franken_duration_us: 10,
         }];
-        let report = validate_behavior(&results, &config).unwrap();
-        let json = serde_json::to_string(&report).unwrap();
-        let back: BehaviorValidationReport = serde_json::from_str(&json).unwrap();
+        let report = validate_behavior(&results, &config).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let back: BehaviorValidationReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report, back);
     }
 
@@ -4145,9 +4145,9 @@ mod tests {
             content: r#"require("fs")"#.into(),
         }];
         let config = MigrationConfig::default();
-        let result = infer_capabilities(&files, &config).unwrap();
-        let json = serde_json::to_string(&result).unwrap();
-        let back: CapabilityInferenceResult = serde_json::from_str(&json).unwrap();
+        let result = infer_capabilities(&files, &config).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let back: CapabilityInferenceResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, back);
     }
 
@@ -4162,8 +4162,8 @@ mod tests {
             node_duration_us: 42,
             franken_duration_us: 43,
         };
-        let json = serde_json::to_string(&ltr).unwrap();
-        let back: LockstepTestResult = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&ltr).expect("serde deserialization should succeed");
+        let back: LockstepTestResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ltr, back);
     }
 
@@ -4178,8 +4178,8 @@ mod tests {
             max_divergence_count: 50,
             deterministic_seed: 99,
         };
-        let json = serde_json::to_string(&config).unwrap();
-        let back: MigrationConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let back: MigrationConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, back);
     }
 
@@ -4196,8 +4196,8 @@ mod tests {
             error_code: Some("FE-MK-0001".into()),
             details,
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let back: MigrationEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let back: MigrationEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
     }
 
@@ -4210,7 +4210,7 @@ mod tests {
             &schema_id,
             b"serde-step",
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let step = RemediationStep {
             step_id,
             category: RemediationCategory::PolyfillAddition,
@@ -4222,8 +4222,8 @@ mod tests {
             affected_files: vec!["lib.js".into()],
             priority_score_millionths: 700_000,
         };
-        let json = serde_json::to_string(&step).unwrap();
-        let back: RemediationStep = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&step).expect("serde deserialization should succeed");
+        let back: RemediationStep = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(step, back);
     }
 
@@ -4327,8 +4327,8 @@ mod tests {
             MigrationKitError::InternalError { detail: "p".into() },
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: MigrationKitError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: MigrationKitError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(v, &back);
         }
     }
@@ -4446,7 +4446,7 @@ mod tests {
         };
         let json = emit_migration_event(&event);
         assert!(json.contains("migration_kit"));
-        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(parsed["outcome"], "pass");
     }
 }

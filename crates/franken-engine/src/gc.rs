@@ -619,23 +619,23 @@ mod tests {
         let mut gc = deterministic_collector();
         // SAFETY: Test-only heap registration with unique identifier "ext-a".
         // register_heap only fails on duplicate heap IDs, which cannot happen in isolated test.
-        gc.register_heap("ext-a".into()).unwrap();
+        gc.register_heap("ext-a".into()).expect("serde deserialization should succeed");
 
         // SAFETY: Allocating on just-registered heap "ext-a" with valid size.
         // allocate only fails on unregistered heap or memory exhaustion (impossible in test).
-        let obj1 = gc.allocate("ext-a", 100).unwrap();
-        let obj2 = gc.allocate("ext-a", 200).unwrap();
+        let obj1 = gc.allocate("ext-a", 100).expect("serde deserialization should succeed");
+        let obj2 = gc.allocate("ext-a", 200).expect("serde deserialization should succeed");
 
         // Unroot both — they become garbage.
-        gc.unroot("ext-a", obj1).unwrap();
-        gc.unroot("ext-a", obj2).unwrap();
+        gc.unroot("ext-a", obj1).expect("serde deserialization should succeed");
+        gc.unroot("ext-a", obj2).expect("serde deserialization should succeed");
 
-        let event = gc.collect("ext-a").unwrap();
+        let event = gc.collect("ext-a").expect("serde deserialization should succeed");
         assert_eq!(event.swept_count, 2);
         assert_eq!(event.bytes_reclaimed, 300);
         assert_eq!(event.marked_count, 0);
 
-        let heap = gc.get_heap("ext-a").unwrap();
+        let heap = gc.get_heap("ext-a").expect("serde deserialization should succeed");
         assert_eq!(heap.object_count(), 0);
         assert_eq!(heap.total_bytes(), 0);
     }
@@ -643,45 +643,45 @@ mod tests {
     #[test]
     fn rooted_objects_survive_collection() {
         let mut gc = deterministic_collector();
-        gc.register_heap("ext-a".into()).unwrap();
+        gc.register_heap("ext-a".into()).expect("serde deserialization should succeed");
 
-        let obj1 = gc.allocate("ext-a", 100).unwrap();
-        let _obj2 = gc.allocate("ext-a", 200).unwrap();
+        let obj1 = gc.allocate("ext-a", 100).expect("serde deserialization should succeed");
+        let _obj2 = gc.allocate("ext-a", 200).expect("serde deserialization should succeed");
 
         // Only unroot obj1.
-        gc.unroot("ext-a", obj1).unwrap();
+        gc.unroot("ext-a", obj1).expect("serde deserialization should succeed");
 
-        let event = gc.collect("ext-a").unwrap();
+        let event = gc.collect("ext-a").expect("serde deserialization should succeed");
         assert_eq!(event.swept_count, 1); // obj1 collected
         assert_eq!(event.bytes_reclaimed, 100);
         assert_eq!(event.marked_count, 1); // obj2 still alive
 
-        let heap = gc.get_heap("ext-a").unwrap();
+        let heap = gc.get_heap("ext-a").expect("serde deserialization should succeed");
         assert_eq!(heap.object_count(), 1);
     }
 
     #[test]
     fn referenced_objects_survive_collection() {
         let mut gc = deterministic_collector();
-        gc.register_heap("ext-a".into()).unwrap();
+        gc.register_heap("ext-a".into()).expect("serde deserialization should succeed");
 
-        let root = gc.allocate("ext-a", 50).unwrap();
-        let child = gc.allocate("ext-a", 80).unwrap();
-        let grandchild = gc.allocate("ext-a", 120).unwrap();
+        let root = gc.allocate("ext-a", 50).expect("serde deserialization should succeed");
+        let child = gc.allocate("ext-a", 80).expect("serde deserialization should succeed");
+        let grandchild = gc.allocate("ext-a", 120).expect("serde deserialization should succeed");
 
         // root -> child -> grandchild
-        gc.add_reference("ext-a", root, child).unwrap();
-        gc.add_reference("ext-a", child, grandchild).unwrap();
+        gc.add_reference("ext-a", root, child).expect("serde deserialization should succeed");
+        gc.add_reference("ext-a", child, grandchild).expect("serde deserialization should succeed");
 
         // Unroot child and grandchild — they're still reachable from root.
-        gc.unroot("ext-a", child).unwrap();
-        gc.unroot("ext-a", grandchild).unwrap();
+        gc.unroot("ext-a", child).expect("serde deserialization should succeed");
+        gc.unroot("ext-a", grandchild).expect("serde deserialization should succeed");
 
-        let event = gc.collect("ext-a").unwrap();
+        let event = gc.collect("ext-a").expect("serde deserialization should succeed");
         assert_eq!(event.marked_count, 3);
         assert_eq!(event.swept_count, 0);
 
-        let heap = gc.get_heap("ext-a").unwrap();
+        let heap = gc.get_heap("ext-a").expect("serde deserialization should succeed");
         assert_eq!(heap.object_count(), 3);
     }
 
@@ -690,44 +690,44 @@ mod tests {
     #[test]
     fn circular_references_collected_when_unreachable() {
         let mut gc = deterministic_collector();
-        gc.register_heap("ext-a".into()).unwrap();
+        gc.register_heap("ext-a".into()).expect("serde deserialization should succeed");
 
-        let a = gc.allocate("ext-a", 64).unwrap();
-        let b = gc.allocate("ext-a", 64).unwrap();
-        let c = gc.allocate("ext-a", 64).unwrap();
+        let a = gc.allocate("ext-a", 64).expect("serde deserialization should succeed");
+        let b = gc.allocate("ext-a", 64).expect("serde deserialization should succeed");
+        let c = gc.allocate("ext-a", 64).expect("serde deserialization should succeed");
 
         // Create cycle: a -> b -> c -> a
-        gc.add_reference("ext-a", a, b).unwrap();
-        gc.add_reference("ext-a", b, c).unwrap();
-        gc.add_reference("ext-a", c, a).unwrap();
+        gc.add_reference("ext-a", a, b).expect("serde deserialization should succeed");
+        gc.add_reference("ext-a", b, c).expect("serde deserialization should succeed");
+        gc.add_reference("ext-a", c, a).expect("serde deserialization should succeed");
 
         // Unroot all — cycle is unreachable.
-        gc.unroot("ext-a", a).unwrap();
-        gc.unroot("ext-a", b).unwrap();
-        gc.unroot("ext-a", c).unwrap();
+        gc.unroot("ext-a", a).expect("serde deserialization should succeed");
+        gc.unroot("ext-a", b).expect("serde deserialization should succeed");
+        gc.unroot("ext-a", c).expect("serde deserialization should succeed");
 
-        let event = gc.collect("ext-a").unwrap();
+        let event = gc.collect("ext-a").expect("serde deserialization should succeed");
         assert_eq!(event.swept_count, 3);
         assert_eq!(event.bytes_reclaimed, 192);
 
-        let heap = gc.get_heap("ext-a").unwrap();
+        let heap = gc.get_heap("ext-a").expect("serde deserialization should succeed");
         assert_eq!(heap.object_count(), 0);
     }
 
     #[test]
     fn circular_references_survive_when_rooted() {
         let mut gc = deterministic_collector();
-        gc.register_heap("ext-a".into()).unwrap();
+        gc.register_heap("ext-a".into()).expect("serde deserialization should succeed");
 
-        let a = gc.allocate("ext-a", 64).unwrap();
-        let b = gc.allocate("ext-a", 64).unwrap();
+        let a = gc.allocate("ext-a", 64).expect("serde deserialization should succeed");
+        let b = gc.allocate("ext-a", 64).expect("serde deserialization should succeed");
 
         // a -> b -> a (cycle), but a remains rooted.
-        gc.add_reference("ext-a", a, b).unwrap();
-        gc.add_reference("ext-a", b, a).unwrap();
-        gc.unroot("ext-a", b).unwrap();
+        gc.add_reference("ext-a", a, b).expect("serde deserialization should succeed");
+        gc.add_reference("ext-a", b, a).expect("serde deserialization should succeed");
+        gc.unroot("ext-a", b).expect("serde deserialization should succeed");
 
-        let event = gc.collect("ext-a").unwrap();
+        let event = gc.collect("ext-a").expect("serde deserialization should succeed");
         assert_eq!(event.marked_count, 2);
         assert_eq!(event.swept_count, 0);
     }
@@ -737,21 +737,21 @@ mod tests {
     #[test]
     fn dangling_references_do_not_crash() {
         let mut gc = deterministic_collector();
-        gc.register_heap("ext-a".into()).unwrap();
+        gc.register_heap("ext-a".into()).expect("serde deserialization should succeed");
 
-        let obj = gc.allocate("ext-a", 100).unwrap();
+        let obj = gc.allocate("ext-a", 100).expect("serde deserialization should succeed");
         // Add reference to a non-existent object ID.
         let phantom = GcObjectId(999);
         gc.get_heap_mut("ext-a")
-            .unwrap()
+            .expect("serde deserialization should succeed")
             .objects
             .get_mut(&obj)
-            .unwrap()
+            .expect("serde deserialization should succeed")
             .references
             .insert(phantom);
 
         // Collection should succeed without panic.
-        let event = gc.collect("ext-a").unwrap();
+        let event = gc.collect("ext-a").expect("serde deserialization should succeed");
         assert_eq!(event.marked_count, 1); // obj is rooted
         assert_eq!(event.swept_count, 0);
     }
@@ -761,21 +761,21 @@ mod tests {
     #[test]
     fn per_extension_collection_isolation() {
         let mut gc = deterministic_collector();
-        gc.register_heap("ext-a".into()).unwrap();
-        gc.register_heap("ext-b".into()).unwrap();
+        gc.register_heap("ext-a".into()).expect("serde deserialization should succeed");
+        gc.register_heap("ext-b".into()).expect("serde deserialization should succeed");
 
-        let a1 = gc.allocate("ext-a", 100).unwrap();
-        let _b1 = gc.allocate("ext-b", 200).unwrap();
+        let a1 = gc.allocate("ext-a", 100).expect("serde deserialization should succeed");
+        let _b1 = gc.allocate("ext-b", 200).expect("serde deserialization should succeed");
 
         // Unroot a1 and collect ext-a only.
-        gc.unroot("ext-a", a1).unwrap();
-        let event = gc.collect("ext-a").unwrap();
+        gc.unroot("ext-a", a1).expect("serde deserialization should succeed");
+        let event = gc.collect("ext-a").expect("serde deserialization should succeed");
         assert_eq!(event.swept_count, 1);
         assert_eq!(event.bytes_reclaimed, 100);
         assert_eq!(event.extension_id, "ext-a");
 
         // ext-b should be completely unaffected.
-        let heap_b = gc.get_heap("ext-b").unwrap();
+        let heap_b = gc.get_heap("ext-b").expect("serde deserialization should succeed");
         assert_eq!(heap_b.object_count(), 1);
         assert_eq!(heap_b.total_bytes(), 200);
         assert_eq!(heap_b.collection_count(), 0);
@@ -784,9 +784,9 @@ mod tests {
     #[test]
     fn collect_all_processes_heaps_in_deterministic_order() {
         let mut gc = deterministic_collector();
-        gc.register_heap("ext-c".into()).unwrap();
-        gc.register_heap("ext-a".into()).unwrap();
-        gc.register_heap("ext-b".into()).unwrap();
+        gc.register_heap("ext-c".into()).expect("serde deserialization should succeed");
+        gc.register_heap("ext-a".into()).expect("serde deserialization should succeed");
+        gc.register_heap("ext-b".into()).expect("serde deserialization should succeed");
 
         let events = gc.collect_all();
         assert_eq!(events.len(), 3);
@@ -806,24 +806,24 @@ mod tests {
     fn deterministic_mode_produces_identical_event_sequence() {
         fn run_scenario() -> Vec<GcEvent> {
             let mut gc = GcCollector::new(GcConfig::deterministic());
-            gc.register_heap("ext-a".into()).unwrap();
+            gc.register_heap("ext-a".into()).expect("serde deserialization should succeed");
 
-            let r = gc.allocate("ext-a", 50).unwrap();
-            let a = gc.allocate("ext-a", 30).unwrap();
-            let b = gc.allocate("ext-a", 20).unwrap();
+            let r = gc.allocate("ext-a", 50).expect("serde deserialization should succeed");
+            let a = gc.allocate("ext-a", 30).expect("serde deserialization should succeed");
+            let b = gc.allocate("ext-a", 20).expect("serde deserialization should succeed");
 
-            gc.add_reference("ext-a", r, a).unwrap();
-            gc.add_reference("ext-a", a, b).unwrap();
-            gc.unroot("ext-a", a).unwrap();
-            gc.unroot("ext-a", b).unwrap();
+            gc.add_reference("ext-a", r, a).expect("serde deserialization should succeed");
+            gc.add_reference("ext-a", a, b).expect("serde deserialization should succeed");
+            gc.unroot("ext-a", a).expect("serde deserialization should succeed");
+            gc.unroot("ext-a", b).expect("serde deserialization should succeed");
 
-            gc.collect("ext-a").unwrap();
+            gc.collect("ext-a").expect("serde deserialization should succeed");
 
-            let c = gc.allocate("ext-a", 40).unwrap();
-            gc.unroot("ext-a", c).unwrap();
-            gc.unroot("ext-a", r).unwrap();
+            let c = gc.allocate("ext-a", 40).expect("serde deserialization should succeed");
+            gc.unroot("ext-a", c).expect("serde deserialization should succeed");
+            gc.unroot("ext-a", r).expect("serde deserialization should succeed");
 
-            gc.collect("ext-a").unwrap();
+            gc.collect("ext-a").expect("serde deserialization should succeed");
             gc.events().to_vec()
         }
 
@@ -835,16 +835,16 @@ mod tests {
     #[test]
     fn deterministic_mode_uses_fixed_pause_ns() {
         let mut gc = GcCollector::new(GcConfig::deterministic());
-        gc.register_heap("ext-a".into()).unwrap();
-        let event = gc.collect("ext-a").unwrap();
+        gc.register_heap("ext-a".into()).expect("serde deserialization should succeed");
+        let event = gc.collect("ext-a").expect("serde deserialization should succeed");
         assert_eq!(event.pause_ns, 1000);
     }
 
     #[test]
     fn non_deterministic_mode_uses_zero_pause_ns() {
         let mut gc = GcCollector::new(GcConfig::default());
-        gc.register_heap("ext-a".into()).unwrap();
-        let event = gc.collect("ext-a").unwrap();
+        gc.register_heap("ext-a".into()).expect("serde deserialization should succeed");
+        let event = gc.collect("ext-a").expect("serde deserialization should succeed");
         assert_eq!(event.pause_ns, 0);
     }
 
@@ -853,10 +853,10 @@ mod tests {
     #[test]
     fn pressure_check_reports_correct_utilization() {
         let mut gc = deterministic_collector();
-        gc.register_heap("ext-a".into()).unwrap();
-        gc.allocate("ext-a", 750).unwrap();
+        gc.register_heap("ext-a".into()).expect("serde deserialization should succeed");
+        gc.allocate("ext-a", 750).expect("serde deserialization should succeed");
 
-        let util = gc.check_pressure("ext-a", 1000).unwrap();
+        let util = gc.check_pressure("ext-a", 1000).expect("serde deserialization should succeed");
         assert!((util - 0.75).abs() < f64::EPSILON);
     }
 
@@ -866,12 +866,12 @@ mod tests {
             deterministic: true,
             pressure_threshold_percent: 50,
         });
-        gc.register_heap("ext-a".into()).unwrap();
+        gc.register_heap("ext-a".into()).expect("serde deserialization should succeed");
 
-        gc.allocate("ext-a", 400).unwrap();
+        gc.allocate("ext-a", 400).expect("serde deserialization should succeed");
         assert!(!gc.should_collect("ext-a", 1000)); // 40% < 50%
 
-        gc.allocate("ext-a", 200).unwrap();
+        gc.allocate("ext-a", 200).expect("serde deserialization should succeed");
         assert!(gc.should_collect("ext-a", 1000)); // 60% >= 50%
     }
 
@@ -886,7 +886,7 @@ mod tests {
     #[test]
     fn allocate_tracked_charges_domain_registry() {
         let mut gc = deterministic_collector();
-        gc.register_heap("ext-a".into()).unwrap();
+        gc.register_heap("ext-a".into()).expect("serde deserialization should succeed");
 
         let mut reg = DomainRegistry::new();
         reg.register(
@@ -894,14 +894,14 @@ mod tests {
             crate::alloc_domain::LifetimeClass::SessionScoped,
             1000,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
-        let (obj_id, seq) = gc.allocate_tracked("ext-a", 400, &mut reg).unwrap();
+        let (obj_id, seq) = gc.allocate_tracked("ext-a", 400, &mut reg).expect("serde deserialization should succeed");
         assert_eq!(obj_id.as_u64(), 0);
         assert_eq!(seq, 1);
         assert_eq!(
             reg.get(&AllocationDomain::ExtensionHeap)
-                .unwrap()
+                .expect("serde deserialization should succeed")
                 .budget
                 .used_bytes,
             400
@@ -911,7 +911,7 @@ mod tests {
     #[test]
     fn collect_tracked_releases_to_domain_registry() {
         let mut gc = deterministic_collector();
-        gc.register_heap("ext-a".into()).unwrap();
+        gc.register_heap("ext-a".into()).expect("serde deserialization should succeed");
 
         let mut reg = DomainRegistry::new();
         reg.register(
@@ -919,16 +919,16 @@ mod tests {
             crate::alloc_domain::LifetimeClass::SessionScoped,
             1000,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
-        let (obj_id, _) = gc.allocate_tracked("ext-a", 400, &mut reg).unwrap();
-        gc.unroot("ext-a", obj_id).unwrap();
+        let (obj_id, _) = gc.allocate_tracked("ext-a", 400, &mut reg).expect("serde deserialization should succeed");
+        gc.unroot("ext-a", obj_id).expect("serde deserialization should succeed");
 
-        let event = gc.collect_tracked("ext-a", &mut reg).unwrap();
+        let event = gc.collect_tracked("ext-a", &mut reg).expect("serde deserialization should succeed");
         assert_eq!(event.bytes_reclaimed, 400);
         assert_eq!(
             reg.get(&AllocationDomain::ExtensionHeap)
-                .unwrap()
+                .expect("serde deserialization should succeed")
                 .budget
                 .used_bytes,
             0
@@ -938,10 +938,10 @@ mod tests {
     #[test]
     fn collect_tracked_missing_registry_domain_fails_without_mutation() {
         let mut gc = deterministic_collector();
-        gc.register_heap("ext-a".into()).unwrap();
+        gc.register_heap("ext-a".into()).expect("serde deserialization should succeed");
 
-        let obj_id = gc.allocate("ext-a", 400).unwrap();
-        gc.unroot("ext-a", obj_id).unwrap();
+        let obj_id = gc.allocate("ext-a", 400).expect("serde deserialization should succeed");
+        gc.unroot("ext-a", obj_id).expect("serde deserialization should succeed");
 
         let mut reg = DomainRegistry::new();
         let result = gc.collect_tracked("ext-a", &mut reg);
@@ -952,7 +952,7 @@ mod tests {
             }))
         ));
 
-        let heap = gc.get_heap("ext-a").unwrap();
+        let heap = gc.get_heap("ext-a").expect("serde deserialization should succeed");
         assert_eq!(heap.object_count(), 1);
         assert_eq!(heap.total_bytes(), 400);
         assert_eq!(gc.events().len(), 0);
@@ -962,7 +962,7 @@ mod tests {
     #[test]
     fn allocate_tracked_rejects_when_budget_exceeded() {
         let mut gc = deterministic_collector();
-        gc.register_heap("ext-a".into()).unwrap();
+        gc.register_heap("ext-a".into()).expect("serde deserialization should succeed");
 
         let mut reg = DomainRegistry::new();
         reg.register(
@@ -970,7 +970,7 @@ mod tests {
             crate::alloc_domain::LifetimeClass::SessionScoped,
             100,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let result = gc.allocate_tracked("ext-a", 200, &mut reg);
         assert!(matches!(result, Err(GcError::DomainError(_))));
@@ -981,7 +981,7 @@ mod tests {
     #[test]
     fn register_duplicate_heap_rejected() {
         let mut gc = deterministic_collector();
-        gc.register_heap("ext-a".into()).unwrap();
+        gc.register_heap("ext-a".into()).expect("serde deserialization should succeed");
         assert!(matches!(
             gc.register_heap("ext-a".into()),
             Err(GcError::DuplicateHeap { .. })
@@ -991,10 +991,10 @@ mod tests {
     #[test]
     fn remove_heap_returns_heap_data() {
         let mut gc = deterministic_collector();
-        gc.register_heap("ext-a".into()).unwrap();
-        gc.allocate("ext-a", 100).unwrap();
+        gc.register_heap("ext-a".into()).expect("serde deserialization should succeed");
+        gc.allocate("ext-a", 100).expect("serde deserialization should succeed");
 
-        let heap = gc.remove_heap("ext-a").unwrap();
+        let heap = gc.remove_heap("ext-a").expect("serde deserialization should succeed");
         assert_eq!(heap.extension_id(), "ext-a");
         assert_eq!(heap.object_count(), 1);
         assert_eq!(gc.heap_count(), 0);
@@ -1023,12 +1023,12 @@ mod tests {
     #[test]
     fn events_accumulate_across_collections() {
         let mut gc = deterministic_collector();
-        gc.register_heap("ext-a".into()).unwrap();
-        gc.register_heap("ext-b".into()).unwrap();
+        gc.register_heap("ext-a".into()).expect("serde deserialization should succeed");
+        gc.register_heap("ext-b".into()).expect("serde deserialization should succeed");
 
-        gc.collect("ext-a").unwrap();
-        gc.collect("ext-b").unwrap();
-        gc.collect("ext-a").unwrap();
+        gc.collect("ext-a").expect("serde deserialization should succeed");
+        gc.collect("ext-b").expect("serde deserialization should succeed");
+        gc.collect("ext-a").expect("serde deserialization should succeed");
 
         assert_eq!(gc.events().len(), 3);
         assert_eq!(gc.event_sequence(), 3);
@@ -1042,13 +1042,13 @@ mod tests {
     #[test]
     fn reroot_prevents_collection() {
         let mut gc = deterministic_collector();
-        gc.register_heap("ext-a".into()).unwrap();
+        gc.register_heap("ext-a".into()).expect("serde deserialization should succeed");
 
-        let obj = gc.allocate("ext-a", 100).unwrap();
-        gc.unroot("ext-a", obj).unwrap();
-        gc.get_heap_mut("ext-a").unwrap().root(obj).unwrap();
+        let obj = gc.allocate("ext-a", 100).expect("serde deserialization should succeed");
+        gc.unroot("ext-a", obj).expect("serde deserialization should succeed");
+        gc.get_heap_mut("ext-a").expect("serde deserialization should succeed").root(obj).expect("serde deserialization should succeed");
 
-        let event = gc.collect("ext-a").unwrap();
+        let event = gc.collect("ext-a").expect("serde deserialization should succeed");
         assert_eq!(event.swept_count, 0);
         assert_eq!(event.marked_count, 1);
     }
@@ -1058,9 +1058,9 @@ mod tests {
     #[test]
     fn collecting_empty_heap_is_noop() {
         let mut gc = deterministic_collector();
-        gc.register_heap("ext-a".into()).unwrap();
+        gc.register_heap("ext-a".into()).expect("serde deserialization should succeed");
 
-        let event = gc.collect("ext-a").unwrap();
+        let event = gc.collect("ext-a").expect("serde deserialization should succeed");
         assert_eq!(event.marked_count, 0);
         assert_eq!(event.swept_count, 0);
         assert_eq!(event.bytes_reclaimed, 0);
@@ -1071,13 +1071,13 @@ mod tests {
     #[test]
     fn collection_count_increments() {
         let mut gc = deterministic_collector();
-        gc.register_heap("ext-a".into()).unwrap();
+        gc.register_heap("ext-a".into()).expect("serde deserialization should succeed");
 
-        gc.collect("ext-a").unwrap();
-        gc.collect("ext-a").unwrap();
-        gc.collect("ext-a").unwrap();
+        gc.collect("ext-a").expect("serde deserialization should succeed");
+        gc.collect("ext-a").expect("serde deserialization should succeed");
+        gc.collect("ext-a").expect("serde deserialization should succeed");
 
-        assert_eq!(gc.get_heap("ext-a").unwrap().collection_count(), 3);
+        assert_eq!(gc.get_heap("ext-a").expect("serde deserialization should succeed").collection_count(), 3);
     }
 
     // -- Total reclaimed tracking --
@@ -1085,17 +1085,17 @@ mod tests {
     #[test]
     fn total_reclaimed_accumulates() {
         let mut gc = deterministic_collector();
-        gc.register_heap("ext-a".into()).unwrap();
+        gc.register_heap("ext-a".into()).expect("serde deserialization should succeed");
 
-        let a = gc.allocate("ext-a", 100).unwrap();
-        gc.unroot("ext-a", a).unwrap();
-        gc.collect("ext-a").unwrap();
+        let a = gc.allocate("ext-a", 100).expect("serde deserialization should succeed");
+        gc.unroot("ext-a", a).expect("serde deserialization should succeed");
+        gc.collect("ext-a").expect("serde deserialization should succeed");
 
-        let b = gc.allocate("ext-a", 200).unwrap();
-        gc.unroot("ext-a", b).unwrap();
-        gc.collect("ext-a").unwrap();
+        let b = gc.allocate("ext-a", 200).expect("serde deserialization should succeed");
+        gc.unroot("ext-a", b).expect("serde deserialization should succeed");
+        gc.collect("ext-a").expect("serde deserialization should succeed");
 
-        assert_eq!(gc.get_heap("ext-a").unwrap().total_reclaimed(), 300);
+        assert_eq!(gc.get_heap("ext-a").expect("serde deserialization should succeed").total_reclaimed(), 300);
     }
 
     // -- Serialization --
@@ -1103,20 +1103,20 @@ mod tests {
     #[test]
     fn gc_collector_serialization_round_trip() {
         let mut gc = deterministic_collector();
-        gc.register_heap("ext-a".into()).unwrap();
-        let obj = gc.allocate("ext-a", 100).unwrap();
-        gc.unroot("ext-a", obj).unwrap();
-        gc.collect("ext-a").unwrap();
+        gc.register_heap("ext-a".into()).expect("serde deserialization should succeed");
+        let obj = gc.allocate("ext-a", 100).expect("serde deserialization should succeed");
+        gc.unroot("ext-a", obj).expect("serde deserialization should succeed");
+        gc.collect("ext-a").expect("serde deserialization should succeed");
 
-        let json = serde_json::to_string(&gc).unwrap();
-        let restored: GcCollector = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&gc).expect("serde deserialization should succeed");
+        let restored: GcCollector = serde_json::from_str(&json).expect("serde deserialization should succeed");
 
         assert_eq!(gc.heap_count(), restored.heap_count());
         assert_eq!(gc.event_sequence(), restored.event_sequence());
         assert_eq!(gc.events().len(), restored.events().len());
         assert_eq!(
-            gc.get_heap("ext-a").unwrap().object_count(),
-            restored.get_heap("ext-a").unwrap().object_count()
+            gc.get_heap("ext-a").expect("serde deserialization should succeed").object_count(),
+            restored.get_heap("ext-a").expect("serde deserialization should succeed").object_count()
         );
     }
 
@@ -1188,8 +1188,8 @@ mod tests {
     #[test]
     fn gc_phase_serde_round_trip() {
         for phase in &[GcPhase::Mark, GcPhase::Sweep, GcPhase::Complete] {
-            let json = serde_json::to_string(phase).unwrap();
-            let decoded: GcPhase = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(phase).expect("serde deserialization should succeed");
+            let decoded: GcPhase = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&decoded, phase);
         }
     }
@@ -1209,8 +1209,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap();
-            let decoded: GcError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let decoded: GcError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&decoded, err);
         }
     }
@@ -1233,11 +1233,11 @@ mod tests {
     #[test]
     fn allocation_ids_are_monotonically_assigned() {
         let mut gc = deterministic_collector();
-        gc.register_heap("ext-a".into()).unwrap();
+        gc.register_heap("ext-a".into()).expect("serde deserialization should succeed");
 
-        let id1 = gc.allocate("ext-a", 10).unwrap();
-        let id2 = gc.allocate("ext-a", 20).unwrap();
-        let id3 = gc.allocate("ext-a", 30).unwrap();
+        let id1 = gc.allocate("ext-a", 10).expect("serde deserialization should succeed");
+        let id2 = gc.allocate("ext-a", 20).expect("serde deserialization should succeed");
+        let id3 = gc.allocate("ext-a", 30).expect("serde deserialization should succeed");
 
         assert_eq!(id1.as_u64(), 0);
         assert_eq!(id2.as_u64(), 1);
@@ -1284,9 +1284,9 @@ mod tests {
     #[test]
     fn check_pressure_zero_budget_returns_zero() {
         let mut gc = deterministic_collector();
-        gc.register_heap("ext-a".into()).unwrap();
-        gc.allocate("ext-a", 100).unwrap();
-        let pressure = gc.check_pressure("ext-a", 0).unwrap();
+        gc.register_heap("ext-a".into()).expect("serde deserialization should succeed");
+        gc.allocate("ext-a", 100).expect("serde deserialization should succeed");
+        let pressure = gc.check_pressure("ext-a", 0).expect("serde deserialization should succeed");
         // budget=0 with bytes>0 yields infinite pressure (f64::MAX).
         assert!((pressure - f64::MAX).abs() < f64::EPSILON);
     }
@@ -1304,9 +1304,9 @@ mod tests {
     #[test]
     fn iter_heaps_returns_deterministic_alphabetical_order() {
         let mut gc = deterministic_collector();
-        gc.register_heap("ext-z".into()).unwrap();
-        gc.register_heap("ext-a".into()).unwrap();
-        gc.register_heap("ext-m".into()).unwrap();
+        gc.register_heap("ext-z".into()).expect("serde deserialization should succeed");
+        gc.register_heap("ext-a".into()).expect("serde deserialization should succeed");
+        gc.register_heap("ext-m".into()).expect("serde deserialization should succeed");
 
         let ids: Vec<&str> = gc.iter_heaps().map(|(id, _)| id).collect();
         assert_eq!(ids, vec!["ext-a", "ext-m", "ext-z"]);
@@ -1344,12 +1344,12 @@ mod tests {
     #[test]
     fn gc_event_serde_round_trip() {
         let mut gc = deterministic_collector();
-        gc.register_heap("ext-a".into()).unwrap();
-        gc.allocate("ext-a", 50).unwrap();
-        let event = gc.collect("ext-a").unwrap();
+        gc.register_heap("ext-a".into()).expect("serde deserialization should succeed");
+        gc.allocate("ext-a", 50).expect("serde deserialization should succeed");
+        let event = gc.collect("ext-a").expect("serde deserialization should succeed");
 
-        let json = serde_json::to_string(&event).unwrap();
-        let decoded: GcEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let decoded: GcEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(decoded, event);
     }
 
@@ -1403,10 +1403,10 @@ mod tests {
     fn collect_all_deterministic_across_runs() {
         fn run_scenario() -> Vec<GcEvent> {
             let mut gc = GcCollector::new(GcConfig::deterministic());
-            gc.register_heap("ext-b".into()).unwrap();
-            gc.register_heap("ext-a".into()).unwrap();
-            gc.allocate("ext-a", 100).unwrap();
-            gc.allocate("ext-b", 200).unwrap();
+            gc.register_heap("ext-b".into()).expect("serde deserialization should succeed");
+            gc.register_heap("ext-a".into()).expect("serde deserialization should succeed");
+            gc.allocate("ext-a", 100).expect("serde deserialization should succeed");
+            gc.allocate("ext-b", 200).expect("serde deserialization should succeed");
             gc.collect_all()
         }
         let r1 = run_scenario();
@@ -1422,11 +1422,11 @@ mod tests {
     fn heap_count_tracks_registrations_and_removals() {
         let mut gc = deterministic_collector();
         assert_eq!(gc.heap_count(), 0);
-        gc.register_heap("ext-a".into()).unwrap();
+        gc.register_heap("ext-a".into()).expect("serde deserialization should succeed");
         assert_eq!(gc.heap_count(), 1);
-        gc.register_heap("ext-b".into()).unwrap();
+        gc.register_heap("ext-b".into()).expect("serde deserialization should succeed");
         assert_eq!(gc.heap_count(), 2);
-        gc.remove_heap("ext-a").unwrap();
+        gc.remove_heap("ext-a").expect("serde deserialization should succeed");
         assert_eq!(gc.heap_count(), 1);
     }
 
@@ -1445,8 +1445,8 @@ mod tests {
             },
         ];
         for config in &configs {
-            let json = serde_json::to_string(config).unwrap();
-            let back: GcConfig = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(config).expect("serde deserialization should succeed");
+            let back: GcConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(config.deterministic, back.deterministic);
             assert_eq!(
                 config.pressure_threshold_percent,
@@ -1503,8 +1503,8 @@ mod tests {
             remaining: 100,
             domain: Some(AllocationDomain::ExtensionHeap),
         });
-        let json = serde_json::to_string(&err).unwrap();
-        let decoded: GcError = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let decoded: GcError = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(decoded, err);
     }
 
@@ -1521,8 +1521,8 @@ mod tests {
             references: refs,
             rooted: true,
         };
-        let json = serde_json::to_string(&obj).unwrap();
-        let back: GcObject = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&obj).expect("serde deserialization should succeed");
+        let back: GcObject = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(obj, back);
     }
 
@@ -1534,8 +1534,8 @@ mod tests {
             references: BTreeSet::new(),
             rooted: false,
         };
-        let json = serde_json::to_string(&obj).unwrap();
-        let back: GcObject = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&obj).expect("serde deserialization should succeed");
+        let back: GcObject = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(obj, back);
     }
 
@@ -1562,9 +1562,9 @@ mod tests {
         let mut heap = ExtensionHeap::new("ext".into());
         let a = heap.allocate(10);
         let b = heap.allocate(20);
-        heap.add_reference(a, b).unwrap();
-        heap.add_reference(a, b).unwrap(); // duplicate
-        let obj = heap.get(a).unwrap();
+        heap.add_reference(a, b).expect("serde deserialization should succeed");
+        heap.add_reference(a, b).expect("serde deserialization should succeed"); // duplicate
+        let obj = heap.get(a).expect("serde deserialization should succeed");
         assert_eq!(obj.references.len(), 1); // BTreeSet deduplicates
     }
 
@@ -1572,8 +1572,8 @@ mod tests {
     fn extension_heap_root_already_rooted_object() {
         let mut heap = ExtensionHeap::new("ext".into());
         let id = heap.allocate(10); // starts rooted
-        heap.root(id).unwrap(); // re-root is no-op
-        let obj = heap.get(id).unwrap();
+        heap.root(id).expect("serde deserialization should succeed"); // re-root is no-op
+        let obj = heap.get(id).expect("serde deserialization should succeed");
         assert!(obj.rooted);
     }
 
@@ -1582,11 +1582,11 @@ mod tests {
         let mut heap = ExtensionHeap::new("serde-ext".into());
         let a = heap.allocate(100);
         let b = heap.allocate(200);
-        heap.add_reference(a, b).unwrap();
-        heap.unroot(b).unwrap();
+        heap.add_reference(a, b).expect("serde deserialization should succeed");
+        heap.unroot(b).expect("serde deserialization should succeed");
 
-        let json = serde_json::to_string(&heap).unwrap();
-        let back: ExtensionHeap = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&heap).expect("serde deserialization should succeed");
+        let back: ExtensionHeap = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.extension_id(), "serde-ext");
         assert_eq!(back.object_count(), 2);
         assert_eq!(back.total_bytes(), 300);
@@ -1619,18 +1619,18 @@ mod tests {
     #[test]
     fn collector_event_sequence_monotonic() {
         let mut gc = GcCollector::new(GcConfig::deterministic());
-        gc.register_heap("ext-a".into()).unwrap();
-        gc.register_heap("ext-b".into()).unwrap();
-        let e1 = gc.collect("ext-a").unwrap();
-        let e2 = gc.collect("ext-b").unwrap();
+        gc.register_heap("ext-a".into()).expect("serde deserialization should succeed");
+        gc.register_heap("ext-b".into()).expect("serde deserialization should succeed");
+        let e1 = gc.collect("ext-a").expect("serde deserialization should succeed");
+        let e2 = gc.collect("ext-b").expect("serde deserialization should succeed");
         assert!(e2.sequence > e1.sequence);
     }
 
     #[test]
     fn collect_all_events_have_complete_phase() {
         let mut gc = GcCollector::new(GcConfig::deterministic());
-        gc.register_heap("a".into()).unwrap();
-        gc.register_heap("b".into()).unwrap();
+        gc.register_heap("a".into()).expect("serde deserialization should succeed");
+        gc.register_heap("b".into()).expect("serde deserialization should succeed");
         let events = gc.collect_all();
         assert_eq!(events.len(), 2);
         for ev in &events {
@@ -1675,8 +1675,8 @@ mod tests {
     #[test]
     fn gc_phase_serde_roundtrip_all_variants() {
         for v in [GcPhase::Mark, GcPhase::Sweep, GcPhase::Complete] {
-            let json = serde_json::to_string(&v).unwrap();
-            let back: GcPhase = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let back: GcPhase = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(v, back);
         }
     }
@@ -1723,10 +1723,10 @@ mod tests {
     #[test]
     fn self_referencing_object_survives_collection() {
         let mut gc = GcCollector::new(GcConfig::deterministic());
-        gc.register_heap("ext".into()).unwrap();
-        let id = gc.allocate("ext", 64).unwrap();
-        gc.add_reference("ext", id, id).unwrap(); // self-reference
-        let ev = gc.collect("ext").unwrap();
+        gc.register_heap("ext".into()).expect("serde deserialization should succeed");
+        let id = gc.allocate("ext", 64).expect("serde deserialization should succeed");
+        gc.add_reference("ext", id, id).expect("serde deserialization should succeed"); // self-reference
+        let ev = gc.collect("ext").expect("serde deserialization should succeed");
         // rooted + self-referencing: survives collection
         assert_eq!(ev.swept_count, 0);
         assert_eq!(ev.marked_count, 1);
@@ -1750,8 +1750,8 @@ mod tests {
             deterministic: true,
             pressure_threshold_percent: 50,
         });
-        gc.register_heap("ext".into()).unwrap();
-        gc.allocate("ext", 50).unwrap(); // 50 bytes out of budget 100
+        gc.register_heap("ext".into()).expect("serde deserialization should succeed");
+        gc.allocate("ext", 50).expect("serde deserialization should succeed"); // 50 bytes out of budget 100
         assert!(gc.should_collect("ext", 100)); // 50% == threshold => true
     }
 

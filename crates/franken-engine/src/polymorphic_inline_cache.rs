@@ -915,10 +915,10 @@ mod tests {
         for kind in IcSiteKind::ALL {
             // SAFETY: IcSiteKind derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json = serde_json::to_string(kind).unwrap();
+            let json = serde_json::to_string(kind).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by to_string of a valid IcSiteKind,
             // so from_str back to IcSiteKind cannot fail (valid format + matching schema).
-            let back: IcSiteKind = serde_json::from_str(&json).unwrap();
+            let back: IcSiteKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*kind, back);
         }
     }
@@ -949,10 +949,10 @@ mod tests {
         for state in IcSiteState::ALL {
             // SAFETY: IcSiteState derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json = serde_json::to_string(state).unwrap();
+            let json = serde_json::to_string(state).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by to_string of a valid IcSiteState,
             // so from_str back to IcSiteState cannot fail (valid format + matching schema).
-            let back: IcSiteState = serde_json::from_str(&json).unwrap();
+            let back: IcSiteState = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*state, back);
         }
     }
@@ -1062,10 +1062,10 @@ mod tests {
         p.record_access(42, &IcPolicyConfig::default());
         // SAFETY: IcSiteProfile derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&p).unwrap();
+        let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid IcSiteProfile,
         // so from_str back to IcSiteProfile cannot fail (valid format + matching schema).
-        let back: IcSiteProfile = serde_json::from_str(&json).unwrap();
+        let back: IcSiteProfile = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(p, back);
     }
 
@@ -1104,8 +1104,8 @@ mod tests {
     #[test]
     fn verdict_serde_roundtrip() {
         for v in BailoutVerdict::ALL {
-            let json = serde_json::to_string(v).unwrap();
-            let back: BailoutVerdict = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: BailoutVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -1125,8 +1125,8 @@ mod tests {
     #[test]
     fn config_serde_roundtrip() {
         let config = IcPolicyConfig::default();
-        let json = serde_json::to_string(&config).unwrap();
-        let back: IcPolicyConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let back: IcPolicyConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, back);
     }
 
@@ -1187,8 +1187,8 @@ mod tests {
         p.record_access(42, &IcPolicyConfig::default());
         let config = IcPolicyConfig::default();
         let decision = decide_bailout(&p, &config, epoch());
-        let json = serde_json::to_string(&decision).unwrap();
-        let back: BailoutDecision = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&decision).expect("serde deserialization should succeed");
+        let back: BailoutDecision = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(decision, back);
     }
 
@@ -1262,8 +1262,8 @@ mod tests {
             42,
             1,
         );
-        let json = serde_json::to_string(&log).unwrap();
-        let back: IcReplayLog = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&log).expect("serde deserialization should succeed");
+        let back: IcReplayLog = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(log, back);
     }
 
@@ -1285,7 +1285,7 @@ mod tests {
 
         scope.record_access(10, 42, &IcPolicyConfig::default());
         assert_eq!(scope.total_accesses, 1);
-        assert_eq!(scope.sites.get(&10).unwrap().total_accesses, 1);
+        assert_eq!(scope.sites.get(&10).expect("serde deserialization should succeed").total_accesses, 1);
     }
 
     #[test]
@@ -1314,7 +1314,7 @@ mod tests {
         scope.register_site(10, IcSiteKind::PropertyLoad);
         scope.record_guard_failure(10);
         assert_eq!(scope.total_guard_failures, 1);
-        assert_eq!(scope.sites.get(&10).unwrap().guard_failure_count, 1);
+        assert_eq!(scope.sites.get(&10).expect("serde deserialization should succeed").guard_failure_count, 1);
     }
 
     #[test]
@@ -1348,8 +1348,8 @@ mod tests {
     #[test]
     fn specimen_family_serde_roundtrip() {
         for fam in PicSpecimenFamily::ALL {
-            let json = serde_json::to_string(fam).unwrap();
-            let back: PicSpecimenFamily = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(fam).expect("serde deserialization should succeed");
+            let back: PicSpecimenFamily = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*fam, back);
         }
     }
@@ -1359,8 +1359,8 @@ mod tests {
     #[test]
     fn pic_verdict_serde_roundtrip() {
         for v in [PicVerdict::Pass, PicVerdict::Fail] {
-            let json = serde_json::to_string(&v).unwrap();
-            let back: PicVerdict = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let back: PicVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(v, back);
         }
     }

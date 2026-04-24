@@ -1317,15 +1317,15 @@ mod tests {
 
     #[test]
     fn test_boundary_kind_serde_fold() {
-        let json = serde_json::to_string(&BoundaryKind::Fold).unwrap();
-        let deserialized: BoundaryKind = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&BoundaryKind::Fold).expect("serde deserialization should succeed");
+        let deserialized: BoundaryKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(deserialized, BoundaryKind::Fold);
     }
 
     #[test]
     fn test_boundary_kind_serde_cusp() {
-        let json = serde_json::to_string(&BoundaryKind::Cusp).unwrap();
-        let deserialized: BoundaryKind = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&BoundaryKind::Cusp).expect("serde deserialization should succeed");
+        let deserialized: BoundaryKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(deserialized, BoundaryKind::Cusp);
     }
 
@@ -1340,8 +1340,8 @@ mod tests {
             BoundaryKind::CliffEdge,
         ];
         for variant in &variants {
-            let json = serde_json::to_string(variant).unwrap();
-            let deserialized: BoundaryKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(variant).expect("serde deserialization should succeed");
+            let deserialized: BoundaryKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&deserialized, variant);
         }
     }
@@ -1356,8 +1356,8 @@ mod tests {
             PhaseRegion::RobustLoss,
         ];
         for variant in &variants {
-            let json = serde_json::to_string(variant).unwrap();
-            let deserialized: PhaseRegion = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(variant).expect("serde deserialization should succeed");
+            let deserialized: PhaseRegion = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&deserialized, variant);
         }
     }
@@ -1371,7 +1371,7 @@ mod tests {
         // source_metric in RobustWin, target_metric in RobustLoss
         let result = detect_boundary(&source, &target, 3_000_000, -3_000_000);
         assert!(result.is_ok());
-        let boundary = result.unwrap();
+        let boundary = result.expect("serde deserialization should succeed");
         assert_eq!(boundary.source_region, PhaseRegion::RobustWin);
         assert_eq!(boundary.target_region, PhaseRegion::RobustLoss);
     }
@@ -1391,7 +1391,7 @@ mod tests {
         let target = vec![coord("lr", 100_500)];
         let result = detect_boundary(&source, &target, 500_000, -500_000);
         assert!(result.is_ok());
-        let boundary = result.unwrap();
+        let boundary = result.expect("serde deserialization should succeed");
         assert!(boundary.involves_brittle());
         assert!(boundary.is_critical());
     }
@@ -1400,7 +1400,7 @@ mod tests {
     fn test_detect_boundary_computes_content_hash() {
         let source = vec![coord("x", 0)];
         let target = vec![coord("x", MILLIONTHS)];
-        let boundary = detect_boundary(&source, &target, 3_000_000, -3_000_000).unwrap();
+        let boundary = detect_boundary(&source, &target, 3_000_000, -3_000_000).expect("serde deserialization should succeed");
         // Hash should not be empty
         assert_ne!(boundary.content_hash, ContentHash::compute(&[]));
         // Re-computing should yield the same hash
@@ -1413,7 +1413,7 @@ mod tests {
         let target = vec![coord("x", MILLIONTHS), coord("y", MILLIONTHS)];
         let result = detect_boundary(&source, &target, 3_000_000, -3_000_000);
         assert!(result.is_ok());
-        let boundary = result.unwrap();
+        let boundary = result.expect("serde deserialization should succeed");
         // Multi-dimensional boundaries should have Cusp or higher kind
         assert!(boundary.coordinates.len() == 2);
     }
@@ -1431,7 +1431,7 @@ mod tests {
         );
         let result = generate_witness(&boundary, "input=42", 500_000, -200_000, "accuracy");
         assert!(result.is_ok());
-        let witness = result.unwrap();
+        let witness = result.expect("serde deserialization should succeed");
         assert_eq!(witness.delta_millionths, -700_000);
         assert!(!witness.minimal);
         assert!(witness.is_regression());
@@ -1448,7 +1448,7 @@ mod tests {
         );
         let result = generate_witness(&boundary, "input=99", -200_000, 500_000, "score");
         assert!(result.is_ok());
-        let witness = result.unwrap();
+        let witness = result.expect("serde deserialization should succeed");
         assert_eq!(witness.delta_millionths, 700_000);
         assert!(!witness.is_regression());
     }
@@ -1478,7 +1478,7 @@ mod tests {
         );
         let result = generate_witness(&boundary, "", 1_000_000, -1_000_000, "metric");
         assert!(result.is_ok());
-        let witness = result.unwrap();
+        let witness = result.expect("serde deserialization should succeed");
         assert_eq!(witness.triggering_input, "");
     }
 
@@ -1491,8 +1491,8 @@ mod tests {
             PhaseRegion::BrittleLoss,
             3_000_000,
         );
-        let w1 = generate_witness(&boundary, "same", 100, -100, "m").unwrap();
-        let w2 = generate_witness(&boundary, "same", 100, -100, "m").unwrap();
+        let w1 = generate_witness(&boundary, "same", 100, -100, "m").expect("serde deserialization should succeed");
+        let w2 = generate_witness(&boundary, "same", 100, -100, "m").expect("serde deserialization should succeed");
         assert_eq!(w1.content_hash, w2.content_hash);
         assert_eq!(w1.witness_id, w2.witness_id);
     }
@@ -1506,8 +1506,8 @@ mod tests {
             PhaseRegion::BrittleLoss,
             3_000_000,
         );
-        let w1 = generate_witness(&boundary, "input_a", 100, -100, "m").unwrap();
-        let w2 = generate_witness(&boundary, "input_b", 100, -100, "m").unwrap();
+        let w1 = generate_witness(&boundary, "input_a", 100, -100, "m").expect("serde deserialization should succeed");
+        let w2 = generate_witness(&boundary, "input_b", 100, -100, "m").expect("serde deserialization should succeed");
         assert_ne!(w1.content_hash, w2.content_hash);
         assert_ne!(w1.witness_id, w2.witness_id);
     }
@@ -1529,7 +1529,7 @@ mod tests {
 
         let result = minimize_witness(&witness);
         assert!(result.is_ok());
-        let minimized = result.unwrap();
+        let minimized = result.expect("serde deserialization should succeed");
         assert!(minimized.minimized_witness.minimal);
         assert!(minimized.minimized_witness.replay_steps < witness.replay_steps);
         assert!(minimized.steps_removed > 0);
@@ -1575,7 +1575,7 @@ mod tests {
             8_000_000,
         );
         let witness = make_witness(&boundary, 1_000_000, -5_000_000);
-        let result = minimize_witness(&witness).unwrap();
+        let result = minimize_witness(&witness).expect("serde deserialization should succeed");
         assert_eq!(
             result.minimized_witness.before_metric_millionths,
             witness.before_metric_millionths
@@ -1600,7 +1600,7 @@ mod tests {
             3_000_000,
         );
         let witness = make_witness(&boundary, 500_000, -200_000);
-        let result = minimize_witness(&witness).unwrap();
+        let result = minimize_witness(&witness).expect("serde deserialization should succeed");
         assert_ne!(
             result.minimality_certificate_hash,
             ContentHash::compute(&[])
@@ -1618,7 +1618,7 @@ mod tests {
         );
         let mut witness = make_witness(&boundary, 500_000, -3_000_000);
         witness.replay_steps = 10_000;
-        let result = minimize_witness(&witness).unwrap();
+        let result = minimize_witness(&witness).expect("serde deserialization should succeed");
         // sqrt(10_000) = 100
         assert_eq!(result.minimized_witness.replay_steps, 100);
         assert_eq!(result.steps_removed, 9_900);
@@ -1640,7 +1640,7 @@ mod tests {
 
         let result = build_brittleness_report(epoch, vec![boundary], vec![witness]);
         assert!(result.is_ok());
-        let report = result.unwrap();
+        let report = result.expect("serde deserialization should succeed");
         assert_eq!(report.epoch, epoch);
         assert_eq!(report.boundaries.len(), 1);
         assert_eq!(report.witnesses.len(), 1);
@@ -1653,7 +1653,7 @@ mod tests {
         let epoch = SecurityEpoch::from_raw(0);
         let result = build_brittleness_report(epoch, vec![], vec![]);
         assert!(result.is_ok());
-        let report = result.unwrap();
+        let report = result.expect("serde deserialization should succeed");
         assert_eq!(report.boundaries.len(), 0);
         assert_eq!(report.witnesses.len(), 0);
         assert_eq!(report.brittle_region_count, 0);
@@ -1680,7 +1680,7 @@ mod tests {
 
         let result = build_brittleness_report(SecurityEpoch::from_raw(1), vec![b1, b2], vec![w1]);
         assert!(result.is_ok());
-        let report = result.unwrap();
+        let report = result.expect("serde deserialization should succeed");
         assert_eq!(report.boundaries.len(), 2);
         assert_eq!(report.total_boundary_sharpness_millionths, 17_000_000);
     }
@@ -1695,7 +1695,7 @@ mod tests {
             5_000_000,
         );
         let report =
-            build_brittleness_report(SecurityEpoch::from_raw(1), vec![critical], vec![]).unwrap();
+            build_brittleness_report(SecurityEpoch::from_raw(1), vec![critical], vec![]).expect("serde deserialization should succeed");
         assert!(report.has_critical_boundaries());
     }
 
@@ -1710,7 +1710,7 @@ mod tests {
         );
         let report =
             build_brittleness_report(SecurityEpoch::from_raw(1), vec![non_critical], vec![])
-                .unwrap();
+                .expect("serde deserialization should succeed");
         // BrittleWin -> Neutral: source is win, target is not win => critical
         assert!(report.has_critical_boundaries());
     }
@@ -1729,7 +1729,7 @@ mod tests {
 
         let report =
             build_brittleness_report(SecurityEpoch::from_raw(1), vec![boundary], vec![w1, w2])
-                .unwrap();
+                .expect("serde deserialization should succeed");
         // w1 has negative delta, w2 has positive
         assert_eq!(report.regression_count(), 1);
     }
@@ -1748,7 +1748,7 @@ mod tests {
 
         let report =
             build_brittleness_report(SecurityEpoch::from_raw(1), vec![boundary], vec![w1, w2])
-                .unwrap();
+                .expect("serde deserialization should succeed");
         assert_eq!(report.max_magnitude(), 6_000_000);
     }
 
@@ -1765,8 +1765,8 @@ mod tests {
         let epoch = SecurityEpoch::from_raw(1);
 
         let r1 =
-            build_brittleness_report(epoch, vec![boundary.clone()], vec![witness.clone()]).unwrap();
-        let r2 = build_brittleness_report(epoch, vec![boundary], vec![witness]).unwrap();
+            build_brittleness_report(epoch, vec![boundary.clone()], vec![witness.clone()]).expect("serde deserialization should succeed");
+        let r2 = build_brittleness_report(epoch, vec![boundary], vec![witness]).expect("serde deserialization should succeed");
         assert_eq!(r1.content_hash, r2.content_hash);
     }
 
@@ -1845,8 +1845,8 @@ mod tests {
             WitnessError::InternalError("test".to_string()),
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap();
-            let deserialized: WitnessError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let deserialized: WitnessError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&deserialized, err);
         }
     }
@@ -1887,7 +1887,7 @@ mod tests {
     fn test_manifold_coordinate_squared_distance_same_dim() {
         let c1 = coord("x", 1_000_000);
         let c2 = coord("x", 2_000_000);
-        let dist = c1.squared_distance(&c2).unwrap();
+        let dist = c1.squared_distance(&c2).expect("serde deserialization should succeed");
         assert_eq!(dist, 1_000_000i128 * 1_000_000i128);
     }
 
@@ -2021,7 +2021,7 @@ mod tests {
             3_000_000,
         );
         let witness = make_witness(&boundary, 500_000, -200_000);
-        let result = minimize_witness(&witness).unwrap();
+        let result = minimize_witness(&witness).expect("serde deserialization should succeed");
         let s = format!("{result}");
         assert!(s.contains("steps_removed"));
     }
@@ -2038,7 +2038,7 @@ mod tests {
         let witness = make_witness(&boundary, 500_000, -200_000);
         let report =
             build_brittleness_report(SecurityEpoch::from_raw(1), vec![boundary], vec![witness])
-                .unwrap();
+                .expect("serde deserialization should succeed");
         let s = format!("{report}");
         assert!(s.contains("brittleness_report"));
         assert!(s.contains("epoch:1"));
@@ -2057,7 +2057,7 @@ mod tests {
         );
         let mut witness = make_witness(&boundary, 500_000, -200_000);
         witness.replay_steps = 100;
-        let result = minimize_witness(&witness).unwrap();
+        let result = minimize_witness(&witness).expect("serde deserialization should succeed");
         let ratio = result.reduction_ratio_millionths(100);
         // minimized_steps = ceil(sqrt(100)) = 10, removed = 90
         // ratio = 90 * 1M / 100 = 900_000
@@ -2074,7 +2074,7 @@ mod tests {
             3_000_000,
         );
         let witness = make_witness(&boundary, 500_000, -200_000);
-        let result = minimize_witness(&witness).unwrap();
+        let result = minimize_witness(&witness).expect("serde deserialization should succeed");
         assert_eq!(result.reduction_ratio_millionths(0), 0);
     }
 
@@ -2102,7 +2102,7 @@ mod tests {
 
         let report =
             build_brittleness_report(SecurityEpoch::from_raw(1), vec![b1, b2], vec![w1, w2, w3])
-                .unwrap();
+                .expect("serde deserialization should succeed");
         let grouped = report.witnesses_by_boundary();
         assert_eq!(grouped.len(), 2);
         assert_eq!(grouped["wb1"].len(), 2);

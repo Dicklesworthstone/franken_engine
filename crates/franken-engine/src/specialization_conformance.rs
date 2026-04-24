@@ -158,7 +158,7 @@ pub struct WorkloadOutcome {
 impl WorkloadOutcome {
     /// Compute a content hash over the deterministic canonical form.
     pub fn content_hash(&self) -> ContentHash {
-        let canonical = serde_json::to_vec(self).unwrap();
+        let canonical = serde_json::to_vec(self).expect("serde deserialization should succeed");
         ContentHash::compute(&canonical)
     }
 }
@@ -530,7 +530,7 @@ impl ConformanceEvidenceArtifact {
 
     /// Serialize to deterministic JSONL.
     pub fn to_jsonl(&self) -> String {
-        serde_json::to_string(self).unwrap()
+        serde_json::to_string(self).expect("serde deserialization should succeed")
     }
 }
 
@@ -1199,7 +1199,7 @@ mod tests {
             &schema_id(),
             tag.as_bytes(),
         )
-        .unwrap()
+        .expect("serde deserialization should succeed")
     }
 
     fn test_epoch() -> SecurityEpoch {
@@ -1310,8 +1310,8 @@ mod tests {
     #[test]
     fn transformation_type_serde_round_trip() {
         for tt in TransformationType::ALL {
-            let json = serde_json::to_string(tt).unwrap();
-            let back: TransformationType = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(tt).expect("serde deserialization should succeed");
+            let back: TransformationType = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*tt, back);
         }
     }
@@ -1348,8 +1348,8 @@ mod tests {
             CorpusCategory::EpochTransition,
         ];
         for cat in &categories {
-            let json = serde_json::to_string(cat).unwrap();
-            let back: CorpusCategory = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(cat).expect("serde deserialization should succeed");
+            let back: CorpusCategory = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*cat, back);
         }
     }
@@ -1379,8 +1379,8 @@ mod tests {
     #[test]
     fn comparison_verdict_serde_round_trip() {
         for v in [ComparisonVerdict::Match, ComparisonVerdict::Diverge] {
-            let json = serde_json::to_string(&v).unwrap();
-            let back: ComparisonVerdict = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let back: ComparisonVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(v, back);
         }
     }
@@ -1418,8 +1418,8 @@ mod tests {
             DivergenceKind::EvidenceEmission,
         ];
         for k in &kinds {
-            let json = serde_json::to_string(k).unwrap();
-            let back: DivergenceKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(k).expect("serde deserialization should succeed");
+            let back: DivergenceKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*k, back);
         }
     }
@@ -1457,8 +1457,8 @@ mod tests {
             },
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: FallbackOutcome = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: FallbackOutcome = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -1484,8 +1484,8 @@ mod tests {
     #[test]
     fn workload_outcome_serde_round_trip() {
         let o = matching_outcome();
-        let json = serde_json::to_string(&o).unwrap();
-        let back: WorkloadOutcome = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&o).expect("serde deserialization should succeed");
+        let back: WorkloadOutcome = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(o, back);
     }
 
@@ -1585,7 +1585,7 @@ mod tests {
         });
 
         assert!(result.outcome.is_diverge());
-        let detail = result.divergence_detail.as_ref().unwrap();
+        let detail = result.divergence_detail.as_ref().expect("serde deserialization should succeed");
         assert_eq!(detail.divergence_kind, DivergenceKind::ReturnValue);
         assert_eq!(detail.specialized_summary, "42");
         assert_eq!(detail.unspecialized_summary, "99");
@@ -1622,7 +1622,7 @@ mod tests {
         });
 
         assert!(result.outcome.is_diverge());
-        let detail = result.divergence_detail.as_ref().unwrap();
+        let detail = result.divergence_detail.as_ref().expect("serde deserialization should succeed");
         assert_eq!(detail.divergence_kind, DivergenceKind::SideEffectTrace);
     }
 
@@ -1652,7 +1652,7 @@ mod tests {
         });
 
         assert!(result.outcome.is_diverge());
-        let detail = result.divergence_detail.as_ref().unwrap();
+        let detail = result.divergence_detail.as_ref().expect("serde deserialization should succeed");
         assert_eq!(detail.divergence_kind, DivergenceKind::ExceptionSequence);
     }
 
@@ -1682,7 +1682,7 @@ mod tests {
         });
 
         assert!(result.outcome.is_diverge());
-        let detail = result.divergence_detail.as_ref().unwrap();
+        let detail = result.divergence_detail.as_ref().expect("serde deserialization should succeed");
         assert_eq!(detail.divergence_kind, DivergenceKind::EvidenceEmission);
     }
 
@@ -1714,7 +1714,7 @@ mod tests {
 
         assert!(result.outcome.is_match());
         assert!(result.epoch_transition_tested);
-        assert!(result.fallback_outcome.as_ref().unwrap().is_success());
+        assert!(result.fallback_outcome.as_ref().expect("serde deserialization should succeed").is_success());
     }
 
     #[test]
@@ -1740,7 +1740,7 @@ mod tests {
         });
 
         assert!(result.outcome.is_match()); // Outcomes match but fallback failed
-        assert!(result.fallback_outcome.as_ref().unwrap().is_failure());
+        assert!(result.fallback_outcome.as_ref().expect("serde deserialization should succeed").is_failure());
     }
 
     // -----------------------------------------------------------------------
@@ -2059,7 +2059,7 @@ mod tests {
         let artifact = engine.produce_evidence("run-1", ContentHash::compute(b"reg"), "env", 1_000);
         let jsonl = artifact.to_jsonl();
         assert!(!jsonl.is_empty());
-        let back: ConformanceEvidenceArtifact = serde_json::from_str(&jsonl).unwrap();
+        let back: ConformanceEvidenceArtifact = serde_json::from_str(&jsonl).expect("serde deserialization should succeed");
         assert_eq!(back.run_id, "run-1");
     }
 
@@ -2187,8 +2187,8 @@ mod tests {
     #[test]
     fn inventory_entry_serde_round_trip() {
         let entry = make_inventory_entry("x");
-        let json = serde_json::to_string(&entry).unwrap();
-        let back: SpecializationInventoryEntry = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let back: SpecializationInventoryEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, back);
     }
 
@@ -2214,8 +2214,8 @@ mod tests {
             receipt_valid: true,
         });
 
-        let json = serde_json::to_string(&result).unwrap();
-        let back: DifferentialResult = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let back: DifferentialResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, back);
     }
 
@@ -2237,8 +2237,8 @@ mod tests {
             fallback_outcome: None,
             receipt_valid: true,
         };
-        let json = serde_json::to_string(&log).unwrap();
-        let back: ConformanceLog = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&log).expect("serde deserialization should succeed");
+        let back: ConformanceLog = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(log, back);
     }
 
@@ -2255,8 +2255,8 @@ mod tests {
             proof_revoked: true,
             transition_timestamp_ns: 999_999,
         };
-        let json = serde_json::to_string(&sim).unwrap();
-        let back: EpochTransitionSimulation = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&sim).expect("serde deserialization should succeed");
+        let back: EpochTransitionSimulation = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(sim, back);
     }
 
@@ -2276,8 +2276,8 @@ mod tests {
                 invalidation_evidence_id: "inv-1".into(),
             },
         };
-        let json = serde_json::to_string(&ev).unwrap();
-        let back: InvalidationEvidence = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
+        let back: InvalidationEvidence = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ev, back);
     }
 
@@ -2587,8 +2587,8 @@ mod tests {
     #[test]
     fn performance_delta_serde_round_trip() {
         let delta = SpecializationConformanceEngine::compute_performance_delta(80, 100);
-        let json = serde_json::to_string(&delta).unwrap();
-        let back: PerformanceDelta = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&delta).expect("serde deserialization should succeed");
+        let back: PerformanceDelta = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(delta, back);
     }
 
@@ -2599,8 +2599,8 @@ mod tests {
             specialized_summary: "1 effects".to_string(),
             unspecialized_summary: "3 effects".to_string(),
         };
-        let json = serde_json::to_string(&detail).unwrap();
-        let back: DivergenceDetail = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&detail).expect("serde deserialization should succeed");
+        let back: DivergenceDetail = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(detail, back);
     }
 
@@ -2619,8 +2619,8 @@ mod tests {
                 "inconsistent proofs".to_string(),
             ],
         };
-        let json = serde_json::to_string(&r).unwrap();
-        let back: ReceiptValidationResult = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let back: ReceiptValidationResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 
@@ -2645,8 +2645,8 @@ mod tests {
             },
             passed: false,
         };
-        let json = serde_json::to_string(&v).unwrap();
-        let back: PerSpecializationVerdict = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let back: PerSpecializationVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, back);
     }
 
@@ -2674,8 +2674,8 @@ mod tests {
             },
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: ConformanceError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: ConformanceError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -2687,16 +2687,16 @@ mod tests {
             description: "call-logger".to_string(),
             sequence: 42,
         };
-        let json = serde_json::to_string(&effect).unwrap();
-        let back: SideEffect = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&effect).expect("serde deserialization should succeed");
+        let back: SideEffect = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(effect, back);
     }
 
     #[test]
     fn specialization_workload_serde_round_trip() {
         let w = make_workload("w-serde", CorpusCategory::EdgeCase);
-        let json = serde_json::to_string(&w).unwrap();
-        let back: SpecializationWorkload = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&w).expect("serde deserialization should succeed");
+        let back: SpecializationWorkload = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(w, back);
     }
 
@@ -2708,8 +2708,8 @@ mod tests {
             exceptions: vec![],
             evidence_entries: vec![],
         };
-        let json = serde_json::to_string(&outcome).unwrap();
-        let back: WorkloadOutcome = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&outcome).expect("serde deserialization should succeed");
+        let back: WorkloadOutcome = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(outcome, back);
         // Empty outcomes still produce a deterministic hash
         let h1 = outcome.content_hash();
@@ -2787,8 +2787,8 @@ mod tests {
             "env-serde",
             42_000,
         );
-        let json = serde_json::to_string(&artifact).unwrap();
-        let back: ConformanceEvidenceArtifact = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&artifact).expect("serde deserialization should succeed");
+        let back: ConformanceEvidenceArtifact = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(artifact, back);
     }
 
@@ -2867,7 +2867,7 @@ mod tests {
             log_fail
                 .fallback_outcome
                 .as_deref()
-                .unwrap()
+                .expect("serde deserialization should succeed")
                 .starts_with("failure:")
         );
     }
@@ -3359,7 +3359,7 @@ mod tests {
         });
 
         assert!(result.outcome.is_diverge());
-        let detail = result.divergence_detail.as_ref().unwrap();
+        let detail = result.divergence_detail.as_ref().expect("serde deserialization should succeed");
         // ReturnValue check fires first
         assert_eq!(detail.divergence_kind, DivergenceKind::ReturnValue);
     }

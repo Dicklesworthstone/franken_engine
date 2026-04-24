@@ -915,7 +915,7 @@ mod tests {
     fn make_sk(seed: u8) -> SigningKey {
         // SAFETY: Fixed 32-byte array is valid signing key format for test purposes.
         // SigningKey::from_bytes only fails on invalid length (not 32 bytes).
-        SigningKey::from_bytes([seed; 32]).unwrap()
+        SigningKey::from_bytes([seed; 32]).expect("serde deserialization should succeed")
     }
 
     fn make_policy_head(pt: PolicyType, version: u64) -> PolicyHead {
@@ -933,7 +933,7 @@ mod tests {
         CheckpointBuilder::genesis(SecurityEpoch::GENESIS, DeterministicTimestamp(100), zone)
             .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 1))
             .build(keys)
-            .unwrap()
+            .expect("serde deserialization should succeed")
     }
 
     fn build_after(
@@ -947,7 +947,7 @@ mod tests {
         CheckpointBuilder::after(prev, seq, epoch, DeterministicTimestamp(tick), zone)
             .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, seq + 1))
             .build(keys)
-            .unwrap()
+            .expect("serde deserialization should succeed")
     }
 
     /// Build a divergent checkpoint at the same seq by using a different
@@ -967,7 +967,7 @@ mod tests {
                 seq + 1 + version_offset,
             ))
             .build(keys)
-            .unwrap()
+            .expect("serde deserialization should succeed")
     }
 
     // -- Basic recording --
@@ -988,7 +988,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-0",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert_eq!(detector.history_size("zone-a"), 1);
         assert!(!detector.is_safe_mode("zone-a"));
@@ -1010,7 +1010,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-0",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
         // Record same checkpoint again (e.g., via gossip).
         detector
             .record_checkpoint(&RecordCheckpointInput {
@@ -1022,7 +1022,7 @@ mod tests {
                 tick: 200,
                 trace_id: "t-1",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert_eq!(detector.history_size("zone-a"), 1);
         assert!(!detector.is_safe_mode("zone-a"));
@@ -1070,7 +1070,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-0",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Record first seq=1 checkpoint.
         detector
@@ -1083,7 +1083,7 @@ mod tests {
                 tick: 200,
                 trace_id: "t-1a",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Record divergent seq=1 checkpoint — should trigger fork.
         let report = detector
@@ -1139,7 +1139,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-0",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
         detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-a",
@@ -1150,7 +1150,7 @@ mod tests {
                 tick: 200,
                 trace_id: "t-1a",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let _ = detector.record_checkpoint(&RecordCheckpointInput {
             zone: "zone-a",
             checkpoint: &cp1_b,
@@ -1162,7 +1162,7 @@ mod tests {
         });
 
         assert!(detector.is_safe_mode("zone-a"));
-        let sm = detector.safe_mode_state("zone-a").unwrap();
+        let sm = detector.safe_mode_state("zone-a").expect("serde deserialization should succeed");
         assert!(sm.active);
         assert_eq!(sm.trigger_seq, Some(1));
         assert_eq!(sm.unacknowledged_count, 1);
@@ -1204,7 +1204,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-0",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
         detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-a",
@@ -1215,7 +1215,7 @@ mod tests {
                 tick: 200,
                 trace_id: "t-1a",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let _ = detector.record_checkpoint(&RecordCheckpointInput {
             zone: "zone-a",
             checkpoint: &cp1_b,
@@ -1239,7 +1239,7 @@ mod tests {
         // No fork detected — operations should be allowed.
         detector
             .enforce_safe_mode("zone-a", "capability_grant", "t-ok")
-            .unwrap();
+            .expect("serde deserialization should succeed");
     }
 
     // -- Acknowledgment and safe-mode exit --
@@ -1278,7 +1278,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-0",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
         detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-a",
@@ -1289,7 +1289,7 @@ mod tests {
                 tick: 200,
                 trace_id: "t-1a",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let report = detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-a",
@@ -1313,7 +1313,7 @@ mod tests {
         assert!(detector.acknowledge_incident("zone-a", &report.incident_id));
 
         // Now exit should work.
-        let acked = detector.exit_safe_mode("zone-a", "t-exit").unwrap();
+        let acked = detector.exit_safe_mode("zone-a", "t-exit").expect("serde deserialization should succeed");
         assert_eq!(acked, 1);
         assert!(!detector.is_safe_mode("zone-a"));
     }
@@ -1352,7 +1352,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-0",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
         detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-a",
@@ -1363,7 +1363,7 @@ mod tests {
                 tick: 200,
                 trace_id: "t-1a",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let _ = detector.record_checkpoint(&RecordCheckpointInput {
             zone: "zone-a",
             checkpoint: &cp1_b,
@@ -1421,7 +1421,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-a0",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
         detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-a",
@@ -1432,7 +1432,7 @@ mod tests {
                 tick: 200,
                 trace_id: "t-a1",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let _ = detector.record_checkpoint(&RecordCheckpointInput {
             zone: "zone-a",
             checkpoint: &cp1_a_fork,
@@ -1454,7 +1454,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-b0",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Zone-a in safe mode, zone-b is not.
         assert!(detector.is_safe_mode("zone-a"));
@@ -1463,7 +1463,7 @@ mod tests {
         // Zone-b operations should be allowed.
         detector
             .enforce_safe_mode("zone-b", "grant", "t-b-ok")
-            .unwrap();
+            .expect("serde deserialization should succeed");
     }
 
     // -- Retroactive detection --
@@ -1495,7 +1495,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-0",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
         detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-a",
@@ -1506,7 +1506,7 @@ mod tests {
                 tick: 200,
                 trace_id: "t-1",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Later, receive a divergent checkpoint via gossip (not accepted).
         let cp1_b = build_divergent_at_seq(
@@ -1554,7 +1554,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-0",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let mut prev = genesis;
         for i in 1..=10u64 {
@@ -1577,7 +1577,7 @@ mod tests {
                     tick: 100 + i * 100,
                     trace_id: &trace,
                 })
-                .unwrap();
+                .expect("serde deserialization should succeed");
             prev = cp;
         }
 
@@ -1621,7 +1621,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-0",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
         detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-a",
@@ -1632,7 +1632,7 @@ mod tests {
                 tick: 200,
                 trace_id: "t-1",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let _ = detector.record_checkpoint(&RecordCheckpointInput {
             zone: "zone-a",
             checkpoint: &cp1_b,
@@ -1683,7 +1683,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-0",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
         detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-a",
@@ -1694,7 +1694,7 @@ mod tests {
                 tick: 200,
                 trace_id: "t-1",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let _ = detector.record_checkpoint(&RecordCheckpointInput {
             zone: "zone-a",
             checkpoint: &cp1_b,
@@ -1735,8 +1735,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap();
-            let restored: ForkError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let restored: ForkError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, restored);
         }
     }
@@ -1758,8 +1758,8 @@ mod tests {
             existing_was_accepted: true,
             acknowledged: false,
         };
-        let json = serde_json::to_string(&report).unwrap();
-        let restored: ForkIncidentReport = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let restored: ForkIncidentReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report, restored);
     }
 
@@ -1772,8 +1772,8 @@ mod tests {
             },
             trace_id: "t-1".to_string(),
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let restored: ForkEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let restored: ForkEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, restored);
     }
 
@@ -1784,8 +1784,8 @@ mod tests {
             trigger_seq: Some(5),
             unacknowledged_count: 2,
         };
-        let json = serde_json::to_string(&state).unwrap();
-        let restored: SafeModeState = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&state).expect("serde deserialization should succeed");
+        let restored: SafeModeState = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(state, restored);
     }
 
@@ -1831,7 +1831,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-0",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let exported = detector.export_state().clone();
 
@@ -1875,7 +1875,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-0",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
         detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-a",
@@ -1886,7 +1886,7 @@ mod tests {
                 tick: 200,
                 trace_id: "t-1",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let _ = detector.record_checkpoint(&RecordCheckpointInput {
             zone: "zone-a",
             checkpoint: &cp1_b,
@@ -1928,7 +1928,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-a",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
         detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-b",
@@ -1939,7 +1939,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-b",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let zones = detector.zones();
         assert_eq!(zones.len(), 2);
@@ -2116,8 +2116,8 @@ mod tests {
             fork_seq: 10,
             resolution_seq: 5,
         };
-        let json = serde_json::to_string(&err).unwrap();
-        let restored: ForkError = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let restored: ForkError = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, restored);
     }
 
@@ -2227,7 +2227,7 @@ mod tests {
             cli_safe_mode: false,
             environment: BTreeMap::new(),
         };
-        let artifact = evaluate_safe_mode_startup(&input).unwrap();
+        let artifact = evaluate_safe_mode_startup(&input).expect("serde deserialization should succeed");
         assert!(!artifact.safe_mode_active);
         assert_eq!(artifact.source, SafeModeStartupSource::NotRequested);
         assert!(!artifact.restrictions.all_extensions_sandboxed);
@@ -2300,7 +2300,7 @@ mod tests {
                 cli_safe_mode: false,
                 environment: env,
             };
-            let artifact = evaluate_safe_mode_startup(&input).unwrap();
+            let artifact = evaluate_safe_mode_startup(&input).expect("serde deserialization should succeed");
             assert!(
                 artifact.safe_mode_active,
                 "env value '{val}' should activate safe mode"
@@ -2320,7 +2320,7 @@ mod tests {
                 cli_safe_mode: false,
                 environment: env,
             };
-            let artifact = evaluate_safe_mode_startup(&input).unwrap();
+            let artifact = evaluate_safe_mode_startup(&input).expect("serde deserialization should succeed");
             assert!(
                 !artifact.safe_mode_active,
                 "env value '{val}' should NOT activate safe mode"
@@ -2361,7 +2361,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         detector
             .enforce_safe_mode("zone-a", "grant", "t-enforce")
@@ -2414,8 +2414,8 @@ mod tests {
             epoch: SecurityEpoch::GENESIS,
             accepted: true,
         };
-        let json = serde_json::to_string(&entry).unwrap();
-        let restored: CheckpointHistoryEntry = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let restored: CheckpointHistoryEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, restored);
     }
 
@@ -2426,8 +2426,8 @@ mod tests {
             SafeModeStartupSource::CliFlag,
             SafeModeStartupSource::EnvironmentVariable,
         ] {
-            let json = serde_json::to_string(&source).unwrap();
-            let restored: SafeModeStartupSource = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&source).expect("serde deserialization should succeed");
+            let restored: SafeModeStartupSource = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(source, restored);
         }
     }
@@ -2435,8 +2435,8 @@ mod tests {
     #[test]
     fn safe_mode_restrictions_serde_roundtrip() {
         let restrictions = SafeModeRestrictions::conservative();
-        let json = serde_json::to_string(&restrictions).unwrap();
-        let restored: SafeModeRestrictions = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&restrictions).expect("serde deserialization should succeed");
+        let restored: SafeModeRestrictions = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(restrictions, restored);
     }
 
@@ -2445,8 +2445,8 @@ mod tests {
         let err = SafeModeStartupError::MissingField {
             field: "trace_id".to_string(),
         };
-        let json = serde_json::to_string(&err).unwrap();
-        let restored: SafeModeStartupError = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let restored: SafeModeStartupError = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, restored);
     }
 
@@ -2514,9 +2514,9 @@ mod tests {
                 tick: 100,
                 trace_id: "t",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
-        let count = detector.exit_safe_mode("zone-a", "t").unwrap();
+        let count = detector.exit_safe_mode("zone-a", "t").expect("serde deserialization should succeed");
         assert_eq!(count, 0);
     }
 
@@ -2544,8 +2544,8 @@ mod tests {
             },
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: ForkError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: ForkError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -2656,8 +2656,8 @@ mod tests {
             zone: "zone-a".to_string(),
             checkpoint_seq: 42,
         };
-        let json = serde_json::to_string(&evt).unwrap();
-        let back: ForkEventType = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&evt).expect("serde deserialization should succeed");
+        let back: ForkEventType = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(evt, back);
     }
 
@@ -2672,8 +2672,8 @@ mod tests {
             },
             trace_id: "t-42".to_string(),
         };
-        let json = serde_json::to_string(&evt).unwrap();
-        let back: ForkEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&evt).expect("serde deserialization should succeed");
+        let back: ForkEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(evt, back);
     }
 
@@ -2696,8 +2696,8 @@ mod tests {
             existing_was_accepted: true,
             acknowledged: false,
         };
-        let json = serde_json::to_string(&report).unwrap();
-        let back: ForkIncidentReport = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let back: ForkIncidentReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report, back);
     }
 
@@ -2720,8 +2720,8 @@ mod tests {
             trigger_seq: Some(42),
             unacknowledged_count: 3,
         };
-        let json = serde_json::to_string(&state).unwrap();
-        let back: SafeModeState = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&state).expect("serde deserialization should succeed");
+        let back: SafeModeState = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(state, back);
     }
 
@@ -2773,7 +2773,7 @@ mod tests {
             cli_safe_mode: false,
             environment: BTreeMap::new(),
         };
-        let artifact = evaluate_safe_mode_startup(&input).unwrap();
+        let artifact = evaluate_safe_mode_startup(&input).expect("serde deserialization should succeed");
         assert!(!artifact.safe_mode_active);
         assert_eq!(artifact.source, SafeModeStartupSource::NotRequested);
         assert!(artifact.restricted_features.is_empty());
@@ -2788,7 +2788,7 @@ mod tests {
             cli_safe_mode: true,
             environment: BTreeMap::new(),
         };
-        let artifact = evaluate_safe_mode_startup(&input).unwrap();
+        let artifact = evaluate_safe_mode_startup(&input).expect("serde deserialization should succeed");
         assert!(artifact.safe_mode_active);
         assert_eq!(artifact.source, SafeModeStartupSource::CliFlag);
         assert!(!artifact.restricted_features.is_empty());
@@ -2805,7 +2805,7 @@ mod tests {
             cli_safe_mode: false,
             environment: env,
         };
-        let artifact = evaluate_safe_mode_startup(&input).unwrap();
+        let artifact = evaluate_safe_mode_startup(&input).expect("serde deserialization should succeed");
         assert!(artifact.safe_mode_active);
         assert_eq!(artifact.source, SafeModeStartupSource::EnvironmentVariable);
     }
@@ -2835,7 +2835,7 @@ mod tests {
             pending_quarantines: 0,
             evidence_ledger_flushed: true,
         };
-        let artifact = evaluate_safe_mode_exit(&input).unwrap();
+        let artifact = evaluate_safe_mode_exit(&input).expect("serde deserialization should succeed");
         assert!(artifact.can_exit);
         assert!(artifact.blocking_reasons.is_empty());
     }
@@ -2850,7 +2850,7 @@ mod tests {
             pending_quarantines: 0,
             evidence_ledger_flushed: true,
         };
-        let artifact = evaluate_safe_mode_exit(&input).unwrap();
+        let artifact = evaluate_safe_mode_exit(&input).expect("serde deserialization should succeed");
         assert!(!artifact.can_exit);
         assert!(
             artifact
@@ -2870,7 +2870,7 @@ mod tests {
             pending_quarantines: 0,
             evidence_ledger_flushed: false,
         };
-        let artifact = evaluate_safe_mode_exit(&input).unwrap();
+        let artifact = evaluate_safe_mode_exit(&input).expect("serde deserialization should succeed");
         assert!(!artifact.can_exit);
         assert!(
             artifact
@@ -2938,7 +2938,7 @@ mod tests {
                 cli_safe_mode: false,
                 environment: env,
             };
-            let artifact = evaluate_safe_mode_startup(&input).unwrap();
+            let artifact = evaluate_safe_mode_startup(&input).expect("serde deserialization should succeed");
             assert!(
                 artifact.safe_mode_active,
                 "'{val}' should activate safe mode"
@@ -2958,7 +2958,7 @@ mod tests {
                 cli_safe_mode: false,
                 environment: env,
             };
-            let artifact = evaluate_safe_mode_startup(&input).unwrap();
+            let artifact = evaluate_safe_mode_startup(&input).expect("serde deserialization should succeed");
             assert!(
                 !artifact.safe_mode_active,
                 "'{val}' should NOT activate safe mode"
@@ -2992,7 +2992,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-0",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
         detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-a",
@@ -3003,7 +3003,7 @@ mod tests {
                 tick: 200,
                 trace_id: "t-1",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Re-record the same checkpoint — should succeed (duplicate, not fork).
         detector
@@ -3016,7 +3016,7 @@ mod tests {
                 tick: 250,
                 trace_id: "t-1-dup",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert!(!detector.is_safe_mode("zone-a"));
     }
@@ -3071,7 +3071,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-0",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
         detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-a",
@@ -3082,7 +3082,7 @@ mod tests {
                 tick: 200,
                 trace_id: "t-1",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
         detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-a",
@@ -3093,7 +3093,7 @@ mod tests {
                 tick: 300,
                 trace_id: "t-2",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // First fork at seq=1.
         let r1 = detector
@@ -3125,7 +3125,7 @@ mod tests {
 
         assert_eq!(detector.incidents("zone-a").len(), 2);
         assert_eq!(detector.unacknowledged_incidents("zone-a").len(), 2);
-        let sm = detector.safe_mode_state("zone-a").unwrap();
+        let sm = detector.safe_mode_state("zone-a").expect("serde deserialization should succeed");
         assert_eq!(sm.unacknowledged_count, 2);
     }
 
@@ -3162,7 +3162,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-0",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
         detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-a",
@@ -3173,7 +3173,7 @@ mod tests {
                 tick: 200,
                 trace_id: "t-1",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let report = detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-a",
@@ -3208,7 +3208,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-0",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let events = detector.drain_events();
         assert!(!events.is_empty());
@@ -3249,7 +3249,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-0",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
         detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-a",
@@ -3260,7 +3260,7 @@ mod tests {
                 tick: 200,
                 trace_id: "t-1",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let report = detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-a",
@@ -3276,7 +3276,7 @@ mod tests {
         // Clear prior events, acknowledge, and exit.
         detector.drain_events();
         detector.acknowledge_incident("zone-a", &report.incident_id);
-        detector.exit_safe_mode("zone-a", "t-exit").unwrap();
+        detector.exit_safe_mode("zone-a", "t-exit").expect("serde deserialization should succeed");
 
         let counts = detector.event_counts();
         assert_eq!(counts.get("safe_mode_exited"), Some(&1));
@@ -3306,7 +3306,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-0",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
         detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-a",
@@ -3317,9 +3317,9 @@ mod tests {
                 tick: 200,
                 trace_id: "t-1",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
-        let hist = detector.history("zone-a").unwrap();
+        let hist = detector.history("zone-a").expect("serde deserialization should succeed");
         assert_eq!(hist.len(), 2);
         assert!(hist.contains_key(&0));
         assert!(hist.contains_key(&1));
@@ -3353,9 +3353,9 @@ mod tests {
             cli_safe_mode: true,
             environment: BTreeMap::new(),
         };
-        let artifact = evaluate_safe_mode_startup(&input).unwrap();
-        let json = serde_json::to_string(&artifact).unwrap();
-        let back: SafeModeStartupArtifact = serde_json::from_str(&json).unwrap();
+        let artifact = evaluate_safe_mode_startup(&input).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&artifact).expect("serde deserialization should succeed");
+        let back: SafeModeStartupArtifact = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(artifact, back);
     }
 
@@ -3369,9 +3369,9 @@ mod tests {
             pending_quarantines: 0,
             evidence_ledger_flushed: false,
         };
-        let artifact = evaluate_safe_mode_exit(&input).unwrap();
-        let json = serde_json::to_string(&artifact).unwrap();
-        let back: SafeModeExitCheckArtifact = serde_json::from_str(&json).unwrap();
+        let artifact = evaluate_safe_mode_exit(&input).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&artifact).expect("serde deserialization should succeed");
+        let back: SafeModeExitCheckArtifact = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(artifact, back);
     }
 
@@ -3386,8 +3386,8 @@ mod tests {
             outcome: "pass".to_string(),
             error_code: Some("FE-TEST".to_string()),
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let back: SafeModeStartupEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let back: SafeModeStartupEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
     }
 
@@ -3402,8 +3402,8 @@ mod tests {
             cli_safe_mode: true,
             environment: env,
         };
-        let json = serde_json::to_string(&input).unwrap();
-        let back: SafeModeStartupInput = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
+        let back: SafeModeStartupInput = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(input, back);
     }
 
@@ -3417,8 +3417,8 @@ mod tests {
             pending_quarantines: 1,
             evidence_ledger_flushed: false,
         };
-        let json = serde_json::to_string(&input).unwrap();
-        let back: SafeModeExitCheckInput = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
+        let back: SafeModeExitCheckInput = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(input, back);
     }
 
@@ -3431,7 +3431,7 @@ mod tests {
             cli_safe_mode: false,
             environment: BTreeMap::new(),
         };
-        let artifact = evaluate_safe_mode_startup(&input).unwrap();
+        let artifact = evaluate_safe_mode_startup(&input).expect("serde deserialization should succeed");
         assert!(artifact.evidence_preserved);
         assert!(artifact.logs_preserved);
         assert!(artifact.state_preserved);
@@ -3456,7 +3456,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-0",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let mut prev = genesis;
         for i in 1..=5u64 {
@@ -3478,7 +3478,7 @@ mod tests {
                     tick: 100 + i * 100,
                     trace_id: &format!("t-{i}"),
                 })
-                .unwrap();
+                .expect("serde deserialization should succeed");
             prev = cp;
         }
 
@@ -3500,7 +3500,7 @@ mod tests {
             pending_quarantines: 5,
             evidence_ledger_flushed: true,
         };
-        let artifact = evaluate_safe_mode_exit(&input).unwrap();
+        let artifact = evaluate_safe_mode_exit(&input).expect("serde deserialization should succeed");
         assert!(!artifact.can_exit);
         assert!(
             artifact
@@ -3515,8 +3515,8 @@ mod tests {
     #[test]
     fn safe_mode_state_serde_roundtrip_default() {
         let state = SafeModeState::default();
-        let json = serde_json::to_string(&state).unwrap();
-        let back: SafeModeState = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&state).expect("serde deserialization should succeed");
+        let back: SafeModeState = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, state);
         assert!(!back.active);
         assert!(back.trigger_seq.is_none());
@@ -3529,8 +3529,8 @@ mod tests {
             trigger_seq: Some(42),
             unacknowledged_count: 3,
         };
-        let json = serde_json::to_string(&state).unwrap();
-        let back: SafeModeState = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&state).expect("serde deserialization should succeed");
+        let back: SafeModeState = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, state);
     }
 
@@ -3563,8 +3563,8 @@ mod tests {
             },
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: ForkEventType = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: ForkEventType = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, v);
         }
     }
@@ -3578,8 +3578,8 @@ mod tests {
             },
             trace_id: "trace-abc".to_string(),
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let back: ForkEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let back: ForkEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, event);
     }
 
@@ -3603,7 +3603,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-0",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
         for i in 1..=2u64 {
             let cp = build_after(
                 &prev,
@@ -3623,7 +3623,7 @@ mod tests {
                     tick: 100 + i * 100,
                     trace_id: &format!("t-{i}"),
                 })
-                .unwrap();
+                .expect("serde deserialization should succeed");
             prev = cp;
         }
 
@@ -3665,7 +3665,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-0",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
         detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-x",
@@ -3676,7 +3676,7 @@ mod tests {
                 tick: 200,
                 trace_id: "t-1",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let _ = detector.record_checkpoint(&RecordCheckpointInput {
             zone: "zone-x",
             checkpoint: &cp1_div,
@@ -3715,7 +3715,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-a",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
         detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "beta",
@@ -3726,7 +3726,7 @@ mod tests {
                 tick: 200,
                 trace_id: "t-b",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let zones = detector.zones();
         assert_eq!(zones.len(), 2);
@@ -3750,17 +3750,17 @@ mod tests {
                 tick: 100,
                 trace_id: "t-0",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Should succeed — zone is not in safe mode.
         detector
             .enforce_safe_mode("zone-ok", "write", "trace-op")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Unknown zone should also pass.
         detector
             .enforce_safe_mode("unknown-zone", "read", "trace-op2")
-            .unwrap();
+            .expect("serde deserialization should succeed");
     }
 
     #[test]
@@ -3796,7 +3796,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-0",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
         detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-s",
@@ -3807,7 +3807,7 @@ mod tests {
                 tick: 200,
                 trace_id: "t-1",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let _ = detector.record_checkpoint(&RecordCheckpointInput {
             zone: "zone-s",
             checkpoint: &cp1_div,
@@ -3818,7 +3818,7 @@ mod tests {
             trace_id: "t-1b",
         });
 
-        let state = detector.safe_mode_state("zone-s").unwrap();
+        let state = detector.safe_mode_state("zone-s").expect("serde deserialization should succeed");
         assert!(state.active);
         assert_eq!(state.trigger_seq, Some(1));
         assert_eq!(state.unacknowledged_count, 1);
@@ -3837,7 +3837,7 @@ mod tests {
             pending_quarantines: 3,
             evidence_ledger_flushed: false,
         };
-        let artifact = evaluate_safe_mode_exit(&input).unwrap();
+        let artifact = evaluate_safe_mode_exit(&input).expect("serde deserialization should succeed");
         assert!(!artifact.can_exit);
         assert_eq!(artifact.blocking_reasons.len(), 3);
         assert!(
@@ -3872,7 +3872,7 @@ mod tests {
                 cli_safe_mode: false,
                 environment: env,
             };
-            let artifact = evaluate_safe_mode_startup(&input).unwrap();
+            let artifact = evaluate_safe_mode_startup(&input).expect("serde deserialization should succeed");
             assert!(
                 artifact.safe_mode_active,
                 "env value '{val}' should activate safe mode"
@@ -3914,7 +3914,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-0",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
         detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-exit",
@@ -3925,7 +3925,7 @@ mod tests {
                 tick: 200,
                 trace_id: "t-1",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let report = detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-exit",
@@ -3951,7 +3951,7 @@ mod tests {
 
         // Acknowledge and exit.
         assert!(detector.acknowledge_incident("zone-exit", &report.incident_id));
-        let acked = detector.exit_safe_mode("zone-exit", "trace-exit").unwrap();
+        let acked = detector.exit_safe_mode("zone-exit", "trace-exit").expect("serde deserialization should succeed");
         assert_eq!(acked, 1);
         assert!(!detector.is_safe_mode("zone-exit"));
 
@@ -4000,7 +4000,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-0",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
         detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-z1",
@@ -4011,7 +4011,7 @@ mod tests {
                 tick: 200,
                 trace_id: "t-1",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let report = detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-z1",
@@ -4060,7 +4060,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-0",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
         detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-tr",
@@ -4071,7 +4071,7 @@ mod tests {
                 tick: 200,
                 trace_id: "t-1",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let report = detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-tr",
@@ -4120,7 +4120,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-0",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
         detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-tk",
@@ -4131,7 +4131,7 @@ mod tests {
                 tick: 200,
                 trace_id: "t-1",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let report = detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-tk",
@@ -4180,7 +4180,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-0",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
         detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-fs",
@@ -4191,7 +4191,7 @@ mod tests {
                 tick: 200,
                 trace_id: "t-1",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let report = detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-fs",
@@ -4244,7 +4244,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-0",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
         detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-fmt",
@@ -4255,7 +4255,7 @@ mod tests {
                 tick: 200,
                 trace_id: "t-1",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let report = detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-fmt",
@@ -4308,7 +4308,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-0",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
         detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-op",
@@ -4319,7 +4319,7 @@ mod tests {
                 tick: 200,
                 trace_id: "t-1",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let _ = detector.record_checkpoint(&RecordCheckpointInput {
             zone: "zone-op",
             checkpoint: &cp1_div,
@@ -4354,7 +4354,7 @@ mod tests {
             cli_safe_mode: true,
             environment: BTreeMap::new(),
         };
-        let artifact = evaluate_safe_mode_startup(&input).unwrap();
+        let artifact = evaluate_safe_mode_startup(&input).expect("serde deserialization should succeed");
         assert_eq!(
             artifact.events.len(),
             2,
@@ -4377,7 +4377,7 @@ mod tests {
             cli_safe_mode: true,
             environment: env,
         };
-        let artifact = evaluate_safe_mode_startup(&input).unwrap();
+        let artifact = evaluate_safe_mode_startup(&input).expect("serde deserialization should succeed");
         assert!(artifact.safe_mode_active);
         assert_eq!(
             artifact.source,
@@ -4389,8 +4389,8 @@ mod tests {
     #[test]
     fn safe_mode_restrictions_normal_serde_roundtrip() {
         let r = SafeModeRestrictions::normal();
-        let json = serde_json::to_string(&r).unwrap();
-        let back: SafeModeRestrictions = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let back: SafeModeRestrictions = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
         assert!(!back.all_extensions_sandboxed);
     }
@@ -4446,7 +4446,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-a",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
         detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-j2",
@@ -4457,11 +4457,11 @@ mod tests {
                 tick: 200,
                 trace_id: "t-b",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let exported = detector.export_state();
-        let json = serde_json::to_string(exported).unwrap();
-        let back: BTreeMap<String, ZoneState> = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(exported).expect("serde deserialization should succeed");
+        let back: BTreeMap<String, ZoneState> = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.len(), 2);
         assert!(back.contains_key("zone-j1"));
         assert!(back.contains_key("zone-j2"));
@@ -4485,8 +4485,8 @@ mod tests {
             outcome: "normal".to_string(),
             error_code: None,
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let back: SafeModeStartupEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let back: SafeModeStartupEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
         assert!(back.error_code.is_none());
     }
@@ -4499,8 +4499,8 @@ mod tests {
             epoch: SecurityEpoch::from_raw(2),
             accepted: false,
         };
-        let json = serde_json::to_string(&entry).unwrap();
-        let back: CheckpointHistoryEntry = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let back: CheckpointHistoryEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, back);
         assert!(!back.accepted);
     }
@@ -4522,8 +4522,8 @@ mod tests {
             existing_was_accepted: false,
             acknowledged: true,
         };
-        let json = serde_json::to_string(&report).unwrap();
-        let back: ForkIncidentReport = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let back: ForkIncidentReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report, back);
         assert!(back.acknowledged);
         assert!(!back.existing_was_accepted);
@@ -4545,7 +4545,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-0",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let cp1 = build_after(
             &genesis,
@@ -4565,7 +4565,7 @@ mod tests {
                 tick: 200,
                 trace_id: "t-1",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let cp2 = build_after(
             &cp1,
@@ -4585,10 +4585,10 @@ mod tests {
                 tick: 300,
                 trace_id: "t-2",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert_eq!(detector.history_size("zone-h1"), 1);
-        let hist = detector.history("zone-h1").unwrap();
+        let hist = detector.history("zone-h1").expect("serde deserialization should succeed");
         assert!(hist.contains_key(&2), "only the latest seq should remain");
     }
 
@@ -4625,7 +4625,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-0",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
         detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-wr",
@@ -4636,7 +4636,7 @@ mod tests {
                 tick: 200,
                 trace_id: "t-1",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let _ = detector.record_checkpoint(&RecordCheckpointInput {
             zone: "zone-wr",
             checkpoint: &cp1_div,
@@ -4685,7 +4685,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-0",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
         detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-idem",
@@ -4696,7 +4696,7 @@ mod tests {
                 tick: 200,
                 trace_id: "t-1",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let report = detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-idem",
@@ -4710,12 +4710,12 @@ mod tests {
             .unwrap_err();
 
         detector.acknowledge_incident("zone-idem", &report.incident_id);
-        let first_exit = detector.exit_safe_mode("zone-idem", "t-exit1").unwrap();
+        let first_exit = detector.exit_safe_mode("zone-idem", "t-exit1").expect("serde deserialization should succeed");
         assert_eq!(first_exit, 1);
         assert!(!detector.is_safe_mode("zone-idem"));
 
         // Calling exit again should return 0 (already exited).
-        let second_exit = detector.exit_safe_mode("zone-idem", "t-exit2").unwrap();
+        let second_exit = detector.exit_safe_mode("zone-idem", "t-exit2").expect("serde deserialization should succeed");
         assert_eq!(second_exit, 0);
     }
 
@@ -4728,7 +4728,7 @@ mod tests {
             cli_safe_mode: false,
             environment: BTreeMap::new(),
         };
-        let artifact = evaluate_safe_mode_startup(&input).unwrap();
+        let artifact = evaluate_safe_mode_startup(&input).expect("serde deserialization should succeed");
         for event in &artifact.events {
             assert!(
                 event.error_code.is_none(),
@@ -4762,7 +4762,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-0",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
         detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-ord",
@@ -4773,7 +4773,7 @@ mod tests {
                 tick: 200,
                 trace_id: "t-1",
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let events = detector.drain_events();
         assert_eq!(events.len(), 2);
@@ -4804,7 +4804,7 @@ mod tests {
             cli_safe_mode: true,
             environment: BTreeMap::new(),
         };
-        let artifact = evaluate_safe_mode_startup(&input).unwrap();
+        let artifact = evaluate_safe_mode_startup(&input).expect("serde deserialization should succeed");
         assert!(
             artifact.exit_procedure.len() >= 3,
             "safe mode exit_procedure should have verification steps"

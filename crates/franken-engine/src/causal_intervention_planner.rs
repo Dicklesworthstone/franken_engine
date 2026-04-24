@@ -541,7 +541,7 @@ impl CausalInterventionPlanner {
                         expected_effect_millionths: effect,
                         confidence_millionths: confidence,
                         identifiability: status,
-                        adjustment_set: adjustment.unwrap(),
+                        adjustment_set: adjustment.expect("serde deserialization should succeed"),
                         risk_description: String::new(),
                         cost_description: String::new(),
                         tracking_bead: None,
@@ -776,8 +776,8 @@ mod tests {
             NodeKind::Mediator,
             NodeKind::Instrument,
         ] {
-            let json = serde_json::to_string(&kind).unwrap();
-            let back: NodeKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
+            let back: NodeKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(kind, back);
         }
     }
@@ -791,8 +791,8 @@ mod tests {
             EdgeKind::Instrumental,
             EdgeKind::Mediated,
         ] {
-            let json = serde_json::to_string(&kind).unwrap();
-            let back: EdgeKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
+            let back: EdgeKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(kind, back);
         }
     }
@@ -808,8 +808,8 @@ mod tests {
     #[test]
     fn add_nodes() {
         let mut dag = CausalDag::new();
-        dag.add_node(lever("l1")).unwrap();
-        dag.add_node(metric("m1")).unwrap();
+        dag.add_node(lever("l1")).expect("serde deserialization should succeed");
+        dag.add_node(metric("m1")).expect("serde deserialization should succeed");
         assert_eq!(dag.node_count(), 2);
         assert_eq!(dag.levers().len(), 1);
         assert_eq!(dag.metrics().len(), 1);
@@ -818,7 +818,7 @@ mod tests {
     #[test]
     fn duplicate_node_rejected() {
         let mut dag = CausalDag::new();
-        dag.add_node(lever("l1")).unwrap();
+        dag.add_node(lever("l1")).expect("serde deserialization should succeed");
         let err = dag.add_node(lever("l1")).unwrap_err();
         assert!(matches!(err, PlannerError::DuplicateNode { .. }));
     }
@@ -826,16 +826,16 @@ mod tests {
     #[test]
     fn add_edge_valid() {
         let mut dag = CausalDag::new();
-        dag.add_node(lever("l1")).unwrap();
-        dag.add_node(metric("m1")).unwrap();
-        dag.add_edge(direct_edge("l1", "m1", 100_000)).unwrap();
+        dag.add_node(lever("l1")).expect("serde deserialization should succeed");
+        dag.add_node(metric("m1")).expect("serde deserialization should succeed");
+        dag.add_edge(direct_edge("l1", "m1", 100_000)).expect("serde deserialization should succeed");
         assert_eq!(dag.edge_count(), 1);
     }
 
     #[test]
     fn add_edge_missing_node() {
         let mut dag = CausalDag::new();
-        dag.add_node(lever("l1")).unwrap();
+        dag.add_node(lever("l1")).expect("serde deserialization should succeed");
         let err = dag.add_edge(direct_edge("l1", "m_missing", 0)).unwrap_err();
         assert!(matches!(err, PlannerError::MissingNode { .. }));
     }
@@ -843,9 +843,9 @@ mod tests {
     #[test]
     fn parents_and_children() {
         let mut dag = CausalDag::new();
-        dag.add_node(lever("l1")).unwrap();
-        dag.add_node(metric("m1")).unwrap();
-        dag.add_edge(direct_edge("l1", "m1", 0)).unwrap();
+        dag.add_node(lever("l1")).expect("serde deserialization should succeed");
+        dag.add_node(metric("m1")).expect("serde deserialization should succeed");
+        dag.add_edge(direct_edge("l1", "m1", 0)).expect("serde deserialization should succeed");
         assert!(dag.parents("m1").contains("l1"));
         assert!(dag.children("l1").contains("m1"));
     }
@@ -853,18 +853,18 @@ mod tests {
     #[test]
     fn adjustment_set_simple() {
         let mut dag = CausalDag::new();
-        dag.add_node(lever("l1")).unwrap();
-        dag.add_node(metric("m1")).unwrap();
-        dag.add_edge(direct_edge("l1", "m1", 0)).unwrap();
-        let adj = dag.adjustment_set("l1", "m1").unwrap();
+        dag.add_node(lever("l1")).expect("serde deserialization should succeed");
+        dag.add_node(metric("m1")).expect("serde deserialization should succeed");
+        dag.add_edge(direct_edge("l1", "m1", 0)).expect("serde deserialization should succeed");
+        let adj = dag.adjustment_set("l1", "m1").expect("serde deserialization should succeed");
         assert!(adj.is_empty()); // No confounders
     }
 
     #[test]
     fn adjustment_set_with_confounder() {
         let mut dag = CausalDag::new();
-        dag.add_node(lever("l1")).unwrap();
-        dag.add_node(metric("m1")).unwrap();
+        dag.add_node(lever("l1")).expect("serde deserialization should succeed");
+        dag.add_node(metric("m1")).expect("serde deserialization should succeed");
         dag.add_node(CausalNode {
             id: "c1".to_string(),
             name: "c1".to_string(),
@@ -873,10 +873,10 @@ mod tests {
             observable: true,
             interventionable: false,
         })
-        .unwrap();
-        dag.add_edge(direct_edge("c1", "l1", 0)).unwrap();
-        dag.add_edge(direct_edge("l1", "m1", 0)).unwrap();
-        let adj = dag.adjustment_set("l1", "m1").unwrap();
+        .expect("serde deserialization should succeed");
+        dag.add_edge(direct_edge("c1", "l1", 0)).expect("serde deserialization should succeed");
+        dag.add_edge(direct_edge("l1", "m1", 0)).expect("serde deserialization should succeed");
+        let adj = dag.adjustment_set("l1", "m1").expect("serde deserialization should succeed");
         assert!(adj.contains("c1"));
     }
 
@@ -897,15 +897,15 @@ mod tests {
     fn content_hash_changes() {
         let d1 = build_seed_dag();
         let mut d2 = build_seed_dag();
-        d2.add_node(lever("extra")).unwrap();
+        d2.add_node(lever("extra")).expect("serde deserialization should succeed");
         assert_ne!(d1.content_hash(), d2.content_hash());
     }
 
     #[test]
     fn dag_serde_roundtrip() {
         let dag = build_seed_dag();
-        let json = serde_json::to_string(&dag).unwrap();
-        let back: CausalDag = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&dag).expect("serde deserialization should succeed");
+        let back: CausalDag = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(dag.node_count(), back.node_count());
         assert_eq!(dag.content_hash(), back.content_hash());
     }
@@ -929,8 +929,8 @@ mod tests {
     #[test]
     fn identifiability_serde() {
         let id = Identifiability::BackDoorIdentifiable;
-        let json = serde_json::to_string(&id).unwrap();
-        let back: Identifiability = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&id).expect("serde deserialization should succeed");
+        let back: Identifiability = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(id, back);
     }
 
@@ -944,8 +944,8 @@ mod tests {
             InterventionPriority::Low,
             InterventionPriority::Deferred,
         ] {
-            let json = serde_json::to_string(&p).unwrap();
-            let back: InterventionPriority = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
+            let back: InterventionPriority = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(p, back);
         }
     }
@@ -996,8 +996,8 @@ mod tests {
         let dag = build_seed_dag();
         let planner = CausalInterventionPlanner::new();
         let report = planner.analyze(&dag);
-        let json = serde_json::to_string(&report).unwrap();
-        let back: PlannerReport = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let back: PlannerReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report.lever_count, back.lever_count);
     }
 

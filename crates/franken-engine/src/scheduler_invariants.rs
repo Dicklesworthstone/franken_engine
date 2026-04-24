@@ -163,7 +163,7 @@ impl SchedulerAutomaton {
             &invariant_schema(),
             canonical.as_bytes(),
         )
-        .unwrap()
+        .expect("serde deserialization should succeed")
     }
 }
 
@@ -365,7 +365,7 @@ impl VerificationResult {
             &invariant_schema(),
             canonical.as_bytes(),
         )
-        .unwrap()
+        .expect("serde deserialization should succeed")
     }
 }
 
@@ -435,7 +435,7 @@ impl RegressionFixture {
             &invariant_schema(),
             canonical.as_bytes(),
         )
-        .unwrap()
+        .expect("serde deserialization should succeed")
     }
 }
 
@@ -550,7 +550,7 @@ impl CompositionCheck {
             &invariant_schema(),
             canonical.as_bytes(),
         )
-        .unwrap()
+        .expect("serde deserialization should succeed")
     }
 }
 
@@ -650,7 +650,7 @@ impl InvariantRegistry {
             &invariant_schema(),
             canonical.as_bytes(),
         )
-        .unwrap()
+        .expect("serde deserialization should succeed")
     }
 }
 
@@ -871,9 +871,9 @@ mod tests {
             guard: Some("x > 0".to_string()),
         });
         // SAFETY: SchedulerAutomaton derives Serialize and has no non-serializable fields.
-        let json = serde_json::to_string(&a).unwrap();
+        let json = serde_json::to_string(&a).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid SchedulerAutomaton serialization.
-        let back: SchedulerAutomaton = serde_json::from_str(&json).unwrap();
+        let back: SchedulerAutomaton = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(a, back);
     }
 
@@ -985,9 +985,9 @@ mod tests {
             VerificationStatus::Pending,
         ] {
             // SAFETY: VerificationStatus derives Serialize and has no non-serializable fields.
-            let json = serde_json::to_string(&s).unwrap();
+            let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by valid VerificationStatus serialization.
-            let back: VerificationStatus = serde_json::from_str(&json).unwrap();
+            let back: VerificationStatus = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(s, back);
         }
     }
@@ -1103,9 +1103,9 @@ mod tests {
             InterferenceSeverity::Critical,
         ] {
             // SAFETY: to_string cannot fail on derived Serialize enum
-            let json = serde_json::to_string(&s).unwrap();
+            let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
             // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-            let back: InterferenceSeverity = serde_json::from_str(&json).unwrap();
+            let back: InterferenceSeverity = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(s, back);
         }
     }
@@ -1205,9 +1205,9 @@ mod tests {
             reg.add_property(prop);
         }
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&reg).unwrap();
+        let json = serde_json::to_string(&reg).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let back: InvariantRegistry = serde_json::from_str(&json).unwrap();
+        let back: InvariantRegistry = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(reg, back);
     }
 
@@ -1336,9 +1336,9 @@ mod tests {
     fn state_id_serde_roundtrip() {
         let s = StateId::new("test-state");
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&s).unwrap();
+        let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let back: StateId = serde_json::from_str(&json).unwrap();
+        let back: StateId = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(s, back);
     }
 
@@ -1346,9 +1346,9 @@ mod tests {
     fn transition_label_serde_roundtrip() {
         let t = TransitionLabel::new("go");
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&t).unwrap();
+        let json = serde_json::to_string(&t).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let back: TransitionLabel = serde_json::from_str(&json).unwrap();
+        let back: TransitionLabel = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(t, back);
     }
 
@@ -1378,7 +1378,7 @@ mod tests {
         assert!(reg.get_result("P1").is_some());
         assert_eq!(
             // SAFETY: Test-only unwrap, verified above that get_result("P1") returns Some
-            reg.get_result("P1").unwrap().status,
+            reg.get_result("P1").expect("serde deserialization should succeed").status,
             VerificationStatus::Verified
         );
     }
@@ -1471,9 +1471,9 @@ mod tests {
             guard: None,
         };
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&t).unwrap();
+        let json = serde_json::to_string(&t).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let back: Transition = serde_json::from_str(&json).unwrap();
+        let back: Transition = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(t, back);
         assert!(back.guard.is_none());
     }
@@ -1487,9 +1487,9 @@ mod tests {
             guard: Some("x > 0".to_string()),
         };
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&t).unwrap();
+        let json = serde_json::to_string(&t).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let back: Transition = serde_json::from_str(&json).unwrap();
+        let back: Transition = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(t, back);
         assert_eq!(back.guard, Some("x > 0".to_string()));
     }
@@ -1544,8 +1544,8 @@ mod tests {
             PropertyKind::Determinism,
             PropertyKind::Composition,
         ] {
-            let json = serde_json::to_string(&k).unwrap();
-            let back: PropertyKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&k).expect("serde deserialization should succeed");
+            let back: PropertyKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(k, back);
         }
     }
@@ -1608,8 +1608,8 @@ mod tests {
             states_explored: 1000,
             verification_time_us: 5000,
         };
-        let json = serde_json::to_string(&r).unwrap();
-        let back: VerificationResult = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let back: VerificationResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 
@@ -1623,8 +1623,8 @@ mod tests {
             formula: "G(true)".to_string(),
             components: vec!["scheduler".to_string()],
         };
-        let json = serde_json::to_string(&spec).unwrap();
-        let back: PropertySpec = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&spec).expect("serde deserialization should succeed");
+        let back: PropertySpec = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(spec, back);
     }
 
@@ -1641,8 +1641,8 @@ mod tests {
             }],
             violation_description: "test violation".to_string(),
         };
-        let json = serde_json::to_string(&cx).unwrap();
-        let back: Counterexample = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&cx).expect("serde deserialization should succeed");
+        let back: Counterexample = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cx, back);
     }
 
@@ -1658,8 +1658,8 @@ mod tests {
                 ("lane_active".to_string(), "js".to_string()),
             ]),
         };
-        let json = serde_json::to_string(&step).unwrap();
-        let back: CounterexampleStep = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&step).expect("serde deserialization should succeed");
+        let back: CounterexampleStep = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(step, back);
         assert_eq!(back.state_vars.len(), 2);
     }
@@ -1674,8 +1674,8 @@ mod tests {
             expected_final_state: StateId::new("halted"),
             expects_violation: true,
         };
-        let json = serde_json::to_string(&fixture).unwrap();
-        let back: RegressionFixture = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&fixture).expect("serde deserialization should succeed");
+        let back: RegressionFixture = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(fixture, back);
     }
 
@@ -1689,16 +1689,16 @@ mod tests {
             description: "both modify budget".to_string(),
             mitigation: Some("add lock".to_string()),
         };
-        let json = serde_json::to_string(&report).unwrap();
-        let back: InterferenceReport = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let back: InterferenceReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report, back);
     }
 
     #[test]
     fn controller_id_serde_roundtrip() {
         let id = ControllerId::new("hybrid_router");
-        let json = serde_json::to_string(&id).unwrap();
-        let back: ControllerId = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&id).expect("serde deserialization should succeed");
+        let back: ControllerId = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(id, back);
     }
 
@@ -1712,8 +1712,8 @@ mod tests {
     #[test]
     fn shared_resource_serde_roundtrip() {
         let r = SharedResource::new("signal_graph");
-        let json = serde_json::to_string(&r).unwrap();
-        let back: SharedResource = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let back: SharedResource = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 
@@ -1757,8 +1757,8 @@ mod tests {
             description: "benign".to_string(),
             mitigation: None,
         });
-        let json = serde_json::to_string(&check).unwrap();
-        let back: CompositionCheck = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&check).expect("serde deserialization should succeed");
+        let back: CompositionCheck = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(check, back);
     }
 

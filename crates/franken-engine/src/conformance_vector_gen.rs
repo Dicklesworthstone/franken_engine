@@ -953,8 +953,8 @@ mod tests {
             VectorCategory::Degraded,
             VectorCategory::Fault,
         ] {
-            let json = serde_json::to_string(&cat).unwrap();
-            let decoded: VectorCategory = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&cat).expect("serde deserialization should succeed");
+            let decoded: VectorCategory = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(cat, decoded);
         }
     }
@@ -984,8 +984,8 @@ mod tests {
             DegradedScenario::EmptyResponse,
         ];
         for s in &scenarios {
-            let json = serde_json::to_string(s).unwrap();
-            let decoded: DegradedScenario = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(s).expect("serde deserialization should succeed");
+            let decoded: DegradedScenario = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*s, decoded);
         }
     }
@@ -1021,8 +1021,8 @@ mod tests {
             },
         ];
         for s in &scenarios {
-            let json = serde_json::to_string(s).unwrap();
-            let decoded: FaultScenario = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(s).expect("serde deserialization should succeed");
+            let decoded: FaultScenario = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*s, decoded);
         }
     }
@@ -1099,7 +1099,7 @@ mod tests {
         let serde_prop = props
             .iter()
             .find(|p| p.property_id == "serde-roundtrip")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         // serde-roundtrip applies to all surface kinds.
         assert!(serde_prop.applicable_surfaces.len() >= 10);
     }
@@ -1356,8 +1356,8 @@ mod tests {
         let catalog = test_catalog();
         let result = generate_vectors(&catalog, &default_config());
 
-        let json = serde_json::to_string(&result).unwrap();
-        let decoded: GenerationResult = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let decoded: GenerationResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result.vectors.len(), decoded.vectors.len());
         assert_eq!(result.seed, decoded.seed);
         assert_eq!(result.catalog_version, decoded.catalog_version);
@@ -1382,8 +1382,8 @@ mod tests {
             seed: 42,
             covered_fields: ["field_a"].iter().map(|s| s.to_string()).collect(),
         };
-        let json = serde_json::to_string(&v).unwrap();
-        let decoded: GeneratedVector = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let decoded: GeneratedVector = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, decoded);
     }
 
@@ -1404,8 +1404,8 @@ mod tests {
     #[test]
     fn generator_config_serde_roundtrip() {
         let config = default_config();
-        let json = serde_json::to_string(&config).unwrap();
-        let decoded: GeneratorConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let decoded: GeneratorConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, decoded);
     }
 
@@ -1415,7 +1415,7 @@ mod tests {
     fn build_valid_json_for_fields_produces_valid_json() {
         let fields = vec!["alpha".to_string(), "beta".to_string()];
         let json = build_valid_json_for_fields(&fields, 42);
-        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert!(parsed.is_object());
         assert!(parsed.get("alpha").is_some());
         assert!(parsed.get("beta").is_some());
@@ -1424,7 +1424,7 @@ mod tests {
     #[test]
     fn build_valid_json_empty_fields() {
         let json = build_valid_json_for_fields(&[], 42);
-        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert!(parsed.is_object());
     }
 
@@ -1434,8 +1434,8 @@ mod tests {
     fn boundary_property_serde_roundtrip() {
         let props = canonical_boundary_properties();
         for p in &props {
-            let json = serde_json::to_string(p).unwrap();
-            let decoded: BoundaryProperty = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(p).expect("serde deserialization should succeed");
+            let decoded: BoundaryProperty = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*p, decoded);
         }
     }
@@ -1450,8 +1450,8 @@ mod tests {
             passed: true,
             detail: "all fields preserved".to_string(),
         };
-        let json = serde_json::to_string(&r).unwrap();
-        let decoded: PropertyCheckResult = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let decoded: PropertyCheckResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, decoded);
     }
 
@@ -1478,8 +1478,8 @@ mod tests {
         assert!(gaps.is_empty());
 
         // Serde roundtrip of full result.
-        let json = serde_json::to_string(&result).unwrap();
-        let decoded: GenerationResult = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let decoded: GenerationResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result.vectors.len(), decoded.vectors.len());
 
         // Unique IDs.
@@ -1691,8 +1691,8 @@ mod tests {
         let json2 = build_valid_json_for_fields(&fields, 200);
         // Structure is the same but values may differ (or not) depending on impl.
         // Both should parse as valid JSON.
-        let _: serde_json::Value = serde_json::from_str(&json1).unwrap();
-        let _: serde_json::Value = serde_json::from_str(&json2).unwrap();
+        let _: serde_json::Value = serde_json::from_str(&json1).expect("serde deserialization should succeed");
+        let _: serde_json::Value = serde_json::from_str(&json2).expect("serde deserialization should succeed");
     }
 
     #[test]
@@ -1726,8 +1726,8 @@ mod tests {
     #[test]
     fn generator_config_serde_stable_roundtrip() {
         let config = default_config();
-        let json = serde_json::to_string(&config).unwrap();
-        let back: GeneratorConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let back: GeneratorConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, back);
     }
 
@@ -1735,8 +1735,8 @@ mod tests {
     fn generation_result_full_serde_roundtrip() {
         let catalog = test_catalog();
         let result = generate_vectors(&catalog, &default_config());
-        let json = serde_json::to_string(&result).unwrap();
-        let back: GenerationResult = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let back: GenerationResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, back);
     }
 
@@ -1804,8 +1804,8 @@ mod tests {
         let result = generate_vectors(&catalog, &default_config());
         assert!(!result.vectors.is_empty());
         let v = &result.vectors[0];
-        let json = serde_json::to_string(v).unwrap();
-        let back: GeneratedVector = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+        let back: GeneratedVector = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(*v, back);
     }
 
@@ -1860,13 +1860,13 @@ mod tests {
     #[test]
     fn enrichment_vector_category_json_quoted_strings() {
         // Verify serde serialises as quoted strings (not integers).
-        let json = serde_json::to_string(&VectorCategory::Positive).unwrap();
+        let json = serde_json::to_string(&VectorCategory::Positive).expect("serde deserialization should succeed");
         assert!(
             json.starts_with('"'),
             "expected quoted string, got: {}",
             json
         );
-        let json = serde_json::to_string(&VectorCategory::Fault).unwrap();
+        let json = serde_json::to_string(&VectorCategory::Fault).expect("serde deserialization should succeed");
         assert!(json.starts_with('"'));
     }
 
@@ -1906,8 +1906,8 @@ mod tests {
     #[test]
     fn enrichment_degraded_scenario_json_field_stale_revocation() {
         let s = DegradedScenario::StaleRevocationHead { epochs_behind: 42 };
-        let json = serde_json::to_string(&s).unwrap();
-        let val: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+        let val: serde_json::Value = serde_json::from_str(&json).expect("serde deserialization should succeed");
         // Tagged enum: check the variant key exists.
         assert!(
             val.get("StaleRevocationHead").is_some(),
@@ -1947,15 +1947,15 @@ mod tests {
         let s = FaultScenario::ReplayAttack {
             original_nonce: 9999,
         };
-        let json = serde_json::to_string(&s).unwrap();
-        let val: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+        let val: serde_json::Value = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert!(
             val.get("ReplayAttack").is_some(),
             "expected ReplayAttack key in: {}",
             json
         );
-        let inner = val.get("ReplayAttack").unwrap();
-        assert_eq!(inner.get("original_nonce").unwrap().as_u64().unwrap(), 9999);
+        let inner = val.get("ReplayAttack").expect("serde deserialization should succeed");
+        assert_eq!(inner.get("original_nonce").expect("serde deserialization should succeed").as_u64().expect("serde deserialization should succeed"), 9999);
     }
 
     #[test]
@@ -1998,14 +1998,14 @@ mod tests {
             seed: 0,
             covered_fields: BTreeSet::new(),
         };
-        let json = serde_json::to_string(&v).unwrap();
-        let val: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let val: serde_json::Value = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert!(val.get("vector_id").is_some());
         assert!(val.get("category").is_some());
         assert!(val.get("seed").is_some());
         assert!(val.get("expected_pass").is_some());
         assert!(val.get("degraded_scenario").is_some());
-        assert!(!val["expected_pass"].as_bool().unwrap());
+        assert!(!val["expected_pass"].as_bool().expect("serde deserialization should succeed"));
     }
 
     #[test]
@@ -2028,10 +2028,10 @@ mod tests {
     #[test]
     fn enrichment_generator_config_json_fields() {
         let config = default_config();
-        let json = serde_json::to_string(&config).unwrap();
-        let val: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(val["seed"].as_u64().unwrap(), 42);
-        assert_eq!(val["max_positive_per_entry"].as_u64().unwrap(), 3);
+        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let val: serde_json::Value = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        assert_eq!(val["seed"].as_u64().expect("serde deserialization should succeed"), 42);
+        assert_eq!(val["max_positive_per_entry"].as_u64().expect("serde deserialization should succeed"), 3);
         assert!(val["sibling_filter"].is_array());
         assert!(val["surface_filter"].is_array());
     }
@@ -2073,8 +2073,8 @@ mod tests {
     fn enrichment_boundary_property_json_fields() {
         let props = canonical_boundary_properties();
         let p = &props[0]; // "serde-roundtrip"
-        let json = serde_json::to_string(p).unwrap();
-        let val: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(p).expect("serde deserialization should succeed");
+        let val: serde_json::Value = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert!(val.get("property_id").is_some());
         assert!(val.get("description").is_some());
         assert!(val.get("requires_roundtrip").is_some());
@@ -2104,11 +2104,11 @@ mod tests {
             passed: true,
             detail: "ok".to_string(),
         };
-        let json = serde_json::to_string(&r).unwrap();
-        let val: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(val["property_id"].as_str().unwrap(), "ordering-determinism");
-        assert!(val["passed"].as_bool().unwrap());
-        assert_eq!(val["detail"].as_str().unwrap(), "ok");
+        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let val: serde_json::Value = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        assert_eq!(val["property_id"].as_str().expect("serde deserialization should succeed"), "ordering-determinism");
+        assert!(val["passed"].as_bool().expect("serde deserialization should succeed"));
+        assert_eq!(val["detail"].as_str().expect("serde deserialization should succeed"), "ok");
     }
 
     #[test]

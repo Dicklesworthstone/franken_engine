@@ -1246,8 +1246,8 @@ mod tests {
                 false_action_cost: 50,
             },
         );
-        let json = serde_json::to_string(&m).unwrap();
-        let restored: DecomposedLossMatrix = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
+        let restored: DecomposedLossMatrix = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(m, restored);
     }
 
@@ -1386,7 +1386,7 @@ mod tests {
     fn attacker_strategy_roi() {
         let m = sample_attacker_model();
         // ROI = (20M - 9.7M) * 1M / 9.7M = 10.3M * 1M / 9.7M ≈ 1_061_855
-        let roi = m.strategy_roi("supply_chain").unwrap();
+        let roi = m.strategy_roi("supply_chain").expect("serde deserialization should succeed");
         assert!(roi > 1_000_000 && roi < 1_100_000, "roi was {roi}");
     }
 
@@ -1419,7 +1419,7 @@ mod tests {
             version: 1,
             calibration_source: "test".into(),
         };
-        let roi = m.expected_roi().unwrap();
+        let roi = m.expected_roi().expect("serde deserialization should succeed");
         assert!(roi < 0, "expected negative ROI, got {roi}");
     }
 
@@ -1500,8 +1500,8 @@ mod tests {
     #[test]
     fn attacker_model_serialization_round_trip() {
         let m = sample_attacker_model();
-        let json = serde_json::to_string(&m).unwrap();
-        let restored: AttackerCostModel = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
+        let restored: AttackerCostModel = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(m, restored);
     }
 
@@ -1535,7 +1535,7 @@ mod tests {
     #[test]
     fn containment_cost_get_set() {
         let m = sample_containment_model();
-        let allow_cost = m.get(ContainmentAction::Allow).unwrap();
+        let allow_cost = m.get(ContainmentAction::Allow).expect("serde deserialization should succeed");
         assert_eq!(allow_cost.execution_latency_us, 0);
         assert_eq!(m.get(ContainmentAction::Sandbox), None);
     }
@@ -1550,8 +1550,8 @@ mod tests {
     #[test]
     fn containment_model_serialization_round_trip() {
         let m = sample_containment_model();
-        let json = serde_json::to_string(&m).unwrap();
-        let restored: ContainmentCostModel = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
+        let restored: ContainmentCostModel = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(m, restored);
     }
 
@@ -1669,8 +1669,8 @@ mod tests {
             cascade_probability: 250_000,
             growth_rate_per_sec: 100_000,
         };
-        let json = serde_json::to_string(&br).unwrap();
-        let restored: BlastRadiusEstimate = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&br).expect("serde deserialization should succeed");
+        let restored: BlastRadiusEstimate = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(br, restored);
     }
 
@@ -1758,8 +1758,8 @@ mod tests {
     #[test]
     fn model_inputs_serialization_round_trip() {
         let m = sample_model_inputs();
-        let json = serde_json::to_string(&m).unwrap();
-        let restored: TrustEconomicsModelInputs = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
+        let restored: TrustEconomicsModelInputs = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(m, restored);
     }
 
@@ -1809,8 +1809,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap();
-            let restored: TrustEconomicsError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let restored: TrustEconomicsError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, restored);
         }
     }
@@ -1821,8 +1821,8 @@ mod tests {
     fn deterministic_serialization() {
         let m1 = sample_model_inputs();
         let m2 = sample_model_inputs();
-        let json1 = serde_json::to_string(&m1).unwrap();
-        let json2 = serde_json::to_string(&m2).unwrap();
+        let json1 = serde_json::to_string(&m1).expect("serde deserialization should succeed");
+        let json2 = serde_json::to_string(&m2).expect("serde deserialization should succeed");
         assert_eq!(json1, json2, "identical inputs must produce identical JSON");
     }
 
@@ -1937,8 +1937,8 @@ mod tests {
             RoiAlertLevel::Profitable,
             RoiAlertLevel::HighlyProfitable,
         ] {
-            let json = serde_json::to_string(&level).unwrap();
-            let back: RoiAlertLevel = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&level).expect("serde deserialization should succeed");
+            let back: RoiAlertLevel = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(level, back);
         }
     }
@@ -1946,8 +1946,8 @@ mod tests {
     #[test]
     fn roi_trend_serde_roundtrip() {
         for trend in [RoiTrend::Falling, RoiTrend::Stable, RoiTrend::Rising] {
-            let json = serde_json::to_string(&trend).unwrap();
-            let back: RoiTrend = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&trend).expect("serde deserialization should succeed");
+            let back: RoiTrend = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(trend, back);
         }
     }
@@ -1961,8 +1961,8 @@ mod tests {
             containment_cost: 400,
             false_action_cost: 500,
         };
-        let json = serde_json::to_string(&sl).unwrap();
-        let back: SubLoss = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&sl).expect("serde deserialization should succeed");
+        let back: SubLoss = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(sl, back);
     }
 
@@ -1975,8 +1975,8 @@ mod tests {
             operator_burden: 400,
             reversibility_cost: 500,
         };
-        let json = serde_json::to_string(&ac).unwrap();
-        let back: ActionCost = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&ac).expect("serde deserialization should succeed");
+        let back: ActionCost = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ac, back);
     }
 
@@ -2187,7 +2187,7 @@ mod tests {
             },
         );
         let base = m.total_base_cost();
-        let adjusted = m.adjusted_cost("supply-chain").unwrap();
+        let adjusted = m.adjusted_cost("supply-chain").expect("serde deserialization should succeed");
         assert_eq!(adjusted, base + 500_000 - 200_000 + 100_000);
     }
 
@@ -2221,7 +2221,7 @@ mod tests {
             },
         );
         // adjusted_cost = 1_000_000, gain = 2_000_000, roi = 1_000_000 * 1M / 1M = 1_000_000
-        let roi = m.strategy_roi("phishing").unwrap();
+        let roi = m.strategy_roi("phishing").expect("serde deserialization should succeed");
         assert_eq!(roi, 1_000_000);
     }
 
@@ -2240,8 +2240,8 @@ mod tests {
             evasion_delta: 100_000,
             justification: "test justification".into(),
         };
-        let json = serde_json::to_string(&adj).unwrap();
-        let back: StrategyCostAdjustment = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&adj).expect("serde deserialization should succeed");
+        let back: StrategyCostAdjustment = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(adj, back);
     }
 
@@ -2294,8 +2294,8 @@ mod tests {
     #[test]
     fn attacker_roi_assessment_serde_roundtrip() {
         let a = AttackerRoiAssessment::new("ext-z", 1_500_000, &[1_000_000, 1_500_000]);
-        let json = serde_json::to_string(&a).unwrap();
-        let back: AttackerRoiAssessment = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&a).expect("serde deserialization should succeed");
+        let back: AttackerRoiAssessment = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(a, back);
     }
 
@@ -2307,8 +2307,8 @@ mod tests {
             AttackerRoiAssessment::new("ext-a", 2_500_000, &[2_000_000, 2_500_000]),
         );
         let summary = summarize_fleet_roi(&assessments);
-        let json = serde_json::to_string(&summary).unwrap();
-        let back: FleetRoiSummary = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
+        let back: FleetRoiSummary = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(summary, back);
     }
 

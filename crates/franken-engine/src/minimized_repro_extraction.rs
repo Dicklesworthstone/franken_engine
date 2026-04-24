@@ -1068,8 +1068,8 @@ mod tests {
             TriageSeverity::Error,
             TriageSeverity::Critical,
         ] {
-            let json = serde_json::to_string(&sev).unwrap();
-            let back: TriageSeverity = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&sev).expect("serde deserialization should succeed");
+            let back: TriageSeverity = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(sev, back);
         }
     }
@@ -1079,8 +1079,8 @@ mod tests {
     #[test]
     fn test_failure_category_serde_roundtrip() {
         for cat in FailureCategory::all() {
-            let json = serde_json::to_string(cat).unwrap();
-            let back: FailureCategory = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(cat).expect("serde deserialization should succeed");
+            let back: FailureCategory = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*cat, back);
         }
     }
@@ -1105,8 +1105,8 @@ mod tests {
             MinimizationStrategy::StateSlicing,
             MinimizationStrategy::PropElimination,
         ] {
-            let json = serde_json::to_string(&strat).unwrap();
-            let back: MinimizationStrategy = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&strat).expect("serde deserialization should succeed");
+            let back: MinimizationStrategy = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(strat, back);
         }
     }
@@ -1150,8 +1150,8 @@ mod tests {
             TriageOwner::BuildTooling,
             TriageOwner::ExternalUpstream,
         ] {
-            let json = serde_json::to_string(&owner).unwrap();
-            let back: TriageOwner = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&owner).expect("serde deserialization should succeed");
+            let back: TriageOwner = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(owner, back);
         }
     }
@@ -1183,8 +1183,8 @@ mod tests {
             ExtractionVerdict::NoInputs,
             ExtractionVerdict::MultipleIssues,
         ] {
-            let json = serde_json::to_string(&v).unwrap();
-            let back: ExtractionVerdict = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let back: ExtractionVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(v, back);
         }
     }
@@ -1219,8 +1219,8 @@ mod tests {
     #[test]
     fn test_repro_input_serde_roundtrip() {
         let input = ReproInput::new("test".to_string(), FailureCategory::HookOrdering, 50, 3, 2);
-        let json = serde_json::to_string(&input).unwrap();
-        let back: ReproInput = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
+        let back: ReproInput = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(input, back);
     }
 
@@ -1236,8 +1236,8 @@ mod tests {
             true,
             5000,
         );
-        let json = serde_json::to_string(&repro).unwrap();
-        let back: MinimizedRepro = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&repro).expect("serde deserialization should succeed");
+        let back: MinimizedRepro = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(repro, back);
     }
 
@@ -1274,8 +1274,8 @@ mod tests {
             repro_hash: Some(ContentHash::compute(b"test")),
             recommended_action: "fix the renderer".into(),
         };
-        let json = serde_json::to_string(&finding).unwrap();
-        let back: TriageFinding = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&finding).expect("serde deserialization should succeed");
+        let back: TriageFinding = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(finding, back);
     }
 
@@ -1289,8 +1289,8 @@ mod tests {
             repro_hash: None,
             recommended_action: "investigate".into(),
         };
-        let json = serde_json::to_string(&finding).unwrap();
-        let back: TriageFinding = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&finding).expect("serde deserialization should succeed");
+        let back: TriageFinding = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert!(back.repro_hash.is_none());
     }
 
@@ -1299,8 +1299,8 @@ mod tests {
     #[test]
     fn test_config_serde_roundtrip() {
         let config = ExtractionConfig::strict();
-        let json = serde_json::to_string(&config).unwrap();
-        let back: ExtractionConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let back: ExtractionConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, back);
     }
 
@@ -1317,8 +1317,8 @@ mod tests {
     fn test_report_serde_roundtrip() {
         let engine = ExtractionEngine::new(ExtractionConfig::default());
         let report = engine.evaluate(epoch());
-        let json = serde_json::to_string(&report).unwrap();
-        let back: ExtractionReport = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let back: ExtractionReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report, back);
     }
 

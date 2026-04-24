@@ -399,7 +399,7 @@ mod tests {
     fn budget_rejects_over_limit() {
         let mut budget = DomainBudget::new(100);
         // SAFETY: Test reserving 60 bytes within 100-byte budget should succeed
-        budget.try_reserve(60).unwrap();
+        budget.try_reserve(60).expect("serde deserialization should succeed");
         assert!(matches!(
             budget.try_reserve(50),
             Err(AllocDomainError::BudgetExceeded { .. })
@@ -412,7 +412,7 @@ mod tests {
     fn budget_release_frees_space() {
         let mut budget = DomainBudget::new(100);
         // SAFETY: Test reserving 80 bytes within 100-byte budget should succeed
-        budget.try_reserve(80).unwrap();
+        budget.try_reserve(80).expect("serde deserialization should succeed");
         budget.release(30);
         assert_eq!(budget.used_bytes, 50);
         assert_eq!(budget.remaining(), 50);
@@ -422,7 +422,7 @@ mod tests {
     fn budget_release_saturates_at_zero() {
         let mut budget = DomainBudget::new(100);
         // SAFETY: Test reserving 10 bytes within 100-byte budget should succeed
-        budget.try_reserve(10).unwrap();
+        budget.try_reserve(10).expect("serde deserialization should succeed");
         budget.release(100); // release more than used
         assert_eq!(budget.used_bytes, 0);
     }
@@ -432,10 +432,10 @@ mod tests {
         let mut budget = DomainBudget::new(200);
         assert!((budget.utilization() - 0.0).abs() < f64::EPSILON);
         // SAFETY: Test reserving 100 bytes within 200-byte budget should succeed
-        budget.try_reserve(100).unwrap();
+        budget.try_reserve(100).expect("serde deserialization should succeed");
         assert!((budget.utilization() - 0.5).abs() < f64::EPSILON);
         // SAFETY: Test reserving second 100 bytes within remaining 100-byte budget should succeed
-        budget.try_reserve(100).unwrap();
+        budget.try_reserve(100).expect("serde deserialization should succeed");
         assert!((budget.utilization() - 1.0).abs() < f64::EPSILON);
     }
 
@@ -456,12 +456,12 @@ mod tests {
             LifetimeClass::SessionScoped,
             1024,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         // SAFETY: Test allocating 256 bytes from 1024-byte registered domain should succeed
-        let seq = reg.allocate(AllocationDomain::ExtensionHeap, 256).unwrap();
+        let seq = reg.allocate(AllocationDomain::ExtensionHeap, 256).expect("serde deserialization should succeed");
         assert_eq!(seq, 1);
         // SAFETY: Test getting config for just-registered domain should succeed
-        let config = reg.get(&AllocationDomain::ExtensionHeap).unwrap();
+        let config = reg.get(&AllocationDomain::ExtensionHeap).expect("serde deserialization should succeed");
         assert_eq!(config.budget.used_bytes, 256);
     }
 
@@ -470,7 +470,7 @@ mod tests {
         let mut reg = DomainRegistry::new();
         // SAFETY: Test registering new domain with valid parameters should succeed
         reg.register(AllocationDomain::IrArena, LifetimeClass::Arena, 1024)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(matches!(
             reg.register(AllocationDomain::IrArena, LifetimeClass::Arena, 2048),
             Err(AllocDomainError::DuplicateDomain { .. })
@@ -495,11 +495,11 @@ mod tests {
             LifetimeClass::SessionScoped,
             100,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         // SAFETY: Test allocating 60 bytes from 100-byte budget should succeed
-        reg.allocate(AllocationDomain::ExtensionHeap, 60).unwrap();
+        reg.allocate(AllocationDomain::ExtensionHeap, 60).expect("serde deserialization should succeed");
         // SAFETY: Test allocating 30 bytes from remaining 40-byte budget should succeed
-        reg.allocate(AllocationDomain::ExtensionHeap, 30).unwrap();
+        reg.allocate(AllocationDomain::ExtensionHeap, 30).expect("serde deserialization should succeed");
         // Next allocation would exceed
         assert!(matches!(
             reg.allocate(AllocationDomain::ExtensionHeap, 20),
@@ -519,18 +519,18 @@ mod tests {
             LifetimeClass::RequestScoped,
             100,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         // SAFETY: Test allocating 80 bytes from 100-byte budget should succeed
-        reg.allocate(AllocationDomain::ScratchBuffer, 80).unwrap();
+        reg.allocate(AllocationDomain::ScratchBuffer, 80).expect("serde deserialization should succeed");
         // SAFETY: Test releasing 80 bytes from allocated domain should succeed
-        reg.release(AllocationDomain::ScratchBuffer, 80).unwrap();
+        reg.release(AllocationDomain::ScratchBuffer, 80).expect("serde deserialization should succeed");
         // Should be able to allocate again.
         // SAFETY: Test allocating 90 bytes from freed 100-byte budget should succeed
-        reg.allocate(AllocationDomain::ScratchBuffer, 90).unwrap();
+        reg.allocate(AllocationDomain::ScratchBuffer, 90).expect("serde deserialization should succeed");
         assert_eq!(
             // SAFETY: Test getting config for registered domain should succeed
             reg.get(&AllocationDomain::ScratchBuffer)
-                .unwrap()
+                .expect("serde deserialization should succeed")
                 .budget
                 .used_bytes,
             90
@@ -542,15 +542,15 @@ mod tests {
         let mut reg = DomainRegistry::new();
         // SAFETY: Test registering new domain with valid parameters should succeed
         reg.register(AllocationDomain::IrArena, LifetimeClass::Arena, 1024)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         // SAFETY: Test allocating 500 bytes from 1024-byte budget should succeed
-        reg.allocate(AllocationDomain::IrArena, 500).unwrap();
+        reg.allocate(AllocationDomain::IrArena, 500).expect("serde deserialization should succeed");
         // SAFETY: Test resetting registered domain should succeed
-        reg.reset_domain(AllocationDomain::IrArena).unwrap();
+        reg.reset_domain(AllocationDomain::IrArena).expect("serde deserialization should succeed");
         assert_eq!(
             // SAFETY: Test getting config for registered domain should succeed
             reg.get(&AllocationDomain::IrArena)
-                .unwrap()
+                .expect("serde deserialization should succeed")
                 .budget
                 .used_bytes,
             0
@@ -566,17 +566,17 @@ mod tests {
             LifetimeClass::SessionScoped,
             10000,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         // SAFETY: Test registering IrArena domain with valid parameters should succeed
         reg.register(AllocationDomain::IrArena, LifetimeClass::Arena, 10000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // SAFETY: Test allocating 10 bytes from 10000-byte ExtensionHeap budget should succeed
-        let s1 = reg.allocate(AllocationDomain::ExtensionHeap, 10).unwrap();
+        let s1 = reg.allocate(AllocationDomain::ExtensionHeap, 10).expect("serde deserialization should succeed");
         // SAFETY: Test allocating 20 bytes from 10000-byte IrArena budget should succeed
-        let s2 = reg.allocate(AllocationDomain::IrArena, 20).unwrap();
+        let s2 = reg.allocate(AllocationDomain::IrArena, 20).expect("serde deserialization should succeed");
         // SAFETY: Test allocating 30 bytes from remaining ExtensionHeap budget should succeed
-        let s3 = reg.allocate(AllocationDomain::ExtensionHeap, 30).unwrap();
+        let s3 = reg.allocate(AllocationDomain::ExtensionHeap, 30).expect("serde deserialization should succeed");
 
         assert_eq!(s1, 1);
         assert_eq!(s2, 2);
@@ -594,17 +594,17 @@ mod tests {
             LifetimeClass::RequestScoped,
             100,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         // SAFETY: Test registering ExtensionHeap domain with valid parameters should succeed
         reg.register(
             AllocationDomain::ExtensionHeap,
             LifetimeClass::SessionScoped,
             100,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         // SAFETY: Test registering IrArena domain with valid parameters should succeed
         reg.register(AllocationDomain::IrArena, LifetimeClass::Arena, 100)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let domains: Vec<AllocationDomain> = reg.iter().map(|(d, _)| *d).collect();
         // BTreeMap sorts by enum discriminant order.
@@ -642,18 +642,18 @@ mod tests {
             LifetimeClass::SessionScoped,
             100,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         // SAFETY: Test registering IrArena domain with valid parameters should succeed
         reg.register(AllocationDomain::IrArena, LifetimeClass::Arena, 100)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Fill extension heap to capacity.
         // SAFETY: Test allocating 100 bytes from 100-byte ExtensionHeap budget should succeed
-        reg.allocate(AllocationDomain::ExtensionHeap, 100).unwrap();
+        reg.allocate(AllocationDomain::ExtensionHeap, 100).expect("serde deserialization should succeed");
 
         // IR arena should still be fully available.
         // SAFETY: Test allocating 100 bytes from separate 100-byte IrArena budget should succeed
-        reg.allocate(AllocationDomain::IrArena, 100).unwrap();
+        reg.allocate(AllocationDomain::IrArena, 100).expect("serde deserialization should succeed");
 
         assert_eq!(reg.total_used(), 200);
         assert_eq!(reg.total_capacity(), 200);
@@ -668,15 +668,15 @@ mod tests {
             LifetimeClass::SessionScoped,
             500,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         // SAFETY: Test registering IrArena domain with valid parameters should succeed
         reg.register(AllocationDomain::IrArena, LifetimeClass::Arena, 300)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // SAFETY: Test allocating 100 bytes from 500-byte ExtensionHeap budget should succeed
-        reg.allocate(AllocationDomain::ExtensionHeap, 100).unwrap();
+        reg.allocate(AllocationDomain::ExtensionHeap, 100).expect("serde deserialization should succeed");
         // SAFETY: Test allocating 50 bytes from 300-byte IrArena budget should succeed
-        reg.allocate(AllocationDomain::IrArena, 50).unwrap();
+        reg.allocate(AllocationDomain::IrArena, 50).expect("serde deserialization should succeed");
 
         assert_eq!(reg.total_used(), 150);
         assert_eq!(reg.total_capacity(), 800);
@@ -688,27 +688,27 @@ mod tests {
     fn domain_registry_serialization_round_trip() {
         let mut reg = DomainRegistry::with_standard_domains(1024);
         // SAFETY: Test allocating 256 bytes from pre-registered 1024-byte domain should succeed
-        reg.allocate(AllocationDomain::ExtensionHeap, 256).unwrap();
+        reg.allocate(AllocationDomain::ExtensionHeap, 256).expect("serde deserialization should succeed");
 
         // SAFETY: DomainRegistry derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&reg).unwrap();
+        let json = serde_json::to_string(&reg).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid DomainRegistry,
         // so from_str back to DomainRegistry cannot fail (valid format + matching schema).
-        let roundtrip: DomainRegistry = serde_json::from_str(&json).unwrap();
+        let roundtrip: DomainRegistry = serde_json::from_str(&json).expect("serde deserialization should succeed");
 
         assert_eq!(reg.len(), roundtrip.len());
         assert_eq!(reg.allocation_sequence(), roundtrip.allocation_sequence());
         assert_eq!(
             // SAFETY: Test accessing domain that was just registered in with_standard_domains should succeed
             reg.get(&AllocationDomain::ExtensionHeap)
-                .unwrap()
+                .expect("serde deserialization should succeed")
                 .budget
                 .used_bytes,
             // SAFETY: Test accessing domain in roundtrip registry (copied from original) should succeed
             roundtrip
                 .get(&AllocationDomain::ExtensionHeap)
-                .unwrap()
+                .expect("serde deserialization should succeed")
                 .budget
                 .used_bytes
         );
@@ -797,10 +797,10 @@ mod tests {
         for v in &variants {
             // SAFETY: AllocationDomain derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json = serde_json::to_string(v).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by to_string of a valid AllocationDomain,
             // so from_str back to AllocationDomain cannot fail (valid format + matching schema).
-            let restored: AllocationDomain = serde_json::from_str(&json).unwrap();
+            let restored: AllocationDomain = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, restored);
         }
     }
@@ -816,10 +816,10 @@ mod tests {
         for v in &variants {
             // SAFETY: LifetimeClass derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json = serde_json::to_string(v).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by to_string of a valid LifetimeClass,
             // so from_str back to LifetimeClass cannot fail (valid format + matching schema).
-            let restored: LifetimeClass = serde_json::from_str(&json).unwrap();
+            let restored: LifetimeClass = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, restored);
         }
     }
@@ -848,10 +848,10 @@ mod tests {
         for v in &variants {
             // SAFETY: AllocDomainError derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json = serde_json::to_string(v).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by to_string of a valid AllocDomainError,
             // so from_str back to AllocDomainError cannot fail (valid format + matching schema).
-            let restored: AllocDomainError = serde_json::from_str(&json).unwrap();
+            let restored: AllocDomainError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, restored);
         }
     }
@@ -860,13 +860,13 @@ mod tests {
     fn domain_budget_serde_roundtrip() {
         let mut budget = DomainBudget::new(1024);
         // SAFETY: Test reserving 256 bytes within 1024-byte budget should succeed
-        budget.try_reserve(256).unwrap();
+        budget.try_reserve(256).expect("serde deserialization should succeed");
         // SAFETY: DomainBudget derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&budget).unwrap();
+        let json = serde_json::to_string(&budget).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid DomainBudget,
         // so from_str back to DomainBudget cannot fail (valid format + matching schema).
-        let restored: DomainBudget = serde_json::from_str(&json).unwrap();
+        let restored: DomainBudget = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(budget, restored);
     }
 
@@ -879,10 +879,10 @@ mod tests {
         };
         // SAFETY: DomainConfig derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&config).unwrap();
+        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid DomainConfig,
         // so from_str back to DomainConfig cannot fail (valid format + matching schema).
-        let restored: DomainConfig = serde_json::from_str(&json).unwrap();
+        let restored: DomainConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, restored);
     }
 
@@ -902,7 +902,7 @@ mod tests {
     fn budget_overflow_on_checked_add() {
         let mut b = DomainBudget::new(u64::MAX);
         // SAFETY: Test reserving u64::MAX from u64::MAX budget should succeed (exact fit)
-        b.try_reserve(u64::MAX).unwrap();
+        b.try_reserve(u64::MAX).expect("serde deserialization should succeed");
         let err = b.try_reserve(1).unwrap_err();
         assert!(matches!(err, AllocDomainError::BudgetOverflow));
     }
@@ -911,7 +911,7 @@ mod tests {
     fn budget_try_reserve_exact_limit() {
         let mut b = DomainBudget::new(100);
         // SAFETY: Test reserving exactly 100 bytes from 100-byte budget should succeed (exact fit)
-        b.try_reserve(100).unwrap();
+        b.try_reserve(100).expect("serde deserialization should succeed");
         assert_eq!(b.used_bytes, 100);
         assert_eq!(b.remaining(), 0);
     }
@@ -920,7 +920,7 @@ mod tests {
     fn budget_try_reserve_zero_bytes() {
         let mut b = DomainBudget::new(100);
         // SAFETY: Test reserving 0 bytes from any budget should always succeed (no-op)
-        b.try_reserve(0).unwrap();
+        b.try_reserve(0).expect("serde deserialization should succeed");
         assert_eq!(b.used_bytes, 0);
     }
 
@@ -974,25 +974,25 @@ mod tests {
     fn standard_domains_lifetime_classes() {
         let reg = DomainRegistry::with_standard_domains(1024);
         // SAFETY: ExtensionHeap is pre-registered in with_standard_domains, get() succeeds
-        let ext = reg.get(&AllocationDomain::ExtensionHeap).unwrap();
+        let ext = reg.get(&AllocationDomain::ExtensionHeap).expect("serde deserialization should succeed");
         assert_eq!(ext.lifetime, LifetimeClass::SessionScoped);
         assert_eq!(ext.budget.max_bytes, 1024);
 
         // SAFETY: RuntimeHeap is pre-registered in with_standard_domains, get() succeeds
-        let rt = reg.get(&AllocationDomain::RuntimeHeap).unwrap();
+        let rt = reg.get(&AllocationDomain::RuntimeHeap).expect("serde deserialization should succeed");
         assert_eq!(rt.lifetime, LifetimeClass::Global);
         assert_eq!(rt.budget.max_bytes, u64::MAX);
 
         // SAFETY: IrArena is pre-registered in with_standard_domains, get() succeeds
-        let ir = reg.get(&AllocationDomain::IrArena).unwrap();
+        let ir = reg.get(&AllocationDomain::IrArena).expect("serde deserialization should succeed");
         assert_eq!(ir.lifetime, LifetimeClass::Arena);
         assert_eq!(ir.budget.max_bytes, 512 * 1024 * 1024);
 
-        let ev = reg.get(&AllocationDomain::EvidenceArena).unwrap();
+        let ev = reg.get(&AllocationDomain::EvidenceArena).expect("serde deserialization should succeed");
         assert_eq!(ev.lifetime, LifetimeClass::SessionScoped);
         assert_eq!(ev.budget.max_bytes, 128 * 1024 * 1024);
 
-        let sc = reg.get(&AllocationDomain::ScratchBuffer).unwrap();
+        let sc = reg.get(&AllocationDomain::ScratchBuffer).expect("serde deserialization should succeed");
         assert_eq!(sc.lifetime, LifetimeClass::RequestScoped);
         assert_eq!(sc.budget.max_bytes, 64 * 1024 * 1024);
     }
@@ -1009,7 +1009,7 @@ mod tests {
             LifetimeClass::SessionScoped,
             100,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let err = reg
             .allocate(AllocationDomain::ExtensionHeap, 200)
             .unwrap_err();
@@ -1037,10 +1037,10 @@ mod tests {
             LifetimeClass::RequestScoped,
             1000,
         )
-        .unwrap();
-        let s1 = reg.allocate(AllocationDomain::ScratchBuffer, 10).unwrap();
-        reg.release(AllocationDomain::ScratchBuffer, 10).unwrap();
-        let s2 = reg.allocate(AllocationDomain::ScratchBuffer, 10).unwrap();
+        .expect("serde deserialization should succeed");
+        let s1 = reg.allocate(AllocationDomain::ScratchBuffer, 10).expect("serde deserialization should succeed");
+        reg.release(AllocationDomain::ScratchBuffer, 10).expect("serde deserialization should succeed");
+        let s2 = reg.allocate(AllocationDomain::ScratchBuffer, 10).expect("serde deserialization should succeed");
         assert_eq!(s1, 1);
         assert_eq!(s2, 2); // sequence keeps incrementing
     }
@@ -1116,11 +1116,11 @@ mod tests {
     #[test]
     fn budget_reserve_then_release_then_reserve_cycle() {
         let mut budget = DomainBudget::new(100);
-        budget.try_reserve(100).unwrap();
+        budget.try_reserve(100).expect("serde deserialization should succeed");
         assert_eq!(budget.remaining(), 0);
         budget.release(50);
         assert_eq!(budget.remaining(), 50);
-        budget.try_reserve(50).unwrap();
+        budget.try_reserve(50).expect("serde deserialization should succeed");
         assert_eq!(budget.remaining(), 0);
         assert!((budget.utilization() - 1.0).abs() < f64::EPSILON);
     }
@@ -1136,7 +1136,7 @@ mod tests {
             AllocationDomain::EvidenceArena,
             AllocationDomain::ScratchBuffer,
         ] {
-            let seq = reg.allocate(domain, 1).unwrap();
+            let seq = reg.allocate(domain, 1).expect("serde deserialization should succeed");
             assert!(seq > 0);
         }
         assert_eq!(reg.allocation_sequence(), 5);
@@ -1147,10 +1147,10 @@ mod tests {
     fn reset_domain_preserves_allocation_sequence() {
         let mut reg = DomainRegistry::new();
         reg.register(AllocationDomain::IrArena, LifetimeClass::Arena, 1024)
-            .unwrap();
-        reg.allocate(AllocationDomain::IrArena, 500).unwrap();
+            .expect("serde deserialization should succeed");
+        reg.allocate(AllocationDomain::IrArena, 500).expect("serde deserialization should succeed");
         let seq_before = reg.allocation_sequence();
-        reg.reset_domain(AllocationDomain::IrArena).unwrap();
+        reg.reset_domain(AllocationDomain::IrArena).expect("serde deserialization should succeed");
         assert_eq!(
             reg.allocation_sequence(),
             seq_before,
@@ -1158,7 +1158,7 @@ mod tests {
         );
         assert_eq!(
             reg.get(&AllocationDomain::IrArena)
-                .unwrap()
+                .expect("serde deserialization should succeed")
                 .budget
                 .used_bytes,
             0
@@ -1173,8 +1173,8 @@ mod tests {
             LifetimeClass::SessionScoped,
             256,
         )
-        .unwrap();
-        let config = reg.get(&AllocationDomain::EvidenceArena).unwrap();
+        .expect("serde deserialization should succeed");
+        let config = reg.get(&AllocationDomain::EvidenceArena).expect("serde deserialization should succeed");
         assert_eq!(config.lifetime, LifetimeClass::SessionScoped);
         assert_eq!(config.domain, AllocationDomain::EvidenceArena);
     }
@@ -1182,18 +1182,18 @@ mod tests {
     #[test]
     fn registry_serde_preserves_used_bytes_across_domains() {
         let mut reg = DomainRegistry::with_standard_domains(4096);
-        reg.allocate(AllocationDomain::ExtensionHeap, 100).unwrap();
-        reg.allocate(AllocationDomain::IrArena, 200).unwrap();
-        reg.allocate(AllocationDomain::ScratchBuffer, 300).unwrap();
+        reg.allocate(AllocationDomain::ExtensionHeap, 100).expect("serde deserialization should succeed");
+        reg.allocate(AllocationDomain::IrArena, 200).expect("serde deserialization should succeed");
+        reg.allocate(AllocationDomain::ScratchBuffer, 300).expect("serde deserialization should succeed");
 
-        let json = serde_json::to_string(&reg).unwrap();
-        let restored: DomainRegistry = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&reg).expect("serde deserialization should succeed");
+        let restored: DomainRegistry = serde_json::from_str(&json).expect("serde deserialization should succeed");
 
         assert_eq!(restored.total_used(), 600);
         assert_eq!(
             restored
                 .get(&AllocationDomain::ExtensionHeap)
-                .unwrap()
+                .expect("serde deserialization should succeed")
                 .budget
                 .used_bytes,
             100
@@ -1201,7 +1201,7 @@ mod tests {
         assert_eq!(
             restored
                 .get(&AllocationDomain::IrArena)
-                .unwrap()
+                .expect("serde deserialization should succeed")
                 .budget
                 .used_bytes,
             200
@@ -1209,7 +1209,7 @@ mod tests {
         assert_eq!(
             restored
                 .get(&AllocationDomain::ScratchBuffer)
-                .unwrap()
+                .expect("serde deserialization should succeed")
                 .budget
                 .used_bytes,
             300
@@ -1219,10 +1219,10 @@ mod tests {
     #[test]
     fn budget_try_reserve_one_over_limit_exact_boundary() {
         let mut b = DomainBudget::new(100);
-        b.try_reserve(99).unwrap();
+        b.try_reserve(99).expect("serde deserialization should succeed");
         // Exactly one byte remaining
         assert_eq!(b.remaining(), 1);
-        b.try_reserve(1).unwrap();
+        b.try_reserve(1).expect("serde deserialization should succeed");
         assert_eq!(b.remaining(), 0);
         // Now even 1 byte fails
         let err = b.try_reserve(1).unwrap_err();
@@ -1248,7 +1248,7 @@ mod tests {
     #[test]
     fn domain_budget_clone_equality() {
         let mut b = DomainBudget::new(500);
-        b.try_reserve(123).unwrap();
+        b.try_reserve(123).expect("serde deserialization should succeed");
         let cloned = b.clone();
         assert_eq!(b, cloned);
     }
@@ -1324,8 +1324,8 @@ mod tests {
     #[test]
     fn domain_budget_json_field_presence() {
         let mut b = DomainBudget::new(1024);
-        b.try_reserve(256).unwrap();
-        let json = serde_json::to_string(&b).unwrap();
+        b.try_reserve(256).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&b).expect("serde deserialization should succeed");
         assert!(json.contains("\"max_bytes\""));
         assert!(json.contains("\"used_bytes\""));
         assert!(json.contains("1024"));
@@ -1339,7 +1339,7 @@ mod tests {
             lifetime: LifetimeClass::SessionScoped,
             budget: DomainBudget::new(512),
         };
-        let json = serde_json::to_string(&cfg).unwrap();
+        let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
         assert!(json.contains("\"domain\""));
         assert!(json.contains("\"lifetime\""));
         assert!(json.contains("\"budget\""));
@@ -1359,12 +1359,12 @@ mod tests {
     fn registry_allocate_zero_bytes_increments_sequence() {
         let mut reg = DomainRegistry::new();
         reg.register(AllocationDomain::IrArena, LifetimeClass::Arena, 100)
-            .unwrap();
-        let seq = reg.allocate(AllocationDomain::IrArena, 0).unwrap();
+            .expect("serde deserialization should succeed");
+        let seq = reg.allocate(AllocationDomain::IrArena, 0).expect("serde deserialization should succeed");
         assert_eq!(seq, 1);
         assert_eq!(
             reg.get(&AllocationDomain::IrArena)
-                .unwrap()
+                .expect("serde deserialization should succeed")
                 .budget
                 .used_bytes,
             0
@@ -1379,13 +1379,13 @@ mod tests {
             LifetimeClass::SessionScoped,
             1000,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         reg.register(AllocationDomain::IrArena, LifetimeClass::Arena, 1000)
-            .unwrap();
-        reg.allocate(AllocationDomain::ExtensionHeap, 400).unwrap();
-        reg.allocate(AllocationDomain::IrArena, 300).unwrap();
+            .expect("serde deserialization should succeed");
+        reg.allocate(AllocationDomain::ExtensionHeap, 400).expect("serde deserialization should succeed");
+        reg.allocate(AllocationDomain::IrArena, 300).expect("serde deserialization should succeed");
         assert_eq!(reg.total_used(), 700);
-        reg.release(AllocationDomain::ExtensionHeap, 150).unwrap();
+        reg.release(AllocationDomain::ExtensionHeap, 150).expect("serde deserialization should succeed");
         assert_eq!(reg.total_used(), 550);
     }
 
@@ -1399,7 +1399,7 @@ mod tests {
     #[test]
     fn budget_multiple_sequential_releases_saturate() {
         let mut b = DomainBudget::new(100);
-        b.try_reserve(50).unwrap();
+        b.try_reserve(50).expect("serde deserialization should succeed");
         b.release(20);
         assert_eq!(b.used_bytes, 30);
         b.release(20);
@@ -1411,8 +1411,8 @@ mod tests {
     #[test]
     fn registry_clone_preserves_state() {
         let mut reg = DomainRegistry::with_standard_domains(2048);
-        reg.allocate(AllocationDomain::ExtensionHeap, 100).unwrap();
-        reg.allocate(AllocationDomain::IrArena, 200).unwrap();
+        reg.allocate(AllocationDomain::ExtensionHeap, 100).expect("serde deserialization should succeed");
+        reg.allocate(AllocationDomain::IrArena, 200).expect("serde deserialization should succeed");
         let cloned = reg.clone();
         assert_eq!(cloned.len(), reg.len());
         assert_eq!(cloned.total_used(), reg.total_used());
@@ -1420,7 +1420,7 @@ mod tests {
         assert_eq!(
             cloned
                 .get(&AllocationDomain::ExtensionHeap)
-                .unwrap()
+                .expect("serde deserialization should succeed")
                 .budget
                 .used_bytes,
             100
@@ -1434,10 +1434,10 @@ mod tests {
     #[test]
     fn domain_budget_clone_independence_enrichment() {
         let mut original = DomainBudget::new(1000);
-        original.try_reserve(200).unwrap();
+        original.try_reserve(200).expect("serde deserialization should succeed");
         let mut cloned = original.clone();
         // Mutate the original
-        original.try_reserve(300).unwrap();
+        original.try_reserve(300).expect("serde deserialization should succeed");
         // Clone must remain at 200
         assert_eq!(cloned.used_bytes, 200);
         assert_eq!(original.used_bytes, 500);
@@ -1454,9 +1454,9 @@ mod tests {
             lifetime: LifetimeClass::SessionScoped,
             budget: DomainBudget::new(2048),
         };
-        original.budget.try_reserve(500).unwrap();
+        original.budget.try_reserve(500).expect("serde deserialization should succeed");
         let cloned = original.clone();
-        original.budget.try_reserve(300).unwrap();
+        original.budget.try_reserve(300).expect("serde deserialization should succeed");
         assert_eq!(original.budget.used_bytes, 800);
         assert_eq!(cloned.budget.used_bytes, 500);
     }
@@ -1469,16 +1469,16 @@ mod tests {
             LifetimeClass::SessionScoped,
             5000,
         )
-        .unwrap();
-        reg.allocate(AllocationDomain::ExtensionHeap, 100).unwrap();
+        .expect("serde deserialization should succeed");
+        reg.allocate(AllocationDomain::ExtensionHeap, 100).expect("serde deserialization should succeed");
         let mut cloned = reg.clone();
         // Allocate more on original
-        reg.allocate(AllocationDomain::ExtensionHeap, 200).unwrap();
+        reg.allocate(AllocationDomain::ExtensionHeap, 200).expect("serde deserialization should succeed");
         // Clone must still be at 100
         assert_eq!(
             cloned
                 .get(&AllocationDomain::ExtensionHeap)
-                .unwrap()
+                .expect("serde deserialization should succeed")
                 .budget
                 .used_bytes,
             100
@@ -1487,7 +1487,7 @@ mod tests {
         // Allocate on clone
         cloned
             .allocate(AllocationDomain::ExtensionHeap, 50)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(cloned.allocation_sequence(), 2);
         assert_eq!(reg.allocation_sequence(), 2);
     }
@@ -1506,7 +1506,7 @@ mod tests {
         assert_eq!(set.len(), 5);
         // First element should be ExtensionHeap (smallest discriminant)
         // SAFETY: The set length is asserted above, so next() must yield an element.
-        assert_eq!(*set.iter().next().unwrap(), AllocationDomain::ExtensionHeap);
+        assert_eq!(*set.iter().next().expect("serde deserialization should succeed"), AllocationDomain::ExtensionHeap);
     }
 
     #[test]
@@ -1520,7 +1520,7 @@ mod tests {
         set.insert(LifetimeClass::Arena); // duplicate
         assert_eq!(set.len(), 4);
         // SAFETY: The set length is asserted above, so next() must yield an element.
-        assert_eq!(*set.iter().next().unwrap(), LifetimeClass::RequestScoped);
+        assert_eq!(*set.iter().next().expect("serde deserialization should succeed"), LifetimeClass::RequestScoped);
     }
 
     #[test]
@@ -1641,9 +1641,9 @@ mod tests {
     fn budget_serde_zero_capacity_enrichment() {
         let b = DomainBudget::new(0);
         // SAFETY: DomainBudget derives Serialize; writing to an in-memory String cannot fail here.
-        let json = serde_json::to_string(&b).unwrap();
+        let json = serde_json::to_string(&b).expect("serde deserialization should succeed");
         // SAFETY: JSON was produced from the same DomainBudget schema immediately above.
-        let restored: DomainBudget = serde_json::from_str(&json).unwrap();
+        let restored: DomainBudget = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(restored.max_bytes, 0);
         assert_eq!(restored.used_bytes, 0);
     }
@@ -1652,11 +1652,11 @@ mod tests {
     fn budget_serde_max_u64_capacity_enrichment() {
         let mut b = DomainBudget::new(u64::MAX);
         // SAFETY: Reserving one byte from a u64::MAX budget is within capacity.
-        b.try_reserve(1).unwrap();
+        b.try_reserve(1).expect("serde deserialization should succeed");
         // SAFETY: DomainBudget derives Serialize; writing to an in-memory String cannot fail here.
-        let json = serde_json::to_string(&b).unwrap();
+        let json = serde_json::to_string(&b).expect("serde deserialization should succeed");
         // SAFETY: JSON was produced from the same DomainBudget schema immediately above.
-        let restored: DomainBudget = serde_json::from_str(&json).unwrap();
+        let restored: DomainBudget = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(restored.max_bytes, u64::MAX);
         assert_eq!(restored.used_bytes, 1);
     }
@@ -1665,9 +1665,9 @@ mod tests {
     fn registry_serde_empty_enrichment() {
         let reg = DomainRegistry::new();
         // SAFETY: DomainRegistry derives Serialize; writing to an in-memory String cannot fail here.
-        let json = serde_json::to_string(&reg).unwrap();
+        let json = serde_json::to_string(&reg).expect("serde deserialization should succeed");
         // SAFETY: JSON was produced from the same empty DomainRegistry schema immediately above.
-        let restored: DomainRegistry = serde_json::from_str(&json).unwrap();
+        let restored: DomainRegistry = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert!(restored.is_empty());
         assert_eq!(restored.allocation_sequence(), 0);
     }
@@ -1677,21 +1677,21 @@ mod tests {
         let mut reg = DomainRegistry::new();
         // SAFETY: Registering a fresh IrArena domain with a positive budget is valid.
         reg.register(AllocationDomain::IrArena, LifetimeClass::Arena, 5000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         // SAFETY: Allocation is within the registered 5000-byte IrArena budget.
-        reg.allocate(AllocationDomain::IrArena, 3000).unwrap();
+        reg.allocate(AllocationDomain::IrArena, 3000).expect("serde deserialization should succeed");
         // SAFETY: IrArena was registered above and can be reset.
-        reg.reset_domain(AllocationDomain::IrArena).unwrap();
+        reg.reset_domain(AllocationDomain::IrArena).expect("serde deserialization should succeed");
 
         // SAFETY: DomainRegistry derives Serialize; writing to an in-memory String cannot fail here.
-        let json = serde_json::to_string(&reg).unwrap();
+        let json = serde_json::to_string(&reg).expect("serde deserialization should succeed");
         // SAFETY: JSON was produced from the same DomainRegistry schema immediately above.
-        let restored: DomainRegistry = serde_json::from_str(&json).unwrap();
+        let restored: DomainRegistry = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(
             restored
                 .get(&AllocationDomain::IrArena)
                 // SAFETY: IrArena was registered before serialization and must survive roundtrip.
-                .unwrap()
+                .expect("serde deserialization should succeed")
                 .budget
                 .used_bytes,
             0
@@ -1718,22 +1718,22 @@ mod tests {
                 LifetimeClass::SessionScoped,
                 10000,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
             reg.register(AllocationDomain::IrArena, LifetimeClass::Arena, 10000)
-                .unwrap();
+                .expect("serde deserialization should succeed");
             reg.register(
                 AllocationDomain::ScratchBuffer,
                 LifetimeClass::RequestScoped,
                 10000,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         }
 
         let mut seqs1 = Vec::new();
         let mut seqs2 = Vec::new();
         for (domain, bytes) in &ops {
-            seqs1.push(reg1.allocate(*domain, *bytes).unwrap());
-            seqs2.push(reg2.allocate(*domain, *bytes).unwrap());
+            seqs1.push(reg1.allocate(*domain, *bytes).expect("serde deserialization should succeed"));
+            seqs2.push(reg2.allocate(*domain, *bytes).expect("serde deserialization should succeed"));
         }
         assert_eq!(seqs1, seqs2);
         assert_eq!(reg1.total_used(), reg2.total_used());
@@ -1744,17 +1744,17 @@ mod tests {
     fn deterministic_replay_serde_equivalence_enrichment() {
         let mut reg = DomainRegistry::with_standard_domains(10000);
         // SAFETY: ExtensionHeap is registered by with_standard_domains and this allocation is in budget.
-        reg.allocate(AllocationDomain::ExtensionHeap, 100).unwrap();
+        reg.allocate(AllocationDomain::ExtensionHeap, 100).expect("serde deserialization should succeed");
         // SAFETY: IrArena is registered by with_standard_domains and this allocation is in budget.
-        reg.allocate(AllocationDomain::IrArena, 200).unwrap();
+        reg.allocate(AllocationDomain::IrArena, 200).expect("serde deserialization should succeed");
         // SAFETY: ScratchBuffer is registered by with_standard_domains and this allocation is in budget.
-        reg.allocate(AllocationDomain::ScratchBuffer, 50).unwrap();
+        reg.allocate(AllocationDomain::ScratchBuffer, 50).expect("serde deserialization should succeed");
 
         // Serialize twice independently
         // SAFETY: DomainRegistry derives Serialize; writing to an in-memory String cannot fail here.
-        let json1 = serde_json::to_string(&reg).unwrap();
+        let json1 = serde_json::to_string(&reg).expect("serde deserialization should succeed");
         // SAFETY: Re-serializing the same valid registry to an in-memory String cannot fail here.
-        let json2 = serde_json::to_string(&reg).unwrap();
+        let json2 = serde_json::to_string(&reg).expect("serde deserialization should succeed");
         assert_eq!(json1, json2, "deterministic serialization");
     }
 
@@ -1767,16 +1767,16 @@ mod tests {
             LifetimeClass::RequestScoped,
             1_000_000,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         for i in 0..1000 {
             // SAFETY: Each one-byte allocation remains within the registered 1_000_000-byte budget.
-            let seq = reg.allocate(AllocationDomain::ScratchBuffer, 1).unwrap();
+            let seq = reg.allocate(AllocationDomain::ScratchBuffer, 1).expect("serde deserialization should succeed");
             assert_eq!(seq, (i + 1) as u64);
         }
         assert_eq!(
             reg.get(&AllocationDomain::ScratchBuffer)
                 // SAFETY: ScratchBuffer was registered before the allocation loop.
-                .unwrap()
+                .expect("serde deserialization should succeed")
                 .budget
                 .used_bytes,
             1000
@@ -1789,18 +1789,18 @@ mod tests {
         let mut reg = DomainRegistry::new();
         // SAFETY: Registering a fresh IrArena domain with a positive budget is valid.
         reg.register(AllocationDomain::IrArena, LifetimeClass::Arena, 100)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         // 500 cycles of allocate-then-release
         for _ in 0..500 {
             // SAFETY: Each cycle allocates exactly the registered 100-byte IrArena budget.
-            reg.allocate(AllocationDomain::IrArena, 100).unwrap();
+            reg.allocate(AllocationDomain::IrArena, 100).expect("serde deserialization should succeed");
             // SAFETY: The preceding allocation makes releasing 100 bytes from IrArena valid.
-            reg.release(AllocationDomain::IrArena, 100).unwrap();
+            reg.release(AllocationDomain::IrArena, 100).expect("serde deserialization should succeed");
         }
         assert_eq!(
             reg.get(&AllocationDomain::IrArena)
                 // SAFETY: IrArena was registered before the allocation-release loop.
-                .unwrap()
+                .expect("serde deserialization should succeed")
                 .budget
                 .used_bytes,
             0
@@ -1817,17 +1817,17 @@ mod tests {
             LifetimeClass::SessionScoped,
             50000,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         // SAFETY: Registering a fresh IrArena domain with a positive budget is valid.
         reg.register(AllocationDomain::IrArena, LifetimeClass::Arena, 50000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         // SAFETY: Registering a fresh ScratchBuffer domain with a positive budget is valid.
         reg.register(
             AllocationDomain::ScratchBuffer,
             LifetimeClass::RequestScoped,
             50000,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let domains = [
             AllocationDomain::ExtensionHeap,
@@ -1837,14 +1837,14 @@ mod tests {
         for i in 0u64..300 {
             let domain = domains[(i as usize) % 3];
             // SAFETY: 100 allocations of 10 bytes per registered domain stay within each budget.
-            reg.allocate(domain, 10).unwrap();
+            reg.allocate(domain, 10).expect("serde deserialization should succeed");
         }
         assert_eq!(reg.allocation_sequence(), 300);
         // Each domain got 100 allocations of 10 bytes
         assert_eq!(reg.total_used(), 3000);
         for domain in &domains {
             // SAFETY: Each domain in domains was registered before the allocation loop.
-            assert_eq!(reg.get(domain).unwrap().budget.used_bytes, 1000);
+            assert_eq!(reg.get(domain).expect("serde deserialization should succeed").budget.used_bytes, 1000);
         }
     }
 
@@ -1852,13 +1852,13 @@ mod tests {
     fn budget_utilization_midpoint_enrichment() {
         let mut b = DomainBudget::new(200);
         // SAFETY: Reserving 50 bytes from a 200-byte budget is within capacity.
-        b.try_reserve(50).unwrap();
+        b.try_reserve(50).expect("serde deserialization should succeed");
         assert!((b.utilization() - 0.25).abs() < f64::EPSILON);
         // SAFETY: Reserving another 50 bytes keeps used bytes within the 200-byte budget.
-        b.try_reserve(50).unwrap();
+        b.try_reserve(50).expect("serde deserialization should succeed");
         assert!((b.utilization() - 0.50).abs() < f64::EPSILON);
         // SAFETY: Reserving a third 50-byte chunk keeps used bytes within capacity.
-        b.try_reserve(50).unwrap();
+        b.try_reserve(50).expect("serde deserialization should succeed");
         assert!((b.utilization() - 0.75).abs() < f64::EPSILON);
     }
 
@@ -1866,7 +1866,7 @@ mod tests {
     fn budget_remaining_after_exact_fill_enrichment() {
         let mut b = DomainBudget::new(u64::MAX);
         // SAFETY: Reserving exactly u64::MAX bytes from a u64::MAX budget is an exact fit.
-        b.try_reserve(u64::MAX).unwrap();
+        b.try_reserve(u64::MAX).expect("serde deserialization should succeed");
         assert_eq!(b.remaining(), 0);
         assert!((b.utilization() - 1.0).abs() < f64::EPSILON);
     }
@@ -1875,7 +1875,7 @@ mod tests {
     fn budget_release_zero_is_noop_enrichment() {
         let mut b = DomainBudget::new(100);
         // SAFETY: Reserving 50 bytes from a 100-byte budget is within capacity.
-        b.try_reserve(50).unwrap();
+        b.try_reserve(50).expect("serde deserialization should succeed");
         b.release(0);
         assert_eq!(b.used_bytes, 50);
     }
@@ -1889,20 +1889,20 @@ mod tests {
             LifetimeClass::SessionScoped,
             500,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         // SAFETY: Allocating exactly the registered 500-byte EvidenceArena budget is valid.
-        reg.allocate(AllocationDomain::EvidenceArena, 500).unwrap();
+        reg.allocate(AllocationDomain::EvidenceArena, 500).expect("serde deserialization should succeed");
         // Full — cannot allocate more
         assert!(reg.allocate(AllocationDomain::EvidenceArena, 1).is_err());
         // Reset and reallocate
         // SAFETY: EvidenceArena was registered above and can be reset.
-        reg.reset_domain(AllocationDomain::EvidenceArena).unwrap();
+        reg.reset_domain(AllocationDomain::EvidenceArena).expect("serde deserialization should succeed");
         // SAFETY: Reallocating 250 bytes after reset is within the 500-byte budget.
-        reg.allocate(AllocationDomain::EvidenceArena, 250).unwrap();
+        reg.allocate(AllocationDomain::EvidenceArena, 250).expect("serde deserialization should succeed");
         assert_eq!(
             reg.get(&AllocationDomain::EvidenceArena)
                 // SAFETY: EvidenceArena was registered before the reset/reuse sequence.
-                .unwrap()
+                .expect("serde deserialization should succeed")
                 .budget
                 .used_bytes,
             250
@@ -1917,7 +1917,7 @@ mod tests {
             assert_eq!(
                 reg.get(&AllocationDomain::ExtensionHeap)
                     // SAFETY: with_standard_domains always registers ExtensionHeap.
-                    .unwrap()
+                    .expect("serde deserialization should succeed")
                     .budget
                     .max_bytes,
                 size
@@ -1946,9 +1946,9 @@ mod tests {
         ];
         for err in &errors {
             // SAFETY: AllocDomainError derives Serialize; writing to an in-memory String cannot fail here.
-            let json = serde_json::to_string(err).unwrap();
+            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
             // SAFETY: JSON was produced from the same AllocDomainError schema immediately above.
-            let restored: AllocDomainError = serde_json::from_str(&json).unwrap();
+            let restored: AllocDomainError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, restored);
         }
     }
@@ -2022,8 +2022,8 @@ mod tests {
             LifetimeClass::SessionScoped,
             100,
         )
-        .unwrap();
-        reg.allocate(AllocationDomain::ExtensionHeap, 70).unwrap();
+        .expect("serde deserialization should succeed");
+        reg.allocate(AllocationDomain::ExtensionHeap, 70).expect("serde deserialization should succeed");
         let err = reg
             .allocate(AllocationDomain::ExtensionHeap, 50)
             .unwrap_err();
@@ -2051,12 +2051,12 @@ mod tests {
             LifetimeClass::SessionScoped,
             1000,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         reg.register(AllocationDomain::IrArena, LifetimeClass::Arena, 2000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let cap_before = reg.total_capacity();
-        reg.allocate(AllocationDomain::ExtensionHeap, 500).unwrap();
-        reg.allocate(AllocationDomain::IrArena, 1000).unwrap();
+        reg.allocate(AllocationDomain::ExtensionHeap, 500).expect("serde deserialization should succeed");
+        reg.allocate(AllocationDomain::IrArena, 1000).expect("serde deserialization should succeed");
         assert_eq!(
             reg.total_capacity(),
             cap_before,
@@ -2072,13 +2072,13 @@ mod tests {
             LifetimeClass::RequestScoped,
             1000,
         )
-        .unwrap();
-        reg.allocate(AllocationDomain::ScratchBuffer, 10).unwrap();
+        .expect("serde deserialization should succeed");
+        reg.allocate(AllocationDomain::ScratchBuffer, 10).expect("serde deserialization should succeed");
         // Release more than allocated
-        reg.release(AllocationDomain::ScratchBuffer, 999).unwrap();
+        reg.release(AllocationDomain::ScratchBuffer, 999).expect("serde deserialization should succeed");
         assert_eq!(
             reg.get(&AllocationDomain::ScratchBuffer)
-                .unwrap()
+                .expect("serde deserialization should succeed")
                 .budget
                 .used_bytes,
             0
@@ -2107,8 +2107,8 @@ mod tests {
                     lifetime: *l,
                     budget: DomainBudget::new(42),
                 };
-                let json = serde_json::to_string(&cfg).unwrap();
-                let restored: DomainConfig = serde_json::from_str(&json).unwrap();
+                let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
+                let restored: DomainConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
                 assert_eq!(cfg, restored);
             }
         }

@@ -806,8 +806,8 @@ mod tests {
             ChecklistCategory::Reproducibility,
             ChecklistCategory::Operational,
         ] {
-            let json = serde_json::to_string(&cat).unwrap();
-            let back: ChecklistCategory = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&cat).expect("serde deserialization should succeed");
+            let back: ChecklistCategory = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(back, cat);
         }
     }
@@ -838,8 +838,8 @@ mod tests {
             ChecklistItemStatus::NotRun,
             ChecklistItemStatus::Waived,
         ] {
-            let json = serde_json::to_string(&status).unwrap();
-            let back: ChecklistItemStatus = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&status).expect("serde deserialization should succeed");
+            let back: ChecklistItemStatus = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(back, status);
         }
     }
@@ -975,13 +975,13 @@ mod tests {
 
     #[test]
     fn normalize_utc_timestamp_valid() {
-        let result = normalize_utc_timestamp("2025-01-15T12:00:00Z").unwrap();
+        let result = normalize_utc_timestamp("2025-01-15T12:00:00Z").expect("serde deserialization should succeed");
         assert!(result.contains("2025-01-15"));
     }
 
     #[test]
     fn normalize_utc_timestamp_with_offset() {
-        let result = normalize_utc_timestamp("2025-01-15T14:00:00+02:00").unwrap();
+        let result = normalize_utc_timestamp("2025-01-15T14:00:00+02:00").expect("serde deserialization should succeed");
         assert!(result.contains("12:00:00")); // Converted to UTC
     }
 
@@ -1107,7 +1107,7 @@ mod tests {
     #[test]
     fn evaluate_full_passing_not_blocked() {
         let cl = make_full_checklist();
-        let result = evaluate_checklist(&cl).unwrap();
+        let result = evaluate_checklist(&cl).expect("serde deserialization should succeed");
         assert!(!result.blocked);
         assert!(result.blockers.is_empty());
     }
@@ -1118,7 +1118,7 @@ mod tests {
         // Remove the first required item
         let first_id = REQUIRED_CHECKLIST_ITEMS[0].item_id;
         cl.items.retain(|item| item.item_id != first_id);
-        let result = evaluate_checklist(&cl).unwrap();
+        let result = evaluate_checklist(&cl).expect("serde deserialization should succeed");
         assert!(result.blocked);
         assert!(result.blockers.iter().any(|b| b.contains(first_id)));
     }
@@ -1127,7 +1127,7 @@ mod tests {
     fn evaluate_failed_required_item_is_blocked() {
         let mut cl = make_full_checklist();
         cl.items[0].status = ChecklistItemStatus::Fail;
-        let result = evaluate_checklist(&cl).unwrap();
+        let result = evaluate_checklist(&cl).expect("serde deserialization should succeed");
         assert!(result.blocked);
     }
 
@@ -1135,7 +1135,7 @@ mod tests {
     fn evaluate_pass_without_artifacts_is_blocked() {
         let mut cl = make_full_checklist();
         cl.items[0].artifact_refs.clear();
-        let result = evaluate_checklist(&cl).unwrap();
+        let result = evaluate_checklist(&cl).expect("serde deserialization should succeed");
         assert!(result.blocked);
     }
 
@@ -1144,8 +1144,8 @@ mod tests {
     #[test]
     fn parse_valid_json() {
         let cl = make_full_checklist();
-        let json = serde_json::to_string(&cl).unwrap();
-        let parsed = parse_release_checklist_json(&json).unwrap();
+        let json = serde_json::to_string(&cl).expect("serde deserialization should succeed");
+        let parsed = parse_release_checklist_json(&json).expect("serde deserialization should succeed");
         assert_eq!(parsed.release_tag, "v0.1.0");
     }
 
@@ -1163,8 +1163,8 @@ mod tests {
     #[test]
     fn checklist_serde_round_trip() {
         let cl = make_full_checklist();
-        let json = serde_json::to_string(&cl).unwrap();
-        let back: ReleaseChecklist = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&cl).expect("serde deserialization should succeed");
+        let back: ReleaseChecklist = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, cl);
     }
 
@@ -1181,8 +1181,8 @@ mod tests {
             checklist_id: Some("rchk_abc".to_string()),
             item_id: None,
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let back: ReleaseChecklistGateEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let back: ReleaseChecklistGateEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, event);
     }
 
@@ -1315,8 +1315,8 @@ mod tests {
             path: "artifacts/art-1.json".to_string(),
             sha256: Some("a".repeat(64)),
         };
-        let json = serde_json::to_string(&art).unwrap();
-        let back: ArtifactRef = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&art).expect("serde deserialization should succeed");
+        let back: ArtifactRef = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, art);
     }
 
@@ -1327,8 +1327,8 @@ mod tests {
             path: "artifacts/art-2.json".to_string(),
             sha256: None,
         };
-        let json = serde_json::to_string(&art).unwrap();
-        let back: ArtifactRef = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&art).expect("serde deserialization should succeed");
+        let back: ArtifactRef = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, art);
     }
 
@@ -1341,8 +1341,8 @@ mod tests {
             approver: "admin".to_string(),
             exception_artifact_link: "bd-99".to_string(),
         };
-        let json = serde_json::to_string(&waiver).unwrap();
-        let back: ChecklistWaiver = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&waiver).expect("serde deserialization should succeed");
+        let back: ChecklistWaiver = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, waiver);
     }
 
@@ -1351,8 +1351,8 @@ mod tests {
     #[test]
     fn checklist_item_serde_round_trip() {
         let item = make_passing_item("security.conformance_suite", ChecklistCategory::Security);
-        let json = serde_json::to_string(&item).unwrap();
-        let back: ChecklistItem = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&item).expect("serde deserialization should succeed");
+        let back: ChecklistItem = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, item);
     }
 
@@ -1370,8 +1370,8 @@ mod tests {
                 exception_artifact_link: "bd-100".to_string(),
             }),
         };
-        let json = serde_json::to_string(&item).unwrap();
-        let back: ChecklistItem = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&item).expect("serde deserialization should succeed");
+        let back: ChecklistItem = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, item);
     }
 
@@ -1392,8 +1392,8 @@ mod tests {
             store_key: Some("release_checklist/v1.0.0/rchk_abc".to_string()),
             events: vec![],
         };
-        let json = serde_json::to_string(&decision).unwrap();
-        let back: ReleaseChecklistGateDecision = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&decision).expect("serde deserialization should succeed");
+        let back: ReleaseChecklistGateDecision = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, decision);
     }
 
@@ -1403,7 +1403,7 @@ mod tests {
     fn evaluate_not_run_required_item_is_blocked() {
         let mut cl = make_full_checklist();
         cl.items[0].status = ChecklistItemStatus::NotRun;
-        let result = evaluate_checklist(&cl).unwrap();
+        let result = evaluate_checklist(&cl).expect("serde deserialization should succeed");
         assert!(result.blocked);
         assert!(result.blockers.iter().any(|b| b.contains("not_run")));
     }
@@ -1413,7 +1413,7 @@ mod tests {
         let mut cl = make_full_checklist();
         // Change a security item to performance category
         cl.items[0].category = ChecklistCategory::Performance;
-        let result = evaluate_checklist(&cl).unwrap();
+        let result = evaluate_checklist(&cl).expect("serde deserialization should succeed");
         assert!(result.blocked);
         assert!(result.blockers.iter().any(|b| b.contains("category")));
     }
@@ -1427,7 +1427,7 @@ mod tests {
             approver: "admin".to_string(),
             exception_artifact_link: "bd-99".to_string(),
         });
-        let result = evaluate_checklist(&cl).unwrap();
+        let result = evaluate_checklist(&cl).expect("serde deserialization should succeed");
         // Waived items don't block release
         assert!(!result.blocked);
     }
@@ -1442,7 +1442,7 @@ mod tests {
             exception_artifact_link: "bd-99".to_string(),
         });
         cl.items[0].artifact_refs.clear();
-        let result = evaluate_checklist(&cl).unwrap();
+        let result = evaluate_checklist(&cl).expect("serde deserialization should succeed");
         assert!(result.blocked);
         assert!(
             result
@@ -1556,7 +1556,7 @@ mod tests {
 
     #[test]
     fn normalize_utc_timestamp_fractional_seconds() {
-        let result = normalize_utc_timestamp("2025-01-15T12:00:00.123Z").unwrap();
+        let result = normalize_utc_timestamp("2025-01-15T12:00:00.123Z").expect("serde deserialization should succeed");
         assert!(result.contains("12:00:00"));
     }
 
@@ -1726,7 +1726,7 @@ mod tests {
             "decision-q",
             "policy-q",
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].release_tag, "v0.1.0");
     }
@@ -1754,7 +1754,7 @@ mod tests {
         use crate::storage_adapter::InMemoryStorageAdapter;
         let mut adapter = InMemoryStorageAdapter::default();
         let results =
-            query_release_checklists_by_tag(&mut adapter, "nonexistent", "t", "d", "p").unwrap();
+            query_release_checklists_by_tag(&mut adapter, "nonexistent", "t", "d", "p").expect("serde deserialization should succeed");
         assert!(results.is_empty());
     }
 
@@ -1768,7 +1768,7 @@ mod tests {
         let first_id_before = cl.items[0].item_id.clone();
         assert!(validate_release_checklist(&cl).is_ok());
         // After normalization via evaluate, items should be sorted
-        let result = evaluate_checklist(&cl).unwrap();
+        let result = evaluate_checklist(&cl).expect("serde deserialization should succeed");
         let first_id_after = result.normalized.items[0].item_id.clone();
         // The items are sorted alphabetically
         assert!(first_id_after <= result.normalized.items[1].item_id);
@@ -1794,13 +1794,13 @@ mod tests {
                 sha256: None,
             },
         ];
-        let result = evaluate_checklist(&cl).unwrap();
+        let result = evaluate_checklist(&cl).expect("serde deserialization should succeed");
         let item = result
             .normalized
             .items
             .iter()
             .find(|i| i.item_id == target_id)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(item.artifact_refs[0].artifact_id, "a-art");
         assert_eq!(item.artifact_refs[1].artifact_id, "z-art");
     }
@@ -1835,7 +1835,7 @@ mod tests {
         // First event should be "started"
         assert_eq!(decision.events[0].event, "release_checklist_gate_started");
         // Last event should be "completed"
-        let last = decision.events.last().unwrap();
+        let last = decision.events.last().expect("serde deserialization should succeed");
         assert_eq!(last.event, "release_checklist_gate_completed");
         // All events should have matching trace/decision/policy
         for event in &decision.events {
@@ -1881,7 +1881,7 @@ mod tests {
             "decision-q",
             "policy-q",
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(results.len(), 2);
     }
 }

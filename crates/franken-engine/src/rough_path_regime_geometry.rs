@@ -1494,11 +1494,11 @@ pub fn write_geometry_evidence_bundle(
 
     std::fs::write(
         &inventory_path,
-        serde_json::to_string_pretty(&inventory).unwrap(),
+        serde_json::to_string_pretty(&inventory).expect("serde deserialization should succeed"),
     )?;
     std::fs::write(
         &manifest_path,
-        serde_json::to_string_pretty(&manifest).unwrap(),
+        serde_json::to_string_pretty(&manifest).expect("serde deserialization should succeed"),
     )?;
 
     let mut events_content = String::new();
@@ -1510,7 +1510,7 @@ pub fn write_geometry_evidence_bundle(
             specimen_id: evidence.specimen_id.clone(),
             verdict: evidence.verdict,
         };
-        events_content.push_str(&serde_json::to_string(&event).unwrap());
+        events_content.push_str(&serde_json::to_string(&event).expect("serde deserialization should succeed"));
         events_content.push('\n');
     }
     std::fs::write(&events_path, events_content)?;
@@ -1621,7 +1621,7 @@ mod tests {
     #[test]
     fn test_process_single_trace() {
         let mut orch = make_default_orchestrator();
-        let result = orch.process_trace(&simple_trace("t1")).unwrap();
+        let result = orch.process_trace(&simple_trace("t1")).expect("serde deserialization should succeed");
         assert_eq!(result.seq, 1);
         assert!(!result.trace_id.is_empty());
     }
@@ -1642,24 +1642,24 @@ mod tests {
     #[test]
     fn test_first_trace_no_gate_verdict() {
         let mut orch = make_default_orchestrator();
-        let result = orch.process_trace(&simple_trace("t1")).unwrap();
+        let result = orch.process_trace(&simple_trace("t1")).expect("serde deserialization should succeed");
         assert!(result.gate_verdict.is_none());
     }
 
     #[test]
     fn test_second_trace_has_gate_verdict() {
         let mut orch = make_default_orchestrator();
-        let _ = orch.process_trace(&simple_trace("t1")).unwrap();
-        let result = orch.process_trace(&simple_trace("t2")).unwrap();
+        let _ = orch.process_trace(&simple_trace("t1")).expect("serde deserialization should succeed");
+        let result = orch.process_trace(&simple_trace("t2")).expect("serde deserialization should succeed");
         assert!(result.gate_verdict.is_some());
     }
 
     #[test]
     fn test_step_count_increments() {
         let mut orch = make_default_orchestrator();
-        let _ = orch.process_trace(&simple_trace("t1")).unwrap();
-        let _ = orch.process_trace(&simple_trace("t2")).unwrap();
-        let _ = orch.process_trace(&simple_trace("t3")).unwrap();
+        let _ = orch.process_trace(&simple_trace("t1")).expect("serde deserialization should succeed");
+        let _ = orch.process_trace(&simple_trace("t2")).expect("serde deserialization should succeed");
+        let _ = orch.process_trace(&simple_trace("t3")).expect("serde deserialization should succeed");
         assert_eq!(orch.step_count, 3);
     }
 
@@ -1668,17 +1668,17 @@ mod tests {
     #[test]
     fn test_same_trace_no_regime_change() {
         let mut orch = make_default_orchestrator();
-        let _ = orch.process_trace(&simple_trace("t1")).unwrap();
-        let result = orch.process_trace(&simple_trace("t2")).unwrap();
+        let _ = orch.process_trace(&simple_trace("t1")).expect("serde deserialization should succeed");
+        let result = orch.process_trace(&simple_trace("t2")).expect("serde deserialization should succeed");
         assert!(!result.regime_changed);
     }
 
     #[test]
     fn test_different_trace_may_change_regime() {
         let mut orch = make_default_orchestrator();
-        let _ = orch.process_trace(&simple_trace("t1")).unwrap();
+        let _ = orch.process_trace(&simple_trace("t1")).expect("serde deserialization should succeed");
         // Different trace shape — regime may or may not change depending on classifier.
-        let result = orch.process_trace(&shifted_trace("t2")).unwrap();
+        let result = orch.process_trace(&shifted_trace("t2")).expect("serde deserialization should succeed");
         // The test validates that the pipeline runs without error regardless.
         assert_eq!(result.seq, 2);
     }
@@ -1686,9 +1686,9 @@ mod tests {
     #[test]
     fn test_transition_count_tracked() {
         let mut orch = make_default_orchestrator();
-        let _ = orch.process_trace(&simple_trace("t1")).unwrap();
-        let _ = orch.process_trace(&shifted_trace("t2")).unwrap();
-        let _ = orch.process_trace(&simple_trace("t3")).unwrap();
+        let _ = orch.process_trace(&simple_trace("t1")).expect("serde deserialization should succeed");
+        let _ = orch.process_trace(&shifted_trace("t2")).expect("serde deserialization should succeed");
+        let _ = orch.process_trace(&simple_trace("t3")).expect("serde deserialization should succeed");
         // Transition count depends on classifier; just verify it's >= 0.
         let summary = orch.summary();
         assert!(summary.regime_transitions <= 3);
@@ -1699,7 +1699,7 @@ mod tests {
     #[test]
     fn test_morphing_outcome_recorded() {
         let mut orch = make_default_orchestrator();
-        let result = orch.process_trace(&simple_trace("t1")).unwrap();
+        let result = orch.process_trace(&simple_trace("t1")).expect("serde deserialization should succeed");
         // First step — morphing should either be NoOp, Applied, or Rejected.
         assert!(matches!(
             result.morphing_outcome,
@@ -1712,8 +1712,8 @@ mod tests {
     #[test]
     fn test_morphing_noop_on_stable_regime() {
         let mut orch = make_default_orchestrator();
-        let _ = orch.process_trace(&simple_trace("t1")).unwrap();
-        let result = orch.process_trace(&simple_trace("t2")).unwrap();
+        let _ = orch.process_trace(&simple_trace("t1")).expect("serde deserialization should succeed");
+        let result = orch.process_trace(&simple_trace("t2")).expect("serde deserialization should succeed");
         if !result.regime_changed {
             assert_eq!(result.morphing_outcome, MorphingOutcome::NoOp);
         }
@@ -1722,7 +1722,7 @@ mod tests {
     #[test]
     fn test_active_profile_name_present() {
         let mut orch = make_default_orchestrator();
-        let result = orch.process_trace(&simple_trace("t1")).unwrap();
+        let result = orch.process_trace(&simple_trace("t1")).expect("serde deserialization should succeed");
         assert!(!result.active_profile_name.is_empty());
     }
 
@@ -1779,8 +1779,8 @@ mod tests {
     #[test]
     fn test_summary_after_processing() {
         let mut orch = make_default_orchestrator();
-        let _ = orch.process_trace(&simple_trace("t1")).unwrap();
-        let _ = orch.process_trace(&simple_trace("t2")).unwrap();
+        let _ = orch.process_trace(&simple_trace("t1")).expect("serde deserialization should succeed");
+        let _ = orch.process_trace(&simple_trace("t2")).expect("serde deserialization should succeed");
         let summary = orch.summary();
         assert_eq!(summary.total_steps, 2);
         assert!(!summary.current_profile_name.is_empty());
@@ -1789,7 +1789,7 @@ mod tests {
     #[test]
     fn test_summary_content_hash_deterministic() {
         let mut orch = make_default_orchestrator();
-        let _ = orch.process_trace(&simple_trace("t1")).unwrap();
+        let _ = orch.process_trace(&simple_trace("t1")).expect("serde deserialization should succeed");
         let s1 = orch.summary();
         let s2 = orch.summary();
         assert_eq!(s1.content_hash, s2.content_hash);
@@ -1800,8 +1800,8 @@ mod tests {
     #[test]
     fn test_history_recorded() {
         let mut orch = make_default_orchestrator();
-        let _ = orch.process_trace(&simple_trace("t1")).unwrap();
-        let _ = orch.process_trace(&simple_trace("t2")).unwrap();
+        let _ = orch.process_trace(&simple_trace("t1")).expect("serde deserialization should succeed");
+        let _ = orch.process_trace(&simple_trace("t2")).expect("serde deserialization should succeed");
         assert_eq!(orch.history().len(), 2);
     }
 
@@ -1827,7 +1827,7 @@ mod tests {
         };
         let mut orch =
             RegimeGeometryOrchestrator::new(default_anchor_profile(), test_epoch(), config);
-        let _ = orch.process_trace(&simple_trace("t1")).unwrap();
+        let _ = orch.process_trace(&simple_trace("t1")).expect("serde deserialization should succeed");
         assert!(orch.history().is_empty());
     }
 
@@ -1866,7 +1866,7 @@ mod tests {
     #[test]
     fn test_reset_clears_step_count() {
         let mut orch = make_default_orchestrator();
-        let _ = orch.process_trace(&simple_trace("t1")).unwrap();
+        let _ = orch.process_trace(&simple_trace("t1")).expect("serde deserialization should succeed");
         assert_eq!(orch.step_count, 1);
         orch.reset(SecurityEpoch::from_raw(2));
         assert_eq!(orch.step_count, 0);
@@ -1875,7 +1875,7 @@ mod tests {
     #[test]
     fn test_reset_clears_history() {
         let mut orch = make_default_orchestrator();
-        let _ = orch.process_trace(&simple_trace("t1")).unwrap();
+        let _ = orch.process_trace(&simple_trace("t1")).expect("serde deserialization should succeed");
         assert!(!orch.history().is_empty());
         orch.reset(SecurityEpoch::from_raw(2));
         assert!(orch.history().is_empty());
@@ -1884,7 +1884,7 @@ mod tests {
     #[test]
     fn test_reset_clears_regime() {
         let mut orch = make_default_orchestrator();
-        let _ = orch.process_trace(&simple_trace("t1")).unwrap();
+        let _ = orch.process_trace(&simple_trace("t1")).expect("serde deserialization should succeed");
         orch.reset(SecurityEpoch::from_raw(2));
         assert_eq!(orch.current_regime(), RegimeLabel::Abstention);
     }
@@ -1892,7 +1892,7 @@ mod tests {
     #[test]
     fn test_reset_clears_counters() {
         let mut orch = make_default_orchestrator();
-        let _ = orch.process_trace(&simple_trace("t1")).unwrap();
+        let _ = orch.process_trace(&simple_trace("t1")).expect("serde deserialization should succeed");
         orch.reset(SecurityEpoch::from_raw(2));
         let summary = orch.summary();
         assert_eq!(summary.morphing_applied, 0);
@@ -1905,8 +1905,8 @@ mod tests {
     #[test]
     fn test_step_result_is_gated_false_on_pass() {
         let mut orch = make_default_orchestrator();
-        let _ = orch.process_trace(&simple_trace("t1")).unwrap();
-        let result = orch.process_trace(&simple_trace("t2")).unwrap();
+        let _ = orch.process_trace(&simple_trace("t1")).expect("serde deserialization should succeed");
+        let result = orch.process_trace(&simple_trace("t2")).expect("serde deserialization should succeed");
         if result.gate_verdict == Some(GateVerdict::Pass) {
             assert!(!result.is_gated());
         }
@@ -1915,14 +1915,14 @@ mod tests {
     #[test]
     fn test_step_result_signature_hash_nonempty() {
         let mut orch = make_default_orchestrator();
-        let result = orch.process_trace(&simple_trace("t1")).unwrap();
+        let result = orch.process_trace(&simple_trace("t1")).expect("serde deserialization should succeed");
         assert!(!result.signature_hash.is_empty());
     }
 
     #[test]
     fn test_step_result_epoch_matches() {
         let mut orch = make_default_orchestrator();
-        let result = orch.process_trace(&simple_trace("t1")).unwrap();
+        let result = orch.process_trace(&simple_trace("t1")).expect("serde deserialization should succeed");
         assert_eq!(result.epoch, test_epoch());
     }
 

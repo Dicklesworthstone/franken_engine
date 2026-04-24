@@ -362,7 +362,7 @@ pub fn compute_merkle_root(leaves: &[ContentHash]) -> ContentHash {
         }
         current_level = next_level;
     }
-    current_level.into_iter().next().unwrap()
+    current_level.into_iter().next().expect("serde deserialization should succeed")
 }
 
 /// Build a Merkle proof (sibling hashes) for the leaf at `index`.
@@ -1486,7 +1486,7 @@ mod tests {
         for (i, b) in key.iter_mut().enumerate() {
             *b = (i as u8).wrapping_mul(7).wrapping_add(13);
         }
-        SigningKey::from_bytes(key).unwrap()
+        SigningKey::from_bytes(key).expect("serde deserialization should succeed")
     }
 
     fn test_verification_key() -> VerificationKey {
@@ -1550,7 +1550,7 @@ mod tests {
             rationale: "test rationale".to_string(),
         })
         .build()
-        .unwrap()
+        .expect("serde deserialization should succeed")
     }
 
     fn make_policy_snapshot(policy_id: &str) -> PolicySnapshot {
@@ -1838,7 +1838,7 @@ mod tests {
             .checks
             .iter()
             .find(|c| c.name == "merkle-root-valid")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(merkle_check.outcome.is_fail());
     }
 
@@ -1874,7 +1874,7 @@ mod tests {
         bundle
             .traces
             .get_mut("trace-001")
-            .unwrap()
+            .expect("serde deserialization should succeed")
             .metadata
             .insert("tampered".to_string(), "true".to_string());
 
@@ -1886,7 +1886,7 @@ mod tests {
             .checks
             .iter()
             .find(|c| c.name == "artifact-hash:trace:trace-001")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(trace_hash_check.outcome.is_fail());
     }
 
@@ -1905,7 +1905,7 @@ mod tests {
             .checks
             .iter()
             .find(|c| c.name == "format-version-compatible")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(version_check.outcome.is_fail());
     }
 
@@ -1927,7 +1927,7 @@ mod tests {
     fn verify_signature_fails_with_wrong_key() {
         let bundle = build_test_bundle();
         let wrong_key = SigningKey::from_bytes([99u8; 32])
-            .unwrap()
+            .expect("serde deserialization should succeed")
             .verification_key();
         let verifier = BundleVerifier::new();
         let report = verifier.verify_signature(&bundle, &wrong_key, 6000);
@@ -1966,7 +1966,7 @@ mod tests {
         )
         .policy("p1".to_string(), make_policy_snapshot("p1"))
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let verifier = BundleVerifier::new();
         let report = verifier.verify_replay(&bundle, 6000);
@@ -2038,8 +2038,8 @@ mod tests {
     #[test]
     fn bundle_serde_roundtrip() {
         let bundle = build_test_bundle();
-        let json = serde_json::to_string(&bundle).unwrap();
-        let restored: IncidentReplayBundle = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&bundle).expect("serde deserialization should succeed");
+        let restored: IncidentReplayBundle = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(bundle.manifest.bundle_id, restored.manifest.bundle_id);
         assert_eq!(bundle.manifest.merkle_root, restored.manifest.merkle_root);
         assert_eq!(bundle.traces.len(), restored.traces.len());
@@ -2048,8 +2048,8 @@ mod tests {
     #[test]
     fn manifest_serde_roundtrip() {
         let bundle = build_test_bundle();
-        let json = serde_json::to_string(&bundle.manifest).unwrap();
-        let restored: BundleManifest = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&bundle.manifest).expect("serde deserialization should succeed");
+        let restored: BundleManifest = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(bundle.manifest, restored);
     }
 
@@ -2059,8 +2059,8 @@ mod tests {
         let verifier = BundleVerifier::new();
         let report = verifier.verify_integrity(&bundle, 6000);
 
-        let json = serde_json::to_string(&report).unwrap();
-        let restored: VerificationReport = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let restored: VerificationReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report, restored);
     }
 
@@ -2070,8 +2070,8 @@ mod tests {
         let verifier = BundleVerifier::new();
         let inspection = verifier.inspect(&bundle);
 
-        let json = serde_json::to_string(&inspection).unwrap();
-        let restored: BundleInspection = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&inspection).expect("serde deserialization should succeed");
+        let restored: BundleInspection = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(inspection, restored);
     }
 
@@ -2097,8 +2097,8 @@ mod tests {
         };
         policy.custom_redaction_keys.insert("tenant_id".to_string());
 
-        let json = serde_json::to_string(&policy).unwrap();
-        let restored: RedactionPolicy = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
+        let restored: RedactionPolicy = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(policy, restored);
     }
 
@@ -2226,8 +2226,8 @@ mod tests {
     #[test]
     fn policy_snapshot_serde_roundtrip() {
         let snap = make_policy_snapshot("p1");
-        let json = serde_json::to_string(&snap).unwrap();
-        let restored: PolicySnapshot = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&snap).expect("serde deserialization should succeed");
+        let restored: PolicySnapshot = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(snap, restored);
     }
 
@@ -2249,7 +2249,7 @@ mod tests {
         .trace("trace-B".to_string(), make_trace("trace-B", 4))
         .trace("trace-C".to_string(), make_trace("trace-C", 1))
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         assert_eq!(bundle.traces.len(), 3);
         assert_eq!(bundle.manifest.artifacts.len(), 3);
@@ -2274,7 +2274,7 @@ mod tests {
         .nondeterminism("t1".to_string(), make_nondeterminism_log())
         .policy("p1".to_string(), make_policy_snapshot("p1"))
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let verifier = BundleVerifier::new();
         let integrity = verifier.verify_integrity(&bundle, 6000);
@@ -2353,8 +2353,8 @@ mod tests {
             },
             source_trace_id: "trace-001".to_string(),
         };
-        let json = serde_json::to_string(&result).unwrap();
-        let restored: CounterfactualResult = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let restored: CounterfactualResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, restored);
     }
 
@@ -2395,8 +2395,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap();
-            let restored: BundleError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let restored: BundleError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, restored);
         }
     }
@@ -2476,8 +2476,8 @@ mod tests {
     #[test]
     fn bundle_format_version_serde_roundtrip() {
         let v = BundleFormatVersion { major: 3, minor: 7 };
-        let json = serde_json::to_string(&v).unwrap();
-        let restored: BundleFormatVersion = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let restored: BundleFormatVersion = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, restored);
     }
 
@@ -2492,8 +2492,8 @@ mod tests {
             BundleArtifactKind::CounterfactualResult,
             BundleArtifactKind::PolicySnapshot,
         ] {
-            let json = serde_json::to_string(&variant).unwrap();
-            let restored: BundleArtifactKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&variant).expect("serde deserialization should succeed");
+            let restored: BundleArtifactKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(variant, restored);
         }
     }
@@ -2510,8 +2510,8 @@ mod tests {
             },
         ];
         for outcome in &outcomes {
-            let json = serde_json::to_string(outcome).unwrap();
-            let restored: CheckOutcome = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(outcome).expect("serde deserialization should succeed");
+            let restored: CheckOutcome = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*outcome, restored);
         }
     }
@@ -2526,8 +2526,8 @@ mod tests {
             VerificationCategory::Counterfactual,
             VerificationCategory::Compatibility,
         ] {
-            let json = serde_json::to_string(&variant).unwrap();
-            let restored: VerificationCategory = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&variant).expect("serde deserialization should succeed");
+            let restored: VerificationCategory = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(variant, restored);
         }
     }
@@ -2539,8 +2539,8 @@ mod tests {
             category: VerificationCategory::Integrity,
             outcome: CheckOutcome::Pass,
         };
-        let json = serde_json::to_string(&check).unwrap();
-        let restored: VerificationCheck = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&check).expect("serde deserialization should succeed");
+        let restored: VerificationCheck = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(check, restored);
     }
 
@@ -2551,8 +2551,8 @@ mod tests {
             failed: 2,
             skipped: 1,
         };
-        let json = serde_json::to_string(&summary).unwrap();
-        let restored: CategorySummary = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
+        let restored: CategorySummary = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(summary, restored);
     }
 
@@ -2565,8 +2565,8 @@ mod tests {
             redacted: false,
             size_bytes: 128,
         };
-        let json = serde_json::to_string(&entry).unwrap();
-        let restored: ArtifactEntry = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let restored: ArtifactEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, restored);
     }
 
@@ -2713,8 +2713,8 @@ mod tests {
             ..RedactionPolicy::default()
         };
         policy.custom_redaction_keys.insert("api-key".to_string());
-        let json = serde_json::to_string(&policy).unwrap();
-        let restored: RedactionPolicy = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
+        let restored: RedactionPolicy = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(policy, restored);
     }
 
@@ -2809,8 +2809,8 @@ mod tests {
         let bundle = build_test_bundle();
         let verifier = BundleVerifier::new();
         let inspection = verifier.inspect(&bundle);
-        let json = serde_json::to_string(&inspection).unwrap();
-        let restored: BundleInspection = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&inspection).expect("serde deserialization should succeed");
+        let restored: BundleInspection = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(inspection, restored);
     }
 
@@ -2905,7 +2905,7 @@ mod tests {
         let verifier = BundleVerifier::new();
         let inspection = verifier.inspect(&bundle);
 
-        assert_eq!(inspection.metadata.get("severity").unwrap(), "high");
+        assert_eq!(inspection.metadata.get("severity").expect("serde deserialization should succeed"), "high");
     }
 
     #[test]
@@ -2976,7 +2976,7 @@ mod tests {
         .redaction_policy(policy.clone())
         .trace("t-1".to_string(), make_trace("t-1", 1))
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         assert_eq!(bundle.manifest.redaction_policy, policy);
         assert!(bundle.manifest.redaction_policy.redact_extension_ids);
@@ -3063,7 +3063,7 @@ mod tests {
         .trace("trace-b".to_string(), make_trace("trace-b", 4))
         .trace("trace-c".to_string(), make_trace("trace-c", 1))
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let verifier = BundleVerifier::new();
         let report = verifier.verify_integrity(&bundle, 6000);

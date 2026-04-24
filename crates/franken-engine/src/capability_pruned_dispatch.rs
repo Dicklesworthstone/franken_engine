@@ -1137,8 +1137,8 @@ mod tests {
     #[test]
     fn policy_serde() {
         let p = PruningPolicy::default();
-        let json = serde_json::to_string(&p).unwrap();
-        let back: PruningPolicy = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
+        let back: PruningPolicy = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(p, back);
     }
 
@@ -1196,8 +1196,8 @@ mod tests {
         let site = DispatchSite::new(0, "fs.read")
             .require(test_capability())
             .with_ifc_flow("Secret", "Confidential");
-        let json = serde_json::to_string(&site).unwrap();
-        let back: DispatchSite = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&site).expect("serde deserialization should succeed");
+        let back: DispatchSite = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(site, back);
     }
 
@@ -1228,8 +1228,8 @@ mod tests {
     #[test]
     fn capability_proof_serde() {
         let proof = make_proof(test_capability(), 950_000);
-        let json = serde_json::to_string(&proof).unwrap();
-        let back: CapabilityProof = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&proof).expect("serde deserialization should succeed");
+        let back: CapabilityProof = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(proof, back);
     }
 
@@ -1255,8 +1255,8 @@ mod tests {
     #[test]
     fn flow_proof_ref_serde() {
         let fp = make_flow_proof(test_epoch());
-        let json = serde_json::to_string(&fp).unwrap();
-        let back: FlowProofRef = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&fp).expect("serde deserialization should succeed");
+        let back: FlowProofRef = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(fp, back);
     }
 
@@ -1302,8 +1302,8 @@ mod tests {
             },
         ];
         for route in &routes {
-            let json = serde_json::to_string(route).unwrap();
-            let back: DispatchRoute = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(route).expect("serde deserialization should succeed");
+            let back: DispatchRoute = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*route, back);
         }
     }
@@ -1351,8 +1351,8 @@ mod tests {
             required_millionths: 950_000,
             actual_millionths: 800_000,
         };
-        let json = serde_json::to_string(&r).unwrap();
-        let back: DispatchRejection = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let back: DispatchRejection = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 
@@ -1421,8 +1421,8 @@ mod tests {
             epoch: test_epoch(),
             decision_sequence: 0,
         };
-        let json = serde_json::to_string(&record).unwrap();
-        let back: DispatchDecisionRecord = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&record).expect("serde deserialization should succeed");
+        let back: DispatchDecisionRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(record, back);
     }
 
@@ -1483,8 +1483,8 @@ mod tests {
     fn elidable_region_serde() {
         let mut region = CheckElidableRegion::new(0, 64, test_epoch());
         region.add_fast_path_site(16);
-        let json = serde_json::to_string(&region).unwrap();
-        let back: CheckElidableRegion = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&region).expect("serde deserialization should succeed");
+        let back: CheckElidableRegion = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(region, back);
     }
 
@@ -1706,8 +1706,8 @@ mod tests {
         compiler.register_capability_proofs(vec![make_proof(test_capability(), 990_000)]);
         let sites = vec![DispatchSite::new(0, "fs.read").require(test_capability())];
         let envelope = compiler.compile_envelope("fn_serde", &sites, 1);
-        let json = serde_json::to_string(&envelope).unwrap();
-        let back: SpecializationEnvelope = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&envelope).expect("serde deserialization should succeed");
+        let back: SpecializationEnvelope = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(envelope, back);
     }
 
@@ -1743,8 +1743,8 @@ mod tests {
     #[test]
     fn specimen_family_serde() {
         let f = DispatchSpecimenFamily::IfcRequired;
-        let json = serde_json::to_string(&f).unwrap();
-        let back: DispatchSpecimenFamily = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&f).expect("serde deserialization should succeed");
+        let back: DispatchSpecimenFamily = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(f, back);
     }
 
@@ -1822,8 +1822,8 @@ mod tests {
             elidable_region_count: 2,
             epoch: test_epoch(),
         };
-        let json = serde_json::to_string(&summary).unwrap();
-        let back: EnvelopeSummary = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
+        let back: EnvelopeSummary = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(summary, back);
     }
 }

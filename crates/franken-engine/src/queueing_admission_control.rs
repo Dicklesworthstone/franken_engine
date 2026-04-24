@@ -595,7 +595,7 @@ impl AdmissionControlPolicy {
     pub fn policy_hash(&self) -> ContentHash {
         // SAFETY: AdmissionPolicy derives Serialize and has no non-serializable fields.
         // to_vec on derived Serialize types only fails on writer errors (impossible with Vec<u8>).
-        let bytes = serde_json::to_vec(self).unwrap();
+        let bytes = serde_json::to_vec(self).expect("serde deserialization should succeed");
         ContentHash::compute(&bytes)
     }
 }
@@ -1712,8 +1712,8 @@ mod tests {
     #[test]
     fn test_serde_round_trip_policy() {
         let policy = make_policy();
-        let json = serde_json::to_string(&policy).unwrap();
-        let restored: AdmissionControlPolicy = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
+        let restored: AdmissionControlPolicy = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(policy, restored);
     }
 
@@ -1722,8 +1722,8 @@ mod tests {
         let mut ctrl = make_controller();
         ctrl.check_admission(ExecutionStage::Parse, AdmissionPriority::Normal);
         let receipt = &ctrl.receipts()[0];
-        let json = serde_json::to_string(receipt).unwrap();
-        let restored: AdmissionReceipt = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(receipt).expect("serde deserialization should succeed");
+        let restored: AdmissionReceipt = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(receipt, &restored);
     }
 
@@ -1731,16 +1731,16 @@ mod tests {
     fn test_serde_round_trip_manifest() {
         let ctrl = make_controller();
         let manifest = AdmissionControlManifest::from_controller(&ctrl);
-        let json = serde_json::to_string(&manifest).unwrap();
-        let restored: AdmissionControlManifest = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&manifest).expect("serde deserialization should succeed");
+        let restored: AdmissionControlManifest = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(manifest, restored);
     }
 
     #[test]
     fn test_serde_round_trip_token_bucket() {
         let tb = TokenBucket::new(100, 10);
-        let json = serde_json::to_string(&tb).unwrap();
-        let restored: TokenBucket = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&tb).expect("serde deserialization should succeed");
+        let restored: TokenBucket = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(tb, restored);
     }
 
@@ -1758,7 +1758,7 @@ mod tests {
         ctrl.init_partition(ExecutionStage::ModuleLoad, 1);
         ctrl.check_admission(ExecutionStage::ModuleLoad, AdmissionPriority::Normal);
         ctrl.check_admission(ExecutionStage::ModuleLoad, AdmissionPriority::Normal);
-        let partition = ctrl.partitions.get(&ExecutionStage::ModuleLoad).unwrap();
+        let partition = ctrl.partitions.get(&ExecutionStage::ModuleLoad).expect("serde deserialization should succeed");
         assert_eq!(partition.total_shed, 1);
     }
 

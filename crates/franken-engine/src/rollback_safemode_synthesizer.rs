@@ -1355,7 +1355,7 @@ mod tests {
             BundleKind::Rollback,
         )];
         let constraints = vec![make_constraint("c1", ConstraintCategory::Safety, true)];
-        RollbackSafemodeSynthesizer::new(SynthesizerConfig::default(), rules, constraints).unwrap()
+        RollbackSafemodeSynthesizer::new(SynthesizerConfig::default(), rules, constraints).expect("serde deserialization should succeed")
     }
 
     // ── Constructor Tests ───────────────────────────────────────────
@@ -1532,7 +1532,7 @@ mod tests {
             replay_result: Some(make_replay_result(vec![rec])),
             scan_result: None,
         };
-        let result = synth.synthesize(&input).unwrap();
+        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
         assert!(result.has_bundles());
         assert_eq!(result.approved_count, 1);
         assert_eq!(result.bundles[0].kind, BundleKind::Rollback);
@@ -1548,7 +1548,7 @@ mod tests {
             replay_result: Some(make_replay_result(vec![rec])),
             scan_result: None,
         };
-        let result = synth.synthesize(&input).unwrap();
+        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
         assert!(!result.has_bundles());
         assert!(result.rules_fired.is_empty());
     }
@@ -1561,7 +1561,7 @@ mod tests {
             replay_result: Some(make_replay_result(vec![rec])),
             scan_result: None,
         };
-        let result = synth.synthesize(&input).unwrap();
+        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
         assert!(!result.has_bundles());
     }
 
@@ -1580,7 +1580,7 @@ mod tests {
             replay_result: Some(make_replay_result(vec![rec])),
             scan_result: None,
         };
-        let result = synth.synthesize(&input).unwrap();
+        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
         assert!(!result.has_bundles());
     }
 
@@ -1595,14 +1595,14 @@ mod tests {
         )];
         let mut synth =
             RollbackSafemodeSynthesizer::new(SynthesizerConfig::default(), rules, Vec::new())
-                .unwrap();
+                .expect("serde deserialization should succeed");
 
         let scan = make_scan_result(600_000, Vec::new(), Vec::new()); // risk = 400_000
         let input = SynthesisInput {
             replay_result: None,
             scan_result: Some(scan),
         };
-        let result = synth.synthesize(&input).unwrap();
+        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
         assert!(result.has_bundles());
         assert_eq!(result.bundles[0].kind, BundleKind::SafeMode);
     }
@@ -1618,7 +1618,7 @@ mod tests {
         )];
         let mut synth =
             RollbackSafemodeSynthesizer::new(SynthesizerConfig::default(), rules, Vec::new())
-                .unwrap();
+                .expect("serde deserialization should succeed");
 
         let actions = vec![make_preemptive_action("pa1", 400_000)];
         let scan = make_scan_result(500_000, Vec::new(), actions); // risk = 500_000
@@ -1626,7 +1626,7 @@ mod tests {
             replay_result: None,
             scan_result: Some(scan),
         };
-        let result = synth.synthesize(&input).unwrap();
+        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
         assert!(result.has_bundles());
         assert_eq!(result.bundles[0].deltas.len(), 1);
         assert_eq!(result.bundles[0].deltas[0].delta_id, "d-r1-pa1");
@@ -1643,14 +1643,14 @@ mod tests {
         )];
         let mut synth =
             RollbackSafemodeSynthesizer::new(SynthesizerConfig::default(), rules, Vec::new())
-                .unwrap();
+                .expect("serde deserialization should succeed");
 
         let scan = make_scan_result(900_000, Vec::new(), Vec::new()); // risk = 100_000, below 200_000
         let input = SynthesisInput {
             replay_result: None,
             scan_result: Some(scan),
         };
-        let result = synth.synthesize(&input).unwrap();
+        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
         assert!(!result.has_bundles());
     }
 
@@ -1665,7 +1665,7 @@ mod tests {
         )];
         let mut synth =
             RollbackSafemodeSynthesizer::new(SynthesizerConfig::default(), rules, Vec::new())
-                .unwrap();
+                .expect("serde deserialization should succeed");
 
         let warnings = vec![
             make_warning("w1", 800_000, true),
@@ -1677,7 +1677,7 @@ mod tests {
             replay_result: None,
             scan_result: Some(scan),
         };
-        let result = synth.synthesize(&input).unwrap();
+        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
         assert!(result.has_bundles());
         assert_eq!(
             result.bundles[0].deltas[0].expected_improvement_millionths,
@@ -1696,7 +1696,7 @@ mod tests {
         )];
         let mut synth =
             RollbackSafemodeSynthesizer::new(SynthesizerConfig::default(), rules, Vec::new())
-                .unwrap();
+                .expect("serde deserialization should succeed");
 
         let warnings = vec![
             make_warning("w1", 800_000, true),
@@ -1707,7 +1707,7 @@ mod tests {
             replay_result: None,
             scan_result: Some(scan),
         };
-        let result = synth.synthesize(&input).unwrap();
+        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
         assert!(!result.has_bundles());
     }
 
@@ -1720,7 +1720,7 @@ mod tests {
         )];
         let mut synth =
             RollbackSafemodeSynthesizer::new(SynthesizerConfig::default(), rules, Vec::new())
-                .unwrap();
+                .expect("serde deserialization should succeed");
 
         let actions = vec![
             make_preemptive_action("pa1", 300_000),
@@ -1731,7 +1731,7 @@ mod tests {
             replay_result: None,
             scan_result: Some(scan),
         };
-        let result = synth.synthesize(&input).unwrap();
+        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
         assert!(result.has_bundles());
         assert_eq!(result.bundles[0].deltas.len(), 2);
     }
@@ -1745,14 +1745,14 @@ mod tests {
         )];
         let mut synth =
             RollbackSafemodeSynthesizer::new(SynthesizerConfig::default(), rules, Vec::new())
-                .unwrap();
+                .expect("serde deserialization should succeed");
 
         let scan = make_scan_result(900_000, Vec::new(), Vec::new());
         let input = SynthesisInput {
             replay_result: None,
             scan_result: Some(scan),
         };
-        let result = synth.synthesize(&input).unwrap();
+        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
         assert!(!result.has_bundles());
     }
 
@@ -1768,7 +1768,7 @@ mod tests {
         )];
         let mut synth =
             RollbackSafemodeSynthesizer::new(SynthesizerConfig::default(), rules, Vec::new())
-                .unwrap();
+                .expect("serde deserialization should succeed");
 
         let rec = make_recommendation("alt1", 200_000, 950_000);
         let scan = make_scan_result(600_000, Vec::new(), Vec::new()); // risk = 400_000
@@ -1776,7 +1776,7 @@ mod tests {
             replay_result: Some(make_replay_result(vec![rec])),
             scan_result: Some(scan),
         };
-        let result = synth.synthesize(&input).unwrap();
+        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
         assert!(result.has_bundles());
     }
 
@@ -1792,7 +1792,7 @@ mod tests {
         )];
         let mut synth =
             RollbackSafemodeSynthesizer::new(SynthesizerConfig::default(), rules, Vec::new())
-                .unwrap();
+                .expect("serde deserialization should succeed");
 
         // Replay good but bifurcation stable
         let rec = make_recommendation("alt1", 200_000, 950_000);
@@ -1801,7 +1801,7 @@ mod tests {
             replay_result: Some(make_replay_result(vec![rec])),
             scan_result: Some(scan),
         };
-        let result = synth.synthesize(&input).unwrap();
+        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
         assert!(!result.has_bundles());
     }
 
@@ -1819,14 +1819,14 @@ mod tests {
         let constraints = vec![make_constraint("c1", ConstraintCategory::Performance, true)];
         let mut synth =
             RollbackSafemodeSynthesizer::new(SynthesizerConfig::default(), rules, constraints)
-                .unwrap();
+                .expect("serde deserialization should succeed");
 
         let rec = make_recommendation("alt1", 200_000, 980_000);
         let input = SynthesisInput {
             replay_result: Some(make_replay_result(vec![rec])),
             scan_result: None,
         };
-        let result = synth.synthesize(&input).unwrap();
+        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
         assert!(result.bundles[0].is_approved());
         assert!(result.bundles[0].all_hard_constraints_passed);
     }
@@ -1846,7 +1846,7 @@ mod tests {
 
         let mut synth =
             RollbackSafemodeSynthesizer::new(SynthesizerConfig::default(), rules, constraints)
-                .unwrap();
+                .expect("serde deserialization should succeed");
 
         // Use low confidence to trigger regression estimate.
         let rec = make_recommendation("alt1", 500_000, 500_000);
@@ -1854,7 +1854,7 @@ mod tests {
             replay_result: Some(make_replay_result(vec![rec])),
             scan_result: None,
         };
-        let result = synth.synthesize(&input).unwrap();
+        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
         assert!(!result.bundles[0].is_approved());
         assert_eq!(result.rejected_count, 1);
     }
@@ -1867,7 +1867,7 @@ mod tests {
             replay_result: Some(make_replay_result(vec![rec])),
             scan_result: None,
         };
-        let result = synth.synthesize(&input).unwrap();
+        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
         assert!(!result.bundles[0].verification_hooks.is_empty());
         assert!(
             result.bundles[0]
@@ -1892,7 +1892,7 @@ mod tests {
         )];
         let mut synth =
             RollbackSafemodeSynthesizer::new(SynthesizerConfig::default(), rules, Vec::new())
-                .unwrap();
+                .expect("serde deserialization should succeed");
 
         let actions = vec![make_preemptive_action("pa1", 300_000)];
         let scan = make_scan_result(700_000, Vec::new(), actions);
@@ -1900,7 +1900,7 @@ mod tests {
             replay_result: None,
             scan_result: Some(scan),
         };
-        let result = synth.synthesize(&input).unwrap();
+        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
         assert!(
             result.bundles[0]
                 .verification_hooks
@@ -1922,14 +1922,14 @@ mod tests {
             generate_verification_hooks: false,
             ..Default::default()
         };
-        let mut synth = RollbackSafemodeSynthesizer::new(config, rules, Vec::new()).unwrap();
+        let mut synth = RollbackSafemodeSynthesizer::new(config, rules, Vec::new()).expect("serde deserialization should succeed");
 
         let rec = make_recommendation("alt1", 200_000, 950_000);
         let input = SynthesisInput {
             replay_result: Some(make_replay_result(vec![rec])),
             scan_result: None,
         };
-        let result = synth.synthesize(&input).unwrap();
+        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
         assert!(result.bundles[0].verification_hooks.is_empty());
     }
 
@@ -1941,7 +1941,7 @@ mod tests {
             replay_result: Some(make_replay_result(vec![rec])),
             scan_result: None,
         };
-        let result = synth.synthesize(&input).unwrap();
+        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
         assert_eq!(result.bundles[0].evidence_refs.len(), 1);
         assert_eq!(
             result.bundles[0].evidence_refs[0].source,
@@ -1961,7 +1961,7 @@ mod tests {
         )];
         let mut synth =
             RollbackSafemodeSynthesizer::new(SynthesizerConfig::default(), rules, Vec::new())
-                .unwrap();
+                .expect("serde deserialization should succeed");
 
         let rec = make_recommendation("alt1", 200_000, 950_000);
         let scan = make_scan_result(600_000, Vec::new(), Vec::new());
@@ -1969,7 +1969,7 @@ mod tests {
             replay_result: Some(make_replay_result(vec![rec])),
             scan_result: Some(scan),
         };
-        let result = synth.synthesize(&input).unwrap();
+        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
         assert_eq!(result.bundles[0].evidence_refs.len(), 2);
     }
 
@@ -1987,7 +1987,7 @@ mod tests {
         )];
         let mut synth =
             RollbackSafemodeSynthesizer::new(SynthesizerConfig::default(), rules, Vec::new())
-                .unwrap();
+                .expect("serde deserialization should succeed");
 
         let rec = make_recommendation("alt1", 200_000, 950_000);
         let warnings = vec![make_warning("w1", 900_000, true)]; // critical (risk > threshold)
@@ -1996,7 +1996,7 @@ mod tests {
             replay_result: Some(make_replay_result(vec![rec])),
             scan_result: Some(scan),
         };
-        let result = synth.synthesize(&input).unwrap();
+        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
         assert_eq!(result.bundles[0].kind, BundleKind::SafeMode);
     }
 
@@ -2012,7 +2012,7 @@ mod tests {
         )];
         let mut synth =
             RollbackSafemodeSynthesizer::new(SynthesizerConfig::default(), rules, Vec::new())
-                .unwrap();
+                .expect("serde deserialization should succeed");
 
         let rec = make_recommendation("alt1", 200_000, 950_000);
         // No warnings, no preemptive actions, but risk still above threshold
@@ -2021,7 +2021,7 @@ mod tests {
             replay_result: Some(make_replay_result(vec![rec])),
             scan_result: Some(scan),
         };
-        let result = synth.synthesize(&input).unwrap();
+        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
         assert_eq!(result.bundles[0].kind, BundleKind::Rollback);
     }
 
@@ -2045,7 +2045,7 @@ mod tests {
         ];
         let mut synth =
             RollbackSafemodeSynthesizer::new(SynthesizerConfig::default(), rules, Vec::new())
-                .unwrap();
+                .expect("serde deserialization should succeed");
 
         let rec = make_recommendation("alt1", 200_000, 950_000);
         let actions = vec![make_preemptive_action("pa1", 300_000)];
@@ -2054,7 +2054,7 @@ mod tests {
             replay_result: Some(make_replay_result(vec![rec])),
             scan_result: Some(scan),
         };
-        let result = synth.synthesize(&input).unwrap();
+        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
         assert_eq!(result.bundles.len(), 2);
         assert_eq!(result.rules_fired.len(), 2);
     }
@@ -2072,14 +2072,14 @@ mod tests {
         let rules = vec![rule];
         let mut synth =
             RollbackSafemodeSynthesizer::new(SynthesizerConfig::default(), rules, Vec::new())
-                .unwrap();
+                .expect("serde deserialization should succeed");
 
         let rec = make_recommendation("alt1", 200_000, 950_000);
         let input = SynthesisInput {
             replay_result: Some(make_replay_result(vec![rec])),
             scan_result: None,
         };
-        let result = synth.synthesize(&input).unwrap();
+        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
         assert!(!result.has_bundles());
         assert_eq!(result.rules_skipped, vec!["r1"]);
     }
@@ -2105,14 +2105,14 @@ mod tests {
         let rules = vec![r1, r2]; // r1 first in vec but r2 has higher priority
         let mut synth =
             RollbackSafemodeSynthesizer::new(SynthesizerConfig::default(), rules, Vec::new())
-                .unwrap();
+                .expect("serde deserialization should succeed");
 
         let rec = make_recommendation("alt1", 200_000, 950_000);
         let input = SynthesisInput {
             replay_result: Some(make_replay_result(vec![rec])),
             scan_result: None,
         };
-        let result = synth.synthesize(&input).unwrap();
+        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
         // r2 fires first (priority 1 < 5)
         assert_eq!(result.rules_fired, vec!["r2", "r1"]);
     }
@@ -2131,7 +2131,7 @@ mod tests {
             replay_result: Some(make_replay_result(recs)),
             scan_result: None,
         };
-        let result = synth.synthesize(&input).unwrap();
+        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
         let improvements: Vec<i64> = result.bundles[0]
             .deltas
             .iter()
@@ -2160,7 +2160,7 @@ mod tests {
         ];
         let mut synth =
             RollbackSafemodeSynthesizer::new(SynthesizerConfig::default(), rules, Vec::new())
-                .unwrap();
+                .expect("serde deserialization should succeed");
 
         let rec = make_recommendation("alt1", 200_000, 950_000);
         let actions = vec![make_preemptive_action("pa1", 600_000)]; // Higher improvement
@@ -2169,7 +2169,7 @@ mod tests {
             replay_result: Some(make_replay_result(vec![rec])),
             scan_result: Some(scan),
         };
-        let result = synth.synthesize(&input).unwrap();
+        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
         assert!(
             result.bundles[0].total_improvement_millionths
                 >= result.bundles[1].total_improvement_millionths
@@ -2186,8 +2186,8 @@ mod tests {
             replay_result: Some(make_replay_result(vec![rec])),
             scan_result: None,
         };
-        let result = synth.synthesize(&input).unwrap();
-        let best = result.best_approved().unwrap();
+        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
+        let best = result.best_approved().expect("serde deserialization should succeed");
         assert!(best.is_approved());
     }
 
@@ -2199,7 +2199,7 @@ mod tests {
             replay_result: Some(make_replay_result(vec![rec])),
             scan_result: None,
         };
-        let result = synth.synthesize(&input).unwrap();
+        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
         let approved = result.approved_bundles();
         assert_eq!(approved.len(), result.approved_count as usize);
     }
@@ -2376,16 +2376,16 @@ mod tests {
             },
             BundleKind::Rollback,
         );
-        let json = serde_json::to_string(&rule).unwrap();
-        let back: SynthesisRule = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&rule).expect("serde deserialization should succeed");
+        let back: SynthesisRule = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(rule, back);
     }
 
     #[test]
     fn serde_roundtrip_constraint() {
         let c = make_constraint("c1", ConstraintCategory::Safety, true);
-        let json = serde_json::to_string(&c).unwrap();
-        let back: NonRegressionConstraint = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let back: NonRegressionConstraint = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c, back);
     }
 
@@ -2400,8 +2400,8 @@ mod tests {
             confidence_millionths: 950_000,
             rationale: "test".to_string(),
         };
-        let json = serde_json::to_string(&delta).unwrap();
-        let back: PolicyDelta = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&delta).expect("serde deserialization should succeed");
+        let back: PolicyDelta = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(delta, back);
     }
 
@@ -2413,10 +2413,10 @@ mod tests {
             replay_result: Some(make_replay_result(vec![rec])),
             scan_result: None,
         };
-        let result = synth.synthesize(&input).unwrap();
+        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
         let bundle = &result.bundles[0];
-        let json = serde_json::to_string(bundle).unwrap();
-        let back: SynthesizedBundle = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(bundle).expect("serde deserialization should succeed");
+        let back: SynthesizedBundle = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(*bundle, back);
     }
 
@@ -2428,9 +2428,9 @@ mod tests {
             replay_result: Some(make_replay_result(vec![rec])),
             scan_result: None,
         };
-        let result = synth.synthesize(&input).unwrap();
-        let json = serde_json::to_string(&result).unwrap();
-        let back: SynthesisResult = serde_json::from_str(&json).unwrap();
+        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let back: SynthesisResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, back);
     }
 
@@ -2456,13 +2456,13 @@ mod tests {
             rules.clone(),
             Vec::new(),
         )
-        .unwrap();
-        let r1 = s1.synthesize(&input).unwrap();
+        .expect("serde deserialization should succeed");
+        let r1 = s1.synthesize(&input).expect("serde deserialization should succeed");
 
         let mut s2 =
             RollbackSafemodeSynthesizer::new(SynthesizerConfig::default(), rules, Vec::new())
-                .unwrap();
-        let r2 = s2.synthesize(&input).unwrap();
+                .expect("serde deserialization should succeed");
+        let r2 = s2.synthesize(&input).expect("serde deserialization should succeed");
 
         assert_eq!(r1.artifact_hash, r2.artifact_hash);
         assert_eq!(r1.bundles[0].artifact_hash, r2.bundles[0].artifact_hash);
@@ -2499,7 +2499,7 @@ mod tests {
             replay_result: Some(make_replay_result(recs)),
             scan_result: None,
         };
-        let result = synth.synthesize(&input).unwrap();
+        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
         assert_eq!(result.bundles[0].delta_count(), 2);
     }
 
@@ -2517,14 +2517,14 @@ mod tests {
         let constraints = vec![constraint];
         let mut synth =
             RollbackSafemodeSynthesizer::new(SynthesizerConfig::default(), rules, constraints)
-                .unwrap();
+                .expect("serde deserialization should succeed");
 
         let rec = make_recommendation("alt1", 500_000, 500_000);
         let input = SynthesisInput {
             replay_result: Some(make_replay_result(vec![rec])),
             scan_result: None,
         };
-        let result = synth.synthesize(&input).unwrap();
+        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
         assert!(result.bundles[0].violation_count() > 0);
     }
 
@@ -2545,25 +2545,25 @@ mod tests {
         ];
         let mut synth =
             RollbackSafemodeSynthesizer::new(SynthesizerConfig::default(), rules, constraints)
-                .unwrap();
+                .expect("serde deserialization should succeed");
 
         let rec = make_recommendation("alt1", 200_000, 800_000);
         let input = SynthesisInput {
             replay_result: Some(make_replay_result(vec![rec])),
             scan_result: None,
         };
-        let result = synth.synthesize(&input).unwrap();
+        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
         let bundle = &result.bundles[0];
         let safety_check = bundle
             .constraint_checks
             .iter()
             .find(|c| c.constraint_id == "safety")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let perf_check = bundle
             .constraint_checks
             .iter()
             .find(|c| c.constraint_id == "perf")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         // Safety regression should be <= performance regression due to higher category factor
         assert!(safety_check.regression_millionths <= perf_check.regression_millionths);
     }
@@ -2578,7 +2578,7 @@ mod tests {
             replay_result: Some(make_replay_result(vec![rec])),
             scan_result: None,
         };
-        let result = synth.synthesize(&input).unwrap();
+        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
         let display = format!("{}", result);
         assert!(display.contains("synthesis"));
         assert!(display.contains("approved=1"));
@@ -2592,7 +2592,7 @@ mod tests {
             replay_result: Some(make_replay_result(vec![rec])),
             scan_result: None,
         };
-        let result = synth.synthesize(&input).unwrap();
+        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
         let display = format!("{}", result.bundles[0]);
         assert!(display.contains("bundle"));
         assert!(display.contains("approved"));
@@ -2633,7 +2633,7 @@ mod tests {
             replay_result: Some(make_replay_result(vec![rec])),
             scan_result: None,
         };
-        let result = synth.synthesize(&input).unwrap();
+        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
         assert!(!result.has_bundles());
     }
 
@@ -2649,7 +2649,7 @@ mod tests {
             replay_result: Some(make_replay_result(recs)),
             scan_result: None,
         };
-        let result = synth.synthesize(&input).unwrap();
+        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
         assert_eq!(result.bundles[0].deltas.len(), 1);
         assert!(result.bundles[0].deltas[0].delta_id.contains("alt3"));
     }
@@ -2665,7 +2665,7 @@ mod tests {
             replay_result: Some(make_replay_result(recs)),
             scan_result: None,
         };
-        let result = synth.synthesize(&input).unwrap();
+        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
         assert!(
             result.bundles[0]
                 .verification_hooks
@@ -2682,7 +2682,7 @@ mod tests {
             replay_result: Some(make_replay_result(vec![rec])),
             scan_result: None,
         };
-        let result = synth.synthesize(&input).unwrap();
+        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
         assert!(
             !result.bundles[0]
                 .verification_hooks
@@ -2724,7 +2724,7 @@ mod tests {
         )];
         let mut synth =
             RollbackSafemodeSynthesizer::new(SynthesizerConfig::default(), rules, Vec::new())
-                .unwrap();
+                .expect("serde deserialization should succeed");
 
         let actions = vec![make_preemptive_action("pa1", 300_000)];
         let scan = make_scan_result(700_000, Vec::new(), actions);
@@ -2732,7 +2732,7 @@ mod tests {
             replay_result: None,
             scan_result: Some(scan),
         };
-        let result = synth.synthesize(&input).unwrap();
+        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
         assert!(result.has_bundles());
         // Evidence refs should only have bifurcation scan
         assert_eq!(result.bundles[0].evidence_refs.len(), 1);
@@ -2747,8 +2747,8 @@ mod tests {
     #[test]
     fn synthesizer_config_serde_roundtrip() {
         let config = SynthesizerConfig::default();
-        let json = serde_json::to_string(&config).unwrap();
-        let back: SynthesizerConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let back: SynthesizerConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, back);
     }
 
@@ -2769,8 +2769,8 @@ mod tests {
             replay_result: Some(make_replay_result(vec![rec])),
             scan_result: None,
         };
-        let json = serde_json::to_string(&input).unwrap();
-        let back: SynthesisInput = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
+        let back: SynthesisInput = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(input, back);
     }
 
@@ -2802,8 +2802,8 @@ mod tests {
             },
         ];
         for err in errors {
-            let json = serde_json::to_string(&err).unwrap();
-            let back: SynthesizerError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+            let back: SynthesizerError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(err, back);
         }
     }
@@ -2858,8 +2858,8 @@ mod tests {
             artifact_hash: ContentHash::compute(b"test"),
             summary: "10 traces".to_string(),
         };
-        let json = serde_json::to_string(&eref).unwrap();
-        let back: EvidenceRef = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&eref).expect("serde deserialization should succeed");
+        let back: EvidenceRef = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(eref, back);
     }
 
@@ -2872,8 +2872,8 @@ mod tests {
             expected_outcome_millionths: 200_000,
             tolerance_millionths: 20_000,
         };
-        let json = serde_json::to_string(&hook).unwrap();
-        let back: ReplayVerificationHook = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&hook).expect("serde deserialization should succeed");
+        let back: ReplayVerificationHook = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(hook, back);
     }
 
@@ -2885,8 +2885,8 @@ mod tests {
             regression_millionths: 10_000,
             detail: "ok".to_string(),
         };
-        let json = serde_json::to_string(&check).unwrap();
-        let back: ConstraintCheckResult = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&check).expect("serde deserialization should succeed");
+        let back: ConstraintCheckResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(check, back);
     }
 
@@ -2897,8 +2897,8 @@ mod tests {
             BundleKind::SafeMode,
             BundleKind::Adaptive,
         ] {
-            let json = serde_json::to_string(&kind).unwrap();
-            let back: BundleKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
+            let back: BundleKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(kind, back);
         }
     }
@@ -2912,8 +2912,8 @@ mod tests {
             ConstraintCategory::Stability,
             ConstraintCategory::Compatibility,
         ] {
-            let json = serde_json::to_string(&cat).unwrap();
-            let back: ConstraintCategory = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&cat).expect("serde deserialization should succeed");
+            let back: ConstraintCategory = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(cat, back);
         }
     }
@@ -2925,8 +2925,8 @@ mod tests {
             EvidenceSource::BifurcationScan,
             EvidenceSource::Combined,
         ] {
-            let json = serde_json::to_string(&src).unwrap();
-            let back: EvidenceSource = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&src).expect("serde deserialization should succeed");
+            let back: EvidenceSource = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(src, back);
         }
     }
@@ -2939,8 +2939,8 @@ mod tests {
             VerificationKind::StabilityReplay,
             VerificationKind::SafeModeReplay,
         ] {
-            let json = serde_json::to_string(&vk).unwrap();
-            let back: VerificationKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&vk).expect("serde deserialization should succeed");
+            let back: VerificationKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(vk, back);
         }
     }
@@ -2959,14 +2959,14 @@ mod tests {
         let constraints = vec![constraint];
         let mut synth =
             RollbackSafemodeSynthesizer::new(SynthesizerConfig::default(), rules, constraints)
-                .unwrap();
+                .expect("serde deserialization should succeed");
 
         let rec = make_recommendation("alt1", 500_000, 500_000);
         let input = SynthesisInput {
             replay_result: Some(make_replay_result(vec![rec])),
             scan_result: None,
         };
-        let result = synth.synthesize(&input).unwrap();
+        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
         // Soft constraint fails but bundle is still approved
         assert!(result.bundles[0].is_approved());
         assert!(result.bundles[0].soft_violations > 0);
@@ -2975,8 +2975,8 @@ mod tests {
     #[test]
     fn synthesizer_serde_roundtrip() {
         let synth = default_synthesizer();
-        let json = serde_json::to_string(&synth).unwrap();
-        let back: RollbackSafemodeSynthesizer = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&synth).expect("serde deserialization should succeed");
+        let back: RollbackSafemodeSynthesizer = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.rule_count(), synth.rule_count());
         assert_eq!(back.constraint_count(), synth.constraint_count());
     }
@@ -3003,14 +3003,14 @@ mod tests {
         let constraints = vec![constraint];
         let mut synth =
             RollbackSafemodeSynthesizer::new(SynthesizerConfig::default(), rules, constraints)
-                .unwrap();
+                .expect("serde deserialization should succeed");
 
         let rec = make_recommendation("alt1", 500_000, 500_000);
         let input = SynthesisInput {
             replay_result: Some(make_replay_result(vec![rec])),
             scan_result: None,
         };
-        let result = synth.synthesize(&input).unwrap();
+        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
         assert!(result.best_approved().is_none());
     }
 
@@ -3022,7 +3022,7 @@ mod tests {
             replay_result: Some(make_replay_result(vec![rec])),
             scan_result: None,
         };
-        let result = synth.synthesize(&input).unwrap();
+        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
         assert!(result.best_approved().is_none());
     }
 
@@ -3034,7 +3034,7 @@ mod tests {
             replay_result: Some(make_replay_result(vec![rec])),
             scan_result: None,
         };
-        let result = synth.synthesize(&input).unwrap();
+        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
         assert_eq!(result.schema_version, SYNTHESIZER_SCHEMA_VERSION);
         assert_eq!(result.bundles[0].schema_version, SYNTHESIZER_SCHEMA_VERSION);
     }
@@ -3051,7 +3051,7 @@ mod tests {
         let constraints = vec![make_constraint("c1", ConstraintCategory::Performance, true)];
         let mut synth =
             RollbackSafemodeSynthesizer::new(SynthesizerConfig::default(), rules, constraints)
-                .unwrap();
+                .expect("serde deserialization should succeed");
 
         // Perfect confidence → uncertainty=0 → regression=0
         let rec = make_recommendation("alt1", 200_000, 1_000_000);
@@ -3059,7 +3059,7 @@ mod tests {
             replay_result: Some(make_replay_result(vec![rec])),
             scan_result: None,
         };
-        let result = synth.synthesize(&input).unwrap();
+        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
         let check = &result.bundles[0].constraint_checks[0];
         assert_eq!(check.regression_millionths, 0);
         assert!(check.passed);
@@ -3362,8 +3362,8 @@ mod tests {
             },
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: EvidenceTrigger = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: EvidenceTrigger = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, v);
         }
     }
@@ -3375,8 +3375,8 @@ mod tests {
             BundleKind::SafeMode,
             BundleKind::Adaptive,
         ] {
-            let json = serde_json::to_string(&kind).unwrap();
-            let back: BundleKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
+            let back: BundleKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(back, kind);
         }
     }
@@ -3391,8 +3391,8 @@ mod tests {
             ConstraintCategory::Compatibility,
         ];
         for cat in &all {
-            let json = serde_json::to_string(cat).unwrap();
-            let back: ConstraintCategory = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(cat).expect("serde deserialization should succeed");
+            let back: ConstraintCategory = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, cat);
         }
     }
@@ -3406,8 +3406,8 @@ mod tests {
             VerificationKind::SafeModeReplay,
         ];
         for kind in &all {
-            let json = serde_json::to_string(kind).unwrap();
-            let back: VerificationKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(kind).expect("serde deserialization should succeed");
+            let back: VerificationKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, kind);
         }
     }
@@ -3419,8 +3419,8 @@ mod tests {
             EvidenceSource::BifurcationScan,
             EvidenceSource::Combined,
         ] {
-            let json = serde_json::to_string(&src).unwrap();
-            let back: EvidenceSource = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&src).expect("serde deserialization should succeed");
+            let back: EvidenceSource = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(back, src);
         }
     }
@@ -3453,8 +3453,8 @@ mod tests {
             },
         ];
         for err in &all {
-            let json = serde_json::to_string(err).unwrap();
-            let back: SynthesizerError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let back: SynthesizerError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, err);
         }
     }
@@ -3466,8 +3466,8 @@ mod tests {
             EvidenceTrigger::PreemptiveActionRecommended,
             BundleKind::SafeMode,
         );
-        let json = serde_json::to_string(&rule).unwrap();
-        let back: SynthesisRule = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&rule).expect("serde deserialization should succeed");
+        let back: SynthesisRule = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, rule);
     }
 
@@ -3482,8 +3482,8 @@ mod tests {
             confidence_millionths: 900_000,
             rationale: "test delta".to_string(),
         };
-        let json = serde_json::to_string(&delta).unwrap();
-        let back: PolicyDelta = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&delta).expect("serde deserialization should succeed");
+        let back: PolicyDelta = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, delta);
     }
 
@@ -3496,8 +3496,8 @@ mod tests {
             max_regression_millionths: 50_000,
             hard: true,
         };
-        let json = serde_json::to_string(&c).unwrap();
-        let back: NonRegressionConstraint = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let back: NonRegressionConstraint = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, c);
     }
 
@@ -3509,8 +3509,8 @@ mod tests {
             regression_millionths: -5_000,
             detail: "improved".to_string(),
         };
-        let json = serde_json::to_string(&r).unwrap();
-        let back: ConstraintCheckResult = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let back: ConstraintCheckResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, r);
     }
 
@@ -3523,8 +3523,8 @@ mod tests {
             expected_outcome_millionths: 150_000,
             tolerance_millionths: 10_000,
         };
-        let json = serde_json::to_string(&hook).unwrap();
-        let back: ReplayVerificationHook = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&hook).expect("serde deserialization should succeed");
+        let back: ReplayVerificationHook = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, hook);
     }
 
@@ -3535,16 +3535,16 @@ mod tests {
             artifact_hash: ContentHash::compute(b"evidence"),
             summary: "replay showed improvement".to_string(),
         };
-        let json = serde_json::to_string(&r).unwrap();
-        let back: EvidenceRef = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let back: EvidenceRef = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, r);
     }
 
     #[test]
     fn synthesizer_config_serde_default_roundtrip() {
         let cfg = SynthesizerConfig::default();
-        let json = serde_json::to_string(&cfg).unwrap();
-        let back: SynthesizerConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
+        let back: SynthesizerConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, cfg);
     }
 
@@ -3554,8 +3554,8 @@ mod tests {
             replay_result: None,
             scan_result: None,
         };
-        let json = serde_json::to_string(&input).unwrap();
-        let back: SynthesisInput = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
+        let back: SynthesisInput = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, input);
         assert!(!back.has_evidence());
     }

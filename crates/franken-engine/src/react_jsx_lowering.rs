@@ -651,8 +651,8 @@ pub fn compute_lowering_receipt(
     result: &ReactLoweringResult,
     config: &ReactLoweringConfig,
 ) -> LoweringCompileReceipt {
-    let input_bytes = serde_json::to_vec(input).unwrap();
-    let output_bytes = serde_json::to_vec(&result.element).unwrap();
+    let input_bytes = serde_json::to_vec(input).expect("serde deserialization should succeed");
+    let output_bytes = serde_json::to_vec(&result.element).expect("serde deserialization should succeed");
 
     LoweringCompileReceipt {
         schema_version: REACT_LOWERING_SCHEMA_VERSION.to_string(),
@@ -1581,7 +1581,7 @@ pub fn run_lowering_corpus(config: &ReactLoweringConfig) -> LoweringRunManifest 
         });
     }
 
-    let evidence_bytes = serde_json::to_vec(&evidence).unwrap();
+    let evidence_bytes = serde_json::to_vec(&evidence).expect("serde deserialization should succeed");
     let manifest_hash = ContentHash::compute(&evidence_bytes);
 
     LoweringRunManifest {
@@ -1671,8 +1671,8 @@ mod tests {
     #[test]
     fn test_build_mode_serde_roundtrip() {
         for mode in [BuildMode::Development, BuildMode::Production] {
-            let json = serde_json::to_string(&mode).unwrap();
-            let back: BuildMode = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&mode).expect("serde deserialization should succeed");
+            let back: BuildMode = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(mode, back);
         }
     }
@@ -1747,8 +1747,8 @@ mod tests {
             classic_pragma: Some("createElement".to_string()),
             ..Default::default()
         };
-        let json = serde_json::to_string(&cfg).unwrap();
-        let back: ReactLoweringConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
+        let back: ReactLoweringConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cfg, back);
     }
 
@@ -1829,8 +1829,8 @@ mod tests {
             },
             ElementType::Fragment,
         ] {
-            let json = serde_json::to_string(&et).unwrap();
-            let back: ElementType = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&et).expect("serde deserialization should succeed");
+            let back: ElementType = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(et, back);
         }
     }
@@ -1841,7 +1841,7 @@ mod tests {
     fn test_classic_simple_div() {
         let node = simple_div();
         let cfg = classic_config();
-        let result = lower_jsx_to_react(&node, &cfg).unwrap();
+        let result = lower_jsx_to_react(&node, &cfg).expect("serde deserialization should succeed");
         assert_eq!(
             result.element.element_type,
             ElementType::Intrinsic {
@@ -1880,7 +1880,7 @@ mod tests {
             self_closing: true,
             span: test_span(),
         });
-        let result = lower_jsx_to_react(&node, &classic_config()).unwrap();
+        let result = lower_jsx_to_react(&node, &classic_config()).expect("serde deserialization should succeed");
         assert_eq!(result.element.props.named_count(), 2);
         assert!(!result.element.props.has_spreads);
     }
@@ -1906,7 +1906,7 @@ mod tests {
             self_closing: false,
             span: test_span(),
         });
-        let result = lower_jsx_to_react(&node, &classic_config()).unwrap();
+        let result = lower_jsx_to_react(&node, &classic_config()).expect("serde deserialization should succeed");
         assert_eq!(result.element.children.len(), 2);
         assert_eq!(result.stats.text_children, 1);
         assert_eq!(result.stats.expression_children, 1);
@@ -1939,7 +1939,7 @@ mod tests {
             self_closing: true,
             span: test_span(),
         });
-        let result = lower_jsx_to_react(&node, &classic_config()).unwrap();
+        let result = lower_jsx_to_react(&node, &classic_config()).expect("serde deserialization should succeed");
         assert!(result.element.props.extracted_key.is_some());
         assert_eq!(result.element.props.named_count(), 1); // only 'data', 'key' extracted
         assert_eq!(result.stats.keys_extracted, 1);
@@ -1963,14 +1963,14 @@ mod tests {
             self_closing: true,
             span: test_span(),
         });
-        let result = lower_jsx_to_react(&node, &classic_config()).unwrap();
+        let result = lower_jsx_to_react(&node, &classic_config()).expect("serde deserialization should succeed");
         assert!(result.element.props.extracted_ref.is_some());
         assert_eq!(result.stats.refs_extracted, 1);
     }
 
     #[test]
     fn test_classic_call_convention() {
-        let result = lower_jsx_to_react(&simple_div(), &classic_config()).unwrap();
+        let result = lower_jsx_to_react(&simple_div(), &classic_config()).expect("serde deserialization should succeed");
         match &result.element.call_convention {
             CallConvention::Classic { object, method } => {
                 assert_eq!(object, "React");
@@ -1989,7 +1989,7 @@ mod tests {
             }],
             span: test_span(),
         });
-        let result = lower_jsx_to_react(&node, &classic_config()).unwrap();
+        let result = lower_jsx_to_react(&node, &classic_config()).expect("serde deserialization should succeed");
         assert_eq!(result.element.element_type, ElementType::Fragment);
         assert_eq!(result.element.children.len(), 1);
         assert_eq!(result.stats.fragments_lowered, 1);
@@ -1999,7 +1999,7 @@ mod tests {
 
     #[test]
     fn test_automatic_simple_div() {
-        let result = lower_jsx_to_react(&simple_div(), &automatic_config()).unwrap();
+        let result = lower_jsx_to_react(&simple_div(), &automatic_config()).expect("serde deserialization should succeed");
         assert!(matches!(
             result.element.call_convention,
             CallConvention::Automatic { .. }
@@ -2028,7 +2028,7 @@ mod tests {
             self_closing: false,
             span: test_span(),
         });
-        let result = lower_jsx_to_react(&node, &automatic_config()).unwrap();
+        let result = lower_jsx_to_react(&node, &automatic_config()).expect("serde deserialization should succeed");
         match &result.element.call_convention {
             CallConvention::Automatic { factory, .. } => {
                 assert_eq!(factory, "jsx");
@@ -2068,7 +2068,7 @@ mod tests {
             self_closing: false,
             span: test_span(),
         });
-        let result = lower_jsx_to_react(&node, &automatic_config()).unwrap();
+        let result = lower_jsx_to_react(&node, &automatic_config()).expect("serde deserialization should succeed");
         match &result.element.call_convention {
             CallConvention::Automatic { factory, .. } => {
                 assert_eq!(factory, "jsxs");
@@ -2098,14 +2098,14 @@ mod tests {
             self_closing: false,
             span: test_span(),
         });
-        let result = lower_jsx_to_react(&node, &automatic_config()).unwrap();
+        let result = lower_jsx_to_react(&node, &automatic_config()).expect("serde deserialization should succeed");
         // Should have 'id' prop and 'children' prop
         assert_eq!(result.element.props.entries.len(), 2);
     }
 
     #[test]
     fn test_automatic_import_source() {
-        let result = lower_jsx_to_react(&simple_div(), &automatic_config()).unwrap();
+        let result = lower_jsx_to_react(&simple_div(), &automatic_config()).expect("serde deserialization should succeed");
         assert!(
             result
                 .required_imports
@@ -2123,7 +2123,7 @@ mod tests {
             }],
             span: test_span(),
         });
-        let result = lower_jsx_to_react(&node, &automatic_config()).unwrap();
+        let result = lower_jsx_to_react(&node, &automatic_config()).expect("serde deserialization should succeed");
         assert!(result.required_imports.iter().any(|i| i.name == "Fragment"));
     }
 
@@ -2131,9 +2131,9 @@ mod tests {
 
     #[test]
     fn test_dev_mode_source_location() {
-        let result = lower_jsx_to_react(&simple_div(), &dev_automatic_config()).unwrap();
+        let result = lower_jsx_to_react(&simple_div(), &dev_automatic_config()).expect("serde deserialization should succeed");
         assert!(result.element.source_location.is_some());
-        let loc = result.element.source_location.as_ref().unwrap();
+        let loc = result.element.source_location.as_ref().expect("serde deserialization should succeed");
         assert_eq!(loc.file_name.as_deref(), Some("test.tsx"));
         assert_eq!(loc.line_number, 1);
         assert_eq!(loc.column_number, 0);
@@ -2141,7 +2141,7 @@ mod tests {
 
     #[test]
     fn test_dev_mode_uses_jsxdev() {
-        let result = lower_jsx_to_react(&simple_div(), &dev_automatic_config()).unwrap();
+        let result = lower_jsx_to_react(&simple_div(), &dev_automatic_config()).expect("serde deserialization should succeed");
         match &result.element.call_convention {
             CallConvention::Automatic { factory, .. } => {
                 assert_eq!(factory, "jsxDEV");
@@ -2152,7 +2152,7 @@ mod tests {
 
     #[test]
     fn test_dev_mode_import_source() {
-        let result = lower_jsx_to_react(&simple_div(), &dev_automatic_config()).unwrap();
+        let result = lower_jsx_to_react(&simple_div(), &dev_automatic_config()).expect("serde deserialization should succeed");
         assert!(
             result
                 .required_imports
@@ -2163,7 +2163,7 @@ mod tests {
 
     #[test]
     fn test_prod_mode_no_source_location() {
-        let result = lower_jsx_to_react(&simple_div(), &automatic_config()).unwrap();
+        let result = lower_jsx_to_react(&simple_div(), &automatic_config()).expect("serde deserialization should succeed");
         assert!(result.element.source_location.is_none());
     }
 
@@ -2230,7 +2230,7 @@ mod tests {
             self_closing: true,
             span: test_span(),
         });
-        let result = lower_jsx_to_react(&node, &classic_config()).unwrap();
+        let result = lower_jsx_to_react(&node, &classic_config()).expect("serde deserialization should succeed");
         assert!(result.element.props.has_spreads);
         assert!(
             result
@@ -2278,7 +2278,7 @@ mod tests {
             self_closing: false,
             span: test_span(),
         });
-        let result = lower_jsx_to_react(&node, &classic_config()).unwrap();
+        let result = lower_jsx_to_react(&node, &classic_config()).expect("serde deserialization should succeed");
         assert!(result.element.children.is_empty());
     }
 
@@ -2297,7 +2297,7 @@ mod tests {
             self_closing: true,
             span: test_span(),
         });
-        let result = lower_jsx_to_react(&node, &classic_config()).unwrap();
+        let result = lower_jsx_to_react(&node, &classic_config()).expect("serde deserialization should succeed");
         assert!(
             result
                 .diagnostics
@@ -2377,7 +2377,7 @@ mod tests {
             self_closing: false,
             span: test_span(),
         });
-        let result = lower_jsx_to_react(&node, &classic_config()).unwrap();
+        let result = lower_jsx_to_react(&node, &classic_config()).expect("serde deserialization should succeed");
         assert_eq!(result.element.children.len(), 1);
         assert_eq!(result.stats.elements_lowered, 2); // div + span
         assert_eq!(result.stats.max_depth_reached, 1);
@@ -2401,7 +2401,7 @@ mod tests {
             self_closing: false,
             span: test_span(),
         });
-        let result = lower_jsx_to_react(&node, &classic_config()).unwrap();
+        let result = lower_jsx_to_react(&node, &classic_config()).expect("serde deserialization should succeed");
         assert_eq!(result.stats.elements_lowered, 1);
         assert_eq!(result.stats.fragments_lowered, 1);
     }
@@ -2435,7 +2435,7 @@ mod tests {
             self_closing: true,
             span: test_span(),
         });
-        let result = lower_jsx_to_react(&node, &classic_config()).unwrap();
+        let result = lower_jsx_to_react(&node, &classic_config()).expect("serde deserialization should succeed");
         assert!(
             result
                 .diagnostics
@@ -2484,7 +2484,7 @@ mod tests {
             self_closing: false,
             span: test_span(),
         });
-        let result = lower_jsx_to_react(&node, &classic_config()).unwrap();
+        let result = lower_jsx_to_react(&node, &classic_config()).expect("serde deserialization should succeed");
         assert_eq!(result.stats.elements_lowered, 1);
         assert_eq!(result.stats.total_props, 1);
         assert_eq!(result.stats.spread_attributes, 1);
@@ -2561,7 +2561,7 @@ mod tests {
             diagnostics: vec![],
             feature_families_used: vec![JsxFeatureFamily::SelfClosing],
         };
-        let lowered = lower_jsx_to_react(&node, &cfg).unwrap();
+        let lowered = lower_jsx_to_react(&node, &cfg).expect("serde deserialization should succeed");
         let receipt = compute_lowering_receipt(&parse_result, &lowered, &cfg);
         assert_eq!(receipt.schema_version, REACT_LOWERING_SCHEMA_VERSION);
         assert_eq!(receipt.config_summary.runtime_mode, "classic");
@@ -2577,7 +2577,7 @@ mod tests {
             diagnostics: vec![],
             feature_families_used: vec![],
         };
-        let lowered = lower_jsx_to_react(&node, &cfg).unwrap();
+        let lowered = lower_jsx_to_react(&node, &cfg).expect("serde deserialization should succeed");
         let r1 = compute_lowering_receipt(&parse_result, &lowered, &cfg);
         let r2 = compute_lowering_receipt(&parse_result, &lowered, &cfg);
         assert_eq!(r1.input_hash, r2.input_hash);
@@ -2607,9 +2607,9 @@ mod tests {
             self_closing: false,
             span: test_span(),
         });
-        let result = lower_jsx_to_react(&node, &classic_config()).unwrap();
-        let json = serde_json::to_string(&result.element).unwrap();
-        let back: LoweredElement = serde_json::from_str(&json).unwrap();
+        let result = lower_jsx_to_react(&node, &classic_config()).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result.element).expect("serde deserialization should succeed");
+        let back: LoweredElement = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result.element, back);
     }
 
@@ -2621,8 +2621,8 @@ mod tests {
             message: "test".to_string(),
             span: Some(test_span()),
         };
-        let json = serde_json::to_string(&diag).unwrap();
-        let back: LoweringDiagnostic = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&diag).expect("serde deserialization should succeed");
+        let back: LoweringDiagnostic = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(diag, back);
     }
 
@@ -2638,8 +2638,8 @@ mod tests {
                 message: "bad".to_string(),
             },
         ] {
-            let json = serde_json::to_string(&err).unwrap();
-            let back: ReactLoweringError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+            let back: ReactLoweringError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(err, back);
         }
     }
@@ -2711,7 +2711,7 @@ mod tests {
             self_closing: false,
             span: test_span(),
         });
-        let result = lower_jsx_to_react(&node, &classic_config()).unwrap();
+        let result = lower_jsx_to_react(&node, &classic_config()).expect("serde deserialization should succeed");
         assert!(
             result
                 .feature_families_used
@@ -2737,7 +2737,7 @@ mod tests {
             classic_pragma: Some("h".to_string()),
             ..classic_config()
         };
-        let result = lower_jsx_to_react(&simple_div(), &cfg).unwrap();
+        let result = lower_jsx_to_react(&simple_div(), &cfg).expect("serde deserialization should succeed");
         match &result.element.call_convention {
             CallConvention::Classic { object, .. } => {
                 assert_eq!(object, "h");
@@ -2752,7 +2752,7 @@ mod tests {
             automatic_import_source: Some("preact/jsx-runtime".to_string()),
             ..automatic_config()
         };
-        let result = lower_jsx_to_react(&simple_div(), &cfg).unwrap();
+        let result = lower_jsx_to_react(&simple_div(), &cfg).expect("serde deserialization should succeed");
         assert!(
             result
                 .required_imports
@@ -2800,7 +2800,7 @@ mod tests {
             diagnostics: vec![],
             feature_families_used: vec![],
         };
-        let result = lower_parse_result(&pr, &classic_config()).unwrap();
+        let result = lower_parse_result(&pr, &classic_config()).expect("serde deserialization should succeed");
         assert_eq!(
             result.element.element_type,
             ElementType::Intrinsic {

@@ -677,8 +677,8 @@ mod tests {
     #[test]
     fn test_sim_event_kind_serde_roundtrip() {
         for kind in &SimEventKind::ALL {
-            let json = serde_json::to_string(kind).unwrap();
-            let back: SimEventKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(kind).expect("serde deserialization should succeed");
+            let back: SimEventKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*kind, back);
         }
     }
@@ -717,8 +717,8 @@ mod tests {
     #[test]
     fn test_sim_priority_serde_roundtrip() {
         for p in &SimPriority::ALL {
-            let json = serde_json::to_string(p).unwrap();
-            let back: SimPriority = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(p).expect("serde deserialization should succeed");
+            let back: SimPriority = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*p, back);
         }
     }
@@ -749,8 +749,8 @@ mod tests {
     #[test]
     fn test_scheduler_policy_serde_roundtrip() {
         let p = SchedulerPolicy::default();
-        let json = serde_json::to_string(&p).unwrap();
-        let back: SchedulerPolicy = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
+        let back: SchedulerPolicy = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(p, back);
     }
 
@@ -813,7 +813,7 @@ mod tests {
             3,
         );
 
-        let outcome = sched.advance_tick().unwrap();
+        let outcome = sched.advance_tick().expect("serde deserialization should succeed");
         assert_eq!(
             outcome.events_dispatched,
             vec![micro_id, normal_id, idle_id]
@@ -827,7 +827,7 @@ mod tests {
         let id_b = sched.schedule(SimEventKind::CacheMiss, SimPriority::Normal, 0, "b", 20);
         let id_c = sched.schedule(SimEventKind::CacheEvict, SimPriority::Normal, 0, "c", 30);
 
-        let outcome = sched.advance_tick().unwrap();
+        let outcome = sched.advance_tick().expect("serde deserialization should succeed");
         assert_eq!(outcome.events_dispatched, vec![id_a, id_b, id_c]);
     }
 
@@ -850,7 +850,7 @@ mod tests {
         );
         sched.schedule(SimEventKind::TimerFire, SimPriority::Normal, 0, "t1", 3);
 
-        let outcome = sched.advance_tick().unwrap();
+        let outcome = sched.advance_tick().expect("serde deserialization should succeed");
         assert_eq!(outcome.microtasks_drained, 2);
         assert_eq!(outcome.events_dispatched.len(), 3);
     }
@@ -876,7 +876,7 @@ mod tests {
         let mut sched = SimScheduler::new(SchedulerPolicy::default(), SecurityEpoch::GENESIS);
         // No events at tick 0.
         sched.schedule(SimEventKind::ModuleLoad, SimPriority::Normal, 5, "m", 1);
-        let outcome = sched.advance_tick().unwrap();
+        let outcome = sched.advance_tick().expect("serde deserialization should succeed");
         assert!(outcome.events_dispatched.is_empty());
         assert_eq!(outcome.microtasks_drained, 0);
     }
@@ -891,13 +891,13 @@ mod tests {
         let id0 = sched.schedule(SimEventKind::CacheHit, SimPriority::Normal, 0, "c", 1);
         let id1 = sched.schedule(SimEventKind::CacheMiss, SimPriority::Normal, 2, "c", 2);
 
-        let o0 = sched.advance_tick().unwrap();
+        let o0 = sched.advance_tick().expect("serde deserialization should succeed");
         assert_eq!(o0.events_dispatched, vec![id0]);
 
-        let o1 = sched.advance_tick().unwrap(); // tick 1 — empty
+        let o1 = sched.advance_tick().expect("serde deserialization should succeed"); // tick 1 — empty
         assert!(o1.events_dispatched.is_empty());
 
-        let o2 = sched.advance_tick().unwrap(); // tick 2
+        let o2 = sched.advance_tick().expect("serde deserialization should succeed"); // tick 2
         assert_eq!(o2.events_dispatched, vec![id1]);
     }
 
@@ -1043,8 +1043,8 @@ mod tests {
             kind: SimEventKind::GcPause,
             priority: SimPriority::Idle,
         });
-        let json = serde_json::to_string(&log).unwrap();
-        let back: SimReplayLog = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&log).expect("serde deserialization should succeed");
+        let back: SimReplayLog = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(log, back);
     }
 
@@ -1079,8 +1079,8 @@ mod tests {
             source_label: "timer-test".to_string(),
             deterministic_seed: 12345,
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let back: SimEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let back: SimEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
     }
 
@@ -1099,7 +1099,7 @@ mod tests {
         sched.schedule(SimEventKind::CacheMiss, SimPriority::Normal, 0, "b", 2);
         sched.schedule(SimEventKind::CacheEvict, SimPriority::Normal, 0, "c", 3);
 
-        let outcome = sched.advance_tick().unwrap();
+        let outcome = sched.advance_tick().expect("serde deserialization should succeed");
         assert_eq!(outcome.events_dispatched.len(), 2);
         // The third event should be re-queued.
         assert_eq!(sched.pending_count(), 1);
@@ -1145,10 +1145,10 @@ mod tests {
         let id_b = sched.schedule(SimEventKind::CacheMiss, SimPriority::Normal, 0, "b", 2);
         let id_c = sched.schedule(SimEventKind::CacheEvict, SimPriority::Normal, 0, "c", 3);
 
-        let o0 = sched.advance_tick().unwrap();
+        let o0 = sched.advance_tick().expect("serde deserialization should succeed");
         assert_eq!(o0.events_dispatched, vec![id_a, id_b]);
 
-        let o1 = sched.advance_tick().unwrap();
+        let o1 = sched.advance_tick().expect("serde deserialization should succeed");
         assert_eq!(o1.events_dispatched, vec![id_c]);
         assert_eq!(sched.pending_count(), 0);
     }
@@ -1175,7 +1175,7 @@ mod tests {
             2,
         );
 
-        let outcome = sched.advance_tick().unwrap();
+        let outcome = sched.advance_tick().expect("serde deserialization should succeed");
         // Microtask should come first
         assert_eq!(outcome.events_dispatched[0], micro_id);
         assert_eq!(outcome.events_dispatched[1], normal_id);
@@ -1199,7 +1199,7 @@ mod tests {
             2,
         );
 
-        let outcome = sched.advance_tick().unwrap();
+        let outcome = sched.advance_tick().expect("serde deserialization should succeed");
         // Still priority-ordered (microtask first due to lower rank)
         assert_eq!(outcome.events_dispatched.len(), 2);
         assert_eq!(outcome.microtasks_drained, 1);
@@ -1237,7 +1237,7 @@ mod tests {
             5,
         );
 
-        let outcome = sched.advance_tick().unwrap();
+        let outcome = sched.advance_tick().expect("serde deserialization should succeed");
         assert_eq!(
             outcome.events_dispatched,
             vec![micro, high, normal, low, idle]
@@ -1271,8 +1271,8 @@ mod tests {
         sched.schedule(SimEventKind::CacheMiss, SimPriority::Normal, 1, "y", 2);
         let summary = sched.run_to_completion();
 
-        let json = serde_json::to_string(&summary).unwrap();
-        let back: SimRunSummary = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
+        let back: SimRunSummary = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(summary.total_events, back.total_events);
         assert_eq!(summary.total_ticks, back.total_ticks);
         assert_eq!(summary.content_hash, back.content_hash);
@@ -1290,8 +1290,8 @@ mod tests {
             microtasks_drained: 1,
             pending_count: 5,
         };
-        let json = serde_json::to_string(&outcome).unwrap();
-        let back: TickOutcome = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&outcome).expect("serde deserialization should succeed");
+        let back: TickOutcome = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(outcome, back);
     }
 
@@ -1310,8 +1310,8 @@ mod tests {
             SimSpecimenFamily::MixedPriority,
         ];
         for fam in &families {
-            let json = serde_json::to_string(fam).unwrap();
-            let back: SimSpecimenFamily = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(fam).expect("serde deserialization should succeed");
+            let back: SimSpecimenFamily = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*fam, back);
         }
     }
@@ -1360,7 +1360,7 @@ mod tests {
         let mut sched = SimScheduler::new(SchedulerPolicy::default(), SecurityEpoch::GENESIS);
         sched.schedule(SimEventKind::TimerFire, SimPriority::Normal, 5, "t", 1);
 
-        let o = sched.advance_tick().unwrap(); // tick 0
+        let o = sched.advance_tick().expect("serde deserialization should succeed"); // tick 0
         assert!(o.events_dispatched.is_empty());
         assert_eq!(sched.pending_count(), 1);
     }

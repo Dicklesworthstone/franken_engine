@@ -73,7 +73,7 @@ impl BenchmarkEnvironment {
             &baseline_schema(),
             canonical.as_bytes(),
         )
-        .unwrap()
+        .expect("serde deserialization should succeed")
     }
 }
 
@@ -162,7 +162,7 @@ impl PercentileStats {
             &baseline_schema(),
             canonical.as_bytes(),
         )
-        .unwrap()
+        .expect("serde deserialization should succeed")
     }
 }
 
@@ -347,7 +347,7 @@ impl ProfileArtifact {
             &baseline_schema(),
             canonical.as_bytes(),
         )
-        .unwrap()
+        .expect("serde deserialization should succeed")
     }
 }
 
@@ -407,7 +407,7 @@ impl BenchmarkResult {
             &baseline_schema(),
             canonical.as_bytes(),
         )
-        .unwrap()
+        .expect("serde deserialization should succeed")
     }
 }
 
@@ -554,7 +554,7 @@ impl BaselineComparison {
             &baseline_schema(),
             canonical.as_bytes(),
         )
-        .unwrap()
+        .expect("serde deserialization should succeed")
     }
 }
 
@@ -624,7 +624,7 @@ impl OptimizationOpportunity {
             &baseline_schema(),
             canonical.as_bytes(),
         )
-        .unwrap()
+        .expect("serde deserialization should succeed")
     }
 }
 
@@ -684,7 +684,7 @@ impl OpportunityMatrix {
             &baseline_schema(),
             canonical.as_bytes(),
         )
-        .unwrap()
+        .expect("serde deserialization should succeed")
     }
 }
 
@@ -786,7 +786,7 @@ impl BaselineRegistry {
             &baseline_schema(),
             canonical.as_bytes(),
         )
-        .unwrap()
+        .expect("serde deserialization should succeed")
     }
 }
 
@@ -836,8 +836,8 @@ mod tests {
     #[test]
     fn env_serde_roundtrip() {
         let env = BenchmarkEnvironment::default_env("test-bench");
-        let json = serde_json::to_string(&env).unwrap();
-        let back: BenchmarkEnvironment = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&env).expect("serde deserialization should succeed");
+        let back: BenchmarkEnvironment = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(env, back);
     }
 
@@ -866,7 +866,7 @@ mod tests {
             iteration: 0,
             is_warmup: false,
         }];
-        let stats = PercentileStats::from_samples(&samples).unwrap();
+        let stats = PercentileStats::from_samples(&samples).expect("serde deserialization should succeed");
         assert_eq!(stats.p50_ns, 5000);
         assert_eq!(stats.min_ns, 5000);
         assert_eq!(stats.max_ns, 5000);
@@ -882,7 +882,7 @@ mod tests {
                 is_warmup: false,
             })
             .collect();
-        let stats = PercentileStats::from_samples(&samples).unwrap();
+        let stats = PercentileStats::from_samples(&samples).expect("serde deserialization should succeed");
         assert_eq!(stats.min_ns, 100);
         assert_eq!(stats.max_ns, 10000);
         assert_eq!(stats.sample_count, 100);
@@ -899,7 +899,7 @@ mod tests {
                 is_warmup: false,
             })
             .collect();
-        let stats = PercentileStats::from_samples(&samples).unwrap();
+        let stats = PercentileStats::from_samples(&samples).expect("serde deserialization should succeed");
         assert!(stats.jitter_ns() > 0);
     }
 
@@ -912,7 +912,7 @@ mod tests {
                 is_warmup: false,
             })
             .collect();
-        let stats = PercentileStats::from_samples(&samples).unwrap();
+        let stats = PercentileStats::from_samples(&samples).expect("serde deserialization should succeed");
         let cv = stats.cv_millionths();
         assert!(cv >= 0, "cv should be non-negative, got {cv}");
     }
@@ -926,8 +926,8 @@ mod tests {
                 is_warmup: false,
             })
             .collect();
-        let s1 = PercentileStats::from_samples(&samples).unwrap();
-        let s2 = PercentileStats::from_samples(&samples).unwrap();
+        let s1 = PercentileStats::from_samples(&samples).expect("serde deserialization should succeed");
+        let s2 = PercentileStats::from_samples(&samples).expect("serde deserialization should succeed");
         assert_eq!(s1.derive_id(), s2.derive_id());
     }
 
@@ -955,8 +955,8 @@ mod tests {
     #[test]
     fn throughput_serde() {
         let t = ThroughputMeasurement::new(500, 2_000_000_000);
-        let json = serde_json::to_string(&t).unwrap();
-        let back: ThroughputMeasurement = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&t).expect("serde deserialization should succeed");
+        let back: ThroughputMeasurement = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(t, back);
     }
 
@@ -1008,8 +1008,8 @@ mod tests {
     #[test]
     fn profile_kind_serde() {
         for k in &ProfileKind::ALL {
-            let json = serde_json::to_string(k).unwrap();
-            let back: ProfileKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(k).expect("serde deserialization should succeed");
+            let back: ProfileKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*k, back);
         }
     }
@@ -1052,8 +1052,8 @@ mod tests {
         let r = BenchmarkResult::new("bench-1", env)
             .with_throughput(ThroughputMeasurement::new(1000, 1_000_000_000))
             .with_memory(MemorySnapshot::empty());
-        let json = serde_json::to_string(&r).unwrap();
-        let back: BenchmarkResult = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let back: BenchmarkResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 
@@ -1206,8 +1206,8 @@ mod tests {
     fn matrix_serde() {
         let mut matrix = OpportunityMatrix::new("m1");
         matrix.add(make_opportunity("a", 100_000, 1, 1));
-        let json = serde_json::to_string(&matrix).unwrap();
-        let back: OpportunityMatrix = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&matrix).expect("serde deserialization should succeed");
+        let back: OpportunityMatrix = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(matrix, back);
     }
 
@@ -1242,7 +1242,7 @@ mod tests {
             })
             .collect();
         let baseline = BenchmarkResult::new("bench-1", env.clone())
-            .with_latency(PercentileStats::from_samples(&samples_baseline).unwrap());
+            .with_latency(PercentileStats::from_samples(&samples_baseline).expect("serde deserialization should succeed"));
         reg.register(baseline);
 
         let samples_candidate: Vec<_> = (0..100)
@@ -1253,9 +1253,9 @@ mod tests {
             })
             .collect();
         let candidate = BenchmarkResult::new("bench-1-v2", env)
-            .with_latency(PercentileStats::from_samples(&samples_candidate).unwrap());
+            .with_latency(PercentileStats::from_samples(&samples_candidate).expect("serde deserialization should succeed"));
 
-        let comparison = reg.compare("bench-1", &candidate).unwrap();
+        let comparison = reg.compare("bench-1", &candidate).expect("serde deserialization should succeed");
         assert!(comparison.improvement_count() > 0);
     }
 
@@ -1279,8 +1279,8 @@ mod tests {
         let mut reg = BaselineRegistry::new();
         let env = BenchmarkEnvironment::default_env("env-1");
         reg.register(BenchmarkResult::new("bench-1", env));
-        let json = serde_json::to_string(&reg).unwrap();
-        let back: BaselineRegistry = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&reg).expect("serde deserialization should succeed");
+        let back: BaselineRegistry = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(reg, back);
     }
 
@@ -1320,7 +1320,7 @@ mod tests {
             })
             .collect();
 
-        let stats = PercentileStats::from_samples(&samples).unwrap();
+        let stats = PercentileStats::from_samples(&samples).expect("serde deserialization should succeed");
         assert_eq!(stats.sample_count, 110); // 120 - 10 warmup
 
         // 3. Build benchmark result
@@ -1386,10 +1386,10 @@ mod tests {
             })
             .collect();
         let candidate = BenchmarkResult::new("sg-flush-v2", env)
-            .with_latency(PercentileStats::from_samples(&candidate_samples).unwrap())
+            .with_latency(PercentileStats::from_samples(&candidate_samples).expect("serde deserialization should succeed"))
             .with_throughput(ThroughputMeasurement::new(15_000, 2_000_000_000));
 
-        let comparison = registry.compare("sg-flush-v1", &candidate).unwrap();
+        let comparison = registry.compare("sg-flush-v1", &candidate).expect("serde deserialization should succeed");
         // Latency should be improved
         assert!(comparison.improvement_count() > 0);
     }
@@ -1420,8 +1420,8 @@ mod tests {
             ComparisonDirection::Regression,
             ComparisonDirection::Neutral,
         ] {
-            let json = serde_json::to_string(&d).unwrap();
-            let back: ComparisonDirection = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
+            let back: ComparisonDirection = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(d, back);
         }
     }
@@ -1435,8 +1435,8 @@ mod tests {
             OpportunityStatus::Implemented,
             OpportunityStatus::Rejected,
         ] {
-            let json = serde_json::to_string(&s).unwrap();
-            let back: OpportunityStatus = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+            let back: OpportunityStatus = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(s, back);
         }
     }
@@ -1451,8 +1451,8 @@ mod tests {
             total_allocations: 100,
             total_deallocations: 90,
         };
-        let json = serde_json::to_string(&snap).unwrap();
-        let back: MemorySnapshot = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&snap).expect("serde deserialization should succeed");
+        let back: MemorySnapshot = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(snap, back);
     }
 
@@ -1464,16 +1464,16 @@ mod tests {
             samples: 500,
             module_path: "src/lib.rs".to_string(),
         };
-        let json = serde_json::to_string(&hs).unwrap();
-        let back: Hotspot = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&hs).expect("serde deserialization should succeed");
+        let back: Hotspot = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(hs, back);
     }
 
     #[test]
     fn significance_threshold_serde_roundtrip() {
         let t = SignificanceThreshold::default_threshold();
-        let json = serde_json::to_string(&t).unwrap();
-        let back: SignificanceThreshold = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&t).expect("serde deserialization should succeed");
+        let back: SignificanceThreshold = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(t, back);
     }
 
@@ -1581,7 +1581,7 @@ mod tests {
     fn profile_kind_serde_all_distinct() {
         let set: std::collections::BTreeSet<String> = ProfileKind::ALL
             .iter()
-            .map(|k| serde_json::to_string(k).unwrap())
+            .map(|k| serde_json::to_string(k).expect("serde deserialization should succeed"))
             .collect();
         assert_eq!(set.len(), 5);
     }
@@ -1594,7 +1594,7 @@ mod tests {
             ComparisonDirection::Neutral,
         ]
         .iter()
-        .map(|d| serde_json::to_string(d).unwrap())
+        .map(|d| serde_json::to_string(d).expect("serde deserialization should succeed"))
         .collect();
         assert_eq!(set.len(), 3);
     }
@@ -1609,7 +1609,7 @@ mod tests {
             OpportunityStatus::Rejected,
         ]
         .iter()
-        .map(|s| serde_json::to_string(s).unwrap())
+        .map(|s| serde_json::to_string(s).expect("serde deserialization should succeed"))
         .collect();
         assert_eq!(set.len(), 5);
     }
@@ -1635,7 +1635,7 @@ mod tests {
                 is_warmup: false,
             })
             .collect();
-        let stats = PercentileStats::from_samples(&samples).unwrap();
+        let stats = PercentileStats::from_samples(&samples).expect("serde deserialization should succeed");
         let mut cloned = stats.clone();
         cloned.p50_ns = 999_999;
         assert_ne!(stats.p50_ns, 999_999);
@@ -1682,8 +1682,8 @@ mod tests {
     #[test]
     fn benchmark_environment_json_field_names() {
         let env = BenchmarkEnvironment::default_env("test");
-        let val: serde_json::Value = serde_json::to_value(&env).unwrap();
-        let obj = val.as_object().unwrap();
+        let val: serde_json::Value = serde_json::to_value(&env).expect("serde deserialization should succeed");
+        let obj = val.as_object().expect("serde deserialization should succeed");
         for key in [
             "env_id",
             "warmup_iterations",
@@ -1705,8 +1705,8 @@ mod tests {
             iteration: 0,
             is_warmup: false,
         };
-        let val: serde_json::Value = serde_json::to_value(&sample).unwrap();
-        let obj = val.as_object().unwrap();
+        let val: serde_json::Value = serde_json::to_value(&sample).expect("serde deserialization should succeed");
+        let obj = val.as_object().expect("serde deserialization should succeed");
         for key in ["latency_ns", "iteration", "is_warmup"] {
             assert!(obj.contains_key(key), "missing field: {key}");
         }
@@ -1716,8 +1716,8 @@ mod tests {
     #[test]
     fn throughput_measurement_json_field_names() {
         let t = ThroughputMeasurement::new(100, 1_000_000);
-        let val: serde_json::Value = serde_json::to_value(&t).unwrap();
-        let obj = val.as_object().unwrap();
+        let val: serde_json::Value = serde_json::to_value(&t).expect("serde deserialization should succeed");
+        let obj = val.as_object().expect("serde deserialization should succeed");
         for key in [
             "ops_per_sec_millionths",
             "total_ops",
@@ -1732,8 +1732,8 @@ mod tests {
     #[test]
     fn memory_snapshot_json_field_names() {
         let m = MemorySnapshot::empty();
-        let val: serde_json::Value = serde_json::to_value(&m).unwrap();
-        let obj = val.as_object().unwrap();
+        let val: serde_json::Value = serde_json::to_value(&m).expect("serde deserialization should succeed");
+        let obj = val.as_object().expect("serde deserialization should succeed");
         for key in [
             "heap_bytes",
             "stack_bytes",
@@ -1755,8 +1755,8 @@ mod tests {
             samples: 10,
             module_path: "m".to_string(),
         };
-        let val: serde_json::Value = serde_json::to_value(&hs).unwrap();
-        let obj = val.as_object().unwrap();
+        let val: serde_json::Value = serde_json::to_value(&hs).expect("serde deserialization should succeed");
+        let obj = val.as_object().expect("serde deserialization should succeed");
         for key in ["symbol", "percentage_millionths", "samples", "module_path"] {
             assert!(obj.contains_key(key), "missing field: {key}");
         }
@@ -1767,8 +1767,8 @@ mod tests {
     fn metric_comparison_json_field_names() {
         let threshold = SignificanceThreshold::default_threshold();
         let cmp = compare_metric("test", 100, 200, &threshold);
-        let val: serde_json::Value = serde_json::to_value(&cmp).unwrap();
-        let obj = val.as_object().unwrap();
+        let val: serde_json::Value = serde_json::to_value(&cmp).expect("serde deserialization should succeed");
+        let obj = val.as_object().expect("serde deserialization should succeed");
         for key in [
             "metric_name",
             "baseline_value",
@@ -1833,8 +1833,8 @@ mod tests {
             total_allocations: u64::MAX,
             total_deallocations: u64::MAX,
         };
-        let json = serde_json::to_string(&snap).unwrap();
-        let back: MemorySnapshot = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&snap).expect("serde deserialization should succeed");
+        let back: MemorySnapshot = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(snap, back);
     }
 
@@ -1862,7 +1862,7 @@ mod tests {
                 is_warmup: false,
             })
             .collect();
-        let stats = PercentileStats::from_samples(&samples).unwrap();
+        let stats = PercentileStats::from_samples(&samples).expect("serde deserialization should succeed");
         assert_eq!(stats.jitter_ns(), 0);
         assert_eq!(stats.cv_millionths(), 0);
     }
@@ -1886,7 +1886,7 @@ mod tests {
                 is_warmup: false,
             },
         ];
-        let stats = PercentileStats::from_samples(&samples).unwrap();
+        let stats = PercentileStats::from_samples(&samples).expect("serde deserialization should succeed");
         assert_eq!(stats.sample_count, 2);
         assert_eq!(stats.min_ns, 1000);
         assert_eq!(stats.max_ns, 2000);
@@ -1975,8 +1975,8 @@ mod tests {
                 module_path: "alloc/mod.rs".to_string(),
             },
         );
-        let json = serde_json::to_string(&p).unwrap();
-        let back: ProfileArtifact = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
+        let back: ProfileArtifact = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(p, back);
     }
 
@@ -1991,7 +1991,7 @@ mod tests {
             })
             .collect();
         let mut result = BenchmarkResult::new("full", env)
-            .with_latency(PercentileStats::from_samples(&samples).unwrap())
+            .with_latency(PercentileStats::from_samples(&samples).expect("serde deserialization should succeed"))
             .with_throughput(ThroughputMeasurement::new(5000, 1_000_000_000).with_bytes(500_000))
             .with_memory(MemorySnapshot {
                 heap_bytes: 4096,
@@ -2006,8 +2006,8 @@ mod tests {
             .insert("version".to_string(), "1.0".to_string());
         result.add_profile(ProfileArtifact::new(ProfileKind::SyscallTrace, "full"));
 
-        let json = serde_json::to_string(&result).unwrap();
-        let back: BenchmarkResult = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let back: BenchmarkResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, back);
     }
 
@@ -2017,8 +2017,8 @@ mod tests {
         let mut bc = BaselineComparison::new("b1", "c1");
         bc.add_comparison(compare_metric("lat_p50", 1000, 900, &threshold));
         bc.add_comparison(compare_metric("lat_p99", 2000, 2500, &threshold));
-        let json = serde_json::to_string(&bc).unwrap();
-        let back: BaselineComparison = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&bc).expect("serde deserialization should succeed");
+        let back: BaselineComparison = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(bc, back);
     }
 
@@ -2026,8 +2026,8 @@ mod tests {
     fn metric_comparison_serde_roundtrip() {
         let threshold = SignificanceThreshold::default_threshold();
         let cmp = compare_metric("heap_bytes", 1_000_000, 900_000, &threshold);
-        let json = serde_json::to_string(&cmp).unwrap();
-        let back: MetricComparison = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&cmp).expect("serde deserialization should succeed");
+        let back: MetricComparison = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cmp, back);
     }
 
@@ -2088,7 +2088,7 @@ mod tests {
         // Candidate with higher throughput (improvement)
         let candidate = BenchmarkResult::new("bench-1-v2", env)
             .with_throughput(ThroughputMeasurement::new(2000, 1_000_000_000));
-        let comparison = reg.compare("bench-1", &candidate).unwrap();
+        let comparison = reg.compare("bench-1", &candidate).expect("serde deserialization should succeed");
         // Higher throughput = improvement (direction inverted in compare())
         assert!(comparison.improvement_count() > 0);
     }

@@ -49,4 +49,11 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "jsx_tsx_parser"
+path = "fuzz_targets/jsx_tsx_parser.rs"
+test = false
+doc = false
+bench = false
+
 [workspace]

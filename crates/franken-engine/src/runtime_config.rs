@@ -848,7 +848,7 @@ mod tests {
 
     #[test]
     fn default_passes_validation() {
-        RuntimeConfig::default().validate().unwrap();
+        RuntimeConfig::default().validate().expect("serde deserialization should succeed");
     }
 
     #[test]
@@ -958,16 +958,16 @@ mod tests {
     #[test]
     fn toml_roundtrip_default() {
         let config = RuntimeConfig::default();
-        let toml_str = toml::to_string(&config).unwrap();
-        let restored: RuntimeConfig = toml::from_str(&toml_str).unwrap();
+        let toml_str = toml::to_string(&config).expect("serde deserialization should succeed");
+        let restored: RuntimeConfig = toml::from_str(&toml_str).expect("serde deserialization should succeed");
         assert_eq!(config, restored);
     }
 
     #[test]
     fn json_roundtrip_default() {
         let config = RuntimeConfig::default();
-        let json_str = serde_json::to_string(&config).unwrap();
-        let restored: RuntimeConfig = serde_json::from_str(&json_str).unwrap();
+        let json_str = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let restored: RuntimeConfig = serde_json::from_str(&json_str).expect("serde deserialization should succeed");
         assert_eq!(config, restored);
     }
 
@@ -977,7 +977,7 @@ mod tests {
 
     #[test]
     fn empty_toml_produces_default() {
-        let config = RuntimeConfig::from_toml("").unwrap();
+        let config = RuntimeConfig::from_toml("").expect("serde deserialization should succeed");
         assert_eq!(config, RuntimeConfig::default());
     }
 
@@ -987,7 +987,7 @@ mod tests {
 [execution]
 deterministic_budget = 50000
 "#;
-        let config = RuntimeConfig::from_toml(toml_str).unwrap();
+        let config = RuntimeConfig::from_toml(toml_str).expect("serde deserialization should succeed");
         assert_eq!(config.execution.deterministic_budget, 50_000);
         // All other fields should be defaults.
         assert_eq!(config.execution.throughput_budget, 1_000_000);
@@ -1001,7 +1001,7 @@ deterministic_budget = 50000
 [guardplane.containment]
 grace_period_ns = 1000000000
 "#;
-        let config = RuntimeConfig::from_toml(toml_str).unwrap();
+        let config = RuntimeConfig::from_toml(toml_str).expect("serde deserialization should succeed");
         assert_eq!(config.guardplane.containment.grace_period_ns, 1_000_000_000);
         assert_eq!(
             config.guardplane.containment.challenge_timeout_ns,
@@ -1229,7 +1229,7 @@ grace_period_ns = 1000000000
 
     #[test]
     fn load_missing_file_returns_default() {
-        let config = RuntimeConfig::load(Path::new("/nonexistent/path/config.toml")).unwrap();
+        let config = RuntimeConfig::load(Path::new("/nonexistent/path/config.toml")).expect("serde deserialization should succeed");
         assert_eq!(config, RuntimeConfig::default());
     }
 
@@ -1265,7 +1265,7 @@ malicious_millionths = 50000
 unknown_millionths = 100000
 floor_mass = 100
 "#;
-        let config = RuntimeConfig::from_toml(toml_str).unwrap();
+        let config = RuntimeConfig::from_toml(toml_str).expect("serde deserialization should succeed");
         assert_eq!(config.guardplane.priors.benign_millionths, 700_000);
         assert_eq!(config.guardplane.priors.anomalous_millionths, 150_000);
         assert_eq!(config.guardplane.priors.malicious_millionths, 50_000);
@@ -1280,7 +1280,7 @@ max_version_len = 96
 max_entrypoint_len = 2048
 max_trust_chain_ref_len = 512
 "#;
-        let config = RuntimeConfig::from_toml(toml_str).unwrap();
+        let config = RuntimeConfig::from_toml(toml_str).expect("serde deserialization should succeed");
         assert_eq!(config.extension_host.max_name_len, 256);
         assert_eq!(config.extension_host.max_version_len, 96);
         assert_eq!(config.extension_host.max_entrypoint_len, 2048);

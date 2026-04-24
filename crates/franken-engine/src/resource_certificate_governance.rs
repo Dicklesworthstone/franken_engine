@@ -708,7 +708,7 @@ impl GovernanceEvaluator {
             if categories.len() == 1 {
                 // SAFETY: Just checked categories.len() == 1, so iterator is guaranteed to have exactly one element.
                 // next() unwrap is safe since the collection is non-empty.
-                *categories.iter().next().unwrap()
+                *categories.iter().next().expect("serde deserialization should succeed")
             } else {
                 GovernanceVerdict::MultipleViolations
             }
@@ -1340,10 +1340,10 @@ mod tests {
         for dim in ResourceDimension::all() {
             // SAFETY: ResourceDimension derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json = serde_json::to_string(dim).unwrap();
+            let json = serde_json::to_string(dim).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by to_string of a valid ResourceDimension,
             // so from_str back to ResourceDimension cannot fail (valid format + matching schema).
-            let back: ResourceDimension = serde_json::from_str(&json).unwrap();
+            let back: ResourceDimension = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*dim, back);
         }
     }
@@ -1360,8 +1360,8 @@ mod tests {
             GovernanceVerdict::MultipleViolations,
         ];
         for v in &verdicts {
-            let json = serde_json::to_string(v).unwrap();
-            let back: GovernanceVerdict = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: GovernanceVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -1369,8 +1369,8 @@ mod tests {
     #[test]
     fn test_serde_roundtrip_publication_policy() {
         let strict = PublicationPolicy::strict();
-        let json = serde_json::to_string(&strict).unwrap();
-        let back: PublicationPolicy = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&strict).expect("serde deserialization should succeed");
+        let back: PublicationPolicy = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(strict, back);
     }
 
@@ -1384,8 +1384,8 @@ mod tests {
             100,
             DEFAULT_MAX_UTILISATION_MILLIONTHS,
         );
-        let json = serde_json::to_string(&c).unwrap();
-        let back: CertificateEvidence = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let back: CertificateEvidence = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c, back);
     }
 
@@ -1395,8 +1395,8 @@ mod tests {
         eval.add_certificate(ResourceDimension::CpuTime, "w1".into(), 1000, 500, 50);
         eval.add_regression(ResourceDimension::HeapMemory, "w1".into(), 1000, 1010);
         let receipt = eval.evaluate(epoch());
-        let json = serde_json::to_string(&receipt).unwrap();
-        let back: GovernanceReceipt = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
+        let back: GovernanceReceipt = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(receipt, back);
     }
 
@@ -1617,8 +1617,8 @@ mod tests {
             2_010_000,
             2_000_000,
         );
-        let json = serde_json::to_string(&eval).unwrap();
-        let back: GovernanceEvaluator = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&eval).expect("serde deserialization should succeed");
+        let back: GovernanceEvaluator = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(eval, back);
     }
 

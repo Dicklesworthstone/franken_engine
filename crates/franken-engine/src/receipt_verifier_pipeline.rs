@@ -805,7 +805,7 @@ fn verify_attestation_layer(receipt: &OptReceipt, input: &AttestationLayerInput)
             "attestation_policy_measurement_mismatch",
             format!(
                 "policy measurement ({}:{}) != expected (sha256:{})",
-                serde_json::to_string(&input.policy_quote.measurement.algorithm).unwrap(),
+                serde_json::to_string(&input.policy_quote.measurement.algorithm).expect("serde deserialization should succeed"),
                 input.policy_quote.measurement.digest_hex,
                 expected_measurement_digest
             ),
@@ -1098,7 +1098,7 @@ mod tests {
         let consistency_proof = mmr.consistency_proof(2).expect("consistency");
         let current_root = mmr.root_hash().expect("root");
 
-        let operator_signing_key = SigningKey::from_bytes([9u8; 32]).unwrap();
+        let operator_signing_key = SigningKey::from_bytes([9u8; 32]).expect("serde deserialization should succeed");
         let operator_verification_key = operator_signing_key.verification_key();
         let checkpoint = SignedLogCheckpoint {
             checkpoint_seq: 1,
@@ -1362,8 +1362,8 @@ mod tests {
             VerificationFailureClass::StaleData,
         ];
         for class in &classes {
-            let json = serde_json::to_string(class).unwrap();
-            let back: VerificationFailureClass = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(class).expect("serde deserialization should succeed");
+            let back: VerificationFailureClass = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*class, back);
         }
     }
@@ -1445,8 +1445,8 @@ mod tests {
             error_code: None,
             detail: "detail".to_string(),
         };
-        let json = serde_json::to_string(&check).unwrap();
-        let back: LayerCheck = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&check).expect("serde deserialization should succeed");
+        let back: LayerCheck = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(check, back);
     }
 
@@ -1454,8 +1454,8 @@ mod tests {
     fn layer_result_serde_round_trip() {
         let mut r = LayerResult::pass();
         r.record_pass("c1", "d1");
-        let json = serde_json::to_string(&r).unwrap();
-        let back: LayerResult = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let back: LayerResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 
@@ -1489,7 +1489,7 @@ mod tests {
         let (receipt_id, request) = build_valid_fixture();
         let mut input = ReceiptVerifierCliInput::default();
         input.receipts.insert(receipt_id.clone(), request);
-        let verdict = verify_receipt_by_id(&input, &receipt_id).unwrap();
+        let verdict = verify_receipt_by_id(&input, &receipt_id).expect("serde deserialization should succeed");
         assert!(verdict.passed);
         assert_eq!(verdict.receipt_id, receipt_id);
     }
@@ -1775,8 +1775,8 @@ mod tests {
             outcome: "pass".to_string(),
             error_code: None,
         };
-        let json = serde_json::to_string(&e).unwrap();
-        let back: VerifierLogEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
+        let back: VerifierLogEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(e, back);
     }
 
@@ -1791,8 +1791,8 @@ mod tests {
             outcome: "fail".to_string(),
             error_code: Some("err-1".to_string()),
         };
-        let json = serde_json::to_string(&e).unwrap();
-        let back: VerifierLogEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
+        let back: VerifierLogEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(e, back);
     }
 
@@ -1801,8 +1801,8 @@ mod tests {
         let e = ReceiptVerifierPipelineError::ReceiptNotFound {
             receipt_id: "x".to_string(),
         };
-        let json = serde_json::to_string(&e).unwrap();
-        let back: ReceiptVerifierPipelineError = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
+        let back: ReceiptVerifierPipelineError = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(e, back);
     }
 
@@ -1835,7 +1835,7 @@ mod tests {
             .logs
             .iter()
             .find(|log| log.event == "receipt_verification_complete")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(complete.outcome, "pass");
         assert!(complete.error_code.is_none());
     }
@@ -1849,7 +1849,7 @@ mod tests {
             .logs
             .iter()
             .find(|log| log.event == "receipt_verification_complete")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(complete.outcome, "warn");
         assert_eq!(complete.error_code.as_deref(), Some("stale_data"));
     }
@@ -1863,7 +1863,7 @@ mod tests {
             .logs
             .iter()
             .find(|log| log.event == "receipt_verification_complete")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(complete.outcome, "fail");
         assert_eq!(complete.error_code.as_deref(), Some("signature"));
     }
@@ -1937,8 +1937,8 @@ mod tests {
         let software_root = SoftwareTrustRoot::new("root-1", 7);
         let measurement = software_root.measure(b"a", b"b", b"c", b"d", "e");
         let quote = software_root.attest(&measurement, [0u8; 32], 1000, 0);
-        let a = attestation_quote_digest(&quote).unwrap();
-        let b = attestation_quote_digest(&quote).unwrap();
+        let a = attestation_quote_digest(&quote).expect("serde deserialization should succeed");
+        let b = attestation_quote_digest(&quote).expect("serde deserialization should succeed");
         assert_eq!(a, b);
     }
 
@@ -1962,8 +1962,8 @@ mod tests {
     fn verdict_serde_round_trip() {
         let (receipt_id, request) = build_valid_fixture();
         let verdict = verify_receipt_request(&receipt_id, &request);
-        let json = serde_json::to_string(&verdict).unwrap();
-        let back: UnifiedReceiptVerificationVerdict = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&verdict).expect("serde deserialization should succeed");
+        let back: UnifiedReceiptVerificationVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(verdict, back);
     }
 
@@ -1991,8 +1991,8 @@ mod tests {
             is_revoked: false,
             cache_stale: true,
         };
-        let json = serde_json::to_string(&cache).unwrap();
-        let back: SignerRevocationCache = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&cache).expect("serde deserialization should succeed");
+        let back: SignerRevocationCache = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cache, back);
     }
 
@@ -2001,12 +2001,12 @@ mod tests {
         let key = LogOperatorKey {
             key_id: "op-key-1".to_string(),
             verification_key: SigningKey::from_bytes([3u8; 32])
-                .unwrap()
+                .expect("serde deserialization should succeed")
                 .verification_key(),
             revoked: false,
         };
-        let json = serde_json::to_string(&key).unwrap();
-        let back: LogOperatorKey = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&key).expect("serde deserialization should succeed");
+        let back: LogOperatorKey = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(key, back);
     }
 
@@ -2020,8 +2020,8 @@ mod tests {
             operator_key_id: "op-1".to_string(),
             signature: Signature::from_bytes([0u8; 64]),
         };
-        let json = serde_json::to_string(&checkpoint).unwrap();
-        let back: SignedLogCheckpoint = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&checkpoint).expect("serde deserialization should succeed");
+        let back: SignedLogCheckpoint = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(checkpoint, back);
     }
 
@@ -2035,8 +2035,8 @@ mod tests {
             from_root: ContentHash::compute(b"old-root"),
             proof,
         };
-        let json = serde_json::to_string(&input).unwrap();
-        let back: ConsistencyProofInput = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
+        let back: ConsistencyProofInput = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(input, back);
     }
 
@@ -2052,8 +2052,8 @@ mod tests {
                 cache_stale: false,
             },
         };
-        let json = serde_json::to_string(&input).unwrap();
-        let back: SignatureLayerInput = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
+        let back: SignatureLayerInput = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(input, back);
     }
 
@@ -2138,7 +2138,7 @@ mod tests {
         ];
         for variant in &variants {
             let display = variant.to_string();
-            let json = serde_json::to_string(variant).unwrap();
+            let json = serde_json::to_string(variant).expect("serde deserialization should succeed");
             // serde JSON wraps in quotes: "signature"
             let serde_key = json.trim_matches('"');
             assert_eq!(display, serde_key);
@@ -2167,8 +2167,8 @@ mod tests {
             error_code: Some("some_error_code".to_string()),
             detail: "a detail message".to_string(),
         };
-        let json = serde_json::to_string(&check).unwrap();
-        let back: LayerCheck = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&check).expect("serde deserialization should succeed");
+        let back: LayerCheck = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(check, back);
     }
 

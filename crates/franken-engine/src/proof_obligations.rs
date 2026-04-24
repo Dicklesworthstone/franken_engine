@@ -833,8 +833,8 @@ mod tests {
     #[test]
     fn category_serde_roundtrip() {
         for cat in &ObligationCategory::ALL {
-            let json = serde_json::to_string(cat).unwrap();
-            let back: ObligationCategory = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(cat).expect("serde deserialization should succeed");
+            let back: ObligationCategory = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*cat, back);
         }
     }
@@ -879,8 +879,8 @@ mod tests {
             ObligationStatus::InsufficientEvidence,
         ];
         for s in &statuses {
-            let json = serde_json::to_string(s).unwrap();
-            let back: ObligationStatus = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(s).expect("serde deserialization should succeed");
+            let back: ObligationStatus = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*s, back);
         }
     }
@@ -922,8 +922,8 @@ mod tests {
     #[test]
     fn builtin_templates_serde_roundtrip() {
         let templates = builtin_templates();
-        let json = serde_json::to_string(&templates).unwrap();
-        let back: Vec<ObligationTemplate> = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&templates).expect("serde deserialization should succeed");
+        let back: Vec<ObligationTemplate> = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(templates.len(), back.len());
     }
 
@@ -971,7 +971,7 @@ mod tests {
                 PassId("ir_transform".into()),
                 "behavioral/ir_transform_equivalence",
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(obl_id.0, "obl-1");
         assert_eq!(reg.binding_count(), 1);
     }
@@ -1012,7 +1012,7 @@ mod tests {
         let mut reg = ObligationRegistry::new(epoch(1));
         let obl_id = reg
             .bind(PassId("test".into()), "behavioral/ir_transform_equivalence")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let ok = reg.evaluate(
             &obl_id,
             ObligationStatus::Satisfied,
@@ -1047,8 +1047,8 @@ mod tests {
                 PassId("transform".into()),
                 "behavioral/ir_transform_equivalence",
             )
-            .unwrap();
-        let status = reg.auto_evaluate(&obl_id, 999_500, 2000).unwrap();
+            .expect("serde deserialization should succeed");
+        let status = reg.auto_evaluate(&obl_id, 999_500, 2000).expect("serde deserialization should succeed");
         assert_eq!(status, ObligationStatus::Satisfied);
     }
 
@@ -1060,8 +1060,8 @@ mod tests {
                 PassId("transform".into()),
                 "behavioral/ir_transform_equivalence",
             )
-            .unwrap();
-        let status = reg.auto_evaluate(&obl_id, 900_000, 2000).unwrap();
+            .expect("serde deserialization should succeed");
+        let status = reg.auto_evaluate(&obl_id, 900_000, 2000).expect("serde deserialization should succeed");
         assert_eq!(status, ObligationStatus::Violated);
     }
 
@@ -1073,9 +1073,9 @@ mod tests {
                 PassId("transform".into()),
                 "behavioral/ir_transform_equivalence",
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         // Template requires 1000 tests, provide only 10.
-        let status = reg.auto_evaluate(&obl_id, MILLION, 10).unwrap();
+        let status = reg.auto_evaluate(&obl_id, MILLION, 10).expect("serde deserialization should succeed");
         assert_eq!(status, ObligationStatus::InsufficientEvidence);
     }
 
@@ -1084,8 +1084,8 @@ mod tests {
         let mut reg = ObligationRegistry::new(epoch(1));
         let obl_id = reg
             .bind(PassId("router".into()), "tail_risk/cvar_latency_bound")
-            .unwrap();
-        let status = reg.auto_evaluate(&obl_id, 30 * MILLION, 100).unwrap();
+            .expect("serde deserialization should succeed");
+        let status = reg.auto_evaluate(&obl_id, 30 * MILLION, 100).expect("serde deserialization should succeed");
         assert_eq!(status, ObligationStatus::Satisfied);
     }
 
@@ -1094,8 +1094,8 @@ mod tests {
         let mut reg = ObligationRegistry::new(epoch(1));
         let obl_id = reg
             .bind(PassId("router".into()), "tail_risk/cvar_latency_bound")
-            .unwrap();
-        let status = reg.auto_evaluate(&obl_id, 100 * MILLION, 100).unwrap();
+            .expect("serde deserialization should succeed");
+        let status = reg.auto_evaluate(&obl_id, 100 * MILLION, 100).expect("serde deserialization should succeed");
         assert_eq!(status, ObligationStatus::Violated);
     }
 
@@ -1107,8 +1107,8 @@ mod tests {
                 PassId("calibrator".into()),
                 "calibration/conformal_coverage",
             )
-            .unwrap();
-        let status = reg.auto_evaluate(&obl_id, 950_000, 100).unwrap();
+            .expect("serde deserialization should succeed");
+        let status = reg.auto_evaluate(&obl_id, 950_000, 100).expect("serde deserialization should succeed");
         assert_eq!(status, ObligationStatus::Satisfied);
     }
 
@@ -1128,7 +1128,7 @@ mod tests {
         let mut reg = ObligationRegistry::new(epoch(1));
         let obl_id = reg
             .bind(PassId("timing".into()), "behavioral/effect_timing_contract")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(reg.waive(&obl_id, "operator approved"));
     }
 
@@ -1137,7 +1137,7 @@ mod tests {
         let mut reg = ObligationRegistry::new(epoch(1));
         let obl_id = reg
             .bind(PassId("safety".into()), "safety/ifc_label_propagation")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(!reg.waive(&obl_id, "trying to waive"));
     }
 
@@ -1173,7 +1173,7 @@ mod tests {
         let mut reg = ObligationRegistry::new(epoch(1));
         let obl_id = reg
             .bind(PassId("test".into()), "behavioral/ir_transform_equivalence")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         reg.auto_evaluate(&obl_id, 999_500, 2000);
         let report = reg.report();
         assert!(report.gate_pass);
@@ -1186,7 +1186,7 @@ mod tests {
         let mut reg = ObligationRegistry::new(epoch(1));
         let obl_id = reg
             .bind(PassId("test".into()), "safety/ifc_label_propagation")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         reg.evaluate(&obl_id, ObligationStatus::Violated, None, "failed");
         let report = reg.report();
         assert!(!report.gate_pass);
@@ -1198,7 +1198,7 @@ mod tests {
         let mut reg = ObligationRegistry::new(epoch(1));
         let obl_id = reg
             .bind(PassId("timing".into()), "behavioral/effect_timing_contract")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         reg.waive(&obl_id, "approved");
         let report = reg.report();
         assert!(report.gate_pass);
@@ -1210,11 +1210,11 @@ mod tests {
         let mut reg = ObligationRegistry::new(epoch(1));
         let obl_id = reg
             .bind(PassId("test".into()), "behavioral/ir_transform_equivalence")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         reg.auto_evaluate(&obl_id, 999_500, 2000);
         let report = reg.report();
-        let json = serde_json::to_string(&report).unwrap();
-        let back: ObligationReport = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let back: ObligationReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report, back);
     }
 
@@ -1231,8 +1231,8 @@ mod tests {
     #[test]
     fn obligation_id_serde() {
         let id = ObligationId("obl-1".into());
-        let json = serde_json::to_string(&id).unwrap();
-        let back: ObligationId = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&id).expect("serde deserialization should succeed");
+        let back: ObligationId = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(id, back);
     }
 
@@ -1279,8 +1279,8 @@ mod tests {
             EvidenceRequirement::OperatorReview,
         ];
         for req in &requirements {
-            let json = serde_json::to_string(req).unwrap();
-            let back: EvidenceRequirement = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(req).expect("serde deserialization should succeed");
+            let back: EvidenceRequirement = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*req, back);
         }
     }
@@ -1299,8 +1299,8 @@ mod tests {
             severity: ObligationSeverity::Fatal,
             evidence: EvidenceRequirement::HashLinkage,
         };
-        let json = serde_json::to_string(&binding).unwrap();
-        let back: ObligationBinding = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&binding).expect("serde deserialization should succeed");
+        let back: ObligationBinding = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(binding, back);
     }
 
@@ -1321,8 +1321,8 @@ mod tests {
             required_value: Some(999_000),
             reason: "insufficient".into(),
         };
-        let json = serde_json::to_string(&eval).unwrap();
-        let back: ObligationEvaluation = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&eval).expect("serde deserialization should succeed");
+        let back: ObligationEvaluation = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(eval, back);
     }
 
@@ -1334,8 +1334,8 @@ mod tests {
     fn registry_serde_roundtrip() {
         let mut reg = ObligationRegistry::new(epoch(1));
         reg.bind(PassId("test".into()), "behavioral/ir_transform_equivalence");
-        let json = serde_json::to_string(&reg).unwrap();
-        let back: ObligationRegistry = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&reg).expect("serde deserialization should succeed");
+        let back: ObligationRegistry = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(reg.template_count(), back.template_count());
         assert_eq!(reg.binding_count(), back.binding_count());
     }
@@ -1349,8 +1349,8 @@ mod tests {
         let mut reg = ObligationRegistry::new(epoch(1));
         let obl_id = reg
             .bind(PassId("sched".into()), "liveness/scheduler_progress")
-            .unwrap();
-        let status = reg.auto_evaluate(&obl_id, 995_000, 2000).unwrap();
+            .expect("serde deserialization should succeed");
+        let status = reg.auto_evaluate(&obl_id, 995_000, 2000).expect("serde deserialization should succeed");
         assert_eq!(status, ObligationStatus::Satisfied);
     }
 
@@ -1359,8 +1359,8 @@ mod tests {
         let mut reg = ObligationRegistry::new(epoch(1));
         let obl_id = reg
             .bind(PassId("sched".into()), "liveness/scheduler_progress")
-            .unwrap();
-        let status = reg.auto_evaluate(&obl_id, 995_000, 5).unwrap();
+            .expect("serde deserialization should succeed");
+        let status = reg.auto_evaluate(&obl_id, 995_000, 5).expect("serde deserialization should succeed");
         assert_eq!(status, ObligationStatus::InsufficientEvidence);
     }
 
@@ -1415,8 +1415,8 @@ mod tests {
             ObligationSeverity::Fatal,
         ];
         for sev in &severities {
-            let json = serde_json::to_string(sev).unwrap();
-            let back: ObligationSeverity = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(sev).expect("serde deserialization should succeed");
+            let back: ObligationSeverity = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*sev, back);
         }
     }
@@ -1428,8 +1428,8 @@ mod tests {
     #[test]
     fn pass_id_serde_roundtrip() {
         let id = PassId("ir_lowering".into());
-        let json = serde_json::to_string(&id).unwrap();
-        let back: PassId = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&id).expect("serde deserialization should succeed");
+        let back: PassId = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(id, back);
     }
 
@@ -1458,10 +1458,10 @@ mod tests {
                 PassId("transform".into()),
                 "behavioral/ir_transform_equivalence",
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let obl_safe = reg
             .bind(PassId("safety".into()), "safety/ifc_label_propagation")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         reg.auto_evaluate(&obl_beh, 999_500, 2000);
         reg.evaluate(
             &obl_safe,
@@ -1488,8 +1488,8 @@ mod tests {
             evidence: EvidenceRequirement::OperatorReview,
             waivable: true,
         };
-        let json = serde_json::to_string(&template).unwrap();
-        let back: ObligationTemplate = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&template).expect("serde deserialization should succeed");
+        let back: ObligationTemplate = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(template.template_id, back.template_id);
         assert_eq!(template.category, back.category);
         assert_eq!(template.waivable, back.waivable);
@@ -1504,8 +1504,8 @@ mod tests {
         let mut reg = ObligationRegistry::new(epoch(1));
         let obl_id = reg
             .bind(PassId("prover".into()), "safety/hash_chain_integrity")
-            .unwrap();
-        let status = reg.auto_evaluate(&obl_id, MILLION, 1000).unwrap();
+            .expect("serde deserialization should succeed");
+        let status = reg.auto_evaluate(&obl_id, MILLION, 1000).expect("serde deserialization should succeed");
         // HashLinkage evidence does not match DifferentialTest/StatisticalTest/CvarBound/CalibrationCoverage,
         // so auto-evaluate should be Satisfied or InsufficientEvidence depending on implementation.
         assert!(
@@ -1534,8 +1534,8 @@ mod tests {
             ObligationStatus::InsufficientEvidence,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: ObligationStatus = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: ObligationStatus = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -1604,10 +1604,10 @@ mod tests {
         let mut reg = ObligationRegistry::new(epoch(1));
         let id1 = reg
             .bind(PassId("p1".into()), "behavioral/ir_transform_equivalence")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let id2 = reg
             .bind(PassId("p2".into()), "behavioral/render_output_stability")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(id1.0, "obl-1");
         assert_eq!(id2.0, "obl-2");
     }
@@ -1620,8 +1620,8 @@ mod tests {
         // min_pass_rate = 999_000, min_test_count = 1000
         let obl_id = reg
             .bind(PassId("pass".into()), "behavioral/ir_transform_equivalence")
-            .unwrap();
-        let status = reg.auto_evaluate(&obl_id, 999_000, 1000).unwrap();
+            .expect("serde deserialization should succeed");
+        let status = reg.auto_evaluate(&obl_id, 999_000, 1000).expect("serde deserialization should succeed");
         assert_eq!(status, ObligationStatus::Satisfied);
     }
 
@@ -1630,8 +1630,8 @@ mod tests {
         let mut reg = ObligationRegistry::new(epoch(1));
         let obl_id = reg
             .bind(PassId("pass".into()), "behavioral/ir_transform_equivalence")
-            .unwrap();
-        let status = reg.auto_evaluate(&obl_id, 998_999, 1000).unwrap();
+            .expect("serde deserialization should succeed");
+        let status = reg.auto_evaluate(&obl_id, 998_999, 1000).expect("serde deserialization should succeed");
         assert_eq!(status, ObligationStatus::Violated);
     }
 
@@ -1640,8 +1640,8 @@ mod tests {
         let mut reg = ObligationRegistry::new(epoch(1));
         let obl_id = reg
             .bind(PassId("pass".into()), "behavioral/ir_transform_equivalence")
-            .unwrap();
-        let status = reg.auto_evaluate(&obl_id, MILLION, 999).unwrap();
+            .expect("serde deserialization should succeed");
+        let status = reg.auto_evaluate(&obl_id, MILLION, 999).expect("serde deserialization should succeed");
         assert_eq!(status, ObligationStatus::InsufficientEvidence);
     }
 
@@ -1746,8 +1746,8 @@ mod tests {
             EvidenceRequirement::OperatorReview,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: EvidenceRequirement = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: EvidenceRequirement = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -1759,8 +1759,8 @@ mod tests {
         let mut reg = ObligationRegistry::new(epoch(1));
         let _obl_id = reg
             .bind(PassId("pass".into()), "behavioral/ir_transform_equivalence")
-            .unwrap();
-        let template = reg.template("behavioral/ir_transform_equivalence").unwrap();
+            .expect("serde deserialization should succeed");
+        let template = reg.template("behavioral/ir_transform_equivalence").expect("serde deserialization should succeed");
         let bindings = reg.bindings_for_pass(&PassId("pass".into()));
         assert_eq!(bindings.len(), 1);
         let b = &bindings[0];
@@ -1774,8 +1774,8 @@ mod tests {
     #[test]
     fn obligation_report_serde_roundtrip() {
         let report = ObligationReport::from_evaluations(epoch(1), vec![]);
-        let json = serde_json::to_string(&report).unwrap();
-        let back: ObligationReport = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let back: ObligationReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report, back);
     }
 
@@ -1794,8 +1794,8 @@ mod tests {
             required_value: Some(999_000),
             reason: "not enough data".into(),
         };
-        let json = serde_json::to_string(&eval).unwrap();
-        let back: ObligationEvaluation = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&eval).expect("serde deserialization should succeed");
+        let back: ObligationEvaluation = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(eval, back);
     }
 
@@ -1806,10 +1806,10 @@ mod tests {
         let mut reg = ObligationRegistry::new(epoch(1));
         let obl_id = reg
             .bind(PassId("p".into()), "behavioral/ir_transform_equivalence")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         reg.auto_evaluate(&obl_id, MILLION, 10_000);
-        let json = serde_json::to_string(&reg).unwrap();
-        let back: ObligationRegistry = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&reg).expect("serde deserialization should succeed");
+        let back: ObligationRegistry = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.template_count(), reg.template_count());
         assert_eq!(back.binding_count(), reg.binding_count());
     }

@@ -1241,7 +1241,7 @@ pub fn run_governance_pipeline(
         pipeline.events.push(event);
         results.push(result);
 
-        let last = results.last().unwrap();
+        let last = results.last().expect("serde deserialization should succeed");
         if !last.passed && halt_on_failure {
             return Err(GovernanceError::HookFailed {
                 hook_type: *hook_type,
@@ -1816,7 +1816,7 @@ mod tests {
             &schema,
             canonical.as_bytes(),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         EvidenceEntry {
             entry_id,
             kind: kind.to_string(),
@@ -1838,7 +1838,7 @@ mod tests {
     fn compile_ok(source: PolicySource, bytes: &[u8]) -> PolicyArtifact {
         let result = compile_policy(source, bytes, "test_policy", 1, ts(100), BTreeSet::new());
         assert!(result.is_success(), "expected success: {:?}", result);
-        result.artifact().unwrap().clone()
+        result.artifact().expect("serde deserialization should succeed").clone()
     }
 
     // -----------------------------------------------------------------------
@@ -1930,8 +1930,8 @@ mod tests {
             },
         ];
         for src in sources {
-            let json = serde_json::to_string(&src).unwrap();
-            let decoded: PolicySource = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&src).expect("serde deserialization should succeed");
+            let decoded: PolicySource = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(src, decoded);
         }
     }
@@ -1953,7 +1953,7 @@ mod tests {
             BTreeSet::new(),
         );
         assert!(result.is_success());
-        let art = result.artifact().unwrap();
+        let art = result.artifact().expect("serde deserialization should succeed");
         assert_eq!(art.version, 1);
         assert_eq!(art.policy_name, "runtime_v1");
         assert!(!art.compiled_bytes.is_empty());
@@ -1973,7 +1973,7 @@ mod tests {
             BTreeSet::new(),
         );
         assert!(result.is_success());
-        let art = result.artifact().unwrap();
+        let art = result.artifact().expect("serde deserialization should succeed");
         assert_eq!(art.version, 2);
     }
 
@@ -2007,7 +2007,7 @@ mod tests {
             BTreeSet::new(),
         );
         assert!(result.is_success());
-        let art = result.artifact().unwrap();
+        let art = result.artifact().expect("serde deserialization should succeed");
         assert_eq!(art.version, 3);
     }
 
@@ -2027,7 +2027,7 @@ mod tests {
             tags.clone(),
         );
         assert!(result.is_success());
-        assert_eq!(result.artifact().unwrap().tags, tags);
+        assert_eq!(result.artifact().expect("serde deserialization should succeed").tags, tags);
     }
 
     #[test]
@@ -2055,12 +2055,12 @@ mod tests {
         );
         // compiled_hash (and thus artifact_id) depends only on compiled_bytes.
         assert_eq!(
-            r1.artifact().unwrap().compiled_hash,
-            r2.artifact().unwrap().compiled_hash
+            r1.artifact().expect("serde deserialization should succeed").compiled_hash,
+            r2.artifact().expect("serde deserialization should succeed").compiled_hash
         );
         assert_eq!(
-            r1.artifact().unwrap().artifact_id,
-            r2.artifact().unwrap().artifact_id
+            r1.artifact().expect("serde deserialization should succeed").artifact_id,
+            r2.artifact().expect("serde deserialization should succeed").artifact_id
         );
     }
 
@@ -2217,7 +2217,7 @@ mod tests {
                     &schema,
                     b"placeholder",
                 )
-                .unwrap()
+                .expect("serde deserialization should succeed")
             },
             version: 1,
             definition_hash: ContentHash::compute(b"x"),
@@ -2311,8 +2311,8 @@ mod tests {
     #[test]
     fn test_audit_export_format_serde() {
         for fmt in AuditExportFormat::all() {
-            let json = serde_json::to_string(fmt).unwrap();
-            let decoded: AuditExportFormat = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(fmt).expect("serde deserialization should succeed");
+            let decoded: AuditExportFormat = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*fmt, decoded);
         }
     }
@@ -2340,10 +2340,10 @@ mod tests {
             make_entry("security_action", 20),
         ];
         let req = make_export_request(AuditExportFormat::JsonLines, 0, 100);
-        let result = export_audit_evidence(req, entries, ts(200)).unwrap();
+        let result = export_audit_evidence(req, entries, ts(200)).expect("serde deserialization should succeed");
         assert_eq!(result.entry_count, 2);
         assert!(result.payload_bytes.contains(&b'\n'));
-        let text = std::str::from_utf8(&result.payload_bytes).unwrap();
+        let text = std::str::from_utf8(&result.payload_bytes).expect("serde deserialization should succeed");
         assert!(text.contains("policy_update"));
     }
 
@@ -2351,9 +2351,9 @@ mod tests {
     fn test_export_csv_success() {
         let entries = vec![make_entry("epoch_transition", 15)];
         let req = make_export_request(AuditExportFormat::Csv, 0, 100);
-        let result = export_audit_evidence(req, entries, ts(200)).unwrap();
+        let result = export_audit_evidence(req, entries, ts(200)).expect("serde deserialization should succeed");
         assert_eq!(result.entry_count, 1);
-        let text = std::str::from_utf8(&result.payload_bytes).unwrap();
+        let text = std::str::from_utf8(&result.payload_bytes).expect("serde deserialization should succeed");
         assert!(text.starts_with("entry_id,"));
         assert!(text.contains("epoch_transition"));
     }
@@ -2362,9 +2362,9 @@ mod tests {
     fn test_export_parquet_success() {
         let entries = vec![make_entry("capability_decision", 30)];
         let req = make_export_request(AuditExportFormat::Parquet, 0, 100);
-        let result = export_audit_evidence(req, entries, ts(200)).unwrap();
+        let result = export_audit_evidence(req, entries, ts(200)).expect("serde deserialization should succeed");
         assert_eq!(result.entry_count, 1);
-        let text = std::str::from_utf8(&result.payload_bytes).unwrap();
+        let text = std::str::from_utf8(&result.payload_bytes).expect("serde deserialization should succeed");
         assert!(text.starts_with("FRANKEN_PARQUET_V1"));
     }
 
@@ -2372,9 +2372,9 @@ mod tests {
     fn test_export_compliance_pdf_success() {
         let entries = vec![make_entry("revocation", 40)];
         let req = make_export_request(AuditExportFormat::CompliancePdf, 0, 100);
-        let result = export_audit_evidence(req, entries, ts(200)).unwrap();
+        let result = export_audit_evidence(req, entries, ts(200)).expect("serde deserialization should succeed");
         assert_eq!(result.entry_count, 1);
-        let text = std::str::from_utf8(&result.payload_bytes).unwrap();
+        let text = std::str::from_utf8(&result.payload_bytes).expect("serde deserialization should succeed");
         assert!(text.contains("FRANKEN_COMPLIANCE_REPORT_V1"));
     }
 
@@ -2383,7 +2383,7 @@ mod tests {
         let entries = vec![make_entry("policy_update", 200)];
         // The entry is outside the requested range.
         let req = make_export_request(AuditExportFormat::JsonLines, 0, 100);
-        let result = export_audit_evidence(req, entries, ts(300)).unwrap();
+        let result = export_audit_evidence(req, entries, ts(300)).expect("serde deserialization should succeed");
         assert_eq!(result.entry_count, 0);
         assert!(result.payload_bytes.is_empty());
     }
@@ -2406,7 +2406,7 @@ mod tests {
         let mut kinds = BTreeSet::new();
         kinds.insert("policy_update".to_string());
         req.evidence_kinds = Some(kinds);
-        let result = export_audit_evidence(req, entries, ts(200)).unwrap();
+        let result = export_audit_evidence(req, entries, ts(200)).expect("serde deserialization should succeed");
         assert_eq!(result.entry_count, 2);
     }
 
@@ -2417,7 +2417,7 @@ mod tests {
             .collect();
         let mut req = make_export_request(AuditExportFormat::JsonLines, 0, 100);
         req.max_entries = Some(3);
-        let result = export_audit_evidence(req, entries, ts(200)).unwrap();
+        let result = export_audit_evidence(req, entries, ts(200)).expect("serde deserialization should succeed");
         assert_eq!(result.entry_count, 3);
     }
 
@@ -2425,7 +2425,7 @@ mod tests {
     fn test_export_payload_hash_consistency() {
         let entries = vec![make_entry("policy_update", 10)];
         let req = make_export_request(AuditExportFormat::JsonLines, 0, 100);
-        let result = export_audit_evidence(req, entries, ts(200)).unwrap();
+        let result = export_audit_evidence(req, entries, ts(200)).expect("serde deserialization should succeed");
         assert_eq!(
             result.payload_hash,
             ContentHash::compute(&result.payload_bytes)
@@ -2436,7 +2436,7 @@ mod tests {
     fn test_export_correlation_id_preserved() {
         let mut req = make_export_request(AuditExportFormat::JsonLines, 0, 100);
         req.correlation_id = Some("AUDIT-2026-001".to_string());
-        let result = export_audit_evidence(req, vec![], ts(200)).unwrap();
+        let result = export_audit_evidence(req, vec![], ts(200)).expect("serde deserialization should succeed");
         assert_eq!(
             result.request.correlation_id,
             Some("AUDIT-2026-001".to_string())
@@ -2478,8 +2478,8 @@ mod tests {
     #[test]
     fn test_compliance_framework_serde() {
         let fw = ComplianceFramework::Custom("special_framework".to_string());
-        let json = serde_json::to_string(&fw).unwrap();
-        let decoded: ComplianceFramework = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&fw).expect("serde deserialization should succeed");
+        let decoded: ComplianceFramework = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(fw, decoded);
     }
 
@@ -2508,7 +2508,7 @@ mod tests {
             entries,
             ts(2000),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(bundle.framework, ComplianceFramework::Soc2);
         // With all evidence kinds present, all controls should be satisfied.
         assert!(contract.satisfaction_rate_millionths > 0);
@@ -2519,7 +2519,7 @@ mod tests {
     fn test_compliance_bundle_empty_entries() {
         let (bundle, contract) =
             generate_compliance_bundle(ComplianceFramework::Soc2, ts(0), ts(100), vec![], ts(200))
-                .unwrap();
+                .expect("serde deserialization should succeed");
         assert_eq!(bundle.entries.len(), 0);
         assert_eq!(contract.satisfaction_rate_millionths, 0);
         assert!(contract.unsatisfied_count() > 0);
@@ -2531,7 +2531,7 @@ mod tests {
         let entries = vec![make_entry("policy_update", 10)];
         let (_bundle, contract) =
             generate_compliance_bundle(ComplianceFramework::Soc2, ts(0), ts(100), entries, ts(200))
-                .unwrap();
+                .expect("serde deserialization should succeed");
         // Some controls will not be satisfied (CC6.2, CC7.2, CC9.2 require
         // other kinds).
         assert!(contract.unsatisfied_count() > 0);
@@ -2549,7 +2549,7 @@ mod tests {
             entries,
             ts(2000),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(contract.framework, ComplianceFramework::Iso27001);
         assert_eq!(contract.satisfaction_rate_millionths, 1_000_000);
     }
@@ -2564,7 +2564,7 @@ mod tests {
             entries,
             ts(2000),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(contract.framework, ComplianceFramework::Hipaa);
         assert_eq!(contract.satisfaction_rate_millionths, 1_000_000);
     }
@@ -2579,7 +2579,7 @@ mod tests {
             entries,
             ts(2000),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(contract.framework, ComplianceFramework::PciDss);
         assert_eq!(contract.satisfaction_rate_millionths, 1_000_000);
     }
@@ -2594,7 +2594,7 @@ mod tests {
             entries,
             ts(2000),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(contract.satisfaction_rate_millionths, 1_000_000);
     }
 
@@ -2611,7 +2611,7 @@ mod tests {
             entries,
             ts(200),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(contract.satisfaction_rate_millionths, 1_000_000);
     }
 
@@ -2641,7 +2641,7 @@ mod tests {
             entries,
             ts(200),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(bundle.entries.len(), 1);
     }
 
@@ -2655,8 +2655,8 @@ mod tests {
             entries,
             ts(2000),
         )
-        .unwrap();
-        let ctrl = contract.find_control("CC6.1").unwrap();
+        .expect("serde deserialization should succeed");
+        let ctrl = contract.find_control("CC6.1").expect("serde deserialization should succeed");
         assert_eq!(ctrl.control_id, "CC6.1");
         assert!(contract.find_control("NONEXISTENT").is_none());
     }
@@ -2671,7 +2671,7 @@ mod tests {
             entries.clone(),
             ts(200),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let (b2, _) = generate_compliance_bundle(
             ComplianceFramework::Custom("f".to_string()),
             ts(0),
@@ -2679,7 +2679,7 @@ mod tests {
             entries,
             ts(999),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         // bundle_hash depends only on evidence entries, not on assembled_at.
         assert_eq!(b1.bundle_hash, b2.bundle_hash);
     }
@@ -2715,8 +2715,8 @@ mod tests {
     #[test]
     fn test_hook_type_serde() {
         for h in GovernanceHookType::all() {
-            let json = serde_json::to_string(h).unwrap();
-            let decoded: GovernanceHookType = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(h).expect("serde deserialization should succeed");
+            let decoded: GovernanceHookType = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*h, decoded);
         }
     }
@@ -2758,8 +2758,8 @@ mod tests {
     #[test]
     fn test_hook_result_serde() {
         let r = GovernanceHookResult::pass(GovernanceHookType::AuditExport, "exported", ts(99));
-        let json = serde_json::to_string(&r).unwrap();
-        let decoded: GovernanceHookResult = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let decoded: GovernanceHookResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, decoded);
     }
 
@@ -2813,7 +2813,7 @@ mod tests {
         // the pipeline continues and records all hook results.
         let mut pipeline = make_pipeline(false);
         let results =
-            run_governance_pipeline(&mut pipeline, &single_artifact(), vec![], ts(500)).unwrap();
+            run_governance_pipeline(&mut pipeline, &single_artifact(), vec![], ts(500)).expect("serde deserialization should succeed");
         assert_eq!(results.len(), GovernanceHookType::all().len());
         // PreDeploy, PostDeploy, PolicyChange, and AuditExport all pass.
         assert!(results[0].passed, "PreDeploy should pass");
@@ -2833,7 +2833,7 @@ mod tests {
         let mut pipeline = make_pipeline(true);
         let entries = full_evidence_set();
         let results =
-            run_governance_pipeline(&mut pipeline, &single_artifact(), entries, ts(500)).unwrap();
+            run_governance_pipeline(&mut pipeline, &single_artifact(), entries, ts(500)).expect("serde deserialization should succeed");
         assert_eq!(results.len(), GovernanceHookType::all().len());
         // With full evidence set all built-in frameworks satisfy > 50% controls.
         for r in &results {
@@ -2849,7 +2849,7 @@ mod tests {
     fn test_pipeline_events_recorded() {
         let mut pipeline = make_pipeline(false);
         let results =
-            run_governance_pipeline(&mut pipeline, &single_artifact(), vec![], ts(300)).unwrap();
+            run_governance_pipeline(&mut pipeline, &single_artifact(), vec![], ts(300)).expect("serde deserialization should succeed");
         assert_eq!(pipeline.events().len(), results.len());
         for event in pipeline.events() {
             assert!(!event.summary.is_empty());
@@ -2898,7 +2898,7 @@ mod tests {
         );
         art.version = 0;
         // Should NOT return Err because halt_on_failure = false.
-        let results = run_governance_pipeline(&mut pipeline, &[art], vec![], ts(100)).unwrap();
+        let results = run_governance_pipeline(&mut pipeline, &[art], vec![], ts(100)).expect("serde deserialization should succeed");
         assert_eq!(results.len(), 2);
         assert!(!results[0].passed);
         // PostDeploy checks compiled_hash consistency — valid artifact still passes.
@@ -2911,7 +2911,7 @@ mod tests {
             halt_on_failure: true,
             ..Default::default()
         });
-        let results = run_governance_pipeline(&mut pipeline, &[], vec![], ts(1)).unwrap();
+        let results = run_governance_pipeline(&mut pipeline, &[], vec![], ts(1)).expect("serde deserialization should succeed");
         assert!(results.is_empty());
         assert!(pipeline.events().is_empty());
     }
@@ -2924,7 +2924,7 @@ mod tests {
             ..Default::default()
         });
         let entries = vec![make_entry("policy_update", 10)];
-        let results = run_governance_pipeline(&mut pipeline, &[], entries, ts(200)).unwrap();
+        let results = run_governance_pipeline(&mut pipeline, &[], entries, ts(200)).expect("serde deserialization should succeed");
         assert_eq!(results.len(), 1);
         assert!(results[0].passed);
         assert!(results[0].details.contains_key("entry_count"));
@@ -2947,7 +2947,7 @@ mod tests {
         );
         let art2 = art.clone();
         let results =
-            run_governance_pipeline(&mut pipeline, &[art, art2], vec![], ts(100)).unwrap();
+            run_governance_pipeline(&mut pipeline, &[art, art2], vec![], ts(100)).expect("serde deserialization should succeed");
         assert_eq!(results.len(), 1);
         assert!(!results[0].passed);
     }
@@ -3003,8 +3003,8 @@ mod tests {
         let err = GovernanceError::PolicySchemaViolation {
             constraint: "version must be non-zero".to_string(),
         };
-        let json = serde_json::to_string(&err).unwrap();
-        let decoded: GovernanceError = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let decoded: GovernanceError = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, decoded);
     }
 
@@ -3020,8 +3020,8 @@ mod tests {
             },
             toml_policy(),
         );
-        let json = serde_json::to_string(&art).unwrap();
-        let decoded: PolicyArtifact = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&art).expect("serde deserialization should succeed");
+        let decoded: PolicyArtifact = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(art, decoded);
     }
 
@@ -3030,9 +3030,9 @@ mod tests {
         let entries = vec![make_entry("policy_update", 10)];
         let (bundle, _) =
             generate_compliance_bundle(ComplianceFramework::Soc2, ts(0), ts(100), entries, ts(200))
-                .unwrap();
-        let json = serde_json::to_string(&bundle).unwrap();
-        let decoded: ComplianceEvidence = serde_json::from_str(&json).unwrap();
+                .expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&bundle).expect("serde deserialization should succeed");
+        let decoded: ComplianceEvidence = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(bundle, decoded);
     }
 
@@ -3046,9 +3046,9 @@ mod tests {
             entries,
             ts(2000),
         )
-        .unwrap();
-        let json = serde_json::to_string(&contract).unwrap();
-        let decoded: ComplianceEvidenceContract = serde_json::from_str(&json).unwrap();
+        .expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&contract).expect("serde deserialization should succeed");
+        let decoded: ComplianceEvidenceContract = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(contract, decoded);
     }
 
@@ -3056,9 +3056,9 @@ mod tests {
     fn test_audit_export_result_serde() {
         let entries = vec![make_entry("policy_update", 10)];
         let req = make_export_request(AuditExportFormat::JsonLines, 0, 100);
-        let result = export_audit_evidence(req, entries, ts(200)).unwrap();
-        let json = serde_json::to_string(&result).unwrap();
-        let decoded: AuditExportResult = serde_json::from_str(&json).unwrap();
+        let result = export_audit_evidence(req, entries, ts(200)).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let decoded: AuditExportResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, decoded);
     }
 
@@ -3073,7 +3073,7 @@ mod tests {
                     &schema,
                     b"test_event",
                 )
-                .unwrap()
+                .expect("serde deserialization should succeed")
             },
             hook_type: GovernanceHookType::PolicyChange,
             passed: true,
@@ -3081,8 +3081,8 @@ mod tests {
             attributes: BTreeMap::new(),
             timestamp: ts(42),
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let decoded: GovernanceEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let decoded: GovernanceEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, decoded);
     }
 
@@ -3117,7 +3117,7 @@ mod tests {
             make_entry("policy_update", 100),
         ];
         let req = make_export_request(AuditExportFormat::JsonLines, 0, 100);
-        let result = export_audit_evidence(req, entries, ts(200)).unwrap();
+        let result = export_audit_evidence(req, entries, ts(200)).expect("serde deserialization should succeed");
         // All three entries are within [0, 100] inclusive.
         assert_eq!(result.entry_count, 3);
     }
@@ -3127,7 +3127,7 @@ mod tests {
         // Force all controls to be unsatisfied (empty evidence).
         let (_bundle, contract) =
             generate_compliance_bundle(ComplianceFramework::Soc2, ts(0), ts(100), vec![], ts(200))
-                .unwrap();
+                .expect("serde deserialization should succeed");
         let gaps = contract.all_gaps();
         // Every gap should be prefixed with the control ID.
         for gap in &gaps {
@@ -3149,7 +3149,7 @@ mod tests {
             entries,
             ts(200),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let ids = bundle.ids_for_kind("policy_update");
         assert_eq!(ids.len(), 2);
         let ids2 = bundle.ids_for_kind("revocation");
@@ -3220,8 +3220,8 @@ mod tests {
     #[test]
     fn test_diagnostic_severity_serde() {
         for sev in DiagnosticSeverity::all() {
-            let json = serde_json::to_string(sev).unwrap();
-            let decoded: DiagnosticSeverity = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(sev).expect("serde deserialization should succeed");
+            let decoded: DiagnosticSeverity = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*sev, decoded);
         }
     }
@@ -3265,8 +3265,8 @@ mod tests {
             },
         ];
         for e in &errors {
-            let json = serde_json::to_string(e).unwrap();
-            let decoded: GovernanceError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(e).expect("serde deserialization should succeed");
+            let decoded: GovernanceError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*e, decoded);
         }
         assert_eq!(errors.len(), 10);
@@ -3280,8 +3280,8 @@ mod tests {
             message: "deprecated field".to_string(),
             span: Some((10, 20)),
         };
-        let json = serde_json::to_string(&diag).unwrap();
-        let decoded: PolicyDiagnostic = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&diag).expect("serde deserialization should succeed");
+        let decoded: PolicyDiagnostic = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(diag, decoded);
 
         // Also test with None span.
@@ -3291,8 +3291,8 @@ mod tests {
             message: "hint".to_string(),
             span: None,
         };
-        let json2 = serde_json::to_string(&diag2).unwrap();
-        let decoded2: PolicyDiagnostic = serde_json::from_str(&json2).unwrap();
+        let json2 = serde_json::to_string(&diag2).expect("serde deserialization should succeed");
+        let decoded2: PolicyDiagnostic = serde_json::from_str(&json2).expect("serde deserialization should succeed");
         assert_eq!(diag2, decoded2);
     }
 
@@ -3309,8 +3309,8 @@ mod tests {
             BTreeSet::new(),
         );
         assert!(result.is_success());
-        let json = serde_json::to_string(&result).unwrap();
-        let decoded: PolicyCompilationResult = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let decoded: PolicyCompilationResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, decoded);
     }
 
@@ -3327,8 +3327,8 @@ mod tests {
             BTreeSet::new(),
         );
         assert!(!result.is_success());
-        let json = serde_json::to_string(&result).unwrap();
-        let decoded: PolicyCompilationResult = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let decoded: PolicyCompilationResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, decoded);
     }
 
@@ -3343,8 +3343,8 @@ mod tests {
             max_export_entries: 42,
             frameworks: vec![ComplianceFramework::Soc2],
         };
-        let json = serde_json::to_string(&config).unwrap();
-        let decoded: GovernancePipelineConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let decoded: GovernancePipelineConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, decoded);
     }
 
@@ -3361,8 +3361,8 @@ mod tests {
             requester: "auditor".to_string(),
             correlation_id: Some("CORR-001".to_string()),
         };
-        let json = serde_json::to_string(&req).unwrap();
-        let decoded: AuditExportRequest = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&req).expect("serde deserialization should succeed");
+        let decoded: AuditExportRequest = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(req, decoded);
     }
 
@@ -3375,7 +3375,7 @@ mod tests {
             &schema,
             b"evidence_1",
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let ctrl = ComplianceControl {
             control_id: "CC6.1".to_string(),
             description: "Access controls".to_string(),
@@ -3383,8 +3383,8 @@ mod tests {
             evidence_entry_ids: vec![eid],
             gaps: vec![],
         };
-        let json = serde_json::to_string(&ctrl).unwrap();
-        let decoded: ComplianceControl = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&ctrl).expect("serde deserialization should succeed");
+        let decoded: ComplianceControl = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ctrl, decoded);
     }
 
@@ -3393,8 +3393,8 @@ mod tests {
         let mut attrs = BTreeMap::new();
         attrs.insert("key".to_string(), "value".to_string());
         let entry = make_entry("policy_update", 42);
-        let json = serde_json::to_string(&entry).unwrap();
-        let decoded: EvidenceEntry = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let decoded: EvidenceEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, decoded);
     }
 
@@ -3409,7 +3409,7 @@ mod tests {
             entries,
             ts(2000),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(bundle.entry_count(), expected_count);
     }
 
@@ -3437,7 +3437,7 @@ mod tests {
             vec![make_entry("policy_update", 10)],
             ts(200),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let (b2, _) = generate_compliance_bundle(
             ComplianceFramework::Custom("f".to_string()),
             ts(0),
@@ -3445,7 +3445,7 @@ mod tests {
             vec![make_entry("security_action", 10)],
             ts(200),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_ne!(
             b1.bundle_hash, b2.bundle_hash,
             "different evidence should produce different bundle hashes"
@@ -3511,10 +3511,10 @@ mod tests {
             entries.clone(),
             ts(200),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let (b2, _) =
             generate_compliance_bundle(ComplianceFramework::Gdpr, ts(0), ts(100), entries, ts(200))
-                .unwrap();
+                .expect("serde deserialization should succeed");
         assert_ne!(
             b1.bundle_id, b2.bundle_id,
             "different frameworks should produce different bundle IDs"
@@ -3524,8 +3524,8 @@ mod tests {
     #[test]
     fn governance_pipeline_config_default_serde_roundtrip() {
         let config = GovernancePipelineConfig::default();
-        let json = serde_json::to_string(&config).unwrap();
-        let decoded: GovernancePipelineConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let decoded: GovernancePipelineConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, decoded);
     }
 
@@ -3580,9 +3580,9 @@ mod tests {
     fn export_id_differs_by_format() {
         let entries = vec![make_entry("policy_update", 10)];
         let req_jl = make_export_request(AuditExportFormat::JsonLines, 0, 100);
-        let result_jl = export_audit_evidence(req_jl, entries.clone(), ts(200)).unwrap();
+        let result_jl = export_audit_evidence(req_jl, entries.clone(), ts(200)).expect("serde deserialization should succeed");
         let req_csv = make_export_request(AuditExportFormat::Csv, 0, 100);
-        let result_csv = export_audit_evidence(req_csv, entries, ts(200)).unwrap();
+        let result_csv = export_audit_evidence(req_csv, entries, ts(200)).expect("serde deserialization should succeed");
         assert_ne!(
             result_jl.export_id, result_csv.export_id,
             "different formats should produce different export IDs"
@@ -3599,7 +3599,7 @@ mod tests {
             entries,
             ts(2000),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(
             contract.unsatisfied_count(),
             0,
@@ -3617,7 +3617,7 @@ mod tests {
         });
         let entries = full_evidence_set();
         let _results =
-            run_governance_pipeline(&mut pipeline, &single_artifact(), entries, ts(500)).unwrap();
+            run_governance_pipeline(&mut pipeline, &single_artifact(), entries, ts(500)).expect("serde deserialization should succeed");
         let event = &pipeline.events()[0];
         // ComplianceCheck hook populates details with per-framework results;
         // those should flow into the event attributes.
@@ -3634,7 +3634,7 @@ mod tests {
             .collect();
         let mut req = make_export_request(AuditExportFormat::JsonLines, 0, 100);
         req.max_entries = Some(999);
-        let result = export_audit_evidence(req, entries, ts(200)).unwrap();
+        let result = export_audit_evidence(req, entries, ts(200)).expect("serde deserialization should succeed");
         assert_eq!(
             result.entry_count, 3,
             "max_entries > available should not truncate"
@@ -3649,7 +3649,7 @@ mod tests {
             ..Default::default()
         });
         let arts = single_artifact();
-        let results = run_governance_pipeline(&mut pipeline, &arts, vec![], ts(100)).unwrap();
+        let results = run_governance_pipeline(&mut pipeline, &arts, vec![], ts(100)).expect("serde deserialization should succeed");
         assert!(results[0].passed);
         assert_eq!(
             results[0].details.get("artifact_count"),
@@ -3779,8 +3779,8 @@ mod tests {
         entry.summary = "contains, a comma".to_string();
         let entries = vec![entry];
         let req = make_export_request(AuditExportFormat::Csv, 0, 100);
-        let result = export_audit_evidence(req, entries, ts(200)).unwrap();
-        let text = std::str::from_utf8(&result.payload_bytes).unwrap();
+        let result = export_audit_evidence(req, entries, ts(200)).expect("serde deserialization should succeed");
+        let text = std::str::from_utf8(&result.payload_bytes).expect("serde deserialization should succeed");
         // csv_escape wraps in quotes when commas are present.
         assert!(
             text.contains("\"contains, a comma\""),
@@ -3795,7 +3795,7 @@ mod tests {
             make_entry("policy_update", 51),
         ];
         let req = make_export_request(AuditExportFormat::JsonLines, 50, 50);
-        let result = export_audit_evidence(req, entries, ts(200)).unwrap();
+        let result = export_audit_evidence(req, entries, ts(200)).expect("serde deserialization should succeed");
         assert_eq!(
             result.entry_count, 1,
             "zero-width window should include exact tick"
@@ -3825,8 +3825,8 @@ mod tests {
             BTreeSet::new(),
         );
         assert_ne!(
-            r1.artifact().unwrap().artifact_id,
-            r2.artifact().unwrap().artifact_id,
+            r1.artifact().expect("serde deserialization should succeed").artifact_id,
+            r2.artifact().expect("serde deserialization should succeed").artifact_id,
             "different policy bytes should yield different artifact IDs"
         );
     }
@@ -3842,8 +3842,8 @@ mod tests {
             ComplianceFramework::Custom("my_fw".to_string()),
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let decoded: ComplianceFramework = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let decoded: ComplianceFramework = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, decoded);
         }
     }
@@ -3874,7 +3874,7 @@ mod tests {
             b"key2 = false",
         );
         let results =
-            run_governance_pipeline(&mut pipeline, &[art1, art2], vec![], ts(100)).unwrap();
+            run_governance_pipeline(&mut pipeline, &[art1, art2], vec![], ts(100)).expect("serde deserialization should succeed");
         assert_eq!(results.len(), 1);
         assert!(
             results[0].passed,
@@ -3933,8 +3933,8 @@ mod tests {
         };
         assert!(!ctrl.satisfied);
         assert_eq!(ctrl.gaps.len(), 2);
-        let json = serde_json::to_string(&ctrl).unwrap();
-        let decoded: ComplianceControl = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&ctrl).expect("serde deserialization should succeed");
+        let decoded: ComplianceControl = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ctrl, decoded);
     }
 
@@ -3944,9 +3944,9 @@ mod tests {
             .map(|i| make_entry("security_action", i * 10))
             .collect();
         let req_parquet = make_export_request(AuditExportFormat::Parquet, 0, 100);
-        let result_parquet = export_audit_evidence(req_parquet, entries.clone(), ts(200)).unwrap();
+        let result_parquet = export_audit_evidence(req_parquet, entries.clone(), ts(200)).expect("serde deserialization should succeed");
         let req_pdf = make_export_request(AuditExportFormat::CompliancePdf, 0, 100);
-        let result_pdf = export_audit_evidence(req_pdf, entries, ts(200)).unwrap();
+        let result_pdf = export_audit_evidence(req_pdf, entries, ts(200)).expect("serde deserialization should succeed");
         assert_eq!(result_parquet.entry_count, 5);
         assert_eq!(result_pdf.entry_count, 5);
     }

@@ -1199,8 +1199,8 @@ mod tests {
     #[test]
     fn tier_serde_roundtrip() {
         for tier in OptimizationTier::ALL {
-            let json = serde_json::to_string(tier).unwrap();
-            let back: OptimizationTier = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(tier).expect("serde deserialization should succeed");
+            let back: OptimizationTier = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*tier, back);
         }
     }
@@ -1233,8 +1233,8 @@ mod tests {
     #[test]
     fn status_serde_roundtrip() {
         for s in CertificateStatus::ALL {
-            let json = serde_json::to_string(s).unwrap();
-            let back: CertificateStatus = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(s).expect("serde deserialization should succeed");
+            let back: CertificateStatus = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*s, back);
         }
     }
@@ -1271,8 +1271,8 @@ mod tests {
     #[test]
     fn trigger_serde_roundtrip() {
         for t in RollbackTrigger::ALL {
-            let json = serde_json::to_string(t).unwrap();
-            let back: RollbackTrigger = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(t).expect("serde deserialization should succeed");
+            let back: RollbackTrigger = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*t, back);
         }
     }
@@ -1297,8 +1297,8 @@ mod tests {
     #[test]
     fn forensic_surface_serde_roundtrip() {
         for s in ForensicSurface::ALL {
-            let json = serde_json::to_string(s).unwrap();
-            let back: ForensicSurface = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(s).expect("serde deserialization should succeed");
+            let back: ForensicSurface = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*s, back);
         }
     }
@@ -1361,8 +1361,8 @@ mod tests {
     #[test]
     fn cert_serde_roundtrip() {
         let cert = make_cert("c-serde", "fn-serde", OptimizationTier::Speculative);
-        let json = serde_json::to_string(&cert).unwrap();
-        let back: OptimizationCertificate = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&cert).expect("serde deserialization should succeed");
+        let back: OptimizationCertificate = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cert, back);
     }
 
@@ -1385,8 +1385,8 @@ mod tests {
     #[test]
     fn rollback_serde_roundtrip() {
         let r = make_rollback("r-serde", "fn1", RollbackTrigger::OperatorCommand);
-        let json = serde_json::to_string(&r).unwrap();
-        let back: RollbackRecord = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let back: RollbackRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 
@@ -1409,8 +1409,8 @@ mod tests {
     #[test]
     fn forensic_serde_roundtrip() {
         let f = make_forensic("f-serde", "fn1", ForensicSurface::RewriteChain);
-        let json = serde_json::to_string(&f).unwrap();
-        let back: ForensicEntry = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&f).expect("serde deserialization should succeed");
+        let back: ForensicEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(f, back);
     }
 
@@ -1452,8 +1452,8 @@ mod tests {
     #[test]
     fn config_serde_roundtrip() {
         let cfg = GovernanceConfig::default_config();
-        let json = serde_json::to_string(&cfg).unwrap();
-        let back: GovernanceConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
+        let back: GovernanceConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cfg, back);
     }
 
@@ -1722,8 +1722,8 @@ mod tests {
             active_certs: 5,
             rollback_count: 2,
         };
-        let json = serde_json::to_string(&v).unwrap();
-        let back: GovernanceVerdict = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let back: GovernanceVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, back);
     }
 
@@ -1921,8 +1921,8 @@ mod tests {
         let state = GovernanceState::new(epoch());
         let config = GovernanceConfig::default_config();
         let report = state.report(&config);
-        let json = serde_json::to_string(&report).unwrap();
-        let back: GovernanceReport = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let back: GovernanceReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report, back);
     }
 
@@ -1976,8 +1976,8 @@ mod tests {
             function_id: "fn1".into(),
             tier: OptimizationTier::Speculative,
         };
-        let json = serde_json::to_string(&e).unwrap();
-        let back: GovernanceError = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
+        let back: GovernanceError = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(e, back);
     }
 

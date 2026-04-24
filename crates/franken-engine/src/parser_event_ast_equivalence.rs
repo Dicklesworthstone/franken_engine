@@ -956,8 +956,8 @@ mod tests {
     #[test]
     fn corpus_tier_serde_round_trip() {
         for tier in CorpusTier::ALL {
-            let json = serde_json::to_string(tier).unwrap();
-            let recovered: CorpusTier = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(tier).expect("serde deserialization should succeed");
+            let recovered: CorpusTier = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*tier, recovered);
         }
     }
@@ -976,8 +976,8 @@ mod tests {
     #[test]
     fn tamper_kind_serde_round_trip() {
         for kind in TamperKind::ALL {
-            let json = serde_json::to_string(kind).unwrap();
-            let recovered: TamperKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(kind).expect("serde deserialization should succeed");
+            let recovered: TamperKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*kind, recovered);
         }
     }
@@ -993,8 +993,8 @@ mod tests {
     #[test]
     fn verdict_serde_round_trip() {
         for v in [EquivalenceVerdict::Pass, EquivalenceVerdict::Fail] {
-            let json = serde_json::to_string(&v).unwrap();
-            let recovered: EquivalenceVerdict = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let recovered: EquivalenceVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(v, recovered);
         }
     }
@@ -1169,8 +1169,8 @@ mod tests {
     #[test]
     fn inventory_serde_round_trip() {
         let inventory = run_equivalence_corpus();
-        let json = serde_json::to_string(&inventory).unwrap();
-        let recovered: EquivalenceInventory = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&inventory).expect("serde deserialization should succeed");
+        let recovered: EquivalenceInventory = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(inventory.total, recovered.total);
         assert_eq!(inventory.passed, recovered.passed);
         assert_eq!(inventory.failed, recovered.failed);
@@ -1240,8 +1240,8 @@ mod tests {
             "decision-test",
             vec!["inventory.json".to_string()],
         );
-        let json = serde_json::to_string(&manifest).unwrap();
-        let recovered: EquivalenceRunManifest = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&manifest).expect("serde deserialization should succeed");
+        let recovered: EquivalenceRunManifest = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(manifest.bead_id, recovered.bead_id);
         assert_eq!(manifest.inventory_hash, recovered.inventory_hash);
     }
@@ -1262,8 +1262,8 @@ mod tests {
     fn specimen_evidence_serde_round_trip() {
         let corpus = equivalence_corpus();
         let ev = evaluate_specimen(&corpus[0]);
-        let json = serde_json::to_string(&ev).unwrap();
-        let recovered: SpecimenEvidence = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
+        let recovered: SpecimenEvidence = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ev.specimen_id, recovered.specimen_id);
         assert_eq!(ev.verdict, recovered.verdict);
     }
@@ -1274,69 +1274,69 @@ mod tests {
 
     #[test]
     fn corpus_tier_individual_serde_core() {
-        let json = serde_json::to_string(&CorpusTier::Core).unwrap();
+        let json = serde_json::to_string(&CorpusTier::Core).expect("serde deserialization should succeed");
         assert_eq!(json, "\"core\"");
-        let recovered: CorpusTier = serde_json::from_str(&json).unwrap();
+        let recovered: CorpusTier = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(recovered, CorpusTier::Core);
     }
 
     #[test]
     fn corpus_tier_individual_serde_edge() {
-        let json = serde_json::to_string(&CorpusTier::Edge).unwrap();
+        let json = serde_json::to_string(&CorpusTier::Edge).expect("serde deserialization should succeed");
         assert_eq!(json, "\"edge\"");
-        let recovered: CorpusTier = serde_json::from_str(&json).unwrap();
+        let recovered: CorpusTier = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(recovered, CorpusTier::Edge);
     }
 
     #[test]
     fn corpus_tier_individual_serde_adversarial() {
-        let json = serde_json::to_string(&CorpusTier::Adversarial).unwrap();
+        let json = serde_json::to_string(&CorpusTier::Adversarial).expect("serde deserialization should succeed");
         assert_eq!(json, "\"adversarial\"");
-        let recovered: CorpusTier = serde_json::from_str(&json).unwrap();
+        let recovered: CorpusTier = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(recovered, CorpusTier::Adversarial);
     }
 
     #[test]
     fn tamper_kind_individual_serde_none() {
-        let json = serde_json::to_string(&TamperKind::None).unwrap();
+        let json = serde_json::to_string(&TamperKind::None).expect("serde deserialization should succeed");
         assert_eq!(json, "\"none\"");
-        let recovered: TamperKind = serde_json::from_str(&json).unwrap();
+        let recovered: TamperKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(recovered, TamperKind::None);
     }
 
     #[test]
     fn tamper_kind_individual_serde_statement_hash() {
-        let json = serde_json::to_string(&TamperKind::StatementHash).unwrap();
+        let json = serde_json::to_string(&TamperKind::StatementHash).expect("serde deserialization should succeed");
         assert_eq!(json, "\"statement_hash\"");
-        let recovered: TamperKind = serde_json::from_str(&json).unwrap();
+        let recovered: TamperKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(recovered, TamperKind::StatementHash);
     }
 
     #[test]
     fn tamper_kind_individual_serde_event_deletion() {
-        let json = serde_json::to_string(&TamperKind::EventDeletion).unwrap();
+        let json = serde_json::to_string(&TamperKind::EventDeletion).expect("serde deserialization should succeed");
         assert_eq!(json, "\"event_deletion\"");
-        let recovered: TamperKind = serde_json::from_str(&json).unwrap();
+        let recovered: TamperKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(recovered, TamperKind::EventDeletion);
     }
 
     #[test]
     fn tamper_kind_individual_serde_sequence_reorder() {
-        let json = serde_json::to_string(&TamperKind::SequenceReorder).unwrap();
+        let json = serde_json::to_string(&TamperKind::SequenceReorder).expect("serde deserialization should succeed");
         assert_eq!(json, "\"sequence_reorder\"");
-        let recovered: TamperKind = serde_json::from_str(&json).unwrap();
+        let recovered: TamperKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(recovered, TamperKind::SequenceReorder);
     }
 
     #[test]
     fn equivalence_verdict_serde_pass_json_string() {
-        let json = serde_json::to_string(&EquivalenceVerdict::Pass).unwrap();
+        let json = serde_json::to_string(&EquivalenceVerdict::Pass).expect("serde deserialization should succeed");
         assert_eq!(json, "\"pass\"");
     }
 
     #[test]
     fn equivalence_verdict_serde_fail_json_string() {
-        let json = serde_json::to_string(&EquivalenceVerdict::Fail).unwrap();
+        let json = serde_json::to_string(&EquivalenceVerdict::Fail).expect("serde deserialization should succeed");
         assert_eq!(json, "\"fail\"");
     }
 
@@ -1494,7 +1494,7 @@ mod tests {
         let corpus = equivalence_corpus();
         let ev0 = evaluate_specimen(&corpus[0]);
         // Pick the last specimen which has a different tier/tamper
-        let ev_last = evaluate_specimen(corpus.last().unwrap());
+        let ev_last = evaluate_specimen(corpus.last().expect("serde deserialization should succeed"));
         assert_ne!(
             ev0.canonical_hash(),
             ev_last.canonical_hash(),
@@ -1851,8 +1851,8 @@ mod tests {
     fn equivalence_specimen_serde_round_trip() {
         let corpus = equivalence_corpus();
         for spec in &corpus {
-            let json = serde_json::to_string(spec).unwrap();
-            let recovered: EquivalenceSpecimen = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(spec).expect("serde deserialization should succeed");
+            let recovered: EquivalenceSpecimen = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(spec.specimen_id, recovered.specimen_id);
             assert_eq!(spec.corpus_tier, recovered.corpus_tier);
             assert_eq!(spec.tamper_kind, recovered.tamper_kind);
@@ -1874,8 +1874,8 @@ mod tests {
         let inventory = run_equivalence_corpus();
         let events = generate_events(&inventory);
         for event in &events {
-            let json = serde_json::to_string(event).unwrap();
-            let recovered: EquivalenceEvent = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(event).expect("serde deserialization should succeed");
+            let recovered: EquivalenceEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(event.schema_version, recovered.schema_version);
             assert_eq!(event.specimen_id, recovered.specimen_id);
             assert_eq!(event.outcome, recovered.outcome);
@@ -1890,8 +1890,8 @@ mod tests {
             passed: 8,
             failed: 2,
         };
-        let json = serde_json::to_string(&summary).unwrap();
-        let recovered: TierSummary = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
+        let recovered: TierSummary = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(summary, recovered);
     }
 
@@ -1904,8 +1904,8 @@ mod tests {
             "decision-full",
             vec!["alpha.json".to_string(), "beta.json".to_string()],
         );
-        let json = serde_json::to_string(&manifest).unwrap();
-        let recovered: EquivalenceRunManifest = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&manifest).expect("serde deserialization should succeed");
+        let recovered: EquivalenceRunManifest = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(manifest, recovered);
     }
 
@@ -2345,8 +2345,8 @@ mod tests {
     #[test]
     fn inventory_serde_full_equality_round_trip() {
         let inventory = run_equivalence_corpus();
-        let json = serde_json::to_string_pretty(&inventory).unwrap();
-        let recovered: EquivalenceInventory = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string_pretty(&inventory).expect("serde deserialization should succeed");
+        let recovered: EquivalenceInventory = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(inventory, recovered);
     }
 

@@ -271,15 +271,15 @@ mod tests {
             PrimitiveTier::B,
             PrimitiveTier::C,
         ] {
-            let json = serde_json::to_string(&tier).unwrap();
-            let back: PrimitiveTier = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&tier).expect("serde deserialization should succeed");
+            let back: PrimitiveTier = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(tier, back);
         }
     }
 
     #[test]
     fn tier_serde_snake_case() {
-        let json = serde_json::to_string(&PrimitiveTier::S).unwrap();
+        let json = serde_json::to_string(&PrimitiveTier::S).expect("serde deserialization should succeed");
         assert!(json.contains("s") || json.contains("S"));
     }
 
@@ -292,8 +292,8 @@ mod tests {
             ReuseDecision::BuildNew,
             ReuseDecision::NotApplicable,
         ] {
-            let json = serde_json::to_string(&d).unwrap();
-            let back: ReuseDecision = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
+            let back: ReuseDecision = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(d, back);
         }
     }
@@ -303,8 +303,8 @@ mod tests {
     #[test]
     fn verification_checklist_serde_roundtrip() {
         let v = valid_verification();
-        let json = serde_json::to_string(&v).unwrap();
-        let back: VerificationChecklist = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let back: VerificationChecklist = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, back);
     }
 
@@ -313,8 +313,8 @@ mod tests {
     #[test]
     fn score_serde_roundtrip() {
         let s = valid_score();
-        let json = serde_json::to_string(&s).unwrap();
-        let back: EvRelevanceRiskScore = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+        let back: EvRelevanceRiskScore = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(s, back);
     }
 
@@ -325,8 +325,8 @@ mod tests {
             relevance_millionths: 1_000_000,
             risk_millionths: 0,
         };
-        let json = serde_json::to_string(&s).unwrap();
-        let back: EvRelevanceRiskScore = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+        let back: EvRelevanceRiskScore = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(s, back);
     }
 
@@ -335,8 +335,8 @@ mod tests {
     #[test]
     fn fallback_budget_serde_roundtrip() {
         let fb = valid_fallback();
-        let json = serde_json::to_string(&fb).unwrap();
-        let back: FallbackBudget = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&fb).expect("serde deserialization should succeed");
+        let back: FallbackBudget = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(fb, back);
     }
 
@@ -345,8 +345,8 @@ mod tests {
     #[test]
     fn reuse_scan_serde_roundtrip() {
         let rs = valid_reuse_scan();
-        let json = serde_json::to_string(&rs).unwrap();
-        let back: ReuseScan = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&rs).expect("serde deserialization should succeed");
+        let back: ReuseScan = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(rs, back);
     }
 
@@ -358,8 +358,8 @@ mod tests {
             candidate_crates: vec!["sha2".into(), "sha3".into()],
             rationale: "sha2 meets determinism bar".into(),
         };
-        let json = serde_json::to_string(&rs).unwrap();
-        let back: ReuseScan = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&rs).expect("serde deserialization should succeed");
+        let back: ReuseScan = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(rs.candidate_crates.len(), back.candidate_crates.len());
     }
 
@@ -396,15 +396,15 @@ mod tests {
         let err = PrimitiveAdoptionValidationError::InvalidScoreRange {
             field: "risk_millionths".to_string(),
         };
-        let val = serde_json::to_value(&err).unwrap();
-        let back: PrimitiveAdoptionValidationError = serde_json::from_value(val).unwrap();
+        let val = serde_json::to_value(&err).expect("serde deserialization should succeed");
+        let back: PrimitiveAdoptionValidationError = serde_json::from_value(val).expect("serde deserialization should succeed");
         assert_eq!(err, back);
     }
 
     #[test]
     fn validation_error_tagged_serde() {
         let err = PrimitiveAdoptionValidationError::MissingVerificationMetadata;
-        let json = serde_json::to_string(&err).unwrap();
+        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
         assert!(json.contains("\"kind\""));
         assert!(json.contains("missing_verification_metadata"));
     }
@@ -414,8 +414,8 @@ mod tests {
     #[test]
     fn record_serde_roundtrip() {
         let r = valid_record_tier_s();
-        let json = serde_json::to_string(&r).unwrap();
-        let back: PrimitiveAdoptionRecord = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let back: PrimitiveAdoptionRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 
@@ -730,10 +730,10 @@ mod tests {
     fn validate_build_new_empty_candidates_ok() {
         let r = valid_record_tier_s();
         assert_eq!(
-            r.reuse_scan.as_ref().unwrap().decision,
+            r.reuse_scan.as_ref().expect("serde deserialization should succeed").decision,
             ReuseDecision::BuildNew
         );
-        assert!(r.reuse_scan.as_ref().unwrap().candidate_crates.is_empty());
+        assert!(r.reuse_scan.as_ref().expect("serde deserialization should succeed").candidate_crates.is_empty());
         assert!(r.validate_for_activation().is_ok());
     }
 
@@ -831,8 +831,8 @@ mod tests {
         assert!(r.verification.is_some());
         assert!(r.fallback.is_some());
         assert!(r.reuse_scan.is_some());
-        let json = serde_json::to_string(&r).unwrap();
-        let back: PrimitiveAdoptionRecord = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let back: PrimitiveAdoptionRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 
@@ -847,7 +847,7 @@ mod tests {
             PrimitiveTier::B,
             PrimitiveTier::C,
         ] {
-            let json = serde_json::to_string(&tier).unwrap();
+            let json = serde_json::to_string(&tier).expect("serde deserialization should succeed");
             assert!(!json.is_empty());
         }
     }
@@ -961,7 +961,7 @@ mod tests {
             PrimitiveTier::C,
         ]
         .iter()
-        .map(|t| serde_json::to_string(t).unwrap())
+        .map(|t| serde_json::to_string(t).expect("serde deserialization should succeed"))
         .collect();
         assert_eq!(set.len(), 4);
     }
@@ -974,7 +974,7 @@ mod tests {
             ReuseDecision::NotApplicable,
         ]
         .iter()
-        .map(|d| serde_json::to_string(d).unwrap())
+        .map(|d| serde_json::to_string(d).expect("serde deserialization should succeed"))
         .collect();
         assert_eq!(set.len(), 3);
     }
@@ -993,7 +993,7 @@ mod tests {
             },
         ]
         .iter()
-        .map(|e| serde_json::to_string(e).unwrap())
+        .map(|e| serde_json::to_string(e).expect("serde deserialization should succeed"))
         .collect();
         assert_eq!(set.len(), 5);
     }
@@ -1037,8 +1037,8 @@ mod tests {
     #[test]
     fn verification_checklist_json_field_names() {
         let v = valid_verification();
-        let val: serde_json::Value = serde_json::to_value(&v).unwrap();
-        let obj = val.as_object().unwrap();
+        let val: serde_json::Value = serde_json::to_value(&v).expect("serde deserialization should succeed");
+        let obj = val.as_object().expect("serde deserialization should succeed");
         for key in [
             "checklist_version",
             "primary_paper_verified",
@@ -1053,8 +1053,8 @@ mod tests {
     #[test]
     fn ev_relevance_risk_score_json_field_names() {
         let s = valid_score();
-        let val: serde_json::Value = serde_json::to_value(&s).unwrap();
-        let obj = val.as_object().unwrap();
+        let val: serde_json::Value = serde_json::to_value(&s).expect("serde deserialization should succeed");
+        let obj = val.as_object().expect("serde deserialization should succeed");
         for key in ["ev_millionths", "relevance_millionths", "risk_millionths"] {
             assert!(obj.contains_key(key), "missing field: {key}");
         }
@@ -1064,8 +1064,8 @@ mod tests {
     #[test]
     fn fallback_budget_json_field_names() {
         let fb = valid_fallback();
-        let val: serde_json::Value = serde_json::to_value(&fb).unwrap();
-        let obj = val.as_object().unwrap();
+        let val: serde_json::Value = serde_json::to_value(&fb).expect("serde deserialization should succeed");
+        let obj = val.as_object().expect("serde deserialization should succeed");
         for key in [
             "trigger",
             "deterministic_mode",
@@ -1081,8 +1081,8 @@ mod tests {
     #[test]
     fn reuse_scan_json_field_names() {
         let rs = valid_reuse_scan();
-        let val: serde_json::Value = serde_json::to_value(&rs).unwrap();
-        let obj = val.as_object().unwrap();
+        let val: serde_json::Value = serde_json::to_value(&rs).expect("serde deserialization should succeed");
+        let obj = val.as_object().expect("serde deserialization should succeed");
         for key in [
             "catalog_version",
             "decision",
@@ -1097,8 +1097,8 @@ mod tests {
     #[test]
     fn adoption_record_json_field_names() {
         let r = valid_record_tier_s();
-        let val: serde_json::Value = serde_json::to_value(&r).unwrap();
-        let obj = val.as_object().unwrap();
+        let val: serde_json::Value = serde_json::to_value(&r).expect("serde deserialization should succeed");
+        let obj = val.as_object().expect("serde deserialization should succeed");
         for key in [
             "primitive_id",
             "tier",
@@ -1146,8 +1146,8 @@ mod tests {
             time_budget_ms: u64::MAX,
             memory_budget_mb: u32::MAX,
         };
-        let json = serde_json::to_string(&fb).unwrap();
-        let back: FallbackBudget = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&fb).expect("serde deserialization should succeed");
+        let back: FallbackBudget = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(fb, back);
     }
 
@@ -1158,8 +1158,8 @@ mod tests {
             relevance_millionths: 0,
             risk_millionths: 0,
         };
-        let json = serde_json::to_string(&s).unwrap();
-        let back: EvRelevanceRiskScore = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+        let back: EvRelevanceRiskScore = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(s, back);
     }
 
@@ -1174,8 +1174,8 @@ mod tests {
             reuse_scan: None,
             adopt_vs_build_rationale: "minimal".to_string(),
         };
-        let json = serde_json::to_string(&r).unwrap();
-        let back: PrimitiveAdoptionRecord = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let back: PrimitiveAdoptionRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 
@@ -1187,8 +1187,8 @@ mod tests {
             candidate_crates: (0..50).map(|i| format!("crate-{i}")).collect(),
             rationale: "many options".to_string(),
         };
-        let json = serde_json::to_string(&rs).unwrap();
-        let back: ReuseScan = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&rs).expect("serde deserialization should succeed");
+        let back: ReuseScan = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(rs.candidate_crates.len(), back.candidate_crates.len());
     }
 
@@ -1208,8 +1208,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap();
-            let back: PrimitiveAdoptionValidationError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let back: PrimitiveAdoptionValidationError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, back);
         }
     }
@@ -1238,7 +1238,7 @@ mod tests {
     #[test]
     fn validation_error_tagged_serde_missing_fallback() {
         let err = PrimitiveAdoptionValidationError::MissingFallbackMetadata;
-        let json = serde_json::to_string(&err).unwrap();
+        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
         assert!(json.contains("\"kind\""));
         assert!(json.contains("missing_fallback_metadata"));
     }
@@ -1248,7 +1248,7 @@ mod tests {
         let err = PrimitiveAdoptionValidationError::InvalidScoreRange {
             field: "risk_millionths".to_string(),
         };
-        let json = serde_json::to_string(&err).unwrap();
+        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
         assert!(json.contains("\"kind\""));
         assert!(json.contains("invalid_score_range"));
         assert!(json.contains("risk_millionths"));
@@ -1259,7 +1259,7 @@ mod tests {
         let err = PrimitiveAdoptionValidationError::InvalidMetadataField {
             field: "candidate_crates".to_string(),
         };
-        let json = serde_json::to_string(&err).unwrap();
+        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
         assert!(json.contains("\"kind\""));
         assert!(json.contains("invalid_metadata_field"));
         assert!(json.contains("candidate_crates"));
@@ -1379,7 +1379,7 @@ mod tests {
     #[test]
     fn record_tier_c_no_reuse_scan_json_has_null() {
         let r = valid_record_tier_c();
-        let val: serde_json::Value = serde_json::to_value(&r).unwrap();
+        let val: serde_json::Value = serde_json::to_value(&r).expect("serde deserialization should succeed");
         assert!(val["reuse_scan"].is_null());
     }
 

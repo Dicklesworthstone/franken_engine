@@ -1293,9 +1293,9 @@ mod tests {
     fn test_instance_status_serde_roundtrip() {
         for status in SubstrateInstanceStatus::ALL {
             // SAFETY: to_string cannot fail on derived Serialize enum
-            let json = serde_json::to_string(status).unwrap();
+            let json = serde_json::to_string(status).expect("serde deserialization should succeed");
             // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-            let back: SubstrateInstanceStatus = serde_json::from_str(&json).unwrap();
+            let back: SubstrateInstanceStatus = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*status, back);
         }
     }
@@ -1328,9 +1328,9 @@ mod tests {
     fn test_override_reason_serde_roundtrip() {
         for reason in OverrideReason::ALL {
             // SAFETY: to_string cannot fail on derived Serialize enum
-            let json = serde_json::to_string(reason).unwrap();
+            let json = serde_json::to_string(reason).expect("serde deserialization should succeed");
             // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-            let back: OverrideReason = serde_json::from_str(&json).unwrap();
+            let back: OverrideReason = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*reason, back);
         }
     }
@@ -1387,9 +1387,9 @@ mod tests {
     fn test_policy_serde_roundtrip() {
         let policy = OverridePolicy::permissive();
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&policy).unwrap();
+        let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let back: OverridePolicy = serde_json::from_str(&json).unwrap();
+        let back: OverridePolicy = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(policy, back);
     }
 
@@ -1475,9 +1475,9 @@ mod tests {
         let contract = test_contract();
         let receipt = SubstrateSelectionReceipt::from_contract(&contract, test_epoch(), "test");
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&receipt).unwrap();
+        let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let back: SubstrateSelectionReceipt = serde_json::from_str(&json).unwrap();
+        let back: SubstrateSelectionReceipt = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(receipt, back);
     }
 
@@ -1545,9 +1545,9 @@ mod tests {
             ContentHash::compute(b"module"),
         );
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&snap).unwrap();
+        let json = serde_json::to_string(&snap).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let back: SubstrateSnapshot = serde_json::from_str(&json).unwrap();
+        let back: SubstrateSnapshot = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(snap, back);
     }
 
@@ -1677,9 +1677,9 @@ mod tests {
         let receipt = SubstrateSelectionReceipt::from_contract(&contract, test_epoch(), "test");
         let instance = SubstrateInstance::from_contract(&contract, receipt);
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&instance).unwrap();
+        let json = serde_json::to_string(&instance).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let back: SubstrateInstance = serde_json::from_str(&json).unwrap();
+        let back: SubstrateInstance = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(instance, back);
     }
 
@@ -1718,7 +1718,7 @@ mod tests {
         );
         assert!(result.is_ok());
         // SAFETY: result verified to be Ok above
-        let instance = result.unwrap();
+        let instance = result.expect("serde deserialization should succeed");
         assert_eq!(instance.substrate_kind, SubstrateKind::FlatArray);
         assert_eq!(selector.overridden_count(), 1);
     }
@@ -1787,9 +1787,9 @@ mod tests {
         let policy = OverridePolicy::permissive();
         let selector = SubstrateSelector::new(policy, test_epoch());
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&selector).unwrap();
+        let json = serde_json::to_string(&selector).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let back: SubstrateSelector = serde_json::from_str(&json).unwrap();
+        let back: SubstrateSelector = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(selector, back);
     }
 
@@ -1824,9 +1824,9 @@ mod tests {
     fn test_default_assignments_serde_roundtrip() {
         let inventory = default_optimized_assignments(test_epoch());
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&inventory).unwrap();
+        let json = serde_json::to_string(&inventory).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let back: SubstrateInventory = serde_json::from_str(&json).unwrap();
+        let back: SubstrateInventory = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(inventory, back);
     }
 
@@ -1889,9 +1889,9 @@ mod tests {
         instance.activate();
         let check = SubstrateHealthCheck::check(&instance, test_epoch());
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&check).unwrap();
+        let json = serde_json::to_string(&check).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let back: SubstrateHealthCheck = serde_json::from_str(&json).unwrap();
+        let back: SubstrateHealthCheck = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(check, back);
     }
 
@@ -1958,9 +1958,9 @@ mod tests {
             "decommissioned",
         );
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&event).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let back: SubstrateTransitionEvent = serde_json::from_str(&json).unwrap();
+        let back: SubstrateTransitionEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
     }
 
@@ -2015,9 +2015,9 @@ mod tests {
             reason: OverrideReason::MemoryPressure,
         };
         // SAFETY: to_string cannot fail on derived Serialize enum
-        let json = serde_json::to_string(&err).unwrap();
+        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let back: SubstrateSelectionError = serde_json::from_str(&json).unwrap();
+        let back: SubstrateSelectionError = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, back);
     }
 
@@ -2051,9 +2051,9 @@ mod tests {
             epoch: test_epoch(),
         };
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&report).unwrap();
+        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let back: SelectorSummaryReport = serde_json::from_str(&json).unwrap();
+        let back: SelectorSummaryReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report, back);
     }
 
@@ -2071,7 +2071,7 @@ mod tests {
         // SAFETY: test setup guarantees instance exists for ShapeTable
         let instance = selector
             .instance_for_mut(MetadataStructureKind::ShapeTable)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         instance.activate();
         instance.record_entries(5000);
         let snapshot = instance.take_snapshot(epoch);
@@ -2102,7 +2102,7 @@ mod tests {
         );
         assert!(result.is_ok());
         // SAFETY: result verified to be Ok above
-        let mut instance = result.unwrap();
+        let mut instance = result.expect("serde deserialization should succeed");
         instance.activate();
         instance.fallback(OverrideReason::CorruptionDetected);
         assert_eq!(instance.status, SubstrateInstanceStatus::FallenBack);

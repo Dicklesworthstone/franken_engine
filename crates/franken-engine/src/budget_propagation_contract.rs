@@ -978,7 +978,7 @@ mod tests {
                 10_000,
                 BudgetBoundaryKind::ParentToChildExtension,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(result.derived_budget_ms > 0);
         assert!(result.derived_budget_ms <= 10_000);
         assert!(result.carved_from_parent);
@@ -1053,14 +1053,14 @@ mod tests {
                 10_000,
                 BudgetBoundaryKind::OrchestratorToCellClose,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(result.derived_budget_ms, 10_000);
     }
 
     #[test]
     fn test_validator_cleanup_success() {
         let mut validator = BudgetPropagationValidator::with_defaults();
-        let alloc = validator.validate_cleanup("trace-parent", 10_000).unwrap();
+        let alloc = validator.validate_cleanup("trace-parent", 10_000).expect("serde deserialization should succeed");
         assert!(alloc.total_cleanup_ms <= 10_000);
         assert!(!validator.has_violations());
     }
@@ -1079,7 +1079,7 @@ mod tests {
                     remaining,
                     BudgetBoundaryKind::ParentToChildSession,
                 )
-                .unwrap();
+                .expect("serde deserialization should succeed");
             remaining = result.parent_remaining_after_ms;
         }
 
@@ -1173,24 +1173,24 @@ mod tests {
             error: None,
             sequence: 1,
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let round: BudgetPropagationEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let round: BudgetPropagationEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, round);
     }
 
     #[test]
     fn test_cleanup_budget_policy_serde_roundtrip() {
         let policy = CleanupBudgetPolicy::default();
-        let json = serde_json::to_string(&policy).unwrap();
-        let round: CleanupBudgetPolicy = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
+        let round: CleanupBudgetPolicy = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(policy, round);
     }
 
     #[test]
     fn test_propagation_policy_serde_roundtrip() {
         let policy = BudgetPropagationPolicy::default();
-        let json = serde_json::to_string(&policy).unwrap();
-        let round: BudgetPropagationPolicy = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
+        let round: BudgetPropagationPolicy = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(policy, round);
     }
 
@@ -1204,8 +1204,8 @@ mod tests {
             BudgetBoundaryKind::ParentToChildExtension,
         );
         let report = validator.build_report();
-        let json = serde_json::to_string(&report).unwrap();
-        let round: BudgetPropagationReport = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let round: BudgetPropagationReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report, round);
     }
 
@@ -1224,7 +1224,7 @@ mod tests {
                 6000,
                 BudgetBoundaryKind::ParentToChildExtension,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Should have been capped to maintain reserve
         assert!(result.parent_remaining_after_ms >= 5000 || !result.carved_from_parent);
@@ -1235,10 +1235,10 @@ mod tests {
         let policy = BudgetPropagationPolicy::default();
         let ext_rule = policy
             .rule_for(BudgetBoundaryKind::ParentToChildExtension)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let del_rule = policy
             .rule_for(BudgetBoundaryKind::ParentToChildDelegate)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let parent = 10_000;
         let ext_budget = ext_rule.derivation.derive(parent);
@@ -1292,10 +1292,10 @@ mod tests {
                 10_000,
                 BudgetBoundaryKind::ParentToChildExtension,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert_eq!(result.derived_budget_ms, 8_000);
-        assert_eq!(validator.events().last().unwrap().sequence, u64::MAX);
+        assert_eq!(validator.events().last().expect("serde deserialization should succeed").sequence, u64::MAX);
     }
 
     #[test]
@@ -1338,8 +1338,8 @@ mod tests {
             BudgetBoundaryKind::OrchestratorToCellClose,
         ];
         for kind in &kinds {
-            let json = serde_json::to_string(kind).unwrap();
-            let decoded: BudgetBoundaryKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(kind).expect("serde deserialization should succeed");
+            let decoded: BudgetBoundaryKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*kind, decoded);
         }
     }
@@ -1419,8 +1419,8 @@ mod tests {
             BudgetDerivationStrategy::AllRemaining,
         ];
         for strat in &strategies {
-            let json = serde_json::to_string(strat).unwrap();
-            let decoded: BudgetDerivationStrategy = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(strat).expect("serde deserialization should succeed");
+            let decoded: BudgetDerivationStrategy = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*strat, decoded);
         }
     }
@@ -1628,8 +1628,8 @@ mod tests {
             minimum_ms: 50,
             parent_remaining_ms: 100,
         };
-        let json = serde_json::to_string(&err).unwrap();
-        let decoded: BudgetPropagationError = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let decoded: BudgetPropagationError = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, decoded);
     }
 
@@ -1638,8 +1638,8 @@ mod tests {
     #[test]
     fn test_child_rule_serde_roundtrip() {
         let rule = ChildBudgetRule::default_extension();
-        let json = serde_json::to_string(&rule).unwrap();
-        let decoded: ChildBudgetRule = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&rule).expect("serde deserialization should succeed");
+        let decoded: ChildBudgetRule = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(rule, decoded);
     }
 
@@ -1660,8 +1660,8 @@ mod tests {
             boundary_kind: BudgetBoundaryKind::ParentToChildExtension,
             carved_from_parent: true,
         };
-        let json = serde_json::to_string(&result).unwrap();
-        let decoded: BudgetDerivationResult = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let decoded: BudgetDerivationResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, decoded);
     }
 
@@ -1675,7 +1675,7 @@ mod tests {
                 5000,
                 BudgetBoundaryKind::ParentToChildExtension,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(result.derived_budget_ms > 0);
         if result.carved_from_parent {
             assert!(result.parent_remaining_after_ms < 5000);

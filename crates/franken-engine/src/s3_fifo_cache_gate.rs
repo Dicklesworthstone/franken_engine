@@ -1766,7 +1766,7 @@ mod tests {
             small_ratio_millionths: 500_000, // 50%
             ..S3FifoCacheConfig::default()
         };
-        S3FifoCacheGate::new(config, epoch(1)).unwrap()
+        S3FifoCacheGate::new(config, epoch(1)).expect("serde deserialization should succeed")
     }
 
     // -- Construction tests --
@@ -1823,7 +1823,7 @@ mod tests {
     #[test]
     fn test_basic_insert() {
         let mut gate = default_gate();
-        let decision = gate.insert(artifact("a"), 100, payload("a")).unwrap();
+        let decision = gate.insert(artifact("a"), 100, payload("a")).expect("serde deserialization should succeed");
         assert!(decision.is_admit());
         assert_eq!(gate.total_cached(), 1);
         assert!(gate.contains(&key("a")));
@@ -1832,15 +1832,15 @@ mod tests {
     #[test]
     fn test_insert_starts_in_small() {
         let mut gate = default_gate();
-        gate.insert(artifact("a"), 100, payload("a")).unwrap();
+        gate.insert(artifact("a"), 100, payload("a")).expect("serde deserialization should succeed");
         assert_eq!(gate.entry_segment(&key("a")), Some(CacheSegment::Small));
     }
 
     #[test]
     fn test_duplicate_insert_is_hit() {
         let mut gate = default_gate();
-        gate.insert(artifact("a"), 100, payload("a")).unwrap();
-        let d = gate.insert(artifact("a"), 100, payload("a")).unwrap();
+        gate.insert(artifact("a"), 100, payload("a")).expect("serde deserialization should succeed");
+        let d = gate.insert(artifact("a"), 100, payload("a")).expect("serde deserialization should succeed");
         assert!(d.is_admit());
         assert_eq!(gate.total_cached(), 1);
     }
@@ -1850,7 +1850,7 @@ mod tests {
         let mut gate = small_gate(10);
         for i in 0..5 {
             let label = format!("item_{i}");
-            gate.insert(artifact(&label), 100, payload(&label)).unwrap();
+            gate.insert(artifact(&label), 100, payload(&label)).expect("serde deserialization should succeed");
         }
         assert_eq!(gate.total_cached(), 5);
     }
@@ -1860,7 +1860,7 @@ mod tests {
     #[test]
     fn test_lookup_hit() {
         let mut gate = default_gate();
-        gate.insert(artifact("a"), 100, payload("a")).unwrap();
+        gate.insert(artifact("a"), 100, payload("a")).expect("serde deserialization should succeed");
         assert!(gate.lookup(&key("a")));
         assert_eq!(gate.benchmark_evidence().hits, 1);
     }
@@ -1875,7 +1875,7 @@ mod tests {
     #[test]
     fn test_lookup_increments_frequency() {
         let mut gate = default_gate();
-        gate.insert(artifact("a"), 100, payload("a")).unwrap();
+        gate.insert(artifact("a"), 100, payload("a")).expect("serde deserialization should succeed");
         let k = key("a");
         assert_eq!(gate.entry_frequency(&k), Some(0));
         gate.lookup(&k);
@@ -1887,7 +1887,7 @@ mod tests {
     #[test]
     fn test_frequency_saturates_at_max() {
         let mut gate = default_gate();
-        gate.insert(artifact("a"), 100, payload("a")).unwrap();
+        gate.insert(artifact("a"), 100, payload("a")).expect("serde deserialization should succeed");
         let k = key("a");
         for _ in 0..10 {
             gate.lookup(&k);
@@ -1901,10 +1901,10 @@ mod tests {
     fn test_eviction_from_small_to_ghost() {
         let mut gate = small_gate(4); // 50% small = 2, 50% main = 2
         // Insert enough to fill small and trigger eviction.
-        gate.insert(artifact("a"), 10, payload("a")).unwrap();
-        gate.insert(artifact("b"), 10, payload("b")).unwrap();
+        gate.insert(artifact("a"), 10, payload("a")).expect("serde deserialization should succeed");
+        gate.insert(artifact("b"), 10, payload("b")).expect("serde deserialization should succeed");
         // Third insert should evict from small.
-        gate.insert(artifact("c"), 10, payload("c")).unwrap();
+        gate.insert(artifact("c"), 10, payload("c")).expect("serde deserialization should succeed");
         // 'a' had freq=0 so should be evicted to ghost.
         assert!(gate.is_ghost("a") || gate.total_cached() <= 4);
     }
@@ -1913,13 +1913,13 @@ mod tests {
     fn test_promotion_on_frequency() {
         let mut gate = small_gate(4);
         let ka = key("a");
-        gate.insert(artifact("a"), 10, payload("a")).unwrap();
+        gate.insert(artifact("a"), 10, payload("a")).expect("serde deserialization should succeed");
         // Access 'a' to bump frequency.
         gate.lookup(&ka);
-        assert!(gate.entry_frequency(&ka).unwrap() > 0);
+        assert!(gate.entry_frequency(&ka).expect("serde deserialization should succeed") > 0);
         // Fill to trigger eviction — 'a' should be promoted to main.
-        gate.insert(artifact("b"), 10, payload("b")).unwrap();
-        gate.insert(artifact("c"), 10, payload("c")).unwrap();
+        gate.insert(artifact("b"), 10, payload("b")).expect("serde deserialization should succeed");
+        gate.insert(artifact("c"), 10, payload("c")).expect("serde deserialization should succeed");
         if gate.contains(&ka) {
             assert_eq!(gate.entry_segment(&ka), Some(CacheSegment::Main));
         }
@@ -1928,8 +1928,8 @@ mod tests {
     #[test]
     fn test_ghost_queue_populated_on_eviction() {
         let mut gate = small_gate(2); // small=1, main=1
-        gate.insert(artifact("a"), 10, payload("a")).unwrap();
-        gate.insert(artifact("b"), 10, payload("b")).unwrap();
+        gate.insert(artifact("a"), 10, payload("a")).expect("serde deserialization should succeed");
+        gate.insert(artifact("b"), 10, payload("b")).expect("serde deserialization should succeed");
         // 'a' should be evicted and appear in ghost.
         assert!(gate.is_ghost("a") || gate.total_cached() >= 1);
     }
@@ -1938,12 +1938,12 @@ mod tests {
     fn test_ghost_hit_promotes_to_main() {
         let mut gate = small_gate(4);
         // Fill and evict 'a'.
-        gate.insert(artifact("a"), 10, payload("a")).unwrap();
-        gate.insert(artifact("b"), 10, payload("b")).unwrap();
-        gate.insert(artifact("c"), 10, payload("c")).unwrap();
+        gate.insert(artifact("a"), 10, payload("a")).expect("serde deserialization should succeed");
+        gate.insert(artifact("b"), 10, payload("b")).expect("serde deserialization should succeed");
+        gate.insert(artifact("c"), 10, payload("c")).expect("serde deserialization should succeed");
         // If 'a' is in ghost, re-insert should go to main.
         if gate.is_ghost("a") {
-            gate.insert(artifact("a"), 10, payload("a")).unwrap();
+            gate.insert(artifact("a"), 10, payload("a")).expect("serde deserialization should succeed");
             if gate.contains("a") {
                 assert_eq!(gate.entry_segment("a"), Some(CacheSegment::Main));
             }
@@ -1955,7 +1955,7 @@ mod tests {
     #[test]
     fn test_remove_existing() {
         let mut gate = default_gate();
-        gate.insert(artifact("a"), 10, payload("a")).unwrap();
+        gate.insert(artifact("a"), 10, payload("a")).expect("serde deserialization should succeed");
         let k = key("a");
         assert!(gate.remove(&k));
         assert!(!gate.contains(&k));
@@ -1972,7 +1972,7 @@ mod tests {
         let mut gate = default_gate();
         for i in 0..10 {
             let label = format!("x{i}");
-            gate.insert(artifact(&label), 10, payload(&label)).unwrap();
+            gate.insert(artifact(&label), 10, payload(&label)).expect("serde deserialization should succeed");
         }
         gate.flush();
         assert_eq!(gate.total_cached(), 0);
@@ -2090,10 +2090,10 @@ mod tests {
             total_capacity: 10,
             ..S3FifoCacheConfig::default()
         };
-        let mut gate = S3FifoCacheGate::new(config, epoch(1)).unwrap();
+        let mut gate = S3FifoCacheGate::new(config, epoch(1)).expect("serde deserialization should succeed");
         let d = gate
             .insert(artifact("new_item"), 100, payload("new_item"))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(!d.is_admit());
     }
 
@@ -2113,7 +2113,7 @@ mod tests {
         // Both S3-FIFO and LRU/CLOCK see the same accesses.
         for i in 0..5 {
             let label = format!("p{i}");
-            gate.insert(artifact(&label), 10, payload(&label)).unwrap();
+            gate.insert(artifact(&label), 10, payload(&label)).expect("serde deserialization should succeed");
         }
         for i in 0..5 {
             let label = format!("p{i}");
@@ -2133,7 +2133,7 @@ mod tests {
             reference_policy: ReferencePolicyKind::Clock,
             ..S3FifoCacheConfig::default()
         };
-        let mut gate = S3FifoCacheGate::new(config, epoch(1)).unwrap();
+        let mut gate = S3FifoCacheGate::new(config, epoch(1)).expect("serde deserialization should succeed");
         let parity = gate.evaluate_parity();
         assert_eq!(parity.reference_policy, ReferencePolicyKind::Clock);
     }
@@ -2144,8 +2144,8 @@ mod tests {
         let mut gate2 = small_gate(10);
         for i in 0..3 {
             let label = format!("d{i}");
-            gate1.insert(artifact(&label), 10, payload(&label)).unwrap();
-            gate2.insert(artifact(&label), 10, payload(&label)).unwrap();
+            gate1.insert(artifact(&label), 10, payload(&label)).expect("serde deserialization should succeed");
+            gate2.insert(artifact(&label), 10, payload(&label)).expect("serde deserialization should succeed");
             gate1.lookup(&label);
             gate2.lookup(&label);
         }
@@ -2164,7 +2164,7 @@ mod tests {
             small_ratio_millionths: 500_000,
             ..S3FifoCacheConfig::default()
         };
-        let mut gate = S3FifoCacheGate::new(config, epoch(1)).unwrap();
+        let mut gate = S3FifoCacheGate::new(config, epoch(1)).expect("serde deserialization should succeed");
         // Lots of misses.
         for i in 0..20 {
             let label = format!("miss{i}");
@@ -2189,7 +2189,7 @@ mod tests {
             rollback_cooldown_ops: 5,
             ..S3FifoCacheConfig::default()
         };
-        let mut gate = S3FifoCacheGate::new(config, epoch(1)).unwrap();
+        let mut gate = S3FifoCacheGate::new(config, epoch(1)).expect("serde deserialization should succeed");
         gate.execute_rollback(RollbackTrigger::ParityGateFailure);
         // Lookups should tick down cooldown.
         for _ in 0..5 {
@@ -2204,7 +2204,7 @@ mod tests {
             rollback_cooldown_ops: 100,
             ..S3FifoCacheConfig::default()
         };
-        let mut gate = S3FifoCacheGate::new(config, epoch(1)).unwrap();
+        let mut gate = S3FifoCacheGate::new(config, epoch(1)).expect("serde deserialization should succeed");
         gate.execute_rollback(RollbackTrigger::ParityGateFailure);
         let result = gate.re_enable();
         assert!(matches!(
@@ -2219,7 +2219,7 @@ mod tests {
             rollback_cooldown_ops: 3,
             ..S3FifoCacheConfig::default()
         };
-        let mut gate = S3FifoCacheGate::new(config, epoch(1)).unwrap();
+        let mut gate = S3FifoCacheGate::new(config, epoch(1)).expect("serde deserialization should succeed");
         gate.execute_rollback(RollbackTrigger::ParityGateFailure);
         for _ in 0..3 {
             gate.lookup("tick");
@@ -2242,7 +2242,7 @@ mod tests {
             rollback_cooldown_ops: 1,
             ..S3FifoCacheConfig::default()
         };
-        let mut gate = S3FifoCacheGate::new(config, epoch(1)).unwrap();
+        let mut gate = S3FifoCacheGate::new(config, epoch(1)).expect("serde deserialization should succeed");
         gate.execute_rollback(RollbackTrigger::ParityGateFailure);
         gate.lookup("tick"); // Expire cooldown.
         let _ = gate.re_enable();
@@ -2271,7 +2271,7 @@ mod tests {
             auto_adapt_split: true,
             ..S3FifoCacheConfig::default()
         };
-        let mut gate = S3FifoCacheGate::new(config, epoch(1)).unwrap();
+        let mut gate = S3FifoCacheGate::new(config, epoch(1)).expect("serde deserialization should succeed");
         assert!(gate.adapt_split_ratio().is_none());
     }
 
@@ -2285,7 +2285,7 @@ mod tests {
             max_small_ratio_millionths: 500_000,
             ..S3FifoCacheConfig::default()
         };
-        let mut gate = S3FifoCacheGate::new(config, epoch(1)).unwrap();
+        let mut gate = S3FifoCacheGate::new(config, epoch(1)).expect("serde deserialization should succeed");
         // Simulate high ghost hits.
         gate.benchmark.total_evictions = 10;
         gate.benchmark.ghost_hits = 8; // 80% ghost hit ratio.
@@ -2305,7 +2305,7 @@ mod tests {
             max_small_ratio_millionths: 500_000,
             ..S3FifoCacheConfig::default()
         };
-        let mut gate = S3FifoCacheGate::new(config, epoch(1)).unwrap();
+        let mut gate = S3FifoCacheGate::new(config, epoch(1)).expect("serde deserialization should succeed");
         gate.benchmark.total_evictions = 100;
         gate.benchmark.ghost_hits = 5; // 5% ghost hit ratio.
         let old = gate.effective_small_ratio_millionths();
@@ -2324,7 +2324,7 @@ mod tests {
             max_small_ratio_millionths: 500_000,
             ..S3FifoCacheConfig::default()
         };
-        let mut gate = S3FifoCacheGate::new(config, epoch(1)).unwrap();
+        let mut gate = S3FifoCacheGate::new(config, epoch(1)).expect("serde deserialization should succeed");
         gate.benchmark.total_evictions = 100;
         gate.benchmark.ghost_hits = 1;
         let result = gate.adapt_split_ratio();
@@ -2340,13 +2340,13 @@ mod tests {
             rollback_cooldown_ops: 0,
             ..S3FifoCacheConfig::default()
         };
-        let mut gate = S3FifoCacheGate::new(config, epoch(1)).unwrap();
+        let mut gate = S3FifoCacheGate::new(config, epoch(1)).expect("serde deserialization should succeed");
         gate.active = false;
         gate.rollback_state = RollbackState::Completed;
         let _ = gate.re_enable();
         assert!(!gate.receipts().is_empty());
         assert_eq!(
-            gate.receipts().last().unwrap().decision_kind,
+            gate.receipts().last().expect("serde deserialization should succeed").decision_kind,
             DecisionKind::PolicyEnabled
         );
     }
@@ -2357,7 +2357,7 @@ mod tests {
         gate.execute_rollback(RollbackTrigger::ParityGateFailure);
         assert!(!gate.receipts().is_empty());
         assert_eq!(
-            gate.receipts().last().unwrap().decision_kind,
+            gate.receipts().last().expect("serde deserialization should succeed").decision_kind,
             DecisionKind::GateFailRollback
         );
     }
@@ -2390,7 +2390,7 @@ mod tests {
             admission_policy: AdmissionPolicy::FrequencyAware,
             ..S3FifoCacheConfig::default()
         };
-        let mut gate = S3FifoCacheGate::new(config, epoch(1)).unwrap();
+        let mut gate = S3FifoCacheGate::new(config, epoch(1)).expect("serde deserialization should succeed");
         let receipt = gate.emit_receipt(DecisionKind::GatePassContinue);
         assert!(receipt.admission_policy_label.contains("frequency_aware"));
     }
@@ -2421,7 +2421,7 @@ mod tests {
             small_ratio_millionths: 500_000,
             ..S3FifoCacheConfig::default()
         };
-        let mut gate = S3FifoCacheGate::new(config, epoch(1)).unwrap();
+        let mut gate = S3FifoCacheGate::new(config, epoch(1)).expect("serde deserialization should succeed");
         for i in 0..20 {
             gate.lookup(&format!("miss{i}"));
         }
@@ -2485,7 +2485,7 @@ mod tests {
     #[test]
     fn test_advance_epoch() {
         let mut gate = default_gate();
-        gate.insert(artifact("a"), 10, payload("a")).unwrap();
+        gate.insert(artifact("a"), 10, payload("a")).expect("serde deserialization should succeed");
         gate.advance_epoch(epoch(2));
         assert_eq!(gate.current_epoch(), epoch(2));
     }
@@ -2493,10 +2493,10 @@ mod tests {
     #[test]
     fn test_epoch_updates_entry_validation() {
         let mut gate = default_gate();
-        gate.insert(artifact("a"), 10, payload("a")).unwrap();
+        gate.insert(artifact("a"), 10, payload("a")).expect("serde deserialization should succeed");
         gate.advance_epoch(epoch(5));
         // After advance, entry should be validated at the new epoch.
-        let entry = gate.entries.get(&key("a")).unwrap();
+        let entry = gate.entries.get(&key("a")).expect("serde deserialization should succeed");
         assert_eq!(entry.last_validated_epoch, epoch(5));
     }
 
@@ -2506,7 +2506,7 @@ mod tests {
     fn test_set_admission_policy_emits_receipt() {
         let mut gate = default_gate();
         gate.set_admission_policy(AdmissionPolicy::FrequencyAware);
-        let last = gate.receipts().last().unwrap();
+        let last = gate.receipts().last().expect("serde deserialization should succeed");
         assert_eq!(last.decision_kind, DecisionKind::AdmissionPolicyChanged);
     }
 
@@ -2517,7 +2517,7 @@ mod tests {
         let mut gate = small_gate(10);
         for i in 0..3 {
             let label = format!("s{i}");
-            gate.insert(artifact(&label), 10, payload(&label)).unwrap();
+            gate.insert(artifact(&label), 10, payload(&label)).expect("serde deserialization should succeed");
         }
         let snap = gate.segment_snapshot();
         assert!(snap.total_cached > 0);
@@ -2794,16 +2794,16 @@ mod tests {
     fn test_full_lifecycle_insert_lookup_evict_ghost_readmit() {
         let mut gate = small_gate(4); // small=2, main=2
         // Fill small queue.
-        gate.insert(artifact("a"), 10, payload("a")).unwrap();
-        gate.insert(artifact("b"), 10, payload("b")).unwrap();
+        gate.insert(artifact("a"), 10, payload("a")).expect("serde deserialization should succeed");
+        gate.insert(artifact("b"), 10, payload("b")).expect("serde deserialization should succeed");
         // Access 'a' to bump frequency.
         gate.lookup("a");
         // Insert 'c' triggers eviction from small.
-        gate.insert(artifact("c"), 10, payload("c")).unwrap();
+        gate.insert(artifact("c"), 10, payload("c")).expect("serde deserialization should succeed");
         // 'b' (freq=0) should be evicted; 'a' (freq>0) promoted.
         // Insert 'd' and 'e' to trigger more evictions.
-        gate.insert(artifact("d"), 10, payload("d")).unwrap();
-        gate.insert(artifact("e"), 10, payload("e")).unwrap();
+        gate.insert(artifact("d"), 10, payload("d")).expect("serde deserialization should succeed");
+        gate.insert(artifact("e"), 10, payload("e")).expect("serde deserialization should succeed");
 
         // Verify cache is not larger than capacity.
         assert!(gate.total_cached() <= 4);
@@ -2821,11 +2821,11 @@ mod tests {
             parity_tolerance_millionths: MILLION, // 100% — disables parity gate
             ..S3FifoCacheConfig::default()
         };
-        let mut gate = S3FifoCacheGate::new(config, epoch(1)).unwrap();
+        let mut gate = S3FifoCacheGate::new(config, epoch(1)).expect("serde deserialization should succeed");
         // Insert and access items.
         for i in 0..10 {
             let label = format!("item{i}");
-            gate.insert(artifact(&label), 10, payload(&label)).unwrap();
+            gate.insert(artifact(&label), 10, payload(&label)).expect("serde deserialization should succeed");
         }
         for i in 0..10 {
             let label = format!("item{i}");
@@ -2845,7 +2845,7 @@ mod tests {
             small_ratio_millionths: 500_000,
             ..S3FifoCacheConfig::default()
         };
-        let mut gate = S3FifoCacheGate::new(config, epoch(1)).unwrap();
+        let mut gate = S3FifoCacheGate::new(config, epoch(1)).expect("serde deserialization should succeed");
 
         // Trigger rollback.
         gate.operator_rollback("ops", "test");
@@ -2863,7 +2863,7 @@ mod tests {
         // Insert should work again.
         let d = gate
             .insert(artifact("recovery"), 10, payload("recovery"))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(d.is_admit());
     }
 
@@ -2879,9 +2879,9 @@ mod tests {
     #[test]
     fn test_contains_and_is_ghost_after_eviction_cycle() {
         let mut gate = small_gate(2); // small=1, main=1
-        gate.insert(artifact("x"), 10, payload("x")).unwrap();
-        gate.insert(artifact("y"), 10, payload("y")).unwrap();
-        gate.insert(artifact("z"), 10, payload("z")).unwrap();
+        gate.insert(artifact("x"), 10, payload("x")).expect("serde deserialization should succeed");
+        gate.insert(artifact("y"), 10, payload("y")).expect("serde deserialization should succeed");
+        gate.insert(artifact("z"), 10, payload("z")).expect("serde deserialization should succeed");
         // At least one of the earlier items should be evicted.
         let total_live = gate.total_cached();
         let total_ghost = gate.total_ghost();
@@ -2892,7 +2892,7 @@ mod tests {
     #[test]
     fn test_benchmark_evidence_accumulates() {
         let mut gate = default_gate();
-        gate.insert(artifact("a"), 10, payload("a")).unwrap();
+        gate.insert(artifact("a"), 10, payload("a")).expect("serde deserialization should succeed");
         let ka = key("a");
         gate.lookup(&ka);
         gate.lookup(&ka);
@@ -2906,7 +2906,7 @@ mod tests {
     #[test]
     fn test_inactive_gate_lookup_misses() {
         let mut gate = default_gate();
-        gate.insert(artifact("a"), 10, payload("a")).unwrap();
+        gate.insert(artifact("a"), 10, payload("a")).expect("serde deserialization should succeed");
         gate.active = false;
         assert!(!gate.lookup("a"));
     }
@@ -2917,7 +2917,7 @@ mod tests {
             rollback_cooldown_ops: 100,
             ..S3FifoCacheConfig::default()
         };
-        let mut gate = S3FifoCacheGate::new(config, epoch(1)).unwrap();
+        let mut gate = S3FifoCacheGate::new(config, epoch(1)).expect("serde deserialization should succeed");
         gate.execute_rollback(RollbackTrigger::ParityGateFailure);
         let result = gate.insert(artifact("x"), 10, payload("x"));
         assert!(result.is_err());
@@ -2951,16 +2951,16 @@ mod tests {
             original_size_bytes: 256,
             sequence_number: 42,
         };
-        let json = serde_json::to_string(&ghost).unwrap();
-        let restored: GhostEntry = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&ghost).expect("serde deserialization should succeed");
+        let restored: GhostEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ghost, restored);
     }
 
     #[test]
     fn test_config_serde_roundtrip() {
         let config = S3FifoCacheConfig::default();
-        let json = serde_json::to_string(&config).unwrap();
-        let restored: S3FifoCacheConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let restored: S3FifoCacheConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, restored);
     }
 }

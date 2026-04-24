@@ -641,7 +641,7 @@ mod tests {
             &test_schema_id(),
             tag.as_bytes(),
         )
-        .unwrap()
+        .expect("serde deserialization should succeed")
     }
 
     fn make_storage() -> InMemoryStorageAdapter {
@@ -684,24 +684,24 @@ mod tests {
     fn insert_and_get_receipt() {
         let mut index = make_index();
         let rec = make_record("r1", 1);
-        index.insert_receipt(&rec, "t1").unwrap();
+        index.insert_receipt(&rec, "t1").expect("serde deserialization should succeed");
 
-        let fetched = index.get_receipt(&rec.receipt_id, "t2").unwrap();
-        assert_eq!(fetched.unwrap(), rec);
+        let fetched = index.get_receipt(&rec.receipt_id, "t2").expect("serde deserialization should succeed");
+        assert_eq!(fetched.expect("serde deserialization should succeed"), rec);
     }
 
     #[test]
     fn get_nonexistent_receipt_returns_none() {
         let mut index = make_index();
         let id = make_id("nonexistent");
-        assert!(index.get_receipt(&id, "t1").unwrap().is_none());
+        assert!(index.get_receipt(&id, "t1").expect("serde deserialization should succeed").is_none());
     }
 
     #[test]
     fn duplicate_receipt_rejected() {
         let mut index = make_index();
         let rec = make_record("r1", 1);
-        index.insert_receipt(&rec, "t1").unwrap();
+        index.insert_receipt(&rec, "t1").expect("serde deserialization should succeed");
         let err = index.insert_receipt(&rec, "t2").unwrap_err();
         match err {
             SpecializationIndexError::DuplicateReceipt { .. } => {}
@@ -713,17 +713,17 @@ mod tests {
     fn delete_receipt() {
         let mut index = make_index();
         let rec = make_record("r1", 1);
-        index.insert_receipt(&rec, "t1").unwrap();
+        index.insert_receipt(&rec, "t1").expect("serde deserialization should succeed");
 
-        assert!(index.delete_receipt(&rec.receipt_id, "t2").unwrap());
-        assert!(index.get_receipt(&rec.receipt_id, "t3").unwrap().is_none());
+        assert!(index.delete_receipt(&rec.receipt_id, "t2").expect("serde deserialization should succeed"));
+        assert!(index.get_receipt(&rec.receipt_id, "t3").expect("serde deserialization should succeed").is_none());
     }
 
     #[test]
     fn delete_nonexistent_returns_false() {
         let mut index = make_index();
         let id = make_id("nonexistent");
-        assert!(!index.delete_receipt(&id, "t1").unwrap());
+        assert!(!index.delete_receipt(&id, "t1").expect("serde deserialization should succeed"));
     }
 
     // -----------------------------------------------------------------------
@@ -733,34 +733,34 @@ mod tests {
     #[test]
     fn query_all_receipts() {
         let mut index = make_index();
-        index.insert_receipt(&make_record("r1", 1), "t1").unwrap();
-        index.insert_receipt(&make_record("r2", 2), "t2").unwrap();
-        index.insert_receipt(&make_record("r3", 1), "t3").unwrap();
+        index.insert_receipt(&make_record("r1", 1), "t1").expect("serde deserialization should succeed");
+        index.insert_receipt(&make_record("r2", 2), "t2").expect("serde deserialization should succeed");
+        index.insert_receipt(&make_record("r3", 1), "t3").expect("serde deserialization should succeed");
 
-        let all = index.query_receipts(None, "t4").unwrap();
+        let all = index.query_receipts(None, "t4").expect("serde deserialization should succeed");
         assert_eq!(all.len(), 3);
     }
 
     #[test]
     fn query_receipts_by_epoch() {
         let mut index = make_index();
-        index.insert_receipt(&make_record("r1", 1), "t1").unwrap();
-        index.insert_receipt(&make_record("r2", 2), "t2").unwrap();
-        index.insert_receipt(&make_record("r3", 1), "t3").unwrap();
+        index.insert_receipt(&make_record("r1", 1), "t1").expect("serde deserialization should succeed");
+        index.insert_receipt(&make_record("r2", 2), "t2").expect("serde deserialization should succeed");
+        index.insert_receipt(&make_record("r3", 1), "t3").expect("serde deserialization should succeed");
 
         let epoch1 = index
             .query_receipts(Some(SecurityEpoch::from_raw(1)), "t4")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(epoch1.len(), 2);
 
         let epoch2 = index
             .query_receipts(Some(SecurityEpoch::from_raw(2)), "t5")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(epoch2.len(), 1);
 
         let epoch3 = index
             .query_receipts(Some(SecurityEpoch::from_raw(99)), "t6")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(epoch3.is_empty());
     }
 
@@ -772,10 +772,10 @@ mod tests {
         let mut inactive_rec = make_record("r2", 1);
         inactive_rec.active = false;
 
-        index.insert_receipt(&active_rec, "t1").unwrap();
-        index.insert_receipt(&inactive_rec, "t2").unwrap();
+        index.insert_receipt(&active_rec, "t1").expect("serde deserialization should succeed");
+        index.insert_receipt(&inactive_rec, "t2").expect("serde deserialization should succeed");
 
-        let active = index.query_active_receipts("t3").unwrap();
+        let active = index.query_active_receipts("t3").expect("serde deserialization should succeed");
         assert_eq!(active.len(), 1);
         assert_eq!(active[0].receipt_id, active_rec.receipt_id);
     }
@@ -796,21 +796,21 @@ mod tests {
         let mut r3 = make_record("r3", 1);
         r3.proof_input_ids = vec![proof_id.clone(), make_id("another-proof")];
 
-        index.insert_receipt(&r1, "t1").unwrap();
-        index.insert_receipt(&r2, "t2").unwrap();
-        index.insert_receipt(&r3, "t3").unwrap();
+        index.insert_receipt(&r1, "t1").expect("serde deserialization should succeed");
+        index.insert_receipt(&r2, "t2").expect("serde deserialization should succeed");
+        index.insert_receipt(&r3, "t3").expect("serde deserialization should succeed");
 
-        let found = index.find_by_proof(&proof_id, "t4").unwrap();
+        let found = index.find_by_proof(&proof_id, "t4").expect("serde deserialization should succeed");
         assert_eq!(found.len(), 2);
     }
 
     #[test]
     fn find_by_proof_no_matches() {
         let mut index = make_index();
-        index.insert_receipt(&make_record("r1", 1), "t1").unwrap();
+        index.insert_receipt(&make_record("r1", 1), "t1").expect("serde deserialization should succeed");
 
         let phantom = make_id("phantom-proof");
-        let found = index.find_by_proof(&phantom, "t2").unwrap();
+        let found = index.find_by_proof(&phantom, "t2").expect("serde deserialization should succeed");
         assert!(found.is_empty());
     }
 
@@ -822,14 +822,14 @@ mod tests {
     fn insert_and_find_benchmark() {
         let mut index = make_index();
         let rec = make_record("r1", 1);
-        index.insert_receipt(&rec, "t1").unwrap();
+        index.insert_receipt(&rec, "t1").expect("serde deserialization should succeed");
 
         let bm = make_benchmark("bm-1", "r1");
-        index.insert_benchmark(&bm, "t2").unwrap();
+        index.insert_benchmark(&bm, "t2").expect("serde deserialization should succeed");
 
         let benchmarks = index
             .find_benchmarks_by_receipt(&rec.receipt_id, "t3")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(benchmarks.len(), 1);
         assert_eq!(benchmarks[0].benchmark_id, "bm-1");
         assert_eq!(benchmarks[0].latency_reduction_millionths, 200_000);
@@ -839,7 +839,7 @@ mod tests {
     fn duplicate_benchmark_rejected() {
         let mut index = make_index();
         let bm = make_benchmark("bm-1", "r1");
-        index.insert_benchmark(&bm, "t1").unwrap();
+        index.insert_benchmark(&bm, "t1").expect("serde deserialization should succeed");
         let err = index.insert_benchmark(&bm, "t2").unwrap_err();
         match err {
             SpecializationIndexError::DuplicateBenchmark { .. } => {}
@@ -851,18 +851,18 @@ mod tests {
     fn multiple_benchmarks_per_receipt() {
         let mut index = make_index();
         let rec = make_record("r1", 1);
-        index.insert_receipt(&rec, "t1").unwrap();
+        index.insert_receipt(&rec, "t1").expect("serde deserialization should succeed");
 
         index
             .insert_benchmark(&make_benchmark("bm-1", "r1"), "t2")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         index
             .insert_benchmark(&make_benchmark("bm-2", "r1"), "t3")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let benchmarks = index
             .find_benchmarks_by_receipt(&rec.receipt_id, "t4")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(benchmarks.len(), 2);
     }
 
@@ -870,10 +870,10 @@ mod tests {
     fn benchmarks_not_found_for_other_receipt() {
         let mut index = make_index();
         let bm = make_benchmark("bm-1", "r1");
-        index.insert_benchmark(&bm, "t1").unwrap();
+        index.insert_benchmark(&bm, "t1").expect("serde deserialization should succeed");
 
         let other_id = make_id("r2");
-        let benchmarks = index.find_benchmarks_by_receipt(&other_id, "t2").unwrap();
+        let benchmarks = index.find_benchmarks_by_receipt(&other_id, "t2").expect("serde deserialization should succeed");
         assert!(benchmarks.is_empty());
     }
 
@@ -885,7 +885,7 @@ mod tests {
     fn record_invalidation_marks_receipt_inactive() {
         let mut index = make_index();
         let rec = make_record("r1", 1);
-        index.insert_receipt(&rec, "t1").unwrap();
+        index.insert_receipt(&rec, "t1").expect("serde deserialization should succeed");
 
         let entry = InvalidationEntry {
             receipt_id: rec.receipt_id.clone(),
@@ -896,10 +896,10 @@ mod tests {
             timestamp_ns: 2000,
             fallback_confirmed: true,
         };
-        index.record_invalidation(&entry, "t2").unwrap();
+        index.record_invalidation(&entry, "t2").expect("serde deserialization should succeed");
 
         // Receipt should now be inactive
-        let fetched = index.get_receipt(&rec.receipt_id, "t3").unwrap().unwrap();
+        let fetched = index.get_receipt(&rec.receipt_id, "t3").expect("serde deserialization should succeed").expect("serde deserialization should succeed");
         assert!(!fetched.active);
     }
 
@@ -908,8 +908,8 @@ mod tests {
         let mut index = make_index();
         let r1 = make_record("r1", 1);
         let r2 = make_record("r2", 1);
-        index.insert_receipt(&r1, "t1").unwrap();
-        index.insert_receipt(&r2, "t2").unwrap();
+        index.insert_receipt(&r1, "t1").expect("serde deserialization should succeed");
+        index.insert_receipt(&r2, "t2").expect("serde deserialization should succeed");
 
         let e1 = InvalidationEntry {
             receipt_id: r1.receipt_id.clone(),
@@ -927,24 +927,24 @@ mod tests {
             timestamp_ns: 5000,
             fallback_confirmed: false,
         };
-        index.record_invalidation(&e1, "t3").unwrap();
-        index.record_invalidation(&e2, "t4").unwrap();
+        index.record_invalidation(&e1, "t3").expect("serde deserialization should succeed");
+        index.record_invalidation(&e2, "t4").expect("serde deserialization should succeed");
 
         // All invalidations
-        let all = index.query_invalidations(None, None, "t5").unwrap();
+        let all = index.query_invalidations(None, None, "t5").expect("serde deserialization should succeed");
         assert_eq!(all.len(), 2);
 
         // Window [2000, 6000]
         let windowed = index
             .query_invalidations(Some(2000), Some(6000), "t6")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(windowed.len(), 1);
         assert_eq!(windowed[0].receipt_id, r2.receipt_id);
 
         // Window [0, 1000]
         let early = index
             .query_invalidations(Some(0), Some(1000), "t7")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(early.len(), 1);
         assert_eq!(early[0].receipt_id, r1.receipt_id);
     }
@@ -972,17 +972,17 @@ mod tests {
         .enumerate()
         {
             let rec = make_record(&format!("inv-{i}"), 1);
-            index.insert_receipt(&rec, "t1").unwrap();
+            index.insert_receipt(&rec, "t1").expect("serde deserialization should succeed");
             let entry = InvalidationEntry {
                 receipt_id: rec.receipt_id.clone(),
                 reason,
                 timestamp_ns: (i as u64 + 1) * 1000,
                 fallback_confirmed: true,
             };
-            index.record_invalidation(&entry, "t2").unwrap();
+            index.record_invalidation(&entry, "t2").expect("serde deserialization should succeed");
         }
 
-        let all = index.query_invalidations(None, None, "t3").unwrap();
+        let all = index.query_invalidations(None, None, "t3").expect("serde deserialization should succeed");
         assert_eq!(all.len(), 4);
     }
 
@@ -993,9 +993,9 @@ mod tests {
     #[test]
     fn build_audit_chain_without_benchmarks() {
         let mut index = make_index();
-        index.insert_receipt(&make_record("r1", 1), "t1").unwrap();
+        index.insert_receipt(&make_record("r1", 1), "t1").expect("serde deserialization should succeed");
 
-        let chain = index.build_audit_chain("t2").unwrap();
+        let chain = index.build_audit_chain("t2").expect("serde deserialization should succeed");
         assert_eq!(chain.len(), 1);
         assert!(chain[0].benchmark_id.is_none());
         assert!(chain[0].latency_reduction_millionths.is_none());
@@ -1005,12 +1005,12 @@ mod tests {
     fn build_audit_chain_with_benchmarks() {
         let mut index = make_index();
         let rec = make_record("r1", 1);
-        index.insert_receipt(&rec, "t1").unwrap();
+        index.insert_receipt(&rec, "t1").expect("serde deserialization should succeed");
         index
             .insert_benchmark(&make_benchmark("bm-1", "r1"), "t2")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
-        let chain = index.build_audit_chain("t3").unwrap();
+        let chain = index.build_audit_chain("t3").expect("serde deserialization should succeed");
         assert_eq!(chain.len(), 1);
         assert_eq!(chain[0].benchmark_id.as_deref(), Some("bm-1"));
         assert_eq!(chain[0].latency_reduction_millionths, Some(200_000));
@@ -1022,15 +1022,15 @@ mod tests {
         let mut rec = make_record("r1", 1);
         rec.proof_input_ids = vec![make_id("p1"), make_id("p2")];
         rec.proof_types = vec![ProofType::CapabilityWitness, ProofType::FlowProof];
-        index.insert_receipt(&rec, "t1").unwrap();
+        index.insert_receipt(&rec, "t1").expect("serde deserialization should succeed");
         index
             .insert_benchmark(&make_benchmark("bm-1", "r1"), "t2")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         index
             .insert_benchmark(&make_benchmark("bm-2", "r1"), "t3")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
-        let chain = index.build_audit_chain("t4").unwrap();
+        let chain = index.build_audit_chain("t4").expect("serde deserialization should succeed");
         // 2 proofs * 2 benchmarks = 4 entries
         assert_eq!(chain.len(), 4);
     }
@@ -1038,17 +1038,17 @@ mod tests {
     #[test]
     fn reverse_audit_from_benchmark() {
         let mut index = make_index();
-        index.insert_receipt(&make_record("r1", 1), "t1").unwrap();
-        index.insert_receipt(&make_record("r2", 1), "t2").unwrap();
+        index.insert_receipt(&make_record("r1", 1), "t1").expect("serde deserialization should succeed");
+        index.insert_receipt(&make_record("r2", 1), "t2").expect("serde deserialization should succeed");
 
         index
             .insert_benchmark(&make_benchmark("bm-1", "r1"), "t3")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         index
             .insert_benchmark(&make_benchmark("bm-2", "r2"), "t4")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
-        let result = index.reverse_audit_from_benchmark("bm-1", "t5").unwrap();
+        let result = index.reverse_audit_from_benchmark("bm-1", "t5").expect("serde deserialization should succeed");
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].receipt_id, make_id("r1"));
     }
@@ -1069,11 +1069,11 @@ mod tests {
         let mut r3 = make_record("r3", 1);
         r3.extension_id = "ext-B".to_string();
 
-        index.insert_receipt(&r1, "t1").unwrap();
-        index.insert_receipt(&r2, "t2").unwrap();
-        index.insert_receipt(&r3, "t3").unwrap();
+        index.insert_receipt(&r1, "t1").expect("serde deserialization should succeed");
+        index.insert_receipt(&r2, "t2").expect("serde deserialization should succeed");
+        index.insert_receipt(&r3, "t3").expect("serde deserialization should succeed");
 
-        let summary = index.extension_summary("ext-A", "t4").unwrap();
+        let summary = index.extension_summary("ext-A", "t4").expect("serde deserialization should succeed");
         assert_eq!(summary.total_specializations, 2);
         assert_eq!(summary.active_specializations, 1);
         assert_eq!(summary.invalidated_specializations, 1);
@@ -1083,17 +1083,17 @@ mod tests {
     fn extension_summary_with_benchmarks() {
         let mut index = make_index();
         let rec = make_record("r1", 1);
-        index.insert_receipt(&rec, "t1").unwrap();
+        index.insert_receipt(&rec, "t1").expect("serde deserialization should succeed");
 
         let mut bm1 = make_benchmark("bm-1", "r1");
         bm1.latency_reduction_millionths = 100_000;
         let mut bm2 = make_benchmark("bm-2", "r1");
         bm2.latency_reduction_millionths = 300_000;
 
-        index.insert_benchmark(&bm1, "t2").unwrap();
-        index.insert_benchmark(&bm2, "t3").unwrap();
+        index.insert_benchmark(&bm1, "t2").expect("serde deserialization should succeed");
+        index.insert_benchmark(&bm2, "t3").expect("serde deserialization should succeed");
 
-        let summary = index.extension_summary("ext-1", "t4").unwrap();
+        let summary = index.extension_summary("ext-1", "t4").expect("serde deserialization should succeed");
         assert_eq!(summary.total_benchmarks, 2);
         assert_eq!(summary.avg_latency_reduction_millionths, 200_000);
     }
@@ -1101,7 +1101,7 @@ mod tests {
     #[test]
     fn extension_summary_no_data() {
         let mut index = make_index();
-        let summary = index.extension_summary("nonexistent", "t1").unwrap();
+        let summary = index.extension_summary("nonexistent", "t1").expect("serde deserialization should succeed");
         assert_eq!(summary.total_specializations, 0);
         assert_eq!(summary.active_specializations, 0);
         assert_eq!(summary.total_benchmarks, 0);
@@ -1116,7 +1116,7 @@ mod tests {
     fn events_are_recorded() {
         let mut index = make_index();
         let rec = make_record("r1", 1);
-        index.insert_receipt(&rec, "t1").unwrap();
+        index.insert_receipt(&rec, "t1").expect("serde deserialization should succeed");
         index.insert_receipt(&rec, "t2").unwrap_err(); // duplicate
 
         assert_eq!(index.events().len(), 2);
@@ -1136,7 +1136,7 @@ mod tests {
     fn event_fields_populated() {
         let mut index = make_index();
         let rec = make_record("r1", 1);
-        index.insert_receipt(&rec, "trace-42").unwrap();
+        index.insert_receipt(&rec, "trace-42").expect("serde deserialization should succeed");
 
         let event = &index.events()[0];
         assert_eq!(event.trace_id, "trace-42");
@@ -1151,16 +1151,16 @@ mod tests {
     #[test]
     fn specialization_record_serde_roundtrip() {
         let rec = make_record("r1", 1);
-        let json = serde_json::to_string(&rec).unwrap();
-        let decoded: SpecializationRecord = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&rec).expect("serde deserialization should succeed");
+        let decoded: SpecializationRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(rec, decoded);
     }
 
     #[test]
     fn benchmark_outcome_serde_roundtrip() {
         let bm = make_benchmark("bm-1", "r1");
-        let json = serde_json::to_string(&bm).unwrap();
-        let decoded: BenchmarkOutcome = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&bm).expect("serde deserialization should succeed");
+        let decoded: BenchmarkOutcome = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(bm, decoded);
     }
 
@@ -1175,8 +1175,8 @@ mod tests {
             timestamp_ns: 1000,
             fallback_confirmed: true,
         };
-        let json = serde_json::to_string(&entry).unwrap();
-        let decoded: InvalidationEntry = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let decoded: InvalidationEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, decoded);
     }
 
@@ -1191,8 +1191,8 @@ mod tests {
             latency_reduction_millionths: Some(150_000),
             epoch: SecurityEpoch::from_raw(3),
         };
-        let json = serde_json::to_string(&entry).unwrap();
-        let decoded: AuditChainEntry = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let decoded: AuditChainEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, decoded);
     }
 
@@ -1233,19 +1233,19 @@ mod tests {
         // 1. Insert receipts
         let r1 = make_record("r1", 1);
         let r2 = make_record("r2", 1);
-        index.insert_receipt(&r1, "t1").unwrap();
-        index.insert_receipt(&r2, "t2").unwrap();
+        index.insert_receipt(&r1, "t1").expect("serde deserialization should succeed");
+        index.insert_receipt(&r2, "t2").expect("serde deserialization should succeed");
 
         // 2. Add benchmarks
         index
             .insert_benchmark(&make_benchmark("bm-1", "r1"), "t3")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         index
             .insert_benchmark(&make_benchmark("bm-2", "r2"), "t4")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // 3. Build audit chain (should have 2 entries)
-        let chain = index.build_audit_chain("t5").unwrap();
+        let chain = index.build_audit_chain("t5").expect("serde deserialization should succeed");
         assert_eq!(chain.len(), 2);
         assert!(chain.iter().all(|e| e.benchmark_id.is_some()));
 
@@ -1259,19 +1259,19 @@ mod tests {
             timestamp_ns: 10_000,
             fallback_confirmed: true,
         };
-        index.record_invalidation(&inv, "t6").unwrap();
+        index.record_invalidation(&inv, "t6").expect("serde deserialization should succeed");
 
         // 5. Verify r1 is inactive
-        let fetched = index.get_receipt(&r1.receipt_id, "t7").unwrap().unwrap();
+        let fetched = index.get_receipt(&r1.receipt_id, "t7").expect("serde deserialization should succeed").expect("serde deserialization should succeed");
         assert!(!fetched.active);
 
         // 6. Active query should only return r2
-        let active = index.query_active_receipts("t8").unwrap();
+        let active = index.query_active_receipts("t8").expect("serde deserialization should succeed");
         assert_eq!(active.len(), 1);
         assert_eq!(active[0].receipt_id, r2.receipt_id);
 
         // 7. Summary
-        let summary = index.extension_summary("ext-1", "t9").unwrap();
+        let summary = index.extension_summary("ext-1", "t9").expect("serde deserialization should succeed");
         assert_eq!(summary.total_specializations, 2);
         assert_eq!(summary.active_specializations, 1);
         assert_eq!(summary.invalidated_specializations, 1);
@@ -1327,11 +1327,11 @@ mod tests {
         let run = || {
             let mut index = make_index();
             let rec = make_record("r1", 1);
-            index.insert_receipt(&rec, "t1").unwrap();
+            index.insert_receipt(&rec, "t1").expect("serde deserialization should succeed");
             index
                 .insert_benchmark(&make_benchmark("bm-1", "r1"), "t2")
-                .unwrap();
-            serde_json::to_string(index.events()).unwrap()
+                .expect("serde deserialization should succeed");
+            serde_json::to_string(index.events()).expect("serde deserialization should succeed")
         };
         assert_eq!(run(), run());
     }
@@ -1347,8 +1347,8 @@ mod tests {
             avg_latency_reduction_millionths: 200_000,
             proof_utilization_count: 4,
         };
-        let json = serde_json::to_string(&summary).unwrap();
-        let decoded: ExtensionSpecializationSummary = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
+        let decoded: ExtensionSpecializationSummary = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(summary, decoded);
     }
 
@@ -1363,8 +1363,8 @@ mod tests {
             outcome: "ok".to_string(),
             error_code: None,
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let decoded: SpecializationIndexEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let decoded: SpecializationIndexEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, decoded);
     }
 
@@ -1413,8 +1413,8 @@ mod tests {
             },
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: InvalidationReason = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: InvalidationReason = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -1422,14 +1422,14 @@ mod tests {
     #[test]
     fn get_receipt_nonexistent_returns_none() {
         let mut index = make_index();
-        let result = index.get_receipt(&make_id("nonexistent"), "t1").unwrap();
+        let result = index.get_receipt(&make_id("nonexistent"), "t1").expect("serde deserialization should succeed");
         assert!(result.is_none());
     }
 
     #[test]
     fn query_active_receipts_empty_index() {
         let mut index = make_index();
-        let active = index.query_active_receipts("t1").unwrap();
+        let active = index.query_active_receipts("t1").expect("serde deserialization should succeed");
         assert!(active.is_empty());
     }
 
@@ -1438,13 +1438,13 @@ mod tests {
         let mut index = make_index();
         let bm = make_benchmark("bm-orphan", "nonexistent-receipt");
         // insert_benchmark does not require the receipt to exist beforehand
-        index.insert_benchmark(&bm, "t1").unwrap();
+        index.insert_benchmark(&bm, "t1").expect("serde deserialization should succeed");
     }
 
     #[test]
     fn build_audit_chain_empty_index() {
         let mut index = make_index();
-        let chain = index.build_audit_chain("t1").unwrap();
+        let chain = index.build_audit_chain("t1").expect("serde deserialization should succeed");
         assert!(chain.is_empty());
     }
 
@@ -1452,7 +1452,7 @@ mod tests {
     fn multiple_invalidations_same_receipt_idempotent() {
         let mut index = make_index();
         let rec = make_record("r1", 1);
-        index.insert_receipt(&rec, "t1").unwrap();
+        index.insert_receipt(&rec, "t1").expect("serde deserialization should succeed");
 
         let inv = InvalidationEntry {
             receipt_id: make_id("r1"),
@@ -1463,11 +1463,11 @@ mod tests {
             timestamp_ns: 1000,
             fallback_confirmed: true,
         };
-        index.record_invalidation(&inv, "t2").unwrap();
+        index.record_invalidation(&inv, "t2").expect("serde deserialization should succeed");
         // Second invalidation should succeed without error
-        index.record_invalidation(&inv, "t3").unwrap();
+        index.record_invalidation(&inv, "t3").expect("serde deserialization should succeed");
 
-        let fetched = index.get_receipt(&rec.receipt_id, "t4").unwrap().unwrap();
+        let fetched = index.get_receipt(&rec.receipt_id, "t4").expect("serde deserialization should succeed").expect("serde deserialization should succeed");
         assert!(!fetched.active);
     }
 
@@ -1475,13 +1475,13 @@ mod tests {
     fn extension_summary_with_benchmarks_has_avg_latency() {
         let mut index = make_index();
         let r1 = make_record("r1", 1);
-        index.insert_receipt(&r1, "t1").unwrap();
+        index.insert_receipt(&r1, "t1").expect("serde deserialization should succeed");
 
         let mut bm = make_benchmark("bm-1", "r1");
         bm.latency_reduction_millionths = 200_000;
-        index.insert_benchmark(&bm, "t2").unwrap();
+        index.insert_benchmark(&bm, "t2").expect("serde deserialization should succeed");
 
-        let summary = index.extension_summary("ext-1", "t3").unwrap();
+        let summary = index.extension_summary("ext-1", "t3").expect("serde deserialization should succeed");
         assert_eq!(summary.total_benchmarks, 1);
         assert_eq!(summary.avg_latency_reduction_millionths, 200_000);
     }
@@ -1508,9 +1508,9 @@ mod tests {
     fn audit_chain_entry_without_benchmark() {
         let mut index = make_index();
         let rec = make_record("r1", 1);
-        index.insert_receipt(&rec, "t1").unwrap();
+        index.insert_receipt(&rec, "t1").expect("serde deserialization should succeed");
         // No benchmark inserted — chain entry should have benchmark_id=None
-        let chain = index.build_audit_chain("t2").unwrap();
+        let chain = index.build_audit_chain("t2").expect("serde deserialization should succeed");
         assert_eq!(chain.len(), 1);
         assert!(chain[0].benchmark_id.is_none());
         assert!(chain[0].latency_reduction_millionths.is_none());
@@ -1521,16 +1521,16 @@ mod tests {
         let mut index = make_index();
         let r1 = make_record("r1", 1);
         let r2 = make_record("r2", 1);
-        index.insert_receipt(&r1, "t1").unwrap();
-        index.insert_receipt(&r2, "t2").unwrap();
+        index.insert_receipt(&r1, "t1").expect("serde deserialization should succeed");
+        index.insert_receipt(&r2, "t2").expect("serde deserialization should succeed");
         index
             .insert_benchmark(&make_benchmark("bm-1", "r1"), "t3")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         index
             .insert_benchmark(&make_benchmark("bm-2", "r2"), "t4")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
-        let result = index.reverse_audit_from_benchmark("bm-1", "t5").unwrap();
+        let result = index.reverse_audit_from_benchmark("bm-1", "t5").expect("serde deserialization should succeed");
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].receipt_id, r1.receipt_id);
     }
@@ -1539,14 +1539,14 @@ mod tests {
     fn reverse_audit_nonexistent_benchmark_returns_empty() {
         let mut index = make_index();
         let rec = make_record("r1", 1);
-        index.insert_receipt(&rec, "t1").unwrap();
+        index.insert_receipt(&rec, "t1").expect("serde deserialization should succeed");
         index
             .insert_benchmark(&make_benchmark("bm-1", "r1"), "t2")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let result = index
             .reverse_audit_from_benchmark("bm-nonexistent", "t3")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(result.is_empty());
     }
 
@@ -1554,7 +1554,7 @@ mod tests {
     fn query_invalidations_no_filter() {
         let mut index = make_index();
         let rec = make_record("r1", 1);
-        index.insert_receipt(&rec, "t1").unwrap();
+        index.insert_receipt(&rec, "t1").expect("serde deserialization should succeed");
 
         let inv = InvalidationEntry {
             receipt_id: make_id("r1"),
@@ -1565,9 +1565,9 @@ mod tests {
             timestamp_ns: 5000,
             fallback_confirmed: true,
         };
-        index.record_invalidation(&inv, "t2").unwrap();
+        index.record_invalidation(&inv, "t2").expect("serde deserialization should succeed");
 
-        let results = index.query_invalidations(None, None, "t3").unwrap();
+        let results = index.query_invalidations(None, None, "t3").expect("serde deserialization should succeed");
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].receipt_id, make_id("r1"));
     }
@@ -1577,7 +1577,7 @@ mod tests {
         let mut index = make_index();
         for i in 1..=3u64 {
             let rec = make_record(&format!("r{i}"), 1);
-            index.insert_receipt(&rec, &format!("t-ins-{i}")).unwrap();
+            index.insert_receipt(&rec, &format!("t-ins-{i}")).expect("serde deserialization should succeed");
             let inv = InvalidationEntry {
                 receipt_id: make_id(&format!("r{i}")),
                 reason: InvalidationReason::ManualRevocation {
@@ -1588,13 +1588,13 @@ mod tests {
             };
             index
                 .record_invalidation(&inv, &format!("t-inv-{i}"))
-                .unwrap();
+                .expect("serde deserialization should succeed");
         }
 
         // Only entries in [2000, 3000]
         let results = index
             .query_invalidations(Some(2000), Some(3000), "t-q")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(results.len(), 2);
     }
 
@@ -1602,7 +1602,7 @@ mod tests {
     fn duplicate_receipt_insert_returns_error() {
         let mut index = make_index();
         let rec = make_record("r1", 1);
-        index.insert_receipt(&rec, "t1").unwrap();
+        index.insert_receipt(&rec, "t1").expect("serde deserialization should succeed");
         let err = index.insert_receipt(&rec, "t2").unwrap_err();
         let msg = err.to_string();
         assert!(
@@ -1615,7 +1615,7 @@ mod tests {
     fn duplicate_benchmark_insert_returns_error() {
         let mut index = make_index();
         let bm = make_benchmark("bm-1", "r1");
-        index.insert_benchmark(&bm, "t1").unwrap();
+        index.insert_benchmark(&bm, "t1").expect("serde deserialization should succeed");
         let err = index.insert_benchmark(&bm, "t2").unwrap_err();
         let msg = err.to_string();
         assert!(!msg.is_empty());
@@ -1626,9 +1626,9 @@ mod tests {
         let mut index = make_index();
         for i in 0..20u64 {
             let rec = make_record(&format!("r-{i}"), 1);
-            index.insert_receipt(&rec, &format!("t-{i}")).unwrap();
+            index.insert_receipt(&rec, &format!("t-{i}")).expect("serde deserialization should succeed");
         }
-        let active = index.query_active_receipts("t-q").unwrap();
+        let active = index.query_active_receipts("t-q").expect("serde deserialization should succeed");
         assert_eq!(active.len(), 20);
     }
 
@@ -1641,7 +1641,7 @@ mod tests {
     #[test]
     fn specialization_record_json_field_presence() {
         let rec = make_record("r1", 1);
-        let json = serde_json::to_string(&rec).unwrap();
+        let json = serde_json::to_string(&rec).expect("serde deserialization should succeed");
         assert!(json.contains("\"receipt_id\""));
         assert!(json.contains("\"proof_input_ids\""));
         assert!(json.contains("\"proof_types\""));
@@ -1654,7 +1654,7 @@ mod tests {
     #[test]
     fn benchmark_outcome_json_field_presence() {
         let bm = make_benchmark("bm-1", "r1");
-        let json = serde_json::to_string(&bm).unwrap();
+        let json = serde_json::to_string(&bm).expect("serde deserialization should succeed");
         assert!(json.contains("\"benchmark_id\""));
         assert!(json.contains("\"receipt_id\""));
         assert!(json.contains("\"latency_reduction_millionths\""));
@@ -1666,11 +1666,11 @@ mod tests {
     fn events_accumulate_across_operations() {
         let mut index = make_index();
         let rec = make_record("r1", 1);
-        index.insert_receipt(&rec, "t1").unwrap();
+        index.insert_receipt(&rec, "t1").expect("serde deserialization should succeed");
         index
             .insert_benchmark(&make_benchmark("bm-1", "r1"), "t2")
-            .unwrap();
-        let _ = index.build_audit_chain("t3").unwrap();
+            .expect("serde deserialization should succeed");
+        let _ = index.build_audit_chain("t3").expect("serde deserialization should succeed");
         // insert_receipt + insert_benchmark + build_audit_chain = at least 3 events
         assert!(
             index.events().len() >= 3,
@@ -1684,17 +1684,17 @@ mod tests {
         let mut index = make_index();
         let r1 = make_record("r1", 1);
         let r2 = make_record("r2", 1);
-        index.insert_receipt(&r1, "t1").unwrap();
-        index.insert_receipt(&r2, "t2").unwrap();
+        index.insert_receipt(&r1, "t1").expect("serde deserialization should succeed");
+        index.insert_receipt(&r2, "t2").expect("serde deserialization should succeed");
 
         let mut bm1 = make_benchmark("bm-1", "r1");
         bm1.latency_reduction_millionths = 100_000;
         let mut bm2 = make_benchmark("bm-2", "r2");
         bm2.latency_reduction_millionths = 300_000;
-        index.insert_benchmark(&bm1, "t3").unwrap();
-        index.insert_benchmark(&bm2, "t4").unwrap();
+        index.insert_benchmark(&bm1, "t3").expect("serde deserialization should succeed");
+        index.insert_benchmark(&bm2, "t4").expect("serde deserialization should succeed");
 
-        let summary = index.extension_summary("ext-1", "t5").unwrap();
+        let summary = index.extension_summary("ext-1", "t5").expect("serde deserialization should succeed");
         assert_eq!(summary.total_benchmarks, 2);
         assert_eq!(summary.avg_latency_reduction_millionths, 200_000);
     }
@@ -1833,9 +1833,9 @@ mod tests {
         for (i, class) in classes.iter().enumerate() {
             let mut rec = make_record(&format!("opt-{i}"), 1);
             rec.optimization_class = *class;
-            index.insert_receipt(&rec, &format!("t-{i}")).unwrap();
+            index.insert_receipt(&rec, &format!("t-{i}")).expect("serde deserialization should succeed");
         }
-        let all = index.query_receipts(None, "t-q").unwrap();
+        let all = index.query_receipts(None, "t-q").expect("serde deserialization should succeed");
         assert_eq!(all.len(), 4);
         let found_classes: std::collections::BTreeSet<String> = all
             .iter()
@@ -1855,9 +1855,9 @@ mod tests {
         for (i, pt) in types.iter().enumerate() {
             let mut rec = make_record(&format!("pt-{i}"), 1);
             rec.proof_types = vec![*pt];
-            index.insert_receipt(&rec, &format!("t-{i}")).unwrap();
+            index.insert_receipt(&rec, &format!("t-{i}")).expect("serde deserialization should succeed");
         }
-        let all = index.query_receipts(None, "t-q").unwrap();
+        let all = index.query_receipts(None, "t-q").expect("serde deserialization should succeed");
         assert_eq!(all.len(), 3);
         // Query order is not guaranteed, so collect all proof types
         let found_types: std::collections::BTreeSet<String> =
@@ -1874,8 +1874,8 @@ mod tests {
         rec.proof_input_ids = vec![];
         rec.proof_types = vec![];
         let mut index = make_index();
-        index.insert_receipt(&rec, "t1").unwrap();
-        let chain = index.build_audit_chain("t2").unwrap();
+        index.insert_receipt(&rec, "t1").expect("serde deserialization should succeed");
+        let chain = index.build_audit_chain("t2").expect("serde deserialization should succeed");
         // No proof inputs means no chain entries for this receipt
         assert!(chain.is_empty());
     }
@@ -1892,8 +1892,8 @@ mod tests {
             ProofType::FlowProof,
         ];
         let mut index = make_index();
-        index.insert_receipt(&rec, "t1").unwrap();
-        let chain = index.build_audit_chain("t2").unwrap();
+        index.insert_receipt(&rec, "t1").expect("serde deserialization should succeed");
+        let chain = index.build_audit_chain("t2").expect("serde deserialization should succeed");
         assert_eq!(chain.len(), 5);
         assert_eq!(chain[2].proof_type, ProofType::ReplayMotif);
     }
@@ -1908,8 +1908,8 @@ mod tests {
             sample_count: 0,
             timestamp_ns: 0,
         };
-        let json = serde_json::to_string(&bm).unwrap();
-        let decoded: BenchmarkOutcome = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&bm).expect("serde deserialization should succeed");
+        let decoded: BenchmarkOutcome = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(decoded.latency_reduction_millionths, 0);
         assert_eq!(decoded.throughput_increase_millionths, 0);
         assert_eq!(decoded.sample_count, 0);
@@ -1925,8 +1925,8 @@ mod tests {
             sample_count: u64::MAX,
             timestamp_ns: u64::MAX,
         };
-        let json = serde_json::to_string(&bm).unwrap();
-        let decoded: BenchmarkOutcome = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&bm).expect("serde deserialization should succeed");
+        let decoded: BenchmarkOutcome = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(decoded.latency_reduction_millionths, u64::MAX);
         assert_eq!(decoded.timestamp_ns, u64::MAX);
     }
@@ -1943,8 +1943,8 @@ mod tests {
             timestamp_ns: 7777,
             fallback_confirmed: false,
         };
-        index.record_invalidation(&entry, "t1").unwrap();
-        let results = index.query_invalidations(None, None, "t2").unwrap();
+        index.record_invalidation(&entry, "t1").expect("serde deserialization should succeed");
+        let results = index.query_invalidations(None, None, "t2").expect("serde deserialization should succeed");
         assert_eq!(results.len(), 1);
         assert!(!results[0].fallback_confirmed);
     }
@@ -1953,8 +1953,8 @@ mod tests {
     fn enrichment_delete_receipt_emits_event() {
         let mut index = make_index();
         let rec = make_record("del-evt", 1);
-        index.insert_receipt(&rec, "t1").unwrap();
-        index.delete_receipt(&rec.receipt_id, "t2").unwrap();
+        index.insert_receipt(&rec, "t1").expect("serde deserialization should succeed");
+        index.delete_receipt(&rec.receipt_id, "t2").expect("serde deserialization should succeed");
 
         let delete_events: Vec<_> = index
             .events()
@@ -1969,7 +1969,7 @@ mod tests {
     fn enrichment_delete_nonexistent_receipt_emits_not_found_event() {
         let mut index = make_index();
         let id = make_id("missing");
-        let deleted = index.delete_receipt(&id, "t1").unwrap();
+        let deleted = index.delete_receipt(&id, "t1").expect("serde deserialization should succeed");
         assert!(!deleted);
 
         let delete_events: Vec<_> = index
@@ -1992,7 +1992,7 @@ mod tests {
             latency_reduction_millionths: Some(500_000),
             epoch: SecurityEpoch::from_raw(10),
         };
-        let json = serde_json::to_string(&ace).unwrap();
+        let json = serde_json::to_string(&ace).expect("serde deserialization should succeed");
         assert!(json.contains("\"proof_id\""));
         assert!(json.contains("\"proof_type\""));
         assert!(json.contains("\"receipt_id\""));
@@ -2013,7 +2013,7 @@ mod tests {
             avg_latency_reduction_millionths: 180_000,
             proof_utilization_count: 15,
         };
-        let json = serde_json::to_string(&summary).unwrap();
+        let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
         assert!(json.contains("\"extension_id\""));
         assert!(json.contains("\"total_specializations\""));
         assert!(json.contains("\"active_specializations\""));
@@ -2033,7 +2033,7 @@ mod tests {
             timestamp_ns: 12345,
             fallback_confirmed: true,
         };
-        let json = serde_json::to_string(&entry).unwrap();
+        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
         assert!(json.contains("\"receipt_id\""));
         assert!(json.contains("\"reason\""));
         assert!(json.contains("\"timestamp_ns\""));
@@ -2052,7 +2052,7 @@ mod tests {
             outcome: "ok".to_string(),
             error_code: Some("E001".to_string()),
         };
-        let json = serde_json::to_string(&evt).unwrap();
+        let json = serde_json::to_string(&evt).expect("serde deserialization should succeed");
         assert!(json.contains("\"trace_id\""));
         assert!(json.contains("\"decision_id\""));
         assert!(json.contains("\"policy_id\""));
@@ -2069,10 +2069,10 @@ mod tests {
         r1.proof_input_ids = vec![make_id("p1"), make_id("p2"), make_id("p3")];
         let mut r2 = make_record("r-util-2", 1);
         r2.proof_input_ids = vec![make_id("p4")];
-        index.insert_receipt(&r1, "t1").unwrap();
-        index.insert_receipt(&r2, "t2").unwrap();
+        index.insert_receipt(&r1, "t1").expect("serde deserialization should succeed");
+        index.insert_receipt(&r2, "t2").expect("serde deserialization should succeed");
 
-        let summary = index.extension_summary("ext-1", "t3").unwrap();
+        let summary = index.extension_summary("ext-1", "t3").expect("serde deserialization should succeed");
         assert_eq!(summary.proof_utilization_count, 4); // 3 + 1
     }
 
@@ -2080,7 +2080,7 @@ mod tests {
     fn enrichment_query_invalidations_empty_window_returns_empty() {
         let mut index = make_index();
         let rec = make_record("r-ew", 1);
-        index.insert_receipt(&rec, "t1").unwrap();
+        index.insert_receipt(&rec, "t1").expect("serde deserialization should succeed");
         let inv = InvalidationEntry {
             receipt_id: make_id("r-ew"),
             reason: InvalidationReason::EpochChange {
@@ -2090,16 +2090,16 @@ mod tests {
             timestamp_ns: 5000,
             fallback_confirmed: true,
         };
-        index.record_invalidation(&inv, "t2").unwrap();
+        index.record_invalidation(&inv, "t2").expect("serde deserialization should succeed");
 
         // Window entirely before the invalidation
-        let results = index.query_invalidations(Some(1), Some(100), "t3").unwrap();
+        let results = index.query_invalidations(Some(1), Some(100), "t3").expect("serde deserialization should succeed");
         assert!(results.is_empty());
 
         // Window entirely after the invalidation
         let results = index
             .query_invalidations(Some(10_000), Some(20_000), "t4")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(results.is_empty());
     }
 

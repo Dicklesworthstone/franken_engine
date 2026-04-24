@@ -635,7 +635,7 @@ mod tests {
         let mut store = IdempotencyStore::new(test_epoch(), test_session_key());
         let input = test_derivation_input();
         let key = store.derive_key(&input);
-        let result = store.check_and_claim(&key, &input, 100).unwrap();
+        let result = store.check_and_claim(&key, &input, 100).expect("serde deserialization should succeed");
         assert!(matches!(result, DedupResult::New));
         assert_eq!(store.entry_count(), 1);
     }
@@ -646,8 +646,8 @@ mod tests {
         let input = test_derivation_input();
         let key = store.derive_key(&input);
 
-        store.check_and_claim(&key, &input, 100).unwrap();
-        let result = store.check_and_claim(&key, &input, 101).unwrap();
+        store.check_and_claim(&key, &input, 100).expect("serde deserialization should succeed");
+        let result = store.check_and_claim(&key, &input, 101).expect("serde deserialization should succeed");
         assert!(matches!(result, DedupResult::DuplicateInProgress));
     }
 
@@ -657,10 +657,10 @@ mod tests {
         let input = test_derivation_input();
         let key = store.derive_key(&input);
 
-        store.check_and_claim(&key, &input, 100).unwrap();
-        store.mark_completed(&key, test_result_hash()).unwrap();
+        store.check_and_claim(&key, &input, 100).expect("serde deserialization should succeed");
+        store.mark_completed(&key, test_result_hash()).expect("serde deserialization should succeed");
 
-        let result = store.check_and_claim(&key, &input, 101).unwrap();
+        let result = store.check_and_claim(&key, &input, 101).expect("serde deserialization should succeed");
         assert!(matches!(result, DedupResult::CachedResult { .. }));
         if let DedupResult::CachedResult { result_hash } = result {
             assert_eq!(result_hash, test_result_hash());
@@ -673,10 +673,10 @@ mod tests {
         let input = test_derivation_input();
         let key = store.derive_key(&input);
 
-        store.check_and_claim(&key, &input, 100).unwrap();
-        store.mark_failed(&key, "transient_timeout").unwrap();
+        store.check_and_claim(&key, &input, 100).expect("serde deserialization should succeed");
+        store.mark_failed(&key, "transient_timeout").expect("serde deserialization should succeed");
 
-        let result = store.check_and_claim(&key, &input, 101).unwrap();
+        let result = store.check_and_claim(&key, &input, 101).expect("serde deserialization should succeed");
         assert!(matches!(result, DedupResult::PreviouslyFailed { .. }));
         if let DedupResult::PreviouslyFailed { error_code } = result {
             assert_eq!(error_code, "transient_timeout");
@@ -701,7 +701,7 @@ mod tests {
         let mut store = IdempotencyStore::new(test_epoch(), test_session_key());
         let input = test_derivation_input();
         let key = store.derive_key(&input);
-        store.check_and_claim(&key, &input, 100).unwrap();
+        store.check_and_claim(&key, &input, 100).expect("serde deserialization should succeed");
         assert_eq!(store.entry_count(), 1);
 
         store.advance_epoch(SecurityEpoch::from_raw(2), b"new-session-key".to_vec());
@@ -755,7 +755,7 @@ mod tests {
         input.attempt_number = 3; // exactly at default max
 
         let key = store.derive_key(&input);
-        let result = store.check_and_claim(&key, &input, 100).unwrap();
+        let result = store.check_and_claim(&key, &input, 100).expect("serde deserialization should succeed");
         assert!(matches!(result, DedupResult::New));
     }
 
@@ -767,14 +767,14 @@ mod tests {
         let input = test_derivation_input();
         let key = store.derive_key(&input);
 
-        store.check_and_claim(&key, &input, 100).unwrap();
+        store.check_and_claim(&key, &input, 100).expect("serde deserialization should succeed");
         assert_eq!(store.entry_count(), 1);
 
         // After TTL (default 600 ticks), entry should be evicted.
         let mut input2 = test_derivation_input();
         input2.trace_id = "trace-002".to_string();
         let key2 = store.derive_key(&input2);
-        store.check_and_claim(&key2, &input2, 800).unwrap();
+        store.check_and_claim(&key2, &input2, 800).expect("serde deserialization should succeed");
 
         // Original entry should have been evicted during claim.
         assert_eq!(store.entry_count(), 1);
@@ -794,11 +794,11 @@ mod tests {
         let mut input1 = test_derivation_input();
         input1.computation_name = "short_ttl".to_string();
         let key1 = store.derive_key(&input1);
-        store.check_and_claim(&key1, &input1, 100).unwrap();
+        store.check_and_claim(&key1, &input1, 100).expect("serde deserialization should succeed");
 
         let input2 = test_derivation_input(); // uses default TTL (600)
         let key2 = store.derive_key(&input2);
-        store.check_and_claim(&key2, &input2, 100).unwrap();
+        store.check_and_claim(&key2, &input2, 100).expect("serde deserialization should succeed");
 
         assert_eq!(store.entry_count(), 2);
 
@@ -817,8 +817,8 @@ mod tests {
         let mut input0 = test_derivation_input();
         input0.attempt_number = 0;
         let key0 = store.derive_key(&input0);
-        store.check_and_claim(&key0, &input0, 100).unwrap();
-        store.mark_failed(&key0, "timeout").unwrap();
+        store.check_and_claim(&key0, &input0, 100).expect("serde deserialization should succeed");
+        store.mark_failed(&key0, "timeout").expect("serde deserialization should succeed");
 
         // Attempt 1: new attempt produces new key, should be New.
         let mut input1 = test_derivation_input();
@@ -826,7 +826,7 @@ mod tests {
         let key1 = store.derive_key(&input1);
         assert_ne!(key0.key_hash, key1.key_hash);
 
-        let result = store.check_and_claim(&key1, &input1, 101).unwrap();
+        let result = store.check_and_claim(&key1, &input1, 101).expect("serde deserialization should succeed");
         assert!(matches!(result, DedupResult::New));
     }
 
@@ -857,7 +857,7 @@ mod tests {
         let mut store = IdempotencyStore::new(test_epoch(), test_session_key());
         let input = test_derivation_input();
         let key = store.derive_key(&input);
-        store.check_and_claim(&key, &input, 100).unwrap();
+        store.check_and_claim(&key, &input, 100).expect("serde deserialization should succeed");
 
         let events = store.drain_events();
         assert_eq!(events.len(), 1);
@@ -874,7 +874,7 @@ mod tests {
         let mut store = IdempotencyStore::new(test_epoch(), test_session_key());
         let input = test_derivation_input();
         let key = store.derive_key(&input);
-        store.check_and_claim(&key, &input, 100).unwrap();
+        store.check_and_claim(&key, &input, 100).expect("serde deserialization should succeed");
 
         let e1 = store.drain_events();
         assert_eq!(e1.len(), 1);
@@ -888,11 +888,11 @@ mod tests {
         let input = test_derivation_input();
         let key = store.derive_key(&input);
 
-        store.check_and_claim(&key, &input, 100).unwrap(); // new
-        store.check_and_claim(&key, &input, 101).unwrap(); // duplicate_in_progress
+        store.check_and_claim(&key, &input, 100).expect("serde deserialization should succeed"); // new
+        store.check_and_claim(&key, &input, 101).expect("serde deserialization should succeed"); // duplicate_in_progress
 
-        store.mark_completed(&key, test_result_hash()).unwrap();
-        store.check_and_claim(&key, &input, 102).unwrap(); // cached
+        store.mark_completed(&key, test_result_hash()).expect("serde deserialization should succeed");
+        store.check_and_claim(&key, &input, 102).expect("serde deserialization should succeed"); // cached
 
         assert_eq!(store.result_counts().get("new"), Some(&1));
         assert_eq!(store.result_counts().get("duplicate_in_progress"), Some(&1));
@@ -905,8 +905,8 @@ mod tests {
     fn idempotency_key_serialization_round_trip() {
         let input = test_derivation_input();
         let key = derive_idempotency_key(&test_session_key(), test_epoch(), &input);
-        let json = serde_json::to_string(&key).unwrap();
-        let restored: IdempotencyKey = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&key).expect("serde deserialization should succeed");
+        let restored: IdempotencyKey = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(key, restored);
     }
 
@@ -922,8 +922,8 @@ mod tests {
             },
         ];
         for status in &statuses {
-            let json = serde_json::to_string(status).unwrap();
-            let restored: DedupStatus = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(status).expect("serde deserialization should succeed");
+            let restored: DedupStatus = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*status, restored);
         }
     }
@@ -941,8 +941,8 @@ mod tests {
             },
         ];
         for result in &results {
-            let json = serde_json::to_string(result).unwrap();
-            let restored: DedupResult = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(result).expect("serde deserialization should succeed");
+            let restored: DedupResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*result, restored);
         }
     }
@@ -958,8 +958,8 @@ mod tests {
             epoch_id: 1,
             event: "dedup_check".to_string(),
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let restored: IdempotencyEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let restored: IdempotencyEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, restored);
     }
 
@@ -983,8 +983,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap();
-            let restored: IdempotencyError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let restored: IdempotencyError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, restored);
         }
     }
@@ -995,8 +995,8 @@ mod tests {
             max_retries: 5,
             entry_ttl_ticks: 1000,
         };
-        let json = serde_json::to_string(&config).unwrap();
-        let restored: RetryConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let restored: RetryConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, restored);
     }
 
@@ -1106,14 +1106,14 @@ mod tests {
         assert_eq!(key.epoch, test_epoch());
 
         // 2. Check — should be new
-        let r1 = store.check_and_claim(&key, &input, 100).unwrap();
+        let r1 = store.check_and_claim(&key, &input, 100).expect("serde deserialization should succeed");
         assert!(matches!(r1, DedupResult::New));
 
         // 3. Mark completed
-        store.mark_completed(&key, test_result_hash()).unwrap();
+        store.mark_completed(&key, test_result_hash()).expect("serde deserialization should succeed");
 
         // 4. Check again — should be cached
-        let r2 = store.check_and_claim(&key, &input, 101).unwrap();
+        let r2 = store.check_and_claim(&key, &input, 101).expect("serde deserialization should succeed");
         if let DedupResult::CachedResult { result_hash } = r2 {
             assert_eq!(result_hash, test_result_hash());
         } else {
@@ -1221,9 +1221,9 @@ mod tests {
         assert!(display.contains('@'));
         // The hex part should be 64 chars
         // SAFETY: test verified display.starts_with("idem:"); strip_prefix returns Some
-        let hex_part = display.strip_prefix("idem:").unwrap();
+        let hex_part = display.strip_prefix("idem:").expect("serde deserialization should succeed");
         // SAFETY: test verified display.contains('@'); split('@').next() returns Some
-        let hex_part = hex_part.split('@').next().unwrap();
+        let hex_part = hex_part.split('@').next().expect("serde deserialization should succeed");
         assert_eq!(hex_part.len(), 64);
     }
 
@@ -1273,8 +1273,8 @@ mod tests {
     #[test]
     fn key_derivation_input_serde_roundtrip() {
         let input = test_derivation_input();
-        let json = serde_json::to_string(&input).unwrap();
-        let back: KeyDerivationInput = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
+        let back: KeyDerivationInput = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(input, back);
     }
 
@@ -1288,8 +1288,8 @@ mod tests {
             created_at_ticks: 42,
             epoch: test_epoch(),
         };
-        let json = serde_json::to_string(&entry).unwrap();
-        let back: DedupEntry = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let back: DedupEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, back);
     }
 
@@ -1346,7 +1346,7 @@ mod tests {
             epoch_id: 5,
             event: "dedup_check".into(),
         };
-        let json = serde_json::to_string(&event).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
         assert!(json.contains("\"idempotency_key_hash\""));
         assert!(json.contains("\"computation_name\""));
         assert!(json.contains("\"attempt\""));
@@ -1364,7 +1364,7 @@ mod tests {
             created_at_ticks: 0,
             epoch: test_epoch(),
         };
-        let json = serde_json::to_string(&entry).unwrap();
+        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
         assert!(json.contains("\"status\""));
         assert!(json.contains("\"computation_name\""));
         assert!(json.contains("\"created_at_ticks\""));
@@ -1374,7 +1374,7 @@ mod tests {
     #[test]
     fn key_derivation_input_json_field_presence() {
         let input = test_derivation_input();
-        let json = serde_json::to_string(&input).unwrap();
+        let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
         assert!(json.contains("\"computation_name\""));
         assert!(json.contains("\"input_hash\""));
         assert!(json.contains("\"trace_id\""));
@@ -1422,10 +1422,10 @@ mod tests {
         let mut store = IdempotencyStore::new(test_epoch(), test_session_key());
         let input = test_derivation_input();
         let key = store.derive_key(&input);
-        store.check_and_claim(&key, &input, 100).unwrap();
+        store.check_and_claim(&key, &input, 100).expect("serde deserialization should succeed");
         let rh = ContentHash::compute(b"specific-result");
-        store.mark_completed(&key, rh).unwrap();
-        let result = store.check_and_claim(&key, &input, 101).unwrap();
+        store.mark_completed(&key, rh).expect("serde deserialization should succeed");
+        let result = store.check_and_claim(&key, &input, 101).expect("serde deserialization should succeed");
         if let DedupResult::CachedResult { result_hash } = result {
             assert_eq!(result_hash, rh);
         } else {
@@ -1453,17 +1453,17 @@ mod tests {
         input_b.trace_id = "trace-beta".to_string();
         let key_b = store.derive_key(&input_b);
 
-        let r1 = store.check_and_claim(&key_a, &input_a, 100).unwrap();
-        let r2 = store.check_and_claim(&key_b, &input_b, 100).unwrap();
+        let r1 = store.check_and_claim(&key_a, &input_a, 100).expect("serde deserialization should succeed");
+        let r2 = store.check_and_claim(&key_b, &input_b, 100).expect("serde deserialization should succeed");
         assert!(matches!(r1, DedupResult::New));
         assert!(matches!(r2, DedupResult::New));
         assert_eq!(store.entry_count(), 2);
 
         // Complete one, check it returns cached; other still in-progress.
-        store.mark_completed(&key_a, test_result_hash()).unwrap();
-        let r3 = store.check_and_claim(&key_a, &input_a, 101).unwrap();
+        store.mark_completed(&key_a, test_result_hash()).expect("serde deserialization should succeed");
+        let r3 = store.check_and_claim(&key_a, &input_a, 101).expect("serde deserialization should succeed");
         assert!(matches!(r3, DedupResult::CachedResult { .. }));
-        let r4 = store.check_and_claim(&key_b, &input_b, 101).unwrap();
+        let r4 = store.check_and_claim(&key_b, &input_b, 101).expect("serde deserialization should succeed");
         assert!(matches!(r4, DedupResult::DuplicateInProgress));
     }
 
@@ -1526,7 +1526,7 @@ mod tests {
         // Add entry in epoch 1.
         let input = test_derivation_input();
         let key = store.derive_key(&input);
-        store.check_and_claim(&key, &input, 100).unwrap();
+        store.check_and_claim(&key, &input, 100).expect("serde deserialization should succeed");
         assert_eq!(store.entry_count(), 1);
 
         // Advance to epoch 2 — epoch 1 entries cleared.
@@ -1535,7 +1535,7 @@ mod tests {
 
         // Add entry in epoch 2.
         let key2 = store.derive_key(&input);
-        store.check_and_claim(&key2, &input, 200).unwrap();
+        store.check_and_claim(&key2, &input, 200).expect("serde deserialization should succeed");
         assert_eq!(store.entry_count(), 1);
 
         // Advance to epoch 3 — epoch 2 entries cleared.
@@ -1610,10 +1610,10 @@ mod tests {
         let input = test_derivation_input();
         let key = store.derive_key(&input);
 
-        store.check_and_claim(&key, &input, 100).unwrap();
+        store.check_and_claim(&key, &input, 100).expect("serde deserialization should succeed");
         store.drain_events(); // clear first event
 
-        store.check_and_claim(&key, &input, 101).unwrap();
+        store.check_and_claim(&key, &input, 101).expect("serde deserialization should succeed");
         let events = store.drain_events();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].dedup_result, "duplicate_in_progress");
@@ -1626,11 +1626,11 @@ mod tests {
         let input = test_derivation_input();
         let key = store.derive_key(&input);
 
-        store.check_and_claim(&key, &input, 100).unwrap();
-        store.mark_failed(&key, "network_error").unwrap();
+        store.check_and_claim(&key, &input, 100).expect("serde deserialization should succeed");
+        store.mark_failed(&key, "network_error").expect("serde deserialization should succeed");
         store.drain_events();
 
-        store.check_and_claim(&key, &input, 101).unwrap();
+        store.check_and_claim(&key, &input, 101).expect("serde deserialization should succeed");
         let events = store.drain_events();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].dedup_result, "previously_failed");
@@ -1656,7 +1656,7 @@ mod tests {
         input.computation_name = "zero_retry_comp".to_string();
         input.attempt_number = 0;
         let key = store.derive_key(&input);
-        let result = store.check_and_claim(&key, &input, 100).unwrap();
+        let result = store.check_and_claim(&key, &input, 100).expect("serde deserialization should succeed");
         assert!(matches!(result, DedupResult::New));
 
         // Attempt 1 should fail (exceeds max of 0).
@@ -1726,20 +1726,20 @@ mod tests {
             let mut input = test_derivation_input();
             input.trace_id = format!("trace-{i}");
             let key = store.derive_key(&input);
-            store.check_and_claim(&key, &input, 100 + i).unwrap();
+            store.check_and_claim(&key, &input, 100 + i).expect("serde deserialization should succeed");
         }
         assert_eq!(store.entry_count(), 3);
 
         // Duplicate check doesn't add new entry.
         let input = test_derivation_input();
         let key = store.derive_key(&input);
-        store.check_and_claim(&key, &input, 200).unwrap();
+        store.check_and_claim(&key, &input, 200).expect("serde deserialization should succeed");
         // This might be New (different trace_id than the 3 above)
         // or might match if trace_id matches. Let's use the original.
         let mut orig_input = test_derivation_input();
         orig_input.trace_id = "trace-0".to_string();
         let orig_key = store.derive_key(&orig_input);
-        store.check_and_claim(&orig_key, &orig_input, 200).unwrap();
+        store.check_and_claim(&orig_key, &orig_input, 200).expect("serde deserialization should succeed");
         // entry_count should be 4 (3 numbered + 1 default trace_id)
         assert!(store.entry_count() >= 3);
     }
@@ -1756,22 +1756,22 @@ mod tests {
         let mut input1 = test_derivation_input();
         input1.trace_id = "counts-1".to_string();
         let key1 = store.derive_key(&input1);
-        store.check_and_claim(&key1, &input1, 100).unwrap();
+        store.check_and_claim(&key1, &input1, 100).expect("serde deserialization should succeed");
 
         // Generate "duplicate_in_progress" outcome.
-        store.check_and_claim(&key1, &input1, 101).unwrap();
+        store.check_and_claim(&key1, &input1, 101).expect("serde deserialization should succeed");
 
         // Mark completed, generate "cached" outcome.
-        store.mark_completed(&key1, test_result_hash()).unwrap();
-        store.check_and_claim(&key1, &input1, 102).unwrap();
+        store.mark_completed(&key1, test_result_hash()).expect("serde deserialization should succeed");
+        store.check_and_claim(&key1, &input1, 102).expect("serde deserialization should succeed");
 
         // Generate "previously_failed" outcome.
         let mut input2 = test_derivation_input();
         input2.trace_id = "counts-2".to_string();
         let key2 = store.derive_key(&input2);
-        store.check_and_claim(&key2, &input2, 103).unwrap();
-        store.mark_failed(&key2, "err").unwrap();
-        store.check_and_claim(&key2, &input2, 104).unwrap();
+        store.check_and_claim(&key2, &input2, 103).expect("serde deserialization should succeed");
+        store.mark_failed(&key2, "err").expect("serde deserialization should succeed");
+        store.check_and_claim(&key2, &input2, 104).expect("serde deserialization should succeed");
 
         let counts = store.result_counts();
         assert_eq!(counts.get("new"), Some(&2)); // key1 + key2
@@ -1793,7 +1793,7 @@ mod tests {
             let mut input = test_derivation_input();
             input.trace_id = format!("evict-{i}");
             let key = store.derive_key(&input);
-            store.check_and_claim(&key, &input, 100).unwrap();
+            store.check_and_claim(&key, &input, 100).expect("serde deserialization should succeed");
         }
         assert_eq!(store.entry_count(), 3);
 
@@ -1815,7 +1815,7 @@ mod tests {
         let mut store = IdempotencyStore::new(SecurityEpoch::from_raw(42), test_session_key());
         let input = test_derivation_input();
         let key = store.derive_key(&input);
-        store.check_and_claim(&key, &input, 100).unwrap();
+        store.check_and_claim(&key, &input, 100).expect("serde deserialization should succeed");
 
         // Internal entry should have epoch 42.
         let events = store.drain_events();
@@ -1853,8 +1853,8 @@ mod tests {
             max_retries: u32::MAX,
             entry_ttl_ticks: u64::MAX,
         };
-        let json = serde_json::to_string(&cfg).unwrap();
-        let back: RetryConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
+        let back: RetryConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cfg, back);
     }
 

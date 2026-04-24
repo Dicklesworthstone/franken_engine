@@ -807,7 +807,7 @@ mod tests {
     const TEST_ZONE: &str = "test-zone";
 
     fn owner_signing_key() -> SigningKey {
-        SigningKey::from_bytes([0x01; 32]).unwrap()
+        SigningKey::from_bytes([0x01; 32]).expect("serde deserialization should succeed")
     }
 
     fn owner_vk() -> VerificationKey {
@@ -815,7 +815,7 @@ mod tests {
     }
 
     fn attested_signing_key() -> SigningKey {
-        SigningKey::from_bytes([0x02; 32]).unwrap()
+        SigningKey::from_bytes([0x02; 32]).expect("serde deserialization should succeed")
     }
 
     fn attested_vk() -> VerificationKey {
@@ -1006,7 +1006,7 @@ mod tests {
     #[test]
     fn verify_owner_signature_wrong_key_fails() {
         let att = create_test_attestation(KeyRole::Signing, 1, 100, 200);
-        let wrong_sk = SigningKey::from_bytes([0xFF; 32]).unwrap();
+        let wrong_sk = SigningKey::from_bytes([0xFF; 32]).expect("serde deserialization should succeed");
         let wrong_vk = wrong_sk.verification_key();
         let result = att.verify_owner_signature(&wrong_vk);
         assert!(matches!(
@@ -1223,7 +1223,7 @@ mod tests {
     fn store_register_wrong_signature_rejected() {
         let mut store = AttestationStore::new(TEST_ZONE);
         let att = create_test_attestation(KeyRole::Signing, 1, 100, 200);
-        let wrong_sk = SigningKey::from_bytes([0xFF; 32]).unwrap();
+        let wrong_sk = SigningKey::from_bytes([0xFF; 32]).expect("serde deserialization should succeed");
         let wrong_vk = wrong_sk.verification_key();
         let result = store.register(att, &wrong_vk, DeterministicTimestamp(150), "t-sig");
         assert!(matches!(
@@ -1406,8 +1406,8 @@ mod tests {
     #[test]
     fn attestation_serialization_round_trip() {
         let att = create_test_attestation(KeyRole::Signing, 1, 100, 200);
-        let json = serde_json::to_string(&att).unwrap();
-        let restored: KeyAttestation = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&att).expect("serde deserialization should succeed");
+        let restored: KeyAttestation = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(att, restored);
     }
 
@@ -1432,8 +1432,8 @@ mod tests {
         )
         .expect("create");
 
-        let json = serde_json::to_string(&att).unwrap();
-        let restored: KeyAttestation = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&att).expect("serde deserialization should succeed");
+        let restored: KeyAttestation = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(att, restored);
     }
 
@@ -1455,8 +1455,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap();
-            let restored: AttestationError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let restored: AttestationError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, restored);
         }
     }
@@ -1468,8 +1468,8 @@ mod tests {
             .check_and_record(&test_principal(), AttestationNonce::from_counter(5))
             .expect("record");
 
-        let json = serde_json::to_string(&registry).unwrap();
-        let restored: NonceRegistry = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&registry).expect("serde deserialization should succeed");
+        let restored: NonceRegistry = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(restored.high_water_for(&test_principal()), 5);
     }
 
@@ -1524,7 +1524,7 @@ mod tests {
         assert_eq!(active.len(), 1);
 
         // Rotate: create new attestation with different key and higher nonce.
-        let new_key_sk = SigningKey::from_bytes([0x03; 32]).unwrap();
+        let new_key_sk = SigningKey::from_bytes([0x03; 32]).expect("serde deserialization should succeed");
         let new_key_vk = new_key_sk.verification_key();
         let att2 = KeyAttestation::create_signed(
             &owner_signing_key(),
@@ -1569,10 +1569,10 @@ mod tests {
             .expect("p1");
 
         // Principal 2 (different owner key)
-        let p2_owner_sk = SigningKey::from_bytes([0x10; 32]).unwrap();
+        let p2_owner_sk = SigningKey::from_bytes([0x10; 32]).expect("serde deserialization should succeed");
         let p2_owner_vk = p2_owner_sk.verification_key();
         let p2_principal = PrincipalId::from_verification_key(&p2_owner_vk);
-        let p2_attested_sk = SigningKey::from_bytes([0x20; 32]).unwrap();
+        let p2_attested_sk = SigningKey::from_bytes([0x20; 32]).expect("serde deserialization should succeed");
         let p2_attested_vk = p2_attested_sk.verification_key();
 
         let att2 = KeyAttestation::create_signed(
@@ -1719,8 +1719,8 @@ mod tests {
             posture_type: "tpm2".to_string(),
             evidence: vec![0x01, 0x02, 0x03, 0xFF],
         };
-        let json = serde_json::to_string(&dp).unwrap();
-        let restored: DevicePosture = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&dp).expect("serde deserialization should succeed");
+        let restored: DevicePosture = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(dp, restored);
     }
 
@@ -1743,8 +1743,8 @@ mod tests {
             zone: TEST_ZONE.to_string(),
             trace_id: "t-test".to_string(),
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let restored: AttestationEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let restored: AttestationEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, restored);
     }
 
@@ -1810,8 +1810,8 @@ mod tests {
     #[test]
     fn enrichment_attestation_nonce_serde_roundtrip() {
         let nonce = AttestationNonce::from_counter(1_000_000);
-        let json = serde_json::to_string(&nonce).unwrap();
-        let restored: AttestationNonce = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&nonce).expect("serde deserialization should succeed");
+        let restored: AttestationNonce = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(nonce, restored);
         assert_eq!(restored.as_u64(), 1_000_000);
     }
@@ -2038,8 +2038,8 @@ mod tests {
             AttestationEventType::ExpiredPurged { count: 42 },
         ];
         for variant in &variants {
-            let json = serde_json::to_string(variant).unwrap();
-            let restored: AttestationEventType = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(variant).expect("serde deserialization should succeed");
+            let restored: AttestationEventType = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*variant, restored);
         }
     }

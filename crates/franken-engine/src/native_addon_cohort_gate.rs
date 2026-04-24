@@ -1939,18 +1939,18 @@ mod tests {
     #[test]
     fn cohort_tier_serde_roundtrip() {
         let tier = CohortTier::Critical;
-        let json = serde_json::to_string(&tier).unwrap();
+        let json = serde_json::to_string(&tier).expect("serde deserialization should succeed");
         assert_eq!(json, "\"critical\"");
-        let parsed: CohortTier = serde_json::from_str(&json).unwrap();
+        let parsed: CohortTier = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(parsed, tier);
     }
 
     #[test]
     fn gate_verdict_serde_roundtrip() {
         let verdict = GateVerdict::ConditionalPass;
-        let json = serde_json::to_string(&verdict).unwrap();
+        let json = serde_json::to_string(&verdict).expect("serde deserialization should succeed");
         assert_eq!(json, "\"conditional_pass\"");
-        let parsed: GateVerdict = serde_json::from_str(&json).unwrap();
+        let parsed: GateVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(parsed, verdict);
     }
 

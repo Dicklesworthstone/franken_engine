@@ -1384,7 +1384,7 @@ fn write_stitching_bundle(
             "policy_id": &context.policy_id,
         }
     }))
-    .unwrap();
+    .expect("serde deserialization should succeed");
 
     let mut primary_files = vec![
         BundleFileArtifact::json("evidence_ledger_stitching_bundle.json", &evaluated.bundle),
@@ -1420,9 +1420,9 @@ fn write_stitching_bundle(
                 "edge_count": evaluated.bundle.evidence_ledger_graph.edges.len(),
                 "artifact_count": evaluated.bundle.artifact_lineage_index.len(),
                 "boundary_count": evaluated.bundle.evidence_query_surface_snapshot.decisions.first().map_or(0, |d| d.boundary_correlation_keys.len()),
-                "bundle_hash": digest_json(&serde_json::to_value(&evaluated.bundle).unwrap()),
-                "graph_hash": digest_json(&serde_json::to_value(&evaluated.bundle.evidence_ledger_graph).unwrap()),
-                "query_snapshot_hash": digest_json(&serde_json::to_value(&evaluated.bundle.evidence_query_surface_snapshot).unwrap()),
+                "bundle_hash": digest_json(&serde_json::to_value(&evaluated.bundle).expect("serde deserialization should succeed")),
+                "graph_hash": digest_json(&serde_json::to_value(&evaluated.bundle.evidence_ledger_graph).expect("serde deserialization should succeed")),
+                "query_snapshot_hash": digest_json(&serde_json::to_value(&evaluated.bundle.evidence_query_surface_snapshot).expect("serde deserialization should succeed")),
                 "artifacts": required_artifact_names(),
                 "operator_verification": commands.clone(),
             }),
@@ -1467,7 +1467,7 @@ fn write_stitching_bundle(
             "policy_id": &context.policy_id,
         }
     }))
-    .unwrap();
+    .expect("serde deserialization should succeed");
     primary_files.push(BundleFileArtifact::text("repro.lock", &repro_lock));
     primary_files.sort_by(|left, right| left.path.cmp(&right.path));
 
@@ -1504,7 +1504,7 @@ fn write_stitching_bundle(
         },
         "artifacts": &manifest_artifacts,
     }))
-    .unwrap();
+    .expect("serde deserialization should succeed");
     let manifest_artifact = BundleFileArtifact::text("manifest.json", &manifest_json);
 
     let _bundle_lock = acquire_bundle_write_lock(&context.artifact_dir)?;
@@ -1732,7 +1732,7 @@ fn unique_temp_path(path: &Path) -> PathBuf {
 }
 
 fn digest_json(value: &serde_json::Value) -> String {
-    let bytes = serde_json::to_vec(value).unwrap();
+    let bytes = serde_json::to_vec(value).expect("serde deserialization should succeed");
     sha256_hex(&bytes)
 }
 
@@ -1744,14 +1744,14 @@ impl BundleFileArtifact {
     fn json<T: Serialize>(path: &str, value: &T) -> Self {
         Self {
             path: path.to_string(),
-            contents: serde_json::to_vec_pretty(value).unwrap(),
+            contents: serde_json::to_vec_pretty(value).expect("serde deserialization should succeed"),
         }
     }
 
     fn jsonl<T: Serialize>(path: &str, records: &[T]) -> Self {
         let mut contents = Vec::new();
         for record in records {
-            let mut line = serde_json::to_vec(record).unwrap();
+            let mut line = serde_json::to_vec(record).expect("serde deserialization should succeed");
             line.push(b'\n');
             contents.extend_from_slice(&line);
         }
@@ -2040,16 +2040,16 @@ mod tests {
     #[test]
     fn evidence_entry_serialization_round_trip() {
         let entry = sample_entry();
-        let json = serde_json::to_string(&entry).unwrap();
-        let restored: EvidenceEntry = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let restored: EvidenceEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, restored);
     }
 
     #[test]
     fn evidence_entry_deterministic_serialization() {
         let entry = sample_entry();
-        let json1 = serde_json::to_string(&entry).unwrap();
-        let json2 = serde_json::to_string(&entry).unwrap();
+        let json1 = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let json2 = serde_json::to_string(&entry).expect("serde deserialization should succeed");
         assert_eq!(json1, json2);
     }
 
@@ -2069,8 +2069,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap();
-            let restored: LedgerError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let restored: LedgerError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, restored);
         }
     }
@@ -2078,16 +2078,16 @@ mod tests {
     #[test]
     fn candidate_action_serialization_round_trip() {
         let c = CandidateAction::filtered("sandbox", 100_000, "max-loss");
-        let json = serde_json::to_string(&c).unwrap();
-        let restored: CandidateAction = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let restored: CandidateAction = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c, restored);
     }
 
     #[test]
     fn schema_version_serialization_round_trip() {
         let v = current_schema_version();
-        let json = serde_json::to_string(&v).unwrap();
-        let restored: SchemaVersion = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let restored: SchemaVersion = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, restored);
     }
 
@@ -2136,8 +2136,8 @@ mod tests {
             DecisionType::ContractEvaluation,
             DecisionType::RemoteAuthorization,
         ] {
-            let json = serde_json::to_string(&dt).unwrap();
-            let restored: DecisionType = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&dt).expect("serde deserialization should succeed");
+            let restored: DecisionType = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(dt, restored);
         }
     }
@@ -2149,8 +2149,8 @@ mod tests {
             description: "rate limit".to_string(),
             active: true,
         };
-        let json = serde_json::to_string(&c).unwrap();
-        let restored: Constraint = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let restored: Constraint = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c, restored);
     }
 
@@ -2161,8 +2161,8 @@ mod tests {
             witness_type: "monotonicity".to_string(),
             value: "proof-hash".to_string(),
         };
-        let json = serde_json::to_string(&w).unwrap();
-        let restored: Witness = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&w).expect("serde deserialization should succeed");
+        let restored: Witness = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(w, restored);
     }
 
@@ -2173,8 +2173,8 @@ mod tests {
             expected_loss_millionths: 100_000,
             rationale: "lowest loss".to_string(),
         };
-        let json = serde_json::to_string(&ca).unwrap();
-        let restored: ChosenAction = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&ca).expect("serde deserialization should succeed");
+        let restored: ChosenAction = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ca, restored);
     }
 
@@ -2204,7 +2204,7 @@ mod tests {
             rationale: "default".to_string(),
         })
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert!(entry.candidates.is_empty());
         assert!(entry.constraints.is_empty());
         assert!(entry.witnesses.is_empty());
@@ -2227,7 +2227,7 @@ mod tests {
             rationale: "expired".to_string(),
         })
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(entry.timestamp_ns, 42_000_000);
     }
 
@@ -2256,7 +2256,7 @@ mod tests {
     #[test]
     fn ledger_entries_accessor() {
         let mut ledger = InMemoryLedger::new();
-        ledger.emit(sample_entry()).unwrap();
+        ledger.emit(sample_entry()).expect("serde deserialization should succeed");
         assert_eq!(ledger.entries().len(), 1);
         assert_eq!(ledger.entries()[0].trace_id, "trace-001");
     }
@@ -2297,7 +2297,7 @@ mod tests {
             rationale: "r".to_string(),
         })
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let e2 = EvidenceEntryBuilder::new(
             "t",
@@ -2312,7 +2312,7 @@ mod tests {
             rationale: "r".to_string(),
         })
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         assert_ne!(e1.evidence_hash, e2.evidence_hash);
         assert_ne!(e1.entry_id, e2.entry_id);
@@ -2324,8 +2324,8 @@ mod tests {
     fn candidate_negative_expected_loss_round_trips() {
         let c = CandidateAction::new("action", -999_999);
         assert_eq!(c.expected_loss_millionths, -999_999);
-        let json = serde_json::to_string(&c).unwrap();
-        let restored: CandidateAction = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let restored: CandidateAction = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c, restored);
     }
 
@@ -2391,7 +2391,7 @@ mod tests {
             rationale: "r".to_string(),
         })
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
         // BTreeMap keys should be in sorted order
         let keys: Vec<&String> = entry.metadata.keys().collect();
         assert_eq!(keys, vec!["a_key", "m_key", "z_key"]);
@@ -2422,7 +2422,7 @@ mod tests {
             rationale: "r".to_string(),
         })
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(entry.witnesses.len(), 2);
         // Builder sorts witnesses by witness_id for determinism.
         assert_eq!(entry.witnesses[0].witness_id, "w-1");
@@ -2446,8 +2446,8 @@ mod tests {
                 rationale: "r".to_string(),
             })
             .build()
-            .unwrap();
-            ledger.emit(entry).unwrap();
+            .expect("serde deserialization should succeed");
+            ledger.emit(entry).expect("serde deserialization should succeed");
         }
         assert_eq!(ledger.len(), 3);
         assert_eq!(ledger.by_epoch(SecurityEpoch::from_raw(2)).len(), 1);
@@ -2479,8 +2479,8 @@ mod tests {
                 rationale: "r".to_string(),
             })
             .build()
-            .unwrap();
-            ledger.emit(entry).unwrap();
+            .expect("serde deserialization should succeed");
+            ledger.emit(entry).expect("serde deserialization should succeed");
         }
         assert_eq!(ledger.by_decision_type(DecisionType::PolicyUpdate).len(), 2);
         assert_eq!(
@@ -2518,7 +2518,7 @@ mod tests {
                 rationale: "r".to_string(),
             })
             .build()
-            .unwrap()
+            .expect("serde deserialization should succeed")
         };
         let e1 = base("trace-A");
         let e2 = base("trace-B");
@@ -2541,7 +2541,7 @@ mod tests {
                 rationale: "r".to_string(),
             })
             .build()
-            .unwrap()
+            .expect("serde deserialization should succeed")
         };
         assert_ne!(
             base("policy-v1").evidence_hash,
@@ -2565,7 +2565,7 @@ mod tests {
                 rationale: "r".to_string(),
             })
             .build()
-            .unwrap()
+            .expect("serde deserialization should succeed")
         };
         assert_ne!(base(1).evidence_hash, base(2).evidence_hash);
     }
@@ -2587,7 +2587,7 @@ mod tests {
                 rationale: "r".to_string(),
             })
             .build()
-            .unwrap()
+            .expect("serde deserialization should succeed")
         };
         assert_ne!(base(1000).evidence_hash, base(2000).evidence_hash);
     }
@@ -2609,7 +2609,7 @@ mod tests {
                 rationale: "r".to_string(),
             })
             .build()
-            .unwrap()
+            .expect("serde deserialization should succeed")
         };
         assert_ne!(base("alpha").evidence_hash, base("beta").evidence_hash);
     }
@@ -2629,7 +2629,7 @@ mod tests {
             rationale: "r".to_string(),
         })
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let with = EvidenceEntryBuilder::new(
             "t",
@@ -2645,7 +2645,7 @@ mod tests {
             rationale: "r".to_string(),
         })
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         assert_ne!(without.evidence_hash, with.evidence_hash);
     }
@@ -2665,7 +2665,7 @@ mod tests {
             rationale: "r".to_string(),
         })
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let with = EvidenceEntryBuilder::new(
             "t",
@@ -2685,7 +2685,7 @@ mod tests {
             rationale: "r".to_string(),
         })
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         assert_ne!(without.evidence_hash, with.evidence_hash);
     }
@@ -2705,7 +2705,7 @@ mod tests {
             rationale: "r".to_string(),
         })
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let with = EvidenceEntryBuilder::new(
             "t",
@@ -2725,7 +2725,7 @@ mod tests {
             rationale: "r".to_string(),
         })
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         assert_ne!(without.evidence_hash, with.evidence_hash);
     }
@@ -2745,7 +2745,7 @@ mod tests {
             rationale: "genesis".to_string(),
         })
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(entry.epoch_id, SecurityEpoch::GENESIS);
     }
 
@@ -2779,8 +2779,8 @@ mod tests {
             witness_type: "void".to_string(),
             value: String::new(),
         };
-        let json = serde_json::to_string(&w).unwrap();
-        let restored: Witness = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&w).expect("serde deserialization should succeed");
+        let restored: Witness = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(w, restored);
         assert!(restored.value.is_empty());
     }
@@ -2792,8 +2792,8 @@ mod tests {
             description: "disabled rule".to_string(),
             active: false,
         };
-        let json = serde_json::to_string(&c).unwrap();
-        let restored: Constraint = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let restored: Constraint = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c, restored);
         assert!(!restored.active);
     }
@@ -2816,13 +2816,13 @@ mod tests {
             rationale: "only option".to_string(),
         })
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(entry.candidates.len(), 3);
         assert!(entry.candidates.iter().all(|c| c.filtered));
         let reasons: Vec<_> = entry
             .candidates
             .iter()
-            .map(|c| c.filter_reason.as_deref().unwrap())
+            .map(|c| c.filter_reason.as_deref().expect("serde deserialization should succeed"))
             .collect();
         assert_eq!(reasons, vec!["reason-1", "reason-2", "reason-3"]);
     }
@@ -2845,8 +2845,8 @@ mod tests {
                 rationale: "r".to_string(),
             })
             .build()
-            .unwrap();
-            ledger.emit(entry).unwrap();
+            .expect("serde deserialization should succeed");
+            ledger.emit(entry).expect("serde deserialization should succeed");
         }
         let stored_traces: Vec<&str> = ledger
             .entries()
@@ -2872,9 +2872,9 @@ mod tests {
             rationale: "r".to_string(),
         })
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let expected_id = entry.entry_id.clone();
-        ledger.emit(entry).unwrap();
+        ledger.emit(entry).expect("serde deserialization should succeed");
 
         let results = ledger.by_epoch(SecurityEpoch::from_raw(42));
         assert_eq!(results.len(), 1);
@@ -2897,7 +2897,7 @@ mod tests {
             rationale: String::new(),
         })
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert!(entry.entry_id.starts_with("ev-"));
         assert!(!entry.evidence_hash.is_empty());
     }
@@ -2922,7 +2922,7 @@ mod tests {
                     rationale: "r".to_string(),
                 })
                 .build()
-                .unwrap()
+                .expect("serde deserialization should succeed")
         };
         let e1 = build();
         let e2 = build();
@@ -2966,8 +2966,8 @@ mod tests {
                 rationale: "r".to_string(),
             })
             .build()
-            .unwrap();
-            ledger.emit(entry).unwrap();
+            .expect("serde deserialization should succeed");
+            ledger.emit(entry).expect("serde deserialization should succeed");
         }
         assert_eq!(ledger.len(), 100);
     }
@@ -2975,7 +2975,7 @@ mod tests {
     #[test]
     fn entry_json_contains_all_top_level_fields() {
         let entry = sample_entry();
-        let json = serde_json::to_string(&entry).unwrap();
+        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
         for field in [
             "schema_version",
             "entry_id",
@@ -3003,8 +3003,8 @@ mod tests {
             expected_loss_millionths: -500_000,
             rationale: "net gain".to_string(),
         };
-        let json = serde_json::to_string(&ca).unwrap();
-        let restored: ChosenAction = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&ca).expect("serde deserialization should succeed");
+        let restored: ChosenAction = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ca, restored);
         assert_eq!(restored.expected_loss_millionths, -500_000);
     }
@@ -3035,7 +3035,7 @@ mod tests {
             rationale: "r".to_string(),
         })
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(entry.metadata.len(), 1);
         assert_eq!(entry.metadata["key"], "second");
     }
@@ -3066,7 +3066,7 @@ mod tests {
                 rationale: "r".to_string(),
             })
             .build()
-            .unwrap();
+            .expect("serde deserialization should succeed");
             assert!(entry.entry_id.starts_with("ev-"));
             assert_eq!(entry.decision_type, *dt);
         }
@@ -3077,7 +3077,7 @@ mod tests {
         let mut ledger = InMemoryLedger::new();
         let entry = sample_entry();
         let entry_id = entry.entry_id.clone();
-        ledger.emit(entry.clone()).unwrap();
+        ledger.emit(entry.clone()).expect("serde deserialization should succeed");
 
         let err = ledger.emit(entry).unwrap_err();
         match err {
@@ -3129,7 +3129,7 @@ mod tests {
             rationale: "r".to_string(),
         })
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(entry.constraints.len(), 2);
         assert!(entry.constraints[0].active);
         assert!(!entry.constraints[1].active);
@@ -3153,7 +3153,7 @@ mod tests {
             rationale: "r".to_string(),
         })
         .build()
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let names: Vec<&str> = entry
             .candidates
             .iter()

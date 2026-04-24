@@ -1570,7 +1570,7 @@ mod tests {
     fn test_register_duplicate_prior() {
         let mut engine = default_engine(5);
         let prior = make_prior("p1", TransferKind::RewritePack, 3, 900_000, 10);
-        engine.register_prior(prior.clone()).unwrap();
+        engine.register_prior(prior.clone()).expect("serde deserialization should succeed");
         let result = engine.register_prior(prior);
         assert!(matches!(result, Err(TransferError::DuplicatePrior { .. })));
     }
@@ -1581,11 +1581,11 @@ mod tests {
     fn test_eligibility_near_certificate() {
         let mut engine = default_engine(5);
         let prior = make_prior("p1", TransferKind::RewritePack, 3, 900_000, 10);
-        engine.register_prior(prior).unwrap();
+        engine.register_prior(prior).expect("serde deserialization should succeed");
 
         let result = engine
             .check_eligibility("p1", "tgt1", true, false, false)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(result.is_eligible());
         assert!(!result.is_marginal());
     }
@@ -1594,11 +1594,11 @@ mod tests {
     fn test_eligibility_marginal_certificate() {
         let mut engine = default_engine(5);
         let prior = make_prior("p1", TransferKind::RewritePack, 3, 900_000, 10);
-        engine.register_prior(prior).unwrap();
+        engine.register_prior(prior).expect("serde deserialization should succeed");
 
         let result = engine
             .check_eligibility("p1", "tgt1", false, true, false)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(result.is_eligible());
         assert!(result.is_marginal());
         // Confidence should be discounted
@@ -1609,11 +1609,11 @@ mod tests {
     fn test_eligibility_distant_denied() {
         let mut engine = default_engine(5);
         let prior = make_prior("p1", TransferKind::RewritePack, 3, 900_000, 10);
-        engine.register_prior(prior).unwrap();
+        engine.register_prior(prior).expect("serde deserialization should succeed");
 
         let result = engine
             .check_eligibility("p1", "tgt1", false, false, false)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(!result.is_eligible());
     }
 
@@ -1621,11 +1621,11 @@ mod tests {
     fn test_eligibility_abstained_denied() {
         let mut engine = default_engine(5);
         let prior = make_prior("p1", TransferKind::RewritePack, 3, 900_000, 10);
-        engine.register_prior(prior).unwrap();
+        engine.register_prior(prior).expect("serde deserialization should succeed");
 
         let result = engine
             .check_eligibility("p1", "tgt1", false, false, true)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(matches!(
             result,
             TransferEligibility::Denied {
@@ -1638,11 +1638,11 @@ mod tests {
     fn test_eligibility_stale_prior() {
         let mut engine = default_engine(100); // epoch 100, prior at epoch 3
         let prior = make_prior("p1", TransferKind::RewritePack, 3, 900_000, 10);
-        engine.register_prior(prior).unwrap();
+        engine.register_prior(prior).expect("serde deserialization should succeed");
 
         let result = engine
             .check_eligibility("p1", "tgt1", true, false, false)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(matches!(
             result,
             TransferEligibility::Denied {
@@ -1656,11 +1656,11 @@ mod tests {
         let mut engine = default_engine(5);
         let mut prior = make_prior("p1", TransferKind::RewritePack, 3, 900_000, 10);
         prior.revoked = true;
-        engine.register_prior(prior).unwrap();
+        engine.register_prior(prior).expect("serde deserialization should succeed");
 
         let result = engine
             .check_eligibility("p1", "tgt1", true, false, false)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(matches!(
             result,
             TransferEligibility::Denied {
@@ -1673,11 +1673,11 @@ mod tests {
     fn test_eligibility_insufficient_confidence() {
         let mut engine = default_engine(5);
         let prior = make_prior("p1", TransferKind::RewritePack, 3, 500_000, 10); // below 700k floor
-        engine.register_prior(prior).unwrap();
+        engine.register_prior(prior).expect("serde deserialization should succeed");
 
         let result = engine
             .check_eligibility("p1", "tgt1", true, false, false)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(matches!(
             result,
             TransferEligibility::Denied {
@@ -1700,11 +1700,11 @@ mod tests {
         };
         let mut engine = TransferEngine::new(policy, test_epoch(5));
         let prior = make_prior("p1", TransferKind::GcTuningPrior, 3, 900_000, 10);
-        engine.register_prior(prior).unwrap();
+        engine.register_prior(prior).expect("serde deserialization should succeed");
 
         let result = engine
             .check_eligibility("p1", "tgt1", true, false, false)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(matches!(
             result,
             TransferEligibility::Denied {
@@ -1721,11 +1721,11 @@ mod tests {
         };
         let mut engine = TransferEngine::new(policy, test_epoch(5));
         let prior = make_prior("p1", TransferKind::RewritePack, 3, 900_000, 10); // 10 rules > 5 limit
-        engine.register_prior(prior).unwrap();
+        engine.register_prior(prior).expect("serde deserialization should succeed");
 
         let result = engine
             .check_eligibility("p1", "tgt1", true, false, false)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(matches!(
             result,
             TransferEligibility::Denied {
@@ -1747,11 +1747,11 @@ mod tests {
     fn test_execute_transfer_success() {
         let mut engine = default_engine(5);
         let prior = make_prior("p1", TransferKind::RewritePack, 3, 900_000, 10);
-        engine.register_prior(prior).unwrap();
+        engine.register_prior(prior).expect("serde deserialization should succeed");
 
         let record = engine
             .execute_transfer(&transfer_input("t1", "p1", "tgt1", "cert1"))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(record.transfer_id, "t1");
         assert_eq!(record.rules_transferred, 10);
         // Default policy requires drift monitoring, so status should be Probationary
@@ -1763,11 +1763,11 @@ mod tests {
     fn test_execute_transfer_duplicate() {
         let mut engine = default_engine(5);
         let prior = make_prior("p1", TransferKind::RewritePack, 3, 900_000, 10);
-        engine.register_prior(prior).unwrap();
+        engine.register_prior(prior).expect("serde deserialization should succeed");
 
         engine
             .execute_transfer(&transfer_input("t1", "p1", "tgt1", "cert1"))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let result = engine.execute_transfer(&transfer_input("t1", "p1", "tgt1", "cert1"));
         assert!(matches!(
             result,
@@ -1779,7 +1779,7 @@ mod tests {
     fn test_execute_transfer_denied() {
         let mut engine = default_engine(100);
         let prior = make_prior("p1", TransferKind::RewritePack, 3, 900_000, 10); // stale
-        engine.register_prior(prior).unwrap();
+        engine.register_prior(prior).expect("serde deserialization should succeed");
 
         let result = engine.execute_transfer(&transfer_input("t1", "p1", "tgt1", "cert1"));
         assert!(matches!(result, Err(TransferError::PolicyViolation { .. })));
@@ -1791,13 +1791,13 @@ mod tests {
     fn test_record_drift_within_budget() {
         let mut engine = default_engine(5);
         let prior = make_prior("p1", TransferKind::RewritePack, 3, 900_000, 10);
-        engine.register_prior(prior).unwrap();
+        engine.register_prior(prior).expect("serde deserialization should succeed");
         engine
             .execute_transfer(&transfer_input("t1", "p1", "tgt1", "cert1"))
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let obs = DriftObservation::new("t1", "exec_time", 500_000, 510_000, test_epoch(5), 1);
-        let verdict = engine.record_drift(obs).unwrap();
+        let verdict = engine.record_drift(obs).expect("serde deserialization should succeed");
         assert!(matches!(verdict, DriftVerdict::WithinBudget { .. }));
     }
 
@@ -1810,17 +1810,17 @@ mod tests {
         };
         let mut engine = TransferEngine::new(policy, test_epoch(5));
         let prior = make_prior("p1", TransferKind::RewritePack, 3, 900_000, 10);
-        engine.register_prior(prior).unwrap();
+        engine.register_prior(prior).expect("serde deserialization should succeed");
         engine
             .execute_transfer(&transfer_input("t1", "p1", "tgt1", "cert1"))
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let obs = DriftObservation::new("t1", "exec_time", 500_000, 700_000, test_epoch(5), 1);
-        let verdict = engine.record_drift(obs).unwrap();
+        let verdict = engine.record_drift(obs).expect("serde deserialization should succeed");
         assert!(matches!(verdict, DriftVerdict::BudgetExceeded { .. }));
 
         // Transfer should be revoked
-        let transfer = engine.get_transfer("t1").unwrap();
+        let transfer = engine.get_transfer("t1").expect("serde deserialization should succeed");
         assert_eq!(transfer.status, TransferStatus::RevokedDrift);
         assert!(engine.get_revocation("t1").is_some());
     }
@@ -1829,11 +1829,11 @@ mod tests {
     fn test_record_drift_not_active() {
         let mut engine = default_engine(5);
         let prior = make_prior("p1", TransferKind::RewritePack, 3, 900_000, 10);
-        engine.register_prior(prior).unwrap();
+        engine.register_prior(prior).expect("serde deserialization should succeed");
         engine
             .execute_transfer(&transfer_input("t1", "p1", "tgt1", "cert1"))
-            .unwrap();
-        engine.revoke_transfer("t1").unwrap();
+            .expect("serde deserialization should succeed");
+        engine.revoke_transfer("t1").expect("serde deserialization should succeed");
 
         let obs = DriftObservation::new("t1", "exec_time", 500_000, 510_000, test_epoch(5), 1);
         let result = engine.record_drift(obs);
@@ -1849,18 +1849,18 @@ mod tests {
     fn test_promote_probationary() {
         let mut engine = default_engine(5);
         let prior = make_prior("p1", TransferKind::RewritePack, 3, 900_000, 10);
-        engine.register_prior(prior).unwrap();
+        engine.register_prior(prior).expect("serde deserialization should succeed");
         engine
             .execute_transfer(&transfer_input("t1", "p1", "tgt1", "cert1"))
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert_eq!(
-            engine.get_transfer("t1").unwrap().status,
+            engine.get_transfer("t1").expect("serde deserialization should succeed").status,
             TransferStatus::Probationary
         );
-        engine.promote_transfer("t1").unwrap();
+        engine.promote_transfer("t1").expect("serde deserialization should succeed");
         assert_eq!(
-            engine.get_transfer("t1").unwrap().status,
+            engine.get_transfer("t1").expect("serde deserialization should succeed").status,
             TransferStatus::Active
         );
     }
@@ -1873,10 +1873,10 @@ mod tests {
         };
         let mut engine = TransferEngine::new(policy, test_epoch(5));
         let prior = make_prior("p1", TransferKind::RewritePack, 3, 900_000, 10);
-        engine.register_prior(prior).unwrap();
+        engine.register_prior(prior).expect("serde deserialization should succeed");
         engine
             .execute_transfer(&transfer_input("t1", "p1", "tgt1", "cert1"))
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Already Active, not Probationary
         let result = engine.promote_transfer("t1");
@@ -1892,12 +1892,12 @@ mod tests {
     fn test_revoke_transfer() {
         let mut engine = default_engine(5);
         let prior = make_prior("p1", TransferKind::RewritePack, 3, 900_000, 10);
-        engine.register_prior(prior).unwrap();
+        engine.register_prior(prior).expect("serde deserialization should succeed");
         engine
             .execute_transfer(&transfer_input("t1", "p1", "tgt1", "cert1"))
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
-        let receipt = engine.revoke_transfer("t1").unwrap();
+        let receipt = engine.revoke_transfer("t1").expect("serde deserialization should succeed");
         assert_eq!(receipt.reason, TransferStatus::RevokedManual);
         assert_eq!(engine.revoked_transfer_count(), 1);
     }
@@ -1906,11 +1906,11 @@ mod tests {
     fn test_revoke_already_revoked() {
         let mut engine = default_engine(5);
         let prior = make_prior("p1", TransferKind::RewritePack, 3, 900_000, 10);
-        engine.register_prior(prior).unwrap();
+        engine.register_prior(prior).expect("serde deserialization should succeed");
         engine
             .execute_transfer(&transfer_input("t1", "p1", "tgt1", "cert1"))
-            .unwrap();
-        engine.revoke_transfer("t1").unwrap();
+            .expect("serde deserialization should succeed");
+        engine.revoke_transfer("t1").expect("serde deserialization should succeed");
 
         let result = engine.revoke_transfer("t1");
         assert!(matches!(
@@ -1925,13 +1925,13 @@ mod tests {
     fn test_complete_transfer() {
         let mut engine = default_engine(5);
         let prior = make_prior("p1", TransferKind::RewritePack, 3, 900_000, 10);
-        engine.register_prior(prior).unwrap();
+        engine.register_prior(prior).expect("serde deserialization should succeed");
         engine
             .execute_transfer(&transfer_input("t1", "p1", "tgt1", "cert1"))
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
-        engine.complete_transfer("t1").unwrap();
-        let transfer = engine.get_transfer("t1").unwrap();
+        engine.complete_transfer("t1").expect("serde deserialization should succeed");
+        let transfer = engine.get_transfer("t1").expect("serde deserialization should succeed");
         assert_eq!(transfer.status, TransferStatus::Completed);
     }
 
@@ -1941,10 +1941,10 @@ mod tests {
     fn test_expire_stale_priors() {
         let mut engine = default_engine(5);
         let prior = make_prior("p1", TransferKind::RewritePack, 3, 900_000, 10);
-        engine.register_prior(prior).unwrap();
+        engine.register_prior(prior).expect("serde deserialization should succeed");
         engine
             .execute_transfer(&transfer_input("t1", "p1", "tgt1", "cert1"))
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Advance epoch past staleness threshold
         engine.advance_epoch(test_epoch(100));
@@ -1952,7 +1952,7 @@ mod tests {
         assert_eq!(expired.len(), 1);
         assert_eq!(expired[0], "t1");
 
-        let transfer = engine.get_transfer("t1").unwrap();
+        let transfer = engine.get_transfer("t1").expect("serde deserialization should succeed");
         assert_eq!(transfer.status, TransferStatus::RevokedStale);
     }
 
@@ -1963,14 +1963,14 @@ mod tests {
         let mut engine = default_engine(5);
         let p1 = make_prior("p1", TransferKind::RewritePack, 3, 900_000, 10);
         let p2 = make_prior("p2", TransferKind::TieringPrior, 3, 800_000, 5);
-        engine.register_prior(p1).unwrap();
-        engine.register_prior(p2).unwrap();
+        engine.register_prior(p1).expect("serde deserialization should succeed");
+        engine.register_prior(p2).expect("serde deserialization should succeed");
         engine
             .execute_transfer(&transfer_input("t1", "p1", "tgt1", "cert1"))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         engine
             .execute_transfer(&transfer_input("t2", "p2", "tgt1", "cert2"))
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let summary = engine.summarize_target("tgt1");
         assert_eq!(summary.probationary_count, 2);
@@ -1993,17 +1993,17 @@ mod tests {
         let mut engine = default_engine(5);
         let p1 = make_prior("p1", TransferKind::RewritePack, 3, 900_000, 10);
         let p2 = make_prior("p2", TransferKind::CacheHint, 3, 800_000, 5);
-        engine.register_prior(p1).unwrap();
-        engine.register_prior(p2).unwrap();
+        engine.register_prior(p1).expect("serde deserialization should succeed");
+        engine.register_prior(p2).expect("serde deserialization should succeed");
         engine
             .execute_transfer(&transfer_input("t1", "p1", "tgt1", "cert1"))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         engine
             .execute_transfer(&transfer_input("t2", "p2", "tgt1", "cert2"))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         engine
             .execute_transfer(&transfer_input("t3", "p1", "tgt2", "cert3"))
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let active = engine.active_transfers_for("tgt1");
         assert_eq!(active.len(), 2);
@@ -2015,10 +2015,10 @@ mod tests {
     fn test_evidence_inventory() {
         let mut engine = default_engine(5);
         let p1 = make_prior("p1", TransferKind::RewritePack, 3, 900_000, 10);
-        engine.register_prior(p1).unwrap();
+        engine.register_prior(p1).expect("serde deserialization should succeed");
         engine
             .execute_transfer(&transfer_input("t1", "p1", "tgt1", "cert1"))
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let inv = engine.evidence_inventory();
         assert_eq!(inv.total_priors, 1);
@@ -2032,24 +2032,24 @@ mod tests {
     #[test]
     fn test_serde_transfer_kind() {
         let kind = TransferKind::RewritePack;
-        let json = serde_json::to_string(&kind).unwrap();
-        let back: TransferKind = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
+        let back: TransferKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(kind, back);
     }
 
     #[test]
     fn test_serde_transfer_policy() {
         let policy = TransferPolicy::default();
-        let json = serde_json::to_string(&policy).unwrap();
-        let back: TransferPolicy = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
+        let back: TransferPolicy = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(policy, back);
     }
 
     #[test]
     fn test_serde_prior_entry() {
         let prior = make_prior("p1", TransferKind::CacheHint, 3, 900_000, 10);
-        let json = serde_json::to_string(&prior).unwrap();
-        let back: PriorEntry = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&prior).expect("serde deserialization should succeed");
+        let back: PriorEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(prior, back);
     }
 
@@ -2073,16 +2073,16 @@ mod tests {
             drift_observations: 0,
             content_hash: test_hash("t1"),
         };
-        let json = serde_json::to_string(&record).unwrap();
-        let back: TransferRecord = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&record).expect("serde deserialization should succeed");
+        let back: TransferRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(record, back);
     }
 
     #[test]
     fn test_serde_drift_observation() {
         let obs = DriftObservation::new("t1", "exec_time", 500_000, 510_000, test_epoch(5), 1);
-        let json = serde_json::to_string(&obs).unwrap();
-        let back: DriftObservation = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&obs).expect("serde deserialization should succeed");
+        let back: DriftObservation = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(obs, back);
     }
 
@@ -2093,8 +2093,8 @@ mod tests {
             budget_millionths: 100_000,
             trigger_metric: "exec_time".to_string(),
         };
-        let json = serde_json::to_string(&v).unwrap();
-        let back: DriftVerdict = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let back: DriftVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, back);
     }
 
@@ -2113,8 +2113,8 @@ mod tests {
             content_hash: test_hash("t1"),
             signature: test_hash("sig"),
         };
-        let json = serde_json::to_string(&receipt).unwrap();
-        let back: RevocationReceipt = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
+        let back: RevocationReceipt = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(receipt, back);
     }
 
@@ -2131,8 +2131,8 @@ mod tests {
             max_drift_millionths: 50_000,
             summary_epoch: test_epoch(5),
         };
-        let json = serde_json::to_string(&summary).unwrap();
-        let back: TransferSummary = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
+        let back: TransferSummary = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(summary, back);
     }
 
@@ -2148,8 +2148,8 @@ mod tests {
             policy_hash: test_hash("policy"),
             epoch: test_epoch(10),
         };
-        let json = serde_json::to_string(&inv).unwrap();
-        let back: TransferEvidenceInventory = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&inv).expect("serde deserialization should succeed");
+        let back: TransferEvidenceInventory = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(inv, back);
     }
 
@@ -2159,30 +2159,30 @@ mod tests {
     fn test_full_transfer_lifecycle() {
         let mut engine = default_engine(5);
         let p1 = make_prior("p1", TransferKind::RewritePack, 3, 900_000, 10);
-        engine.register_prior(p1).unwrap();
+        engine.register_prior(p1).expect("serde deserialization should succeed");
 
         // Execute
         let record = engine
             .execute_transfer(&transfer_input("t1", "p1", "tgt1", "cert1"))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(record.status, TransferStatus::Probationary);
 
         // Record drift within budget
         let obs1 = DriftObservation::new("t1", "exec_time", 500_000, 510_000, test_epoch(5), 1);
-        let v1 = engine.record_drift(obs1).unwrap();
+        let v1 = engine.record_drift(obs1).expect("serde deserialization should succeed");
         assert!(matches!(v1, DriftVerdict::WithinBudget { .. }));
 
         // Promote
-        engine.promote_transfer("t1").unwrap();
+        engine.promote_transfer("t1").expect("serde deserialization should succeed");
         assert_eq!(
-            engine.get_transfer("t1").unwrap().status,
+            engine.get_transfer("t1").expect("serde deserialization should succeed").status,
             TransferStatus::Active
         );
 
         // Complete
-        engine.complete_transfer("t1").unwrap();
+        engine.complete_transfer("t1").expect("serde deserialization should succeed");
         assert_eq!(
-            engine.get_transfer("t1").unwrap().status,
+            engine.get_transfer("t1").expect("serde deserialization should succeed").status,
             TransferStatus::Completed
         );
     }
@@ -2197,13 +2197,13 @@ mod tests {
 
         let p1 = make_prior("p1", TransferKind::RewritePack, 3, 900_000, 15);
         let p2 = make_prior("p2", TransferKind::CacheHint, 3, 900_000, 10);
-        engine.register_prior(p1).unwrap();
-        engine.register_prior(p2).unwrap();
+        engine.register_prior(p1).expect("serde deserialization should succeed");
+        engine.register_prior(p2).expect("serde deserialization should succeed");
 
         // First transfer: 15 rules
         engine
             .execute_transfer(&transfer_input("t1", "p1", "tgt1", "cert1"))
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Second transfer would exceed 20 rule limit (15 + 10 = 25 > 20)
         let result = engine.execute_transfer(&transfer_input("t2", "p2", "tgt1", "cert2"));
@@ -2215,12 +2215,12 @@ mod tests {
         ));
 
         // Revoke first transfer, freeing budget
-        engine.revoke_transfer("t1").unwrap();
+        engine.revoke_transfer("t1").expect("serde deserialization should succeed");
 
         // Now second transfer should succeed (0 + 10 ≤ 20)
         let record = engine
             .execute_transfer(&transfer_input("t2", "p2", "tgt1", "cert2"))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(record.rules_transferred, 10);
     }
 
@@ -2232,11 +2232,11 @@ mod tests {
         };
         let mut engine = TransferEngine::new(policy, test_epoch(5));
         let prior = make_prior("p1", TransferKind::RewritePack, 3, 900_000, 10);
-        engine.register_prior(prior).unwrap();
+        engine.register_prior(prior).expect("serde deserialization should succeed");
 
         let result = engine
             .check_eligibility("p1", "tgt1", false, true, false)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(matches!(
             result,
             TransferEligibility::Denied {
@@ -2253,11 +2253,11 @@ mod tests {
         };
         let mut engine = TransferEngine::new(policy, test_epoch(5));
         let prior = make_prior("p1", TransferKind::RewritePack, 3, 900_000, 10);
-        engine.register_prior(prior).unwrap();
+        engine.register_prior(prior).expect("serde deserialization should succeed");
 
         let record = engine
             .execute_transfer(&transfer_input("t1", "p1", "tgt1", "cert1"))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(record.status, TransferStatus::Active);
     }
 }

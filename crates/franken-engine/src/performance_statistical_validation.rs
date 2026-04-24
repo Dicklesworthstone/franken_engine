@@ -961,7 +961,7 @@ mod tests {
 
     #[test]
     fn compute_stats_uniform() {
-        let stats = compute_stats(&[1000, 1000, 1000, 1000, 1000]).unwrap();
+        let stats = compute_stats(&[1000, 1000, 1000, 1000, 1000]).expect("serde deserialization should succeed");
         assert_eq!(stats.mean_ns, 1000);
         assert_eq!(stats.stddev_ns, 0);
         assert_eq!(stats.cv_millionths, 0);
@@ -970,7 +970,7 @@ mod tests {
 
     #[test]
     fn compute_stats_nonzero_stddev() {
-        let stats = compute_stats(&[900, 1000, 1100]).unwrap();
+        let stats = compute_stats(&[900, 1000, 1100]).expect("serde deserialization should succeed");
         assert_eq!(stats.mean_ns, 1000);
         assert!(stats.stddev_ns > 0);
         assert!(stats.cv_millionths > 0);
@@ -1168,16 +1168,16 @@ mod tests {
             "policy",
             vec![low_noise_workload()],
         );
-        let json = serde_json::to_string(&input).unwrap();
-        let restored: StatisticalValidationInput = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
+        let restored: StatisticalValidationInput = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(input, restored);
     }
 
     #[test]
     fn validation_policy_serde_roundtrip() {
         let policy = stable_policy();
-        let json = serde_json::to_string(&policy).unwrap();
-        let restored: StatisticalValidationPolicy = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
+        let restored: StatisticalValidationPolicy = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(policy, restored);
     }
 
@@ -1191,8 +1191,8 @@ mod tests {
             vec![low_noise_workload()],
         );
         let report = evaluate_statistical_validation(&input, &policy);
-        let json = serde_json::to_string(&report).unwrap();
-        let restored: StatisticalValidationReport = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let restored: StatisticalValidationReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report, restored);
     }
 

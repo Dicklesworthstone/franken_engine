@@ -43,12 +43,12 @@ fn serialize_json_value<T: ?Sized + Serialize>(value: &T, _context: &str) -> Val
 
 #[track_caller]
 fn serialize_json_string<T: ?Sized + Serialize>(value: &T, _context: &str) -> String {
-    serde_json::to_string(value).unwrap()
+    serde_json::to_string(value).expect("serde deserialization should succeed")
 }
 
 #[track_caller]
 fn serialize_pretty_json_string<T: ?Sized + Serialize>(value: &T, _context: &str) -> String {
-    serde_json::to_string_pretty(value).unwrap()
+    serde_json::to_string_pretty(value).expect("serde deserialization should succeed")
 }
 
 /// Stable log envelope required by plan acceptance criteria.
@@ -3508,8 +3508,8 @@ mod tests {
             EvidenceSeverity::Warning,
             EvidenceSeverity::Critical,
         ] {
-            let json = serde_json::to_string(sev).unwrap();
-            let back: EvidenceSeverity = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(sev).expect("serde deserialization should succeed");
+            let back: EvidenceSeverity = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*sev, back);
         }
     }
@@ -3523,8 +3523,8 @@ mod tests {
             EvidenceRecordKind::PolicyChange,
             EvidenceRecordKind::ReplayArtifact,
         ] {
-            let json = serde_json::to_string(kind).unwrap();
-            let back: EvidenceRecordKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(kind).expect("serde deserialization should succeed");
+            let back: EvidenceRecordKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*kind, back);
         }
     }
@@ -3540,8 +3540,8 @@ mod tests {
             outcome: "pass".to_string(),
             error_code: Some("E001".to_string()),
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let back: StructuredLogEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let back: StructuredLogEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
     }
 
@@ -3555,8 +3555,8 @@ mod tests {
             severity: Some(EvidenceSeverity::Warning),
             decision_type: Some(DecisionType::Revocation),
         };
-        let json = serde_json::to_string(&filter).unwrap();
-        let back: EvidenceExportFilter = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&filter).expect("serde deserialization should succeed");
+        let back: EvidenceExportFilter = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(filter, back);
     }
 
@@ -3567,8 +3567,8 @@ mod tests {
             used_bytes: 500,
             budget_bytes: 1000,
         };
-        let json = serde_json::to_string(&sample).unwrap();
-        let back: GcPressureSample = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&sample).expect("serde deserialization should succeed");
+        let back: GcPressureSample = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(sample, back);
     }
 
@@ -3583,8 +3583,8 @@ mod tests {
             tasks_completed: 80,
             tasks_timed_out: 2,
         };
-        let json = serde_json::to_string(&sample).unwrap();
-        let back: SchedulerLaneSample = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&sample).expect("serde deserialization should succeed");
+        let back: SchedulerLaneSample = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(sample, back);
     }
 
@@ -3597,8 +3597,8 @@ mod tests {
             artifact_id: "a1".to_string(),
             replay_pointer: "path/to/artifact".to_string(),
         };
-        let json = serde_json::to_string(&record).unwrap();
-        let back: ReplayArtifactRecord = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&record).expect("serde deserialization should succeed");
+        let back: ReplayArtifactRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(record, back);
     }
 
@@ -3842,12 +3842,12 @@ mod tests {
             .gc_pressure
             .iter()
             .find(|g| g.extension_id == "over")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let under = out
             .gc_pressure
             .iter()
             .find(|g| g.extension_id == "under")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(over.over_budget);
         assert!(!under.over_budget);
     }
@@ -3947,8 +3947,8 @@ mod tests {
             counts_by_kind,
             counts_by_severity,
         };
-        let json = serde_json::to_string(&summary).unwrap();
-        let back: EvidenceExportSummary = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
+        let back: EvidenceExportSummary = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(summary, back);
     }
 
@@ -4015,16 +4015,16 @@ mod tests {
             extension_id: "ext-test".to_string(),
             containment_state: ContainmentState::Sandboxed,
         };
-        let json = serde_json::to_string(&state).unwrap();
-        let back: RuntimeExtensionState = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&state).expect("serde deserialization should succeed");
+        let back: RuntimeExtensionState = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(state, back);
     }
 
     #[test]
     fn runtime_state_input_serde_roundtrip() {
         let state = sample_runtime_state();
-        let json = serde_json::to_string(&state).unwrap();
-        let back: RuntimeStateInput = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&state).expect("serde deserialization should succeed");
+        let back: RuntimeStateInput = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(state, back);
     }
 
@@ -4042,8 +4042,8 @@ mod tests {
     fn evidence_export_output_serde_roundtrip() {
         let input = sample_input();
         let output = export_evidence_bundle(&input, EvidenceExportFilter::default());
-        let json = serde_json::to_string(&output).unwrap();
-        let back: EvidenceExportOutput = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&output).expect("serde deserialization should succeed");
+        let back: EvidenceExportOutput = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(output, back);
     }
 
@@ -4133,7 +4133,7 @@ mod tests {
             outcome: "ok".into(),
             error_code: None,
         };
-        let json = serde_json::to_string(&e).unwrap();
+        let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
         assert!(json.contains("\"trace_id\""));
         assert!(json.contains("\"decision_id\""));
         assert!(json.contains("\"policy_id\""));
@@ -4149,7 +4149,7 @@ mod tests {
             used_bytes: 1024,
             budget_bytes: 4096,
         };
-        let json = serde_json::to_string(&s).unwrap();
+        let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
         assert!(json.contains("\"extension_id\""));
         assert!(json.contains("\"used_bytes\""));
         assert!(json.contains("\"budget_bytes\""));
@@ -4164,7 +4164,7 @@ mod tests {
             artifact_id: "a-1".into(),
             replay_pointer: "ptr-1".into(),
         };
-        let json = serde_json::to_string(&r).unwrap();
+        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
         assert!(json.contains("\"trace_id\""));
         assert!(json.contains("\"extension_id\""));
         assert!(json.contains("\"timestamp_ns\""));
@@ -4179,8 +4179,8 @@ mod tests {
             EvidenceSeverity::Warning,
             EvidenceSeverity::Critical,
         ] {
-            let json = serde_json::to_string(&s).unwrap();
-            let back: EvidenceSeverity = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+            let back: EvidenceSeverity = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(s, back);
         }
     }
@@ -4276,7 +4276,7 @@ mod tests {
             EvidenceSeverity::Critical,
         ]
         .iter()
-        .map(|s| serde_json::to_string(s).unwrap())
+        .map(|s| serde_json::to_string(s).expect("serde deserialization should succeed"))
         .collect();
         assert_eq!(jsons.len(), 3);
     }
@@ -4291,7 +4291,7 @@ mod tests {
             EvidenceRecordKind::ReplayArtifact,
         ]
         .iter()
-        .map(|k| serde_json::to_string(k).unwrap())
+        .map(|k| serde_json::to_string(k).expect("serde deserialization should succeed"))
         .collect();
         assert_eq!(jsons.len(), 5);
     }
@@ -4380,7 +4380,7 @@ mod tests {
             tasks_completed: 40,
             tasks_timed_out: 2,
         };
-        let json = serde_json::to_string(&s).unwrap();
+        let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
         assert!(json.contains("\"lane\""));
         assert!(json.contains("\"queue_depth\""));
         assert!(json.contains("\"max_depth\""));
@@ -4400,7 +4400,7 @@ mod tests {
             severity: Some(EvidenceSeverity::Info),
             decision_type: Some(DecisionType::SecurityAction),
         };
-        let json = serde_json::to_string(&f).unwrap();
+        let json = serde_json::to_string(&f).expect("serde deserialization should succeed");
         assert!(json.contains("\"extension_id\""));
         assert!(json.contains("\"trace_id\""));
         assert!(json.contains("\"start_timestamp_ns\""));
@@ -4416,7 +4416,7 @@ mod tests {
             counts_by_kind: BTreeMap::new(),
             counts_by_severity: BTreeMap::new(),
         };
-        let json = serde_json::to_string(&summary).unwrap();
+        let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
         assert!(json.contains("\"total_records\""));
         assert!(json.contains("\"counts_by_kind\""));
         assert!(json.contains("\"counts_by_severity\""));
@@ -4431,7 +4431,7 @@ mod tests {
             pressure_millionths: 500_000,
             over_budget: false,
         };
-        let json = serde_json::to_string(&d).unwrap();
+        let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
         assert!(json.contains("\"extension_id\""));
         assert!(json.contains("\"used_bytes\""));
         assert!(json.contains("\"budget_bytes\""));
@@ -4451,7 +4451,7 @@ mod tests {
             tasks_completed: 7,
             tasks_timed_out: 1,
         };
-        let json = serde_json::to_string(&d).unwrap();
+        let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
         assert!(json.contains("\"lane\""));
         assert!(json.contains("\"utilization_millionths\""));
     }
@@ -4467,8 +4467,8 @@ mod tests {
             EvidenceRecordKind::PolicyChange,
             EvidenceRecordKind::ReplayArtifact,
         ] {
-            let json = serde_json::to_string(&k).unwrap();
-            let back: EvidenceRecordKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&k).expect("serde deserialization should succeed");
+            let back: EvidenceRecordKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(k, back);
         }
     }
@@ -4482,8 +4482,8 @@ mod tests {
             pressure_millionths: 500_000,
             over_budget: false,
         };
-        let json = serde_json::to_string(&d).unwrap();
-        let back: GcPressureDiagnostics = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
+        let back: GcPressureDiagnostics = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(d, back);
     }
 
@@ -4499,8 +4499,8 @@ mod tests {
             tasks_completed: 7,
             tasks_timed_out: 1,
         };
-        let json = serde_json::to_string(&d).unwrap();
-        let back: SchedulerLaneDiagnostics = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
+        let back: SchedulerLaneDiagnostics = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(d, back);
     }
 
@@ -4514,8 +4514,8 @@ mod tests {
             severity: Some(EvidenceSeverity::Warning),
             decision_type: Some(DecisionType::Revocation),
         };
-        let json = serde_json::to_string(&f).unwrap();
-        let back: EvidenceExportFilter = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&f).expect("serde deserialization should succeed");
+        let back: EvidenceExportFilter = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(f, back);
     }
 
@@ -4528,8 +4528,8 @@ mod tests {
             artifact_id: "a".into(),
             replay_pointer: "ptr".into(),
         };
-        let json = serde_json::to_string(&r).unwrap();
-        let back: ReplayArtifactRecord = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let back: ReplayArtifactRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 
@@ -4671,15 +4671,15 @@ mod tests {
     #[test]
     fn evidence_severity_serde_uses_snake_case() {
         assert_eq!(
-            serde_json::to_string(&EvidenceSeverity::Info).unwrap(),
+            serde_json::to_string(&EvidenceSeverity::Info).expect("serde deserialization should succeed"),
             "\"info\""
         );
         assert_eq!(
-            serde_json::to_string(&EvidenceSeverity::Warning).unwrap(),
+            serde_json::to_string(&EvidenceSeverity::Warning).expect("serde deserialization should succeed"),
             "\"warning\""
         );
         assert_eq!(
-            serde_json::to_string(&EvidenceSeverity::Critical).unwrap(),
+            serde_json::to_string(&EvidenceSeverity::Critical).expect("serde deserialization should succeed"),
             "\"critical\""
         );
     }
@@ -4687,11 +4687,11 @@ mod tests {
     #[test]
     fn evidence_record_kind_serde_uses_snake_case() {
         assert_eq!(
-            serde_json::to_string(&EvidenceRecordKind::DecisionReceipt).unwrap(),
+            serde_json::to_string(&EvidenceRecordKind::DecisionReceipt).expect("serde deserialization should succeed"),
             "\"decision_receipt\""
         );
         assert_eq!(
-            serde_json::to_string(&EvidenceRecordKind::HostcallTelemetry).unwrap(),
+            serde_json::to_string(&EvidenceRecordKind::HostcallTelemetry).expect("serde deserialization should succeed"),
             "\"hostcall_telemetry\""
         );
     }

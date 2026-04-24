@@ -866,10 +866,10 @@ mod tests {
         let s = EngineSurface::Module;
         // SAFETY: EngineSurface derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&s).unwrap();
+        let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid EngineSurface,
         // so from_str back to EngineSurface cannot fail (valid format + matching schema).
-        let back: EngineSurface = serde_json::from_str(&json).unwrap();
+        let back: EngineSurface = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(s, back);
     }
 
@@ -892,8 +892,8 @@ mod tests {
     #[test]
     fn support_status_serde() {
         let s = SupportStatus::Partial;
-        let json = serde_json::to_string(&s).unwrap();
-        let back: SupportStatus = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+        let back: SupportStatus = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(s, back);
     }
 
@@ -964,8 +964,8 @@ mod tests {
                 (EngineSurface::Module, SupportStatus::Partial),
             ],
         );
-        let json = serde_json::to_string(&f).unwrap();
-        let back: CoverFeature = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&f).expect("serde deserialization should succeed");
+        let back: CoverFeature = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(f, back);
     }
 
@@ -988,8 +988,8 @@ mod tests {
     #[test]
     fn overlap_restriction_serde() {
         let r = OverlapRestriction::Exclusive;
-        let json = serde_json::to_string(&r).unwrap();
-        let back: OverlapRestriction = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let back: OverlapRestriction = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 
@@ -1111,7 +1111,7 @@ mod tests {
         let map = default_overlap_map();
         let cover = SemanticCover::new(features, map, test_epoch());
         let summary = cover.surface_summary();
-        let parser_sum = summary.get(&EngineSurface::Parser).unwrap();
+        let parser_sum = summary.get(&EngineSurface::Parser).expect("serde deserialization should succeed");
         assert_eq!(parser_sum.total_relevant, 1);
         assert_eq!(parser_sum.supported, 1);
     }
@@ -1234,8 +1234,8 @@ mod tests {
     fn evidence_corpus_serde() {
         let (specimens, _) = run_evidence_corpus();
         for s in &specimens {
-            let json = serde_json::to_string(s).unwrap();
-            let back: CoverSpecimen = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(s).expect("serde deserialization should succeed");
+            let back: CoverSpecimen = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*s, back);
         }
     }
@@ -1291,8 +1291,8 @@ mod tests {
     #[test]
     fn surface_serde_roundtrip_all_variants() {
         for surface in EngineSurface::all() {
-            let json = serde_json::to_string(surface).unwrap();
-            let back: EngineSurface = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(surface).expect("serde deserialization should succeed");
+            let back: EngineSurface = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*surface, back);
         }
     }
@@ -1324,8 +1324,8 @@ mod tests {
             SupportStatus::NotApplicable,
         ];
         for s in statuses {
-            let json = serde_json::to_string(&s).unwrap();
-            let back: SupportStatus = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+            let back: SupportStatus = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(s, back);
         }
     }
@@ -1416,8 +1416,8 @@ mod tests {
         f.evidence_keys.insert("test.evidence.002".into());
         f.evidence_keys.insert("test.evidence.001".into()); // dup
         assert_eq!(f.evidence_keys.len(), 2);
-        let json = serde_json::to_string(&f).unwrap();
-        let back: CoverFeature = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&f).expect("serde deserialization should succeed");
+        let back: CoverFeature = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(f.evidence_keys, back.evidence_keys);
     }
 
@@ -1481,8 +1481,8 @@ mod tests {
     #[test]
     fn overlap_map_serde_roundtrip() {
         let map = default_overlap_map();
-        let json = serde_json::to_string(&map).unwrap();
-        let back: OverlapRestrictionMap = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&map).expect("serde deserialization should succeed");
+        let back: OverlapRestrictionMap = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.entries.len(), map.entries.len());
         assert_eq!(back.content_hash, map.content_hash);
         assert_eq!(back.schema_version, map.schema_version);
@@ -1576,8 +1576,8 @@ mod tests {
         ];
         let map = default_overlap_map();
         let cover = SemanticCover::new(features, map, test_epoch());
-        let json = serde_json::to_string(&cover).unwrap();
-        let back: SemanticCover = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&cover).expect("serde deserialization should succeed");
+        let back: SemanticCover = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.feature_count(), cover.feature_count());
         assert_eq!(back.content_hash, cover.content_hash);
         assert_eq!(back.schema_version, cover.schema_version);
@@ -1652,7 +1652,7 @@ mod tests {
             assert!(summary.contains_key(surface));
         }
         // Non-relevant surfaces should have total_relevant == 0
-        let cli_sum = summary.get(&EngineSurface::Cli).unwrap();
+        let cli_sum = summary.get(&EngineSurface::Cli).expect("serde deserialization should succeed");
         assert_eq!(cli_sum.total_relevant, 0);
         assert_eq!(cli_sum.supported, 0);
     }
@@ -1678,11 +1678,11 @@ mod tests {
         let map = default_overlap_map();
         let cover = SemanticCover::new(features, map, test_epoch());
         let summary = cover.surface_summary();
-        let parser_sum = summary.get(&EngineSurface::Parser).unwrap();
+        let parser_sum = summary.get(&EngineSurface::Parser).expect("serde deserialization should succeed");
         assert_eq!(parser_sum.total_relevant, 2);
         assert_eq!(parser_sum.supported, 1);
         assert_eq!(parser_sum.partial, 1);
-        let lowering_sum = summary.get(&EngineSurface::Lowering).unwrap();
+        let lowering_sum = summary.get(&EngineSurface::Lowering).expect("serde deserialization should succeed");
         assert_eq!(lowering_sum.total_relevant, 2);
         assert_eq!(lowering_sum.unknown, 1);
         assert_eq!(lowering_sum.unsupported, 1);
@@ -1795,8 +1795,8 @@ mod tests {
             GapSeverity::Informational,
         ];
         for sev in severities {
-            let json = serde_json::to_string(&sev).unwrap();
-            let back: GapSeverity = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&sev).expect("serde deserialization should succeed");
+            let back: GapSeverity = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(sev, back);
         }
     }
@@ -1811,8 +1811,8 @@ mod tests {
             unknown_surfaces: BTreeSet::new(),
             severity: GapSeverity::Moderate,
         };
-        let json = serde_json::to_string(&gap).unwrap();
-        let back: CoverGap = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&gap).expect("serde deserialization should succeed");
+        let back: CoverGap = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(gap, back);
     }
 
@@ -1834,8 +1834,8 @@ mod tests {
             restriction: OverlapRestriction::Exclusive,
             description: "test violation".into(),
         };
-        let json = serde_json::to_string(&v).unwrap();
-        let back: OverlapViolation = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let back: OverlapViolation = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, back);
     }
 
@@ -1850,8 +1850,8 @@ mod tests {
             scope_prefix: Some("ts.module.".into()),
             rationale: "test rationale".into(),
         };
-        let json = serde_json::to_string(&entry).unwrap();
-        let back: OverlapEntry = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let back: OverlapEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, back);
     }
 
@@ -1864,9 +1864,9 @@ mod tests {
             scope_prefix: None,
             rationale: "no scope".into(),
         };
-        let json = serde_json::to_string(&entry).unwrap();
+        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
         assert!(json.contains("null") || !json.contains("scope_prefix"));
-        let back: OverlapEntry = serde_json::from_str(&json).unwrap();
+        let back: OverlapEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, back);
     }
 
@@ -1882,8 +1882,8 @@ mod tests {
             unsupported: 2,
             unknown: 1,
         };
-        let json = serde_json::to_string(&summary).unwrap();
-        let back: SurfaceSummary = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
+        let back: SurfaceSummary = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(summary, back);
     }
 
@@ -1899,8 +1899,8 @@ mod tests {
             CoverSpecimenFamily::NotApplicable,
         ];
         for fam in families {
-            let json = serde_json::to_string(&fam).unwrap();
-            let back: CoverSpecimenFamily = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&fam).expect("serde deserialization should succeed");
+            let back: CoverSpecimenFamily = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(fam, back);
         }
     }

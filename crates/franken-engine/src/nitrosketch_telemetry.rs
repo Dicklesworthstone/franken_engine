@@ -1129,8 +1129,8 @@ mod tests {
     #[test]
     fn sketch_kind_serde_round_trip() {
         for kind in SketchKind::all() {
-            let json = serde_json::to_string(kind).unwrap();
-            let back: SketchKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(kind).expect("serde deserialization should succeed");
+            let back: SketchKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*kind, back);
         }
     }
@@ -1162,8 +1162,8 @@ mod tests {
             SamplingStrategy::BudgetAdaptive,
         ];
         for s in &strategies {
-            let json = serde_json::to_string(s).unwrap();
-            let back: SamplingStrategy = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(s).expect("serde deserialization should succeed");
+            let back: SamplingStrategy = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*s, back);
         }
     }
@@ -1224,8 +1224,8 @@ mod tests {
     #[test]
     fn site_serde_round_trip() {
         let site = make_site("s2", SketchKind::TopK);
-        let json = serde_json::to_string(&site).unwrap();
-        let back: TelemetrySite = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&site).expect("serde deserialization should succeed");
+        let back: TelemetrySite = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(site, back);
     }
 
@@ -1326,8 +1326,8 @@ mod tests {
             make_site("a", SketchKind::CountMin),
             make_site("b", SketchKind::Histogram),
         ]);
-        let json = serde_json::to_string(&inv).unwrap();
-        let back: SiteInventory = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&inv).expect("serde deserialization should succeed");
+        let back: SiteInventory = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(inv, back);
     }
 
@@ -1338,14 +1338,14 @@ mod tests {
     #[test]
     fn record_update_decrements_budget() {
         let mut site = make_site_with_budget("r1", 10);
-        let _update = record_update(&mut site, "key1", MILLION).unwrap();
+        let _update = record_update(&mut site, "key1", MILLION).expect("serde deserialization should succeed");
         assert_eq!(site.budget_remaining, 9);
     }
 
     #[test]
     fn record_update_returns_correct_key() {
         let mut site = make_site_with_budget("r2", 5);
-        let update = record_update(&mut site, "my_key", 42).unwrap();
+        let update = record_update(&mut site, "my_key", 42).expect("serde deserialization should succeed");
         assert_eq!(update.key, "my_key");
         assert_eq!(update.weight_millionths, 42);
         assert_eq!(update.site_id, "r2");
@@ -1465,8 +1465,8 @@ mod tests {
         let site = make_site("s", SketchKind::CountMin);
         let results = vec![calibrate_site(&site, 50, 48)];
         let report = build_calibration_report(SecurityEpoch::from_raw(7), results);
-        let json = serde_json::to_string(&report).unwrap();
-        let back: CalibrationReport = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let back: CalibrationReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report, back);
     }
 
@@ -1541,8 +1541,8 @@ mod tests {
             TelemetryError::InternalError("test".to_string()),
         ];
         for e in &errors {
-            let json = serde_json::to_string(e).unwrap();
-            let back: TelemetryError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(e).expect("serde deserialization should succeed");
+            let back: TelemetryError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*e, back);
         }
     }
@@ -1697,7 +1697,7 @@ mod tests {
             make_site("b", SketchKind::CountMin),
             make_site("d", SketchKind::CountMin),
         ]);
-        add_site_to_inventory(&mut inv, make_site("c", SketchKind::Quantile)).unwrap();
+        add_site_to_inventory(&mut inv, make_site("c", SketchKind::Quantile)).expect("serde deserialization should succeed");
         let ids: Vec<&str> = inv.sites.iter().map(|s| s.site_id.as_str()).collect();
         assert_eq!(ids, vec!["b", "c", "d"]);
     }
@@ -1708,7 +1708,7 @@ mod tests {
             make_site("a", SketchKind::CountMin),
             make_site("b", SketchKind::CountMin),
         ]);
-        let removed = remove_site_from_inventory(&mut inv, "a").unwrap();
+        let removed = remove_site_from_inventory(&mut inv, "a").expect("serde deserialization should succeed");
         assert_eq!(removed.site_id, "a");
         assert_eq!(inv.sites.len(), 1);
     }
@@ -1762,7 +1762,7 @@ mod tests {
             make_site("b", SketchKind::CountMin),
         ]);
         let measurements = vec![("a", 100u64, 100u64), ("b", 200, 198)];
-        let report = calibrate_inventory(&inv, &measurements, SecurityEpoch::GENESIS).unwrap();
+        let report = calibrate_inventory(&inv, &measurements, SecurityEpoch::GENESIS).expect("serde deserialization should succeed");
         assert_eq!(report.results.len(), 2);
         assert!(report.all_passed());
     }
@@ -1859,7 +1859,7 @@ mod tests {
             100,
         );
         assert!(result.is_ok());
-        assert!(result.unwrap().is_some());
+        assert!(result.expect("serde deserialization should succeed").is_some());
     }
 
     #[test]
@@ -1875,7 +1875,7 @@ mod tests {
             100,
         );
         assert!(result.is_ok());
-        assert!(result.unwrap().is_none());
+        assert!(result.expect("serde deserialization should succeed").is_none());
         assert_eq!(site.budget_remaining, 100); // budget not consumed
     }
 
@@ -1905,8 +1905,8 @@ mod tests {
     fn calibration_result_serde_round_trip() {
         let site = make_site("cr1", SketchKind::CountMin);
         let result = calibrate_site(&site, 500, 510);
-        let json = serde_json::to_string(&result).unwrap();
-        let back: CalibrationResult = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let back: CalibrationResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, back);
     }
 

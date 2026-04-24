@@ -1015,7 +1015,7 @@ impl FrirLoweringPipeline {
 
         // Check chain continuity
         if !self.witnesses.is_empty() {
-            let last = self.witnesses.last().unwrap();
+            let last = self.witnesses.last().expect("serde deserialization should succeed");
             if !witness.chain_links_to(&last.output_hash) {
                 return Err(FrirPipelineError::BrokenChain {
                     pass_index: witness.pass_index,
@@ -1366,8 +1366,8 @@ mod tests {
     #[test]
     fn frir_version_serde_roundtrip() {
         let v = FrirVersion::CURRENT;
-        let json = serde_json::to_string(&v).unwrap();
-        let back: FrirVersion = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let back: FrirVersion = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, back);
     }
 
@@ -1383,8 +1383,8 @@ mod tests {
     #[test]
     fn lane_target_serde_roundtrip() {
         for lane in [LaneTarget::Js, LaneTarget::Wasm, LaneTarget::Baseline] {
-            let json = serde_json::to_string(&lane).unwrap();
-            let back: LaneTarget = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&lane).expect("serde deserialization should succeed");
+            let back: LaneTarget = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(lane, back);
         }
     }
@@ -1421,8 +1421,8 @@ mod tests {
             PassKind::CodeGeneration,
             PassKind::Custom,
         ] {
-            let json = serde_json::to_string(&kind).unwrap();
-            let back: PassKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
+            let back: PassKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(kind, back);
         }
     }
@@ -1495,8 +1495,8 @@ mod tests {
     #[test]
     fn effect_annotation_serde_roundtrip() {
         let ann = EffectAnnotation::pure_annotation();
-        let json = serde_json::to_string(&ann).unwrap();
-        let back: EffectAnnotation = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&ann).expect("serde deserialization should succeed");
+        let back: EffectAnnotation = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ann, back);
     }
 
@@ -1548,8 +1548,8 @@ mod tests {
     #[test]
     fn pass_witness_serde_roundtrip() {
         let w = make_witness(0, PassKind::Parse, b"source", b"ir0");
-        let json = serde_json::to_string(&w).unwrap();
-        let back: PassWitness = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&w).expect("serde deserialization should succeed");
+        let back: PassWitness = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(w, back);
     }
 
@@ -1674,8 +1674,8 @@ mod tests {
             complete: true,
             chain_hash: make_hash(b"chain"),
         };
-        let json = serde_json::to_string(&chain).unwrap();
-        let back: WitnessChain = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&chain).expect("serde deserialization should succeed");
+        let back: WitnessChain = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(chain, back);
     }
 
@@ -1723,8 +1723,8 @@ mod tests {
             preserved_invariants: vec![InvariantKind::Determinism],
             witness_hash: make_hash(b"eq_witness"),
         };
-        let json = serde_json::to_string(&ew).unwrap();
-        let back: EquivalenceWitness = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&ew).expect("serde deserialization should succeed");
+        let back: EquivalenceWitness = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ew, back);
     }
 
@@ -1763,8 +1763,8 @@ mod tests {
             pass_kind: PassKind::ScopeResolve,
             detail: "type error".to_string(),
         };
-        let json = serde_json::to_string(&r).unwrap();
-        let back: FallbackReason = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let back: FallbackReason = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 
@@ -1811,8 +1811,8 @@ mod tests {
     #[test]
     fn pipeline_config_serde_roundtrip() {
         let config = PipelineConfig::production();
-        let json = serde_json::to_string(&config).unwrap();
-        let back: PipelineConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let back: PipelineConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, back);
     }
 
@@ -1840,8 +1840,8 @@ mod tests {
             pass_index: 3,
             detail: "hash mismatch".to_string(),
         };
-        let json = serde_json::to_string(&e).unwrap();
-        let back: FrirPipelineError = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
+        let back: FrirPipelineError = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(e, back);
     }
 
@@ -1879,7 +1879,7 @@ mod tests {
     fn pipeline_record_single_pass() {
         let mut p = FrirLoweringPipeline::new(PipelineConfig::production());
         let w = make_witness(0, PassKind::Parse, b"source", b"ir0");
-        p.record_pass(w).unwrap();
+        p.record_pass(w).expect("serde deserialization should succeed");
         assert_eq!(p.pass_count(), 1);
         assert!(!p.has_fallen_back());
     }
@@ -1888,8 +1888,8 @@ mod tests {
     fn pipeline_record_chained_passes() {
         let mut p = FrirLoweringPipeline::new(PipelineConfig::production());
         let (w0, w1) = make_chained_witnesses();
-        p.record_pass(w0).unwrap();
-        p.record_pass(w1).unwrap();
+        p.record_pass(w0).expect("serde deserialization should succeed");
+        p.record_pass(w1).expect("serde deserialization should succeed");
         assert_eq!(p.pass_count(), 2);
     }
 
@@ -1898,7 +1898,7 @@ mod tests {
         let mut p = FrirLoweringPipeline::new(PipelineConfig::production());
         let w0 = make_witness(0, PassKind::Parse, b"source", b"ir0");
         let w1 = make_witness(1, PassKind::ScopeResolve, b"wrong", b"ir1");
-        p.record_pass(w0).unwrap();
+        p.record_pass(w0).expect("serde deserialization should succeed");
         let err = p.record_pass(w1).unwrap_err();
         assert!(matches!(err, FrirPipelineError::BrokenChain { .. }));
     }
@@ -1909,7 +1909,7 @@ mod tests {
         let w0 = make_witness(0, PassKind::Parse, b"source", b"ir0");
         let mut w0_dup = make_witness(0, PassKind::Parse, b"source2", b"ir0_2");
         w0_dup.input_hash = w0.output_hash;
-        p.record_pass(w0).unwrap();
+        p.record_pass(w0).expect("serde deserialization should succeed");
         let err = p.record_pass(w0_dup).unwrap_err();
         assert!(matches!(err, FrirPipelineError::DuplicatePassIndex(0)));
     }
@@ -1952,7 +1952,7 @@ mod tests {
     fn pipeline_obligations_tracking() {
         let mut p = FrirLoweringPipeline::new(PipelineConfig::production());
         let w = make_witness(0, PassKind::Parse, b"source", b"ir0");
-        p.record_pass(w).unwrap();
+        p.record_pass(w).expect("serde deserialization should succeed");
         assert_eq!(p.obligations().len(), 1);
         assert!(p.all_obligations_discharged());
         assert!(p.undischarged_obligations().is_empty());
@@ -1964,7 +1964,7 @@ mod tests {
         let mut w = make_witness(0, PassKind::Parse, b"source", b"ir0");
         w.obligations_touched
             .push(make_obligation("pending_ob", false));
-        p.record_pass(w).unwrap();
+        p.record_pass(w).expect("serde deserialization should succeed");
         assert!(!p.all_obligations_discharged());
         assert_eq!(p.undischarged_obligations().len(), 1);
     }
@@ -1973,7 +1973,7 @@ mod tests {
     fn pipeline_assumptions_tracking() {
         let mut p = FrirLoweringPipeline::new(PipelineConfig::production());
         let w = make_witness(0, PassKind::Parse, b"source", b"ir0");
-        p.record_pass(w).unwrap();
+        p.record_pass(w).expect("serde deserialization should succeed");
         assert_eq!(p.assumptions().len(), 1);
     }
 
@@ -2004,9 +2004,9 @@ mod tests {
         let mut p = FrirLoweringPipeline::new(PipelineConfig::production());
         let (w0, w1) = make_chained_witnesses();
         let source_hash = w0.input_hash;
-        p.record_pass(w0).unwrap();
-        p.record_pass(w1).unwrap();
-        let artifact = p.finalize(source_hash).unwrap();
+        p.record_pass(w0).expect("serde deserialization should succeed");
+        p.record_pass(w1).expect("serde deserialization should succeed");
+        let artifact = p.finalize(source_hash).expect("serde deserialization should succeed");
         assert!(artifact.is_valid());
         assert_eq!(artifact.witness_chain.passes.len(), 2);
         assert_eq!(artifact.target_lane, LaneTarget::Js);
@@ -2017,7 +2017,7 @@ mod tests {
         let mut p = FrirLoweringPipeline::new(PipelineConfig::production());
         let w0 = make_witness(0, PassKind::Parse, b"source", b"ir0");
         let source_hash = w0.input_hash;
-        p.record_pass(w0).unwrap();
+        p.record_pass(w0).expect("serde deserialization should succeed");
         let ew = EquivalenceWitness {
             reference_hash: make_hash(b"ref"),
             optimized_hash: make_hash(b"opt"),
@@ -2029,7 +2029,7 @@ mod tests {
             witness_hash: make_hash(b"eq"),
         };
         p.record_equivalence_witness(ew);
-        let artifact = p.finalize(source_hash).unwrap();
+        let artifact = p.finalize(source_hash).expect("serde deserialization should succeed");
         assert_eq!(artifact.equivalence_witnesses.len(), 1);
         assert!(artifact.all_equivalences_proven());
     }
@@ -2039,8 +2039,8 @@ mod tests {
         let mut p = FrirLoweringPipeline::new(PipelineConfig::production());
         let w0 = make_witness(0, PassKind::Parse, b"source", b"ir0");
         let source_hash = w0.input_hash;
-        p.record_pass(w0).unwrap();
-        p.finalize(source_hash).unwrap();
+        p.record_pass(w0).expect("serde deserialization should succeed");
+        p.finalize(source_hash).expect("serde deserialization should succeed");
         let events = p.events();
         // PipelineStarted, PassExecuted, WitnessProduced, PipelineCompleted
         assert!(events.len() >= 4);
@@ -2051,9 +2051,9 @@ mod tests {
     fn pipeline_serde_roundtrip() {
         let mut p = FrirLoweringPipeline::new(PipelineConfig::production());
         let w0 = make_witness(0, PassKind::Parse, b"source", b"ir0");
-        p.record_pass(w0).unwrap();
-        let json = serde_json::to_string(&p).unwrap();
-        let back: FrirLoweringPipeline = serde_json::from_str(&json).unwrap();
+        p.record_pass(w0).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
+        let back: FrirLoweringPipeline = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(p, back);
     }
 
@@ -2064,10 +2064,10 @@ mod tests {
         let mut p = FrirLoweringPipeline::new(PipelineConfig::production());
         let w0 = make_witness(0, PassKind::Parse, b"source", b"ir0");
         let source_hash = w0.input_hash;
-        p.record_pass(w0).unwrap();
-        let artifact = p.finalize(source_hash).unwrap();
-        let json = serde_json::to_string(&artifact).unwrap();
-        let back: FrirArtifact = serde_json::from_str(&json).unwrap();
+        p.record_pass(w0).expect("serde deserialization should succeed");
+        let artifact = p.finalize(source_hash).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&artifact).expect("serde deserialization should succeed");
+        let back: FrirArtifact = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(artifact, back);
     }
 
@@ -2076,8 +2076,8 @@ mod tests {
     #[test]
     fn obligation_ref_serde_roundtrip() {
         let ob = make_obligation("ob_1", true);
-        let json = serde_json::to_string(&ob).unwrap();
-        let back: ObligationRef = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&ob).expect("serde deserialization should succeed");
+        let back: ObligationRef = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ob, back);
     }
 
@@ -2086,8 +2086,8 @@ mod tests {
     #[test]
     fn assumption_ref_serde_roundtrip() {
         let asm = make_assumption("asm_1", true);
-        let json = serde_json::to_string(&asm).unwrap();
-        let back: AssumptionRef = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&asm).expect("serde deserialization should succeed");
+        let back: AssumptionRef = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(asm, back);
     }
 
@@ -2100,8 +2100,8 @@ mod tests {
             errors: Vec::new(),
             pass_verdicts: vec![WitnessVerdict::Valid, WitnessVerdict::Valid],
         };
-        let json = serde_json::to_string(&cv).unwrap();
-        let back: ChainVerification = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&cv).expect("serde deserialization should succeed");
+        let back: ChainVerification = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cv, back);
     }
 
@@ -2110,8 +2110,8 @@ mod tests {
     #[test]
     fn invariant_check_serde_roundtrip() {
         let ic = make_invariant(InvariantKind::SemanticEquivalence, true);
-        let json = serde_json::to_string(&ic).unwrap();
-        let back: InvariantCheck = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&ic).expect("serde deserialization should succeed");
+        let back: InvariantCheck = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ic, back);
     }
 
@@ -2127,8 +2127,8 @@ mod tests {
             WitnessVerdict::TimedOut,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: WitnessVerdict = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: WitnessVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -2144,8 +2144,8 @@ mod tests {
             InvariantKind::Determinism,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: InvariantKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: InvariantKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -2160,8 +2160,8 @@ mod tests {
             EquivalenceKind::Approximate,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: EquivalenceKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: EquivalenceKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -2177,8 +2177,8 @@ mod tests {
             FrirPipelineEventKind::EquivalenceWitnessProduced,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: FrirPipelineEventKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: FrirPipelineEventKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -2378,8 +2378,8 @@ mod tests {
             FrirPipelineError::DuplicatePassIndex(2),
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: FrirPipelineError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: FrirPipelineError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, v);
         }
     }
@@ -2413,8 +2413,8 @@ mod tests {
             },
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: FallbackReason = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: FallbackReason = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, v);
         }
         assert_eq!(variants.len(), 6);
@@ -2492,8 +2492,8 @@ mod tests {
             PassKind::Custom,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: PassKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: PassKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
         assert_eq!(variants.len(), 15);
@@ -2503,8 +2503,8 @@ mod tests {
     fn lane_target_serde_roundtrip_all() {
         let variants = [LaneTarget::Js, LaneTarget::Wasm, LaneTarget::Baseline];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: LaneTarget = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: LaneTarget = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
         assert_eq!(variants.len(), 3);
@@ -2513,8 +2513,8 @@ mod tests {
     #[test]
     fn frir_pipeline_event_kind_serde_includes_pipeline_completed() {
         let v = FrirPipelineEventKind::PipelineCompleted;
-        let json = serde_json::to_string(&v).unwrap();
-        let back: FrirPipelineEventKind = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let back: FrirPipelineEventKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, back);
         assert_eq!(v.to_string(), "pipeline_completed");
     }
@@ -2594,8 +2594,8 @@ mod tests {
             pass_index: Some(3),
             detail: "pass 3 verified".into(),
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let back: FrirPipelineEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let back: FrirPipelineEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
     }
 
@@ -2607,8 +2607,8 @@ mod tests {
             pass_index: None,
             detail: "started".into(),
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let back: FrirPipelineEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let back: FrirPipelineEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert!(back.pass_index.is_none());
     }
 }

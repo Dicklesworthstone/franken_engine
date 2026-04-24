@@ -960,8 +960,8 @@ mod tests {
     #[test]
     fn node_handle_serde_roundtrip() {
         let handle = NodeHandle::from_parts(10, 1);
-        let json = serde_json::to_string(&handle).unwrap();
-        let back: NodeHandle = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&handle).expect("serde deserialization should succeed");
+        let back: NodeHandle = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, handle);
     }
 
@@ -986,8 +986,8 @@ mod tests {
     #[test]
     fn expression_handle_serde_roundtrip() {
         let handle = ExpressionHandle::from_parts(8, 1);
-        let json = serde_json::to_string(&handle).unwrap();
-        let back: ExpressionHandle = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&handle).expect("serde deserialization should succeed");
+        let back: ExpressionHandle = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, handle);
     }
 
@@ -1005,8 +1005,8 @@ mod tests {
     #[test]
     fn span_handle_serde_roundtrip() {
         let handle = SpanHandle::from_parts(99, 1);
-        let json = serde_json::to_string(&handle).unwrap();
-        let back: SpanHandle = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&handle).expect("serde deserialization should succeed");
+        let back: SpanHandle = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, handle);
     }
 
@@ -1026,8 +1026,8 @@ mod tests {
     #[test]
     fn arena_budget_serde_roundtrip() {
         let budget = ArenaBudget::default();
-        let json = serde_json::to_string(&budget).unwrap();
-        let back: ArenaBudget = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&budget).expect("serde deserialization should succeed");
+        let back: ArenaBudget = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, budget);
     }
 
@@ -1043,8 +1043,8 @@ mod tests {
             ArenaBudgetKind::Spans,
             ArenaBudgetKind::Bytes,
         ] {
-            let json = serde_json::to_string(&kind).unwrap();
-            let back: ArenaBudgetKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
+            let back: ArenaBudgetKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(back, kind);
         }
     }
@@ -1110,7 +1110,7 @@ mod tests {
     #[test]
     fn from_syntax_tree_simple_expression() {
         let tree = simple_tree();
-        let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default()).unwrap();
+        let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default()).expect("serde deserialization should succeed");
         assert_eq!(arena.statement_handles().len(), 1);
         assert!(arena.bytes_used() > 0);
     }
@@ -1118,30 +1118,30 @@ mod tests {
     #[test]
     fn from_syntax_tree_import() {
         let tree = import_tree();
-        let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default()).unwrap();
+        let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default()).expect("serde deserialization should succeed");
         assert_eq!(arena.statement_handles().len(), 1);
     }
 
     #[test]
     fn from_syntax_tree_export_default() {
         let tree = export_default_tree();
-        let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default()).unwrap();
+        let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default()).expect("serde deserialization should succeed");
         assert_eq!(arena.statement_handles().len(), 1);
     }
 
     #[test]
     fn from_syntax_tree_export_named() {
         let tree = export_named_tree();
-        let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default()).unwrap();
+        let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default()).expect("serde deserialization should succeed");
         assert_eq!(arena.statement_handles().len(), 1);
     }
 
     #[test]
     fn from_syntax_tree_variable_declaration() {
         let tree = variable_declaration_tree();
-        let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default()).unwrap();
+        let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default()).expect("serde deserialization should succeed");
         assert_eq!(arena.statement_handles().len(), 1);
-        let node = arena.node(arena.statement_handles()[0]).unwrap();
+        let node = arena.node(arena.statement_handles()[0]).expect("serde deserialization should succeed");
         match node {
             ArenaNode::VariableDeclaration {
                 kind, declarations, ..
@@ -1163,7 +1163,7 @@ mod tests {
             body: vec![],
             span: test_span(),
         };
-        let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default()).unwrap();
+        let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default()).expect("serde deserialization should succeed");
         assert_eq!(arena.statement_handles().len(), 0);
     }
 
@@ -1192,7 +1192,7 @@ mod tests {
                 .collect(),
             span: test_span(),
         };
-        let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default()).unwrap();
+        let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default()).expect("serde deserialization should succeed");
         assert_eq!(arena.statement_handles().len(), 8);
     }
 
@@ -1203,40 +1203,40 @@ mod tests {
     #[test]
     fn roundtrip_simple_expression() {
         let tree = simple_tree();
-        let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default()).unwrap();
-        let recovered = arena.to_syntax_tree().unwrap();
+        let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default()).expect("serde deserialization should succeed");
+        let recovered = arena.to_syntax_tree().expect("serde deserialization should succeed");
         assert_eq!(recovered, tree);
     }
 
     #[test]
     fn roundtrip_import() {
         let tree = import_tree();
-        let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default()).unwrap();
-        let recovered = arena.to_syntax_tree().unwrap();
+        let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default()).expect("serde deserialization should succeed");
+        let recovered = arena.to_syntax_tree().expect("serde deserialization should succeed");
         assert_eq!(recovered, tree);
     }
 
     #[test]
     fn roundtrip_export_default() {
         let tree = export_default_tree();
-        let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default()).unwrap();
-        let recovered = arena.to_syntax_tree().unwrap();
+        let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default()).expect("serde deserialization should succeed");
+        let recovered = arena.to_syntax_tree().expect("serde deserialization should succeed");
         assert_eq!(recovered, tree);
     }
 
     #[test]
     fn roundtrip_export_named() {
         let tree = export_named_tree();
-        let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default()).unwrap();
-        let recovered = arena.to_syntax_tree().unwrap();
+        let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default()).expect("serde deserialization should succeed");
+        let recovered = arena.to_syntax_tree().expect("serde deserialization should succeed");
         assert_eq!(recovered, tree);
     }
 
     #[test]
     fn roundtrip_variable_declaration() {
         let tree = variable_declaration_tree();
-        let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default()).unwrap();
-        let recovered = arena.to_syntax_tree().unwrap();
+        let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default()).expect("serde deserialization should succeed");
+        let recovered = arena.to_syntax_tree().expect("serde deserialization should succeed");
         assert_eq!(recovered, tree);
     }
 
@@ -1252,8 +1252,8 @@ mod tests {
             })],
             span: test_span(),
         };
-        let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default()).unwrap();
-        let recovered = arena.to_syntax_tree().unwrap();
+        let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default()).expect("serde deserialization should succeed");
+        let recovered = arena.to_syntax_tree().expect("serde deserialization should succeed");
         assert_eq!(recovered, tree);
     }
 
@@ -1264,9 +1264,9 @@ mod tests {
     #[test]
     fn canonical_hash_deterministic() {
         let tree = simple_tree();
-        let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default()).unwrap();
-        let hash1 = arena.canonical_hash().unwrap();
-        let hash2 = arena.canonical_hash().unwrap();
+        let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default()).expect("serde deserialization should succeed");
+        let hash1 = arena.canonical_hash().expect("serde deserialization should succeed");
+        let hash2 = arena.canonical_hash().expect("serde deserialization should succeed");
         assert_eq!(hash1, hash2);
         assert!(!hash1.is_empty());
     }
@@ -1275,11 +1275,11 @@ mod tests {
     fn canonical_hash_different_trees_differ() {
         let tree1 = simple_tree();
         let tree2 = import_tree();
-        let arena1 = ParserArena::from_syntax_tree(&tree1, ArenaBudget::default()).unwrap();
-        let arena2 = ParserArena::from_syntax_tree(&tree2, ArenaBudget::default()).unwrap();
+        let arena1 = ParserArena::from_syntax_tree(&tree1, ArenaBudget::default()).expect("serde deserialization should succeed");
+        let arena2 = ParserArena::from_syntax_tree(&tree2, ArenaBudget::default()).expect("serde deserialization should succeed");
         assert_ne!(
-            arena1.canonical_hash().unwrap(),
-            arena2.canonical_hash().unwrap()
+            arena1.canonical_hash().expect("serde deserialization should succeed"),
+            arena2.canonical_hash().expect("serde deserialization should succeed")
         );
     }
 
@@ -1290,16 +1290,16 @@ mod tests {
     #[test]
     fn node_lookup_valid() {
         let tree = simple_tree();
-        let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default()).unwrap();
+        let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default()).expect("serde deserialization should succeed");
         let handle = arena.statement_handles()[0];
-        let node = arena.node(handle).unwrap();
+        let node = arena.node(handle).expect("serde deserialization should succeed");
         matches!(node, ArenaNode::ExpressionStatement { .. });
     }
 
     #[test]
     fn node_lookup_invalid_generation() {
         let tree = simple_tree();
-        let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default()).unwrap();
+        let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default()).expect("serde deserialization should succeed");
         let bad_handle = NodeHandle::from_parts(0, 999);
         let err = arena.node(bad_handle).unwrap_err();
         matches!(err, ArenaError::InvalidGeneration { .. });
@@ -1308,7 +1308,7 @@ mod tests {
     #[test]
     fn node_lookup_missing_index() {
         let tree = simple_tree();
-        let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default()).unwrap();
+        let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default()).expect("serde deserialization should succeed");
         let bad_handle = NodeHandle::from_parts(999, HANDLE_GENERATION);
         let err = arena.node(bad_handle).unwrap_err();
         matches!(err, ArenaError::MissingNode { .. });
@@ -1317,7 +1317,7 @@ mod tests {
     #[test]
     fn span_lookup_invalid_generation() {
         let tree = simple_tree();
-        let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default()).unwrap();
+        let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default()).expect("serde deserialization should succeed");
         let bad_handle = SpanHandle::from_parts(0, 999);
         let err = arena.span(bad_handle).unwrap_err();
         matches!(err, ArenaError::InvalidGeneration { .. });
@@ -1326,7 +1326,7 @@ mod tests {
     #[test]
     fn expression_lookup_invalid_generation() {
         let tree = simple_tree();
-        let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default()).unwrap();
+        let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default()).expect("serde deserialization should succeed");
         let bad_handle = ExpressionHandle::from_parts(0, 999);
         let err = arena.expression(bad_handle).unwrap_err();
         matches!(err, ArenaError::InvalidGeneration { .. });
@@ -1411,7 +1411,7 @@ mod tests {
     #[test]
     fn handle_audit_entries_nonempty() {
         let tree = simple_tree();
-        let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default()).unwrap();
+        let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default()).expect("serde deserialization should succeed");
         let entries = arena.handle_audit_entries();
         assert!(!entries.is_empty());
         // Should have at least 1 node, 1 expression, 2 spans (tree + statement)
@@ -1440,19 +1440,19 @@ mod tests {
             generation: 1,
             descriptor: "test descriptor".to_string(),
         };
-        let json = serde_json::to_string(&entry).unwrap();
-        let back: HandleAuditEntry = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let back: HandleAuditEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, entry);
     }
 
     #[test]
     fn handle_audit_jsonl_format() {
         let tree = simple_tree();
-        let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default()).unwrap();
-        let jsonl = arena.handle_audit_jsonl().unwrap();
+        let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default()).expect("serde deserialization should succeed");
+        let jsonl = arena.handle_audit_jsonl().expect("serde deserialization should succeed");
         assert!(!jsonl.is_empty());
         for line in jsonl.lines() {
-            let parsed: HandleAuditEntry = serde_json::from_str(line).unwrap();
+            let parsed: HandleAuditEntry = serde_json::from_str(line).expect("serde deserialization should succeed");
             assert!(!parsed.descriptor.is_empty());
         }
     }
@@ -1592,8 +1592,8 @@ mod tests {
 
     #[test]
     fn usize_to_index_valid() {
-        assert_eq!(usize_to_index(0, ArenaBudgetKind::Nodes).unwrap(), 0);
-        assert_eq!(usize_to_index(100, ArenaBudgetKind::Nodes).unwrap(), 100);
+        assert_eq!(usize_to_index(0, ArenaBudgetKind::Nodes).expect("serde deserialization should succeed"), 0);
+        assert_eq!(usize_to_index(100, ArenaBudgetKind::Nodes).expect("serde deserialization should succeed"), 100);
     }
 
     #[test]
@@ -1613,8 +1613,8 @@ mod tests {
             HandleAuditKind::Expression,
             HandleAuditKind::Span,
         ] {
-            let json = serde_json::to_string(&kind).unwrap();
-            let back: HandleAuditKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
+            let back: HandleAuditKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(back, kind);
         }
     }
@@ -1647,8 +1647,8 @@ mod tests {
             ],
             span: test_span(),
         };
-        let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default()).unwrap();
-        let recovered = arena.to_syntax_tree().unwrap();
+        let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default()).expect("serde deserialization should succeed");
+        let recovered = arena.to_syntax_tree().expect("serde deserialization should succeed");
         assert_eq!(recovered, tree);
         assert_eq!(arena.statement_handles().len(), 3);
     }
@@ -1665,8 +1665,8 @@ mod tests {
             })],
             span: test_span(),
         };
-        let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default()).unwrap();
-        let recovered = arena.to_syntax_tree().unwrap();
+        let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default()).expect("serde deserialization should succeed");
+        let recovered = arena.to_syntax_tree().expect("serde deserialization should succeed");
         assert_eq!(recovered, tree);
     }
 
@@ -1683,7 +1683,7 @@ mod tests {
             body: vec![],
             span: test_span(),
         };
-        let arena = ParserArena::from_syntax_tree(&tree, budget).unwrap();
+        let arena = ParserArena::from_syntax_tree(&tree, budget).expect("serde deserialization should succeed");
         assert_eq!(arena.budget().max_nodes, 10);
         assert_eq!(arena.budget().max_expressions, 20);
     }
@@ -1699,8 +1699,8 @@ mod tests {
             ArenaBudgetKind::Bytes,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: ArenaBudgetKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: ArenaBudgetKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -1708,8 +1708,8 @@ mod tests {
     #[test]
     fn arena_budget_default_serde_roundtrip() {
         let budget = ArenaBudget::default();
-        let json = serde_json::to_string(&budget).unwrap();
-        let back: ArenaBudget = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&budget).expect("serde deserialization should succeed");
+        let back: ArenaBudget = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(budget, back);
     }
 
@@ -1831,19 +1831,19 @@ mod tests {
     #[test]
     fn enrichment_arena_budget_kind_json_snake_case() {
         assert_eq!(
-            serde_json::to_string(&ArenaBudgetKind::Nodes).unwrap(),
+            serde_json::to_string(&ArenaBudgetKind::Nodes).expect("serde deserialization should succeed"),
             "\"nodes\""
         );
         assert_eq!(
-            serde_json::to_string(&ArenaBudgetKind::Expressions).unwrap(),
+            serde_json::to_string(&ArenaBudgetKind::Expressions).expect("serde deserialization should succeed"),
             "\"expressions\""
         );
         assert_eq!(
-            serde_json::to_string(&ArenaBudgetKind::Spans).unwrap(),
+            serde_json::to_string(&ArenaBudgetKind::Spans).expect("serde deserialization should succeed"),
             "\"spans\""
         );
         assert_eq!(
-            serde_json::to_string(&ArenaBudgetKind::Bytes).unwrap(),
+            serde_json::to_string(&ArenaBudgetKind::Bytes).expect("serde deserialization should succeed"),
             "\"bytes\""
         );
     }
@@ -1860,7 +1860,7 @@ mod tests {
     #[test]
     fn enrichment_arena_budget_json_field_names() {
         let budget = ArenaBudget::default();
-        let json: serde_json::Value = serde_json::to_value(budget).unwrap();
+        let json: serde_json::Value = serde_json::to_value(budget).expect("serde deserialization should succeed");
         assert!(json.get("max_nodes").is_some());
         assert!(json.get("max_expressions").is_some());
         assert!(json.get("max_spans").is_some());
@@ -1875,8 +1875,8 @@ mod tests {
             max_spans: 3,
             max_bytes: 4,
         };
-        let json = serde_json::to_string(&budget).unwrap();
-        let back: ArenaBudget = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&budget).expect("serde deserialization should succeed");
+        let back: ArenaBudget = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.max_nodes, 1);
         assert_eq!(back.max_expressions, 2);
         assert_eq!(back.max_spans, 3);
@@ -1936,7 +1936,7 @@ mod tests {
             generation: 1,
             descriptor: "identifier x".to_string(),
         };
-        let json: serde_json::Value = serde_json::to_value(&entry).unwrap();
+        let json: serde_json::Value = serde_json::to_value(&entry).expect("serde deserialization should succeed");
         assert!(json.get("handle_kind").is_some());
         assert!(json.get("index").is_some());
         assert!(json.get("generation").is_some());
@@ -1948,15 +1948,15 @@ mod tests {
     #[test]
     fn enrichment_handle_audit_kind_json_snake_case() {
         assert_eq!(
-            serde_json::to_string(&HandleAuditKind::Node).unwrap(),
+            serde_json::to_string(&HandleAuditKind::Node).expect("serde deserialization should succeed"),
             "\"node\""
         );
         assert_eq!(
-            serde_json::to_string(&HandleAuditKind::Expression).unwrap(),
+            serde_json::to_string(&HandleAuditKind::Expression).expect("serde deserialization should succeed"),
             "\"expression\""
         );
         assert_eq!(
-            serde_json::to_string(&HandleAuditKind::Span).unwrap(),
+            serde_json::to_string(&HandleAuditKind::Span).expect("serde deserialization should succeed"),
             "\"span\""
         );
     }
@@ -1985,15 +1985,15 @@ mod tests {
             ],
             span: test_span(),
         };
-        let small = ParserArena::from_syntax_tree(&small_tree, ArenaBudget::default()).unwrap();
-        let big = ParserArena::from_syntax_tree(&big_tree, ArenaBudget::default()).unwrap();
+        let small = ParserArena::from_syntax_tree(&small_tree, ArenaBudget::default()).expect("serde deserialization should succeed");
+        let big = ParserArena::from_syntax_tree(&big_tree, ArenaBudget::default()).expect("serde deserialization should succeed");
         assert!(big.bytes_used() > small.bytes_used());
     }
 
     #[test]
     fn enrichment_parser_arena_clone_eq() {
         let tree = simple_tree();
-        let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default()).unwrap();
+        let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default()).expect("serde deserialization should succeed");
         let cloned = arena.clone();
         assert_eq!(arena, cloned);
     }
@@ -2005,7 +2005,7 @@ mod tests {
             body: vec![],
             span: test_span(),
         };
-        let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default()).unwrap();
+        let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default()).expect("serde deserialization should succeed");
         let entries = arena.handle_audit_entries();
         // Empty body means only the tree_span is allocated
         assert_eq!(entries.len(), 1);
@@ -2021,7 +2021,7 @@ mod tests {
             max_bytes: 1024,
         };
         let tree = simple_tree();
-        let arena = ParserArena::from_syntax_tree(&tree, budget).unwrap();
+        let arena = ParserArena::from_syntax_tree(&tree, budget).expect("serde deserialization should succeed");
         assert_eq!(arena.statement_handles().len(), 1);
     }
 
@@ -2078,19 +2078,19 @@ mod tests {
             })],
             span: test_span(),
         };
-        let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default()).unwrap();
-        let recovered = arena.to_syntax_tree().unwrap();
+        let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default()).expect("serde deserialization should succeed");
+        let recovered = arena.to_syntax_tree().expect("serde deserialization should succeed");
         assert_eq!(recovered, tree);
     }
 
     #[test]
     fn enrichment_canonical_hash_stable_across_clones() {
         let tree = import_tree();
-        let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default()).unwrap();
+        let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default()).expect("serde deserialization should succeed");
         let cloned = arena.clone();
         assert_eq!(
-            arena.canonical_hash().unwrap(),
-            cloned.canonical_hash().unwrap()
+            arena.canonical_hash().expect("serde deserialization should succeed"),
+            cloned.canonical_hash().expect("serde deserialization should succeed")
         );
     }
 }

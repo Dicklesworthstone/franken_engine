@@ -673,7 +673,7 @@ pub fn select_best_wave(
                 .cmp(&b.total_expected_uplift_millionths)
                 .then_with(|| a.wave_id.cmp(&b.wave_id))
         })
-        .unwrap(); // safe: viable is non-empty
+        .expect("serde deserialization should succeed"); // safe: viable is non-empty
 
     let alternatives_considered = (waves.len() as u64).saturating_sub(1);
 
@@ -824,7 +824,7 @@ mod tests {
 
     fn sample_wave() -> WaveDefinition {
         let passes = sample_passes();
-        plan_wave(passes, MILLIONTHS).unwrap()
+        plan_wave(passes, MILLIONTHS).expect("serde deserialization should succeed")
     }
 
     // Constants -------------------------------------------------------------
@@ -883,8 +883,8 @@ mod tests {
     #[test]
     fn planner_error_serde_roundtrip() {
         let err = PlannerError::InternalError("test".to_string());
-        let json = serde_json::to_string(&err).unwrap();
-        let back: PlannerError = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let back: PlannerError = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, back);
     }
 
@@ -918,8 +918,8 @@ mod tests {
     #[test]
     fn pass_serde_roundtrip() {
         let p = make_pass("test-pass", 300_000, 50_000, 10_000);
-        let json = serde_json::to_string(&p).unwrap();
-        let back: OptimizationPass = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
+        let back: OptimizationPass = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(p, back);
     }
 
@@ -940,8 +940,8 @@ mod tests {
     #[test]
     fn intervention_kind_serde_roundtrip() {
         for k in InterventionKind::ALL {
-            let json = serde_json::to_string(k).unwrap();
-            let back: InterventionKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(k).expect("serde deserialization should succeed");
+            let back: InterventionKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*k, back);
         }
     }
@@ -986,10 +986,10 @@ mod tests {
             make_pass_with_prereqs("b", 200_000, 20_000, 0, vec!["a"]),
             make_pass_with_prereqs("c", 300_000, 30_000, 0, vec!["b"]),
         ];
-        let order = validate_pass_ordering(&passes).unwrap();
-        let pos_a = order.iter().position(|x| x == "a").unwrap();
-        let pos_b = order.iter().position(|x| x == "b").unwrap();
-        let pos_c = order.iter().position(|x| x == "c").unwrap();
+        let order = validate_pass_ordering(&passes).expect("serde deserialization should succeed");
+        let pos_a = order.iter().position(|x| x == "a").expect("serde deserialization should succeed");
+        let pos_b = order.iter().position(|x| x == "b").expect("serde deserialization should succeed");
+        let pos_c = order.iter().position(|x| x == "c").expect("serde deserialization should succeed");
         assert!(pos_a < pos_b);
         assert!(pos_b < pos_c);
     }
@@ -1017,7 +1017,7 @@ mod tests {
             make_pass("y", 200_000, 20_000, 0),
             make_pass("z", 300_000, 30_000, 0),
         ];
-        let order = validate_pass_ordering(&passes).unwrap();
+        let order = validate_pass_ordering(&passes).expect("serde deserialization should succeed");
         assert_eq!(order.len(), 3);
     }
 
@@ -1028,7 +1028,7 @@ mod tests {
         let passes = sample_passes();
         // Total risk of all = 50k + 100k + 30k = 180k.
         // Budget of 100k should exclude some.
-        let wave = plan_wave(passes, 100_000).unwrap();
+        let wave = plan_wave(passes, 100_000).expect("serde deserialization should succeed");
         assert!(wave.total_risk_millionths <= 100_000);
     }
 
@@ -1048,7 +1048,7 @@ mod tests {
     #[test]
     fn plan_wave_aggregates_correct() {
         let passes = sample_passes();
-        let wave = plan_wave(passes, MILLIONTHS).unwrap();
+        let wave = plan_wave(passes, MILLIONTHS).expect("serde deserialization should succeed");
         let sum_uplift: u64 = wave
             .passes
             .iter()
@@ -1077,17 +1077,17 @@ mod tests {
             make_pass("base", 200_000, 30_000, 10_000),
             make_pass_with_prereqs("derived", 200_000, 50_000, 20_000, vec!["base"]),
         ];
-        let wave = plan_wave(passes, MILLIONTHS).unwrap();
+        let wave = plan_wave(passes, MILLIONTHS).expect("serde deserialization should succeed");
         let pos_base = wave
             .priority_order
             .iter()
             .position(|x| x == "base")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let pos_derived = wave
             .priority_order
             .iter()
             .position(|x| x == "derived")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(pos_base < pos_derived);
     }
 
@@ -1203,7 +1203,7 @@ mod tests {
             total_risk_millionths: 80_000,
             priority_order: vec!["b".to_string()],
         };
-        let decision = select_best_wave(vec![w1, w2], MILLIONTHS).unwrap();
+        let decision = select_best_wave(vec![w1, w2], MILLIONTHS).expect("serde deserialization should succeed");
         assert_eq!(decision.selected_wave.wave_id, "w2");
     }
 
@@ -1242,7 +1242,7 @@ mod tests {
             total_risk_millionths: 80_000,
             priority_order: vec!["b".to_string()],
         };
-        let decision = select_best_wave(vec![w1, w2], MILLIONTHS).unwrap();
+        let decision = select_best_wave(vec![w1, w2], MILLIONTHS).expect("serde deserialization should succeed");
         // info value = 500_000 - 200_000 = 300_000
         assert_eq!(decision.information_value_millionths, 300_000);
     }
@@ -1256,7 +1256,7 @@ mod tests {
             total_risk_millionths: 50_000,
             priority_order: vec!["a".to_string()],
         };
-        let decision = select_best_wave(vec![w], MILLIONTHS).unwrap();
+        let decision = select_best_wave(vec![w], MILLIONTHS).expect("serde deserialization should succeed");
         assert_ne!(decision.content_hash, ContentHash::compute(b""));
     }
 
@@ -1295,8 +1295,8 @@ mod tests {
     #[test]
     fn wave_serde_roundtrip() {
         let wave = sample_wave();
-        let json = serde_json::to_string(&wave).unwrap();
-        let back: WaveDefinition = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&wave).expect("serde deserialization should succeed");
+        let back: WaveDefinition = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(wave, back);
     }
 
@@ -1343,8 +1343,8 @@ mod tests {
             content_hash: ContentHash::compute(b""),
         };
         d.seal();
-        let json = serde_json::to_string(&d).unwrap();
-        let back: PlanningDecision = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
+        let back: PlanningDecision = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(d, back);
     }
 
@@ -1356,8 +1356,8 @@ mod tests {
         let target = &wave.passes[0].pass_id;
         let scenario = build_counterfactual(&wave, InterventionKind::EnablePass, target);
         let cert = estimate_causal_effect(&scenario, 100_000, 250_000);
-        let json = serde_json::to_string(&cert).unwrap();
-        let back: UpliftCertificate = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&cert).expect("serde deserialization should succeed");
+        let back: UpliftCertificate = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cert, back);
     }
 
@@ -1368,8 +1368,8 @@ mod tests {
         let wave = sample_wave();
         let target = &wave.passes[0].pass_id;
         let scenario = build_counterfactual(&wave, InterventionKind::EnablePass, target);
-        let json = serde_json::to_string(&scenario).unwrap();
-        let back: CounterfactualScenario = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&scenario).expect("serde deserialization should succeed");
+        let back: CounterfactualScenario = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(scenario, back);
     }
 

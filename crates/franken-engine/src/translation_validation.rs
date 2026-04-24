@@ -823,7 +823,7 @@ impl TranslationValidationGate {
         self.tracked
             .get(optimization_id)
             .map(|t| t.promotions.iter().collect())
-            .unwrap()
+            .expect("serde deserialization should succeed")
     }
 }
 
@@ -876,7 +876,7 @@ mod tests {
             &SchemaId::from_definition(b"test-signer"),
             b"key-material",
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         OptReceipt {
             schema_version: proof_schema_version_current(),
@@ -906,7 +906,7 @@ mod tests {
             &SchemaId::from_definition(b"test-issuer"),
             b"issuer-material",
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         RollbackToken {
             schema_version: proof_schema_version_current(),
@@ -978,8 +978,8 @@ mod tests {
     #[test]
     fn verdict_serde_roundtrip() {
         for v in [pass_verdict(), fail_verdict(), inconclusive_verdict()] {
-            let json = serde_json::to_string(&v).unwrap();
-            let restored: ValidationVerdict = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let restored: ValidationVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(v, restored);
         }
     }
@@ -1022,8 +1022,8 @@ mod tests {
             },
         ];
         for m in &modes {
-            let json = serde_json::to_string(m).unwrap();
-            let restored: ValidationMode = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(m).expect("serde deserialization should succeed");
+            let restored: ValidationMode = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*m, restored);
         }
     }
@@ -1038,7 +1038,7 @@ mod tests {
         let epoch = SecurityEpoch::from_raw(1);
 
         gate.submit(&receipt, &token, TEST_KEY, epoch, 1000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert_eq!(gate.tracked_count(), 1);
         assert_eq!(gate.current_stage("opt-1"), Some(ActivationStage::Shadow));
@@ -1053,7 +1053,7 @@ mod tests {
         let epoch = SecurityEpoch::from_raw(1);
 
         gate.submit(&receipt, &token, TEST_KEY, epoch, 1000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(matches!(
             gate.submit(&receipt, &token, TEST_KEY, epoch, 2000),
             Err(ValidationGateError::DuplicateSubmission { .. })
@@ -1142,7 +1142,7 @@ mod tests {
             SecurityEpoch::from_raw(1),
             1000,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let result = gate
             .record_verdict(
@@ -1152,7 +1152,7 @@ mod tests {
                 SecurityEpoch::from_raw(1),
                 2000,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert!(result.is_none());
         assert_eq!(gate.tracked_count(), 1);
@@ -1169,7 +1169,7 @@ mod tests {
             SecurityEpoch::from_raw(1),
             1000,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let result = gate
             .record_verdict(
@@ -1179,10 +1179,10 @@ mod tests {
                 SecurityEpoch::from_raw(1),
                 2000,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert!(result.is_some());
-        let receipt = result.unwrap();
+        let receipt = result.expect("serde deserialization should succeed");
         assert_eq!(receipt.optimization_id, "opt-1");
         assert!(receipt.counterexample_hash.is_some());
         assert!(receipt.verify_signature(TEST_KEY));
@@ -1203,7 +1203,7 @@ mod tests {
             SecurityEpoch::from_raw(1),
             1000,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let result = gate
             .record_verdict(
@@ -1213,10 +1213,10 @@ mod tests {
                 SecurityEpoch::from_raw(1),
                 2000,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert!(result.is_some());
-        let receipt = result.unwrap();
+        let receipt = result.expect("serde deserialization should succeed");
         assert!(receipt.failure_reason.contains("inconclusive"));
         assert!(receipt.counterexample_hash.is_none());
     }
@@ -1249,9 +1249,9 @@ mod tests {
             epoch,
             1000,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         gate.record_verdict("opt-1", pass_verdict(), TEST_KEY, epoch, 2000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let promotion = gate
             .promote(
@@ -1261,7 +1261,7 @@ mod tests {
                 epoch,
                 3000,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert_eq!(promotion.from_stage, ActivationStage::Shadow);
         assert_eq!(promotion.to_stage, ActivationStage::Canary);
@@ -1280,7 +1280,7 @@ mod tests {
             epoch,
             1000,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let stages = [
             (ActivationStage::Shadow, ActivationStage::Canary),
@@ -1291,7 +1291,7 @@ mod tests {
         for (tick, (from, to)) in stages.iter().enumerate() {
             let t = (tick as u64 + 1) * 1000 + 1000;
             gate.record_verdict("opt-1", pass_verdict(), TEST_KEY, epoch, t)
-                .unwrap();
+                .expect("serde deserialization should succeed");
             let p = gate
                 .promote(
                     "opt-1",
@@ -1300,7 +1300,7 @@ mod tests {
                     epoch,
                     t + 500,
                 )
-                .unwrap();
+                .expect("serde deserialization should succeed");
             assert_eq!(p.from_stage, *from);
             assert_eq!(p.to_stage, *to);
         }
@@ -1319,7 +1319,7 @@ mod tests {
             epoch,
             1000,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         // No verdict recorded, promotion should fail.
         assert!(matches!(
@@ -1339,12 +1339,12 @@ mod tests {
             epoch,
             1000,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         // Fast-forward to Default.
         for t in [2000u64, 3000, 4000] {
             gate.record_verdict("opt-1", pass_verdict(), TEST_KEY, epoch, t)
-                .unwrap();
+                .expect("serde deserialization should succeed");
             gate.promote(
                 "opt-1",
                 ContentHash::compute(b"ev"),
@@ -1352,12 +1352,12 @@ mod tests {
                 epoch,
                 t + 100,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         }
 
         // Now at Default, should fail.
         gate.record_verdict("opt-1", pass_verdict(), TEST_KEY, epoch, 5000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(matches!(
             gate.promote("opt-1", ContentHash::compute(b"ev"), TEST_KEY, epoch, 5100),
             Err(ValidationGateError::InvalidStageTransition { .. })
@@ -1377,11 +1377,11 @@ mod tests {
             epoch,
             1000,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         gate.record_verdict("opt-1", pass_verdict(), TEST_KEY, epoch, 2000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         gate.promote("opt-1", ContentHash::compute(b"ev"), TEST_KEY, epoch, 3000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let demotion = gate
             .demote(
@@ -1392,7 +1392,7 @@ mod tests {
                 epoch,
                 4000,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert_eq!(demotion.from_stage, ActivationStage::Canary);
         assert_eq!(demotion.to_stage, ActivationStage::Shadow);
@@ -1411,7 +1411,7 @@ mod tests {
             epoch,
             1000,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         // At Shadow, cannot demote to Shadow or higher.
         assert!(matches!(
@@ -1442,9 +1442,9 @@ mod tests {
             epoch,
             1000,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         gate.record_verdict("opt-1", fail_verdict(), TEST_KEY, epoch, 2000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Try to resubmit.
         assert!(matches!(
@@ -1471,14 +1471,14 @@ mod tests {
             epoch,
             1000,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         gate.record_verdict("opt-1", fail_verdict(), TEST_KEY, epoch, 2000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert!(gate.is_quarantined("opt-1"));
 
         gate.lift_quarantine("opt-1", "new evidence available", epoch, 3000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert!(!gate.is_quarantined("opt-1"));
 
@@ -1490,7 +1490,7 @@ mod tests {
             epoch,
             4000,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(gate.tracked_count(), 1);
     }
 
@@ -1539,8 +1539,8 @@ mod tests {
         }
         .sign(TEST_KEY);
 
-        let json = serde_json::to_string(&receipt).unwrap();
-        let restored: RollbackReceipt = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
+        let restored: RollbackReceipt = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(receipt, restored);
     }
 
@@ -1575,8 +1575,8 @@ mod tests {
         }
         .sign(TEST_KEY);
 
-        let json = serde_json::to_string(&promo).unwrap();
-        let restored: StagePromotion = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&promo).expect("serde deserialization should succeed");
+        let restored: StagePromotion = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(promo, restored);
     }
 
@@ -1594,11 +1594,11 @@ mod tests {
             epoch,
             1000,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         gate.record_verdict("opt-1", pass_verdict(), TEST_KEY, epoch, 2000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         gate.promote("opt-1", ContentHash::compute(b"ev"), TEST_KEY, epoch, 3000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let events = gate.events();
         assert_eq!(events.len(), 3);
@@ -1628,9 +1628,9 @@ mod tests {
             epoch,
             1000,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         gate.record_verdict("opt-1", fail_verdict(), TEST_KEY, epoch, 2000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let events = gate.events();
         assert_eq!(events.len(), 3); // submitted, validated, rolled_back
@@ -1652,15 +1652,15 @@ mod tests {
             epoch,
             1000,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         gate.record_verdict("opt-1", fail_verdict(), TEST_KEY, epoch, 2000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         gate.lift_quarantine("opt-1", "policy override", epoch, 3000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let events = gate.events();
         // SAFETY: Test performed submit, record_verdict, lift_quarantine operations; events non-empty
-        let last = events.last().unwrap();
+        let last = events.last().expect("serde deserialization should succeed");
         assert!(matches!(
             last.event_type,
             ValidationEventType::QuarantineLifted { .. }
@@ -1719,8 +1719,8 @@ mod tests {
             expiry_epoch: 10,
             current_epoch: 20,
         };
-        let json = serde_json::to_string(&err).unwrap();
-        let restored: ValidationGateError = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let restored: ValidationGateError = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, restored);
     }
 
@@ -1737,10 +1737,10 @@ mod tests {
             epoch,
             1000,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
-        let json = serde_json::to_string(&gate).unwrap();
-        let restored: TranslationValidationGate = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&gate).expect("serde deserialization should succeed");
+        let restored: TranslationValidationGate = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(restored.tracked_count(), 1);
         assert_eq!(restored.event_count(), 1);
     }
@@ -1759,16 +1759,16 @@ mod tests {
                 epoch,
                 1000,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
             g.record_verdict("opt-1", pass_verdict(), TEST_KEY, epoch, 2000)
-                .unwrap();
+                .expect("serde deserialization should succeed");
             g.promote("opt-1", ContentHash::compute(b"ev"), TEST_KEY, epoch, 3000)
-                .unwrap();
+                .expect("serde deserialization should succeed");
             g
         };
 
-        let json1 = serde_json::to_string(&build()).unwrap();
-        let json2 = serde_json::to_string(&build()).unwrap();
+        let json1 = serde_json::to_string(&build()).expect("serde deserialization should succeed");
+        let json2 = serde_json::to_string(&build()).expect("serde deserialization should succeed");
         assert_eq!(
             json1, json2,
             "identical operations must produce identical state"
@@ -1807,15 +1807,15 @@ mod tests {
             epoch,
             1000,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         gate.record_verdict("opt-1", pass_verdict(), TEST_KEY, epoch, 2000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         gate.promote("opt-1", ContentHash::compute(b"ev"), TEST_KEY, epoch, 3000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         gate.record_verdict("opt-1", pass_verdict(), TEST_KEY, epoch, 4000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         gate.promote("opt-1", ContentHash::compute(b"ev"), TEST_KEY, epoch, 5000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let history = gate.promotion_history("opt-1");
         assert_eq!(history.len(), 2);
@@ -1837,12 +1837,12 @@ mod tests {
             epoch,
             1000,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         gate.record_verdict("opt-1", fail_verdict(), TEST_KEY, epoch, 2000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         gate.lift_quarantine("opt-1", "new evidence", epoch, 3000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         gate.submit(
             &test_receipt("opt-1"),
             &test_token("opt-1"),
@@ -1850,9 +1850,9 @@ mod tests {
             epoch,
             4000,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         gate.record_verdict("opt-1", inconclusive_verdict(), TEST_KEY, epoch, 5000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert_eq!(gate.rollback_receipts().len(), 2);
     }
@@ -1868,8 +1868,8 @@ mod tests {
             quarantined_epoch: SecurityEpoch::from_raw(1),
             quarantined_at_ticks: 5000,
         };
-        let json = serde_json::to_string(&entry).unwrap();
-        let restored: QuarantineEntry = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let restored: QuarantineEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, restored);
     }
 
@@ -1886,8 +1886,8 @@ mod tests {
             timestamp_ticks: 3000,
             epoch: SecurityEpoch::from_raw(1),
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let restored: ValidationEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let restored: ValidationEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, restored);
     }
 
@@ -1904,11 +1904,11 @@ mod tests {
             epoch,
             1000,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         gate.record_verdict("opt-1", pass_verdict(), TEST_KEY, epoch, 2000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         gate.promote("opt-1", ContentHash::compute(b"ev"), TEST_KEY, epoch, 3000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         gate.demote(
             "opt-1",
             ActivationStage::Shadow,
@@ -1917,10 +1917,10 @@ mod tests {
             epoch,
             4000,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let events = gate.events();
-        let last = events.last().unwrap();
+        let last = events.last().expect("serde deserialization should succeed");
         assert!(matches!(
             last.event_type,
             ValidationEventType::StageDemoted {
@@ -1944,7 +1944,7 @@ mod tests {
             epoch,
             1000,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         gate.submit(
             &test_receipt("opt-2"),
             &test_token("opt-2"),
@@ -1952,14 +1952,14 @@ mod tests {
             epoch,
             1000,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         assert_eq!(gate.tracked_count(), 2);
 
         gate.record_verdict("opt-1", pass_verdict(), TEST_KEY, epoch, 2000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         gate.record_verdict("opt-2", fail_verdict(), TEST_KEY, epoch, 2000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert_eq!(gate.tracked_count(), 1); // opt-2 removed
         assert_eq!(gate.quarantine_count(), 1); // opt-2 quarantined
@@ -1981,11 +1981,11 @@ mod tests {
             epoch,
             1000,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         gate.record_verdict("opt-1", fail_verdict(), TEST_KEY, epoch, 2000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
-        gate.lift_quarantine("opt-1", "retry", epoch, 3000).unwrap();
+        gate.lift_quarantine("opt-1", "retry", epoch, 3000).expect("serde deserialization should succeed");
         gate.submit(
             &test_receipt("opt-1"),
             &test_token("opt-1"),
@@ -1993,9 +1993,9 @@ mod tests {
             epoch,
             4000,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         gate.record_verdict("opt-1", fail_verdict(), TEST_KEY, epoch, 5000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         gate.submit(
             &test_receipt("opt-2"),
@@ -2004,9 +2004,9 @@ mod tests {
             epoch,
             6000,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         gate.record_verdict("opt-2", fail_verdict(), TEST_KEY, epoch, 7000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let ids = gate.quarantined_ids();
         assert_eq!(ids.len(), 2);
@@ -2022,8 +2022,8 @@ mod tests {
             corpus_hash: ContentHash::compute(b"corpus"),
             vector_count: 100,
         };
-        let json = serde_json::to_string(&mode).unwrap();
-        let back: ValidationMode = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&mode).expect("serde deserialization should succeed");
+        let back: ValidationMode = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(mode, back);
     }
 
@@ -2032,8 +2032,8 @@ mod tests {
         let mode = ValidationMode::SymbolicEquivalence {
             proof_hash: ContentHash::compute(b"proof"),
         };
-        let json = serde_json::to_string(&mode).unwrap();
-        let back: ValidationMode = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&mode).expect("serde deserialization should succeed");
+        let back: ValidationMode = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(mode, back);
     }
 
@@ -2043,8 +2043,8 @@ mod tests {
             workload_hash: ContentHash::compute(b"workload"),
             trace_pair_count: 50,
         };
-        let json = serde_json::to_string(&mode).unwrap();
-        let back: ValidationMode = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&mode).expect("serde deserialization should succeed");
+        let back: ValidationMode = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(mode, back);
     }
 
@@ -2111,24 +2111,24 @@ mod tests {
     #[test]
     fn verdict_serde_roundtrip_pass() {
         let v = pass_verdict();
-        let json = serde_json::to_string(&v).unwrap();
-        let back: ValidationVerdict = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let back: ValidationVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, back);
     }
 
     #[test]
     fn verdict_serde_roundtrip_fail() {
         let v = fail_verdict();
-        let json = serde_json::to_string(&v).unwrap();
-        let back: ValidationVerdict = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let back: ValidationVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, back);
     }
 
     #[test]
     fn verdict_serde_roundtrip_inconclusive() {
         let v = inconclusive_verdict();
-        let json = serde_json::to_string(&v).unwrap();
-        let back: ValidationVerdict = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let back: ValidationVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, back);
     }
 
@@ -2147,8 +2147,8 @@ mod tests {
             epoch: SecurityEpoch::from_raw(1),
             signature: AuthenticityHash::compute_keyed(b"key", b"data"),
         };
-        let json = serde_json::to_string(&receipt).unwrap();
-        let back: RollbackReceipt = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
+        let back: RollbackReceipt = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(receipt, back);
     }
 
@@ -2185,8 +2185,8 @@ mod tests {
             epoch: SecurityEpoch::from_raw(1),
             signature: AuthenticityHash::compute_keyed(b"k", b"d"),
         };
-        let json = serde_json::to_string(&promo).unwrap();
-        let back: StagePromotion = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&promo).expect("serde deserialization should succeed");
+        let back: StagePromotion = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(promo, back);
     }
 
@@ -2216,8 +2216,8 @@ mod tests {
             optimization_id: "opt-1".to_string(),
             reason: "divergence".to_string(),
         };
-        let json = serde_json::to_string(&err).unwrap();
-        let back: ValidationGateError = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let back: ValidationGateError = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, back);
     }
 
@@ -2344,8 +2344,8 @@ mod tests {
             quarantined_epoch: SecurityEpoch::from_raw(5),
             quarantined_at_ticks: 99999,
         };
-        let json = serde_json::to_string(&entry).unwrap();
-        let restored: QuarantineEntry = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let restored: QuarantineEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, restored);
         assert!(restored.counterexample_hash.is_some());
     }
@@ -2379,15 +2379,15 @@ mod tests {
             epoch,
             1000,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(gate.event_count(), 1);
 
         gate.record_verdict("opt-1", pass_verdict(), TEST_KEY, epoch, 2000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(gate.event_count(), 2);
 
         gate.promote("opt-1", ContentHash::compute(b"ev"), TEST_KEY, epoch, 3000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(gate.event_count(), 3);
     }
 
@@ -2424,8 +2424,8 @@ mod tests {
                 timestamp_ticks: 42,
                 epoch: SecurityEpoch::from_raw(1),
             };
-            let json = serde_json::to_string(&event).unwrap();
-            let back: ValidationEvent = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+            let back: ValidationEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(event, back);
         }
     }

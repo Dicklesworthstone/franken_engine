@@ -1799,7 +1799,7 @@ mod tests {
     #[test]
     fn test_gate_with_config() {
         let config = GateConfig::default();
-        let gate = CompressionResidualGate::with_config(config).unwrap();
+        let gate = CompressionResidualGate::with_config(config).expect("serde deserialization should succeed");
         assert_eq!(
             gate.config().cold_start_decompression_budget_millionths,
             DEFAULT_COLD_START_DECOMPRESSION_BUDGET_MILLIONTHS
@@ -2202,7 +2202,7 @@ mod tests {
                 2,
                 true,
             ))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(seq, 0);
         assert_eq!(ledger.len(), 1);
         assert!(!ledger.is_empty());
@@ -2221,7 +2221,7 @@ mod tests {
                 2,
                 true,
             ))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         ledger
             .append(&LedgerAppendInput {
                 restoration_overhead_us: 200,
@@ -2235,7 +2235,7 @@ mod tests {
                     true,
                 )
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
         ledger
             .append(&LedgerAppendInput {
                 restoration_overhead_us: 50,
@@ -2249,7 +2249,7 @@ mod tests {
                     true,
                 )
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let entries = ledger.entries_for_artifact("art-1");
         assert_eq!(entries.len(), 2);
@@ -2272,7 +2272,7 @@ mod tests {
                 2,
                 true,
             ))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         ledger
             .append(&LedgerAppendInput {
                 restoration_overhead_us: 200,
@@ -2286,7 +2286,7 @@ mod tests {
                     true,
                 )
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert_eq!(ledger.total_original_bytes(), 3000);
         assert_eq!(ledger.total_compressed_bytes(), 1300);
@@ -2310,7 +2310,7 @@ mod tests {
                     true,
                 )
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(ledger.aggregate_compression_ratio_millionths(), 500_000);
     }
 
@@ -2330,7 +2330,7 @@ mod tests {
                     true,
                 )
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
         // 20 / (80+20) = 200_000
         assert_eq!(ledger.aggregate_duplicate_mass_millionths(), 200_000);
     }
@@ -2351,7 +2351,7 @@ mod tests {
                     true,
                 )
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(!ledger.has_irreversible_entries());
         assert_eq!(ledger.irreversible_count(), 0);
 
@@ -2369,7 +2369,7 @@ mod tests {
                     false,
                 )
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(ledger.has_irreversible_entries());
         assert_eq!(ledger.irreversible_count(), 1);
     }
@@ -2387,7 +2387,7 @@ mod tests {
                 0,
                 true,
             ))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         ledger
             .append(&LedgerAppendInput {
                 restoration_overhead_us: 250,
@@ -2401,7 +2401,7 @@ mod tests {
                     true,
                 )
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(ledger.total_restoration_overhead_us(), 350);
     }
 
@@ -2425,7 +2425,7 @@ mod tests {
         let arts = vec![simple_artifact("a1", 1000, 500, true)];
         let pass = simple_pass(arts);
         let input = cold_start_input(pass);
-        let receipt = gate.evaluate(&input).unwrap();
+        let receipt = gate.evaluate(&input).expect("serde deserialization should succeed");
         assert_eq!(receipt.verdict, CompressionClaimVerdict::Approved);
         assert!(receipt.blocking_reasons.is_empty());
     }
@@ -2447,7 +2447,7 @@ mod tests {
         })];
         let pass = simple_pass(arts);
         let input = cold_start_input(pass);
-        let receipt = gate.evaluate(&input).unwrap();
+        let receipt = gate.evaluate(&input).expect("serde deserialization should succeed");
         assert_eq!(receipt.verdict, CompressionClaimVerdict::Blocked);
         assert!(!receipt.blocking_reasons.is_empty());
     }
@@ -2469,7 +2469,7 @@ mod tests {
         })];
         let pass = simple_pass(arts);
         let input = cold_start_input(pass);
-        let receipt = gate.evaluate(&input).unwrap();
+        let receipt = gate.evaluate(&input).expect("serde deserialization should succeed");
         assert_eq!(
             receipt.verdict,
             CompressionClaimVerdict::ApprovedWithCaveats
@@ -2486,7 +2486,7 @@ mod tests {
         let pass = simple_pass(arts);
         let expansions = vec![simple_hidden_expansion("s1", 500, 10)];
         let input = memory_input(pass, expansions);
-        let receipt = gate.evaluate(&input).unwrap();
+        let receipt = gate.evaluate(&input).expect("serde deserialization should succeed");
         assert_eq!(receipt.verdict, CompressionClaimVerdict::Approved);
     }
 
@@ -2497,7 +2497,7 @@ mod tests {
         let pass = simple_pass(arts);
         let expansions = vec![simple_hidden_expansion("s1", 100, 200)];
         let input = memory_input(pass, expansions);
-        let receipt = gate.evaluate(&input).unwrap();
+        let receipt = gate.evaluate(&input).expect("serde deserialization should succeed");
         assert_eq!(receipt.verdict, CompressionClaimVerdict::Blocked);
     }
 
@@ -2509,7 +2509,7 @@ mod tests {
         // 200/1000 = 200_000 millionths > threshold of 100_000.
         let expansions = vec![simple_hidden_expansion("s1", 1000, 200)];
         let input = memory_input(pass, expansions);
-        let receipt = gate.evaluate(&input).unwrap();
+        let receipt = gate.evaluate(&input).expect("serde deserialization should succeed");
         assert_eq!(receipt.verdict, CompressionClaimVerdict::Blocked);
     }
 
@@ -2528,7 +2528,7 @@ mod tests {
             stack_traces_accurate: true,
             explanation: "compressed output not readable".to_string(),
         });
-        let receipt = gate.evaluate(&input).unwrap();
+        let receipt = gate.evaluate(&input).expect("serde deserialization should succeed");
         assert_eq!(receipt.verdict, CompressionClaimVerdict::Blocked);
     }
 
@@ -2540,7 +2540,7 @@ mod tests {
         let arts = vec![simple_artifact("a1", 1000, 500, true)];
         let pass = simple_pass(arts);
         let input = proof_input(pass);
-        let receipt = gate.evaluate(&input).unwrap();
+        let receipt = gate.evaluate(&input).expect("serde deserialization should succeed");
         assert_eq!(receipt.verdict, CompressionClaimVerdict::Approved);
     }
 
@@ -2553,7 +2553,7 @@ mod tests {
         input
             .reversibility_checks
             .push(simple_reversibility_check("a1", false));
-        let receipt = gate.evaluate(&input).unwrap();
+        let receipt = gate.evaluate(&input).expect("serde deserialization should succeed");
         assert_eq!(receipt.verdict, CompressionClaimVerdict::Blocked);
     }
 
@@ -2564,7 +2564,7 @@ mod tests {
         let arts = vec![simple_artifact("a1", 1000, 3000, true)];
         let pass = simple_pass(arts);
         let input = proof_input(pass);
-        let receipt = gate.evaluate(&input).unwrap();
+        let receipt = gate.evaluate(&input).expect("serde deserialization should succeed");
         assert_eq!(receipt.verdict, CompressionClaimVerdict::Blocked);
     }
 
@@ -2586,7 +2586,7 @@ mod tests {
             total_bytes: 1000,
             restoration_time_us: 50,
         });
-        let receipt = gate.evaluate(&input).unwrap();
+        let receipt = gate.evaluate(&input).expect("serde deserialization should succeed");
         assert_eq!(receipt.verdict, CompressionClaimVerdict::Blocked);
     }
 
@@ -2602,7 +2602,7 @@ mod tests {
         input
             .support_costs
             .push(simple_support_cost("s1", 1_000_000, 500_000));
-        let receipt = gate.evaluate(&input).unwrap();
+        let receipt = gate.evaluate(&input).expect("serde deserialization should succeed");
         assert_eq!(receipt.verdict, CompressionClaimVerdict::Blocked);
     }
 
@@ -2621,7 +2621,7 @@ mod tests {
             stack_traces_accurate: false,
             explanation: "stack traces lost".to_string(),
         });
-        let receipt = gate.evaluate(&input).unwrap();
+        let receipt = gate.evaluate(&input).expect("serde deserialization should succeed");
         assert_eq!(receipt.verdict, CompressionClaimVerdict::Blocked);
     }
 
@@ -2643,7 +2643,7 @@ mod tests {
         })];
         let pass = simple_pass(arts);
         let input = cold_start_input(pass);
-        let receipt = gate.evaluate(&input).unwrap();
+        let receipt = gate.evaluate(&input).expect("serde deserialization should succeed");
         assert_eq!(receipt.verdict, CompressionClaimVerdict::Blocked);
     }
 
@@ -2663,7 +2663,7 @@ mod tests {
             cold_start_total_budget_us: 1_000_000,
             proof_total_size_bytes: 0,
         };
-        let receipt = gate.evaluate(&input).unwrap();
+        let receipt = gate.evaluate(&input).expect("serde deserialization should succeed");
         assert_eq!(receipt.verdict, CompressionClaimVerdict::Insufficient);
         assert_eq!(gate.claims_insufficient, 1);
         assert_eq!(gate.claims_blocked, 0);
@@ -2684,7 +2684,7 @@ mod tests {
         let arts = vec![simple_artifact("a1", 1000, 500, false)];
         let pass = simple_pass(arts);
         let input = cold_start_input(pass);
-        let receipt = gate.evaluate(&input).unwrap();
+        let receipt = gate.evaluate(&input).expect("serde deserialization should succeed");
         assert_eq!(receipt.verdict, CompressionClaimVerdict::Blocked);
     }
 
@@ -2694,11 +2694,11 @@ mod tests {
             require_full_reversibility: false,
             ..GateConfig::default()
         };
-        let mut gate = CompressionResidualGate::with_config(config).unwrap();
+        let mut gate = CompressionResidualGate::with_config(config).expect("serde deserialization should succeed");
         let arts = vec![simple_artifact("a1", 1000, 500, false)];
         let pass = simple_pass(arts);
         let input = cold_start_input(pass);
-        let receipt = gate.evaluate(&input).unwrap();
+        let receipt = gate.evaluate(&input).expect("serde deserialization should succeed");
         // Not blocked by irreversibility (other checks may still pass)
         let has_irreversible_block = receipt
             .blocking_reasons
@@ -2725,7 +2725,7 @@ mod tests {
             cold_start_total_budget_us: 1_000_000,
             proof_total_size_bytes: 10_000,
         };
-        let results = gate.evaluate_all_surfaces(&template).unwrap();
+        let results = gate.evaluate_all_surfaces(&template).expect("serde deserialization should succeed");
         assert_eq!(results.len(), 3);
         assert_eq!(results[0].surface, ClaimSurface::ColdStart);
         assert_eq!(results[1].surface, ClaimSurface::Memory);
@@ -2752,7 +2752,7 @@ mod tests {
             proof_total_size_bytes: 10_000,
         };
 
-        let results = gate.evaluate_all_surfaces(&template).unwrap();
+        let results = gate.evaluate_all_surfaces(&template).expect("serde deserialization should succeed");
         assert_eq!(results.len(), 3);
         assert_eq!(gate.receipts().len(), 3);
         assert_eq!(gate.ledger().len(), 2);
@@ -2769,7 +2769,7 @@ mod tests {
         let arts = vec![simple_artifact("a1", 1000, 500, true)];
         let pass = simple_pass(arts);
         let input = cold_start_input(pass);
-        gate.evaluate(&input).unwrap();
+        gate.evaluate(&input).expect("serde deserialization should succeed");
         assert_eq!(gate.evaluations_run(), 1);
         assert_eq!(gate.claims_approved(), 1);
         assert_eq!(gate.claims_blocked(), 0);
@@ -2781,7 +2781,7 @@ mod tests {
         let arts = vec![simple_artifact("a1", 1000, 500, true)];
         let pass = simple_pass(arts);
         let input = cold_start_input(pass);
-        gate.evaluate(&input).unwrap();
+        gate.evaluate(&input).expect("serde deserialization should succeed");
         let summary = gate.summary();
         assert_eq!(summary.evaluations_run, 1);
         assert_eq!(summary.claims_approved, 1);
@@ -2799,8 +2799,8 @@ mod tests {
         let pass2 = simple_pass(arts);
         let input1 = cold_start_input(pass1);
         let input2 = cold_start_input(pass2);
-        let r1 = gate1.evaluate(&input1).unwrap();
-        let r2 = gate2.evaluate(&input2).unwrap();
+        let r1 = gate1.evaluate(&input1).expect("serde deserialization should succeed");
+        let r2 = gate2.evaluate(&input2).expect("serde deserialization should succeed");
         assert_eq!(r1.receipt_hash, r2.receipt_hash);
     }
 
@@ -2812,8 +2812,8 @@ mod tests {
         let pass2 = simple_pass(arts);
         let input1 = cold_start_input(pass1);
         let input2 = proof_input(pass2);
-        let r1 = gate.evaluate(&input1).unwrap();
-        let r2 = gate.evaluate(&input2).unwrap();
+        let r1 = gate.evaluate(&input1).expect("serde deserialization should succeed");
+        let r2 = gate.evaluate(&input2).expect("serde deserialization should succeed");
         assert_ne!(r1.receipt_hash, r2.receipt_hash);
     }
 
@@ -2828,7 +2828,7 @@ mod tests {
         ];
         let pass = simple_pass(arts);
         let input = cold_start_input(pass);
-        gate.evaluate(&input).unwrap();
+        gate.evaluate(&input).expect("serde deserialization should succeed");
         assert_eq!(gate.ledger().len(), 2);
         assert_eq!(gate.ledger().distinct_artifact_count(), 2);
     }
@@ -2877,7 +2877,7 @@ mod tests {
         let arts = vec![simple_artifact("a1", 1000, 500, true)];
         let pass = simple_pass(arts);
         let input = cold_start_input(pass);
-        let receipt = gate.evaluate(&input).unwrap();
+        let receipt = gate.evaluate(&input).expect("serde deserialization should succeed");
         assert_eq!(
             receipt.schema_version,
             COMPRESSION_RESIDUAL_GATE_SCHEMA_VERSION
@@ -2891,24 +2891,24 @@ mod tests {
     #[test]
     fn test_serde_round_trip_verdict() {
         let v = CompressionClaimVerdict::ApprovedWithCaveats;
-        let json = serde_json::to_string(&v).unwrap();
-        let v2: CompressionClaimVerdict = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let v2: CompressionClaimVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, v2);
     }
 
     #[test]
     fn test_serde_round_trip_surface() {
         let s = ClaimSurface::ProofSurface;
-        let json = serde_json::to_string(&s).unwrap();
-        let s2: ClaimSurface = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+        let s2: ClaimSurface = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(s, s2);
     }
 
     #[test]
     fn test_serde_round_trip_pass_kind() {
         let k = CompressionPassKind::SemanticFolding;
-        let json = serde_json::to_string(&k).unwrap();
-        let k2: CompressionPassKind = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&k).expect("serde deserialization should succeed");
+        let k2: CompressionPassKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(k, k2);
     }
 
@@ -2918,9 +2918,9 @@ mod tests {
         let arts = vec![simple_artifact("a1", 1000, 500, true)];
         let pass = simple_pass(arts);
         let input = cold_start_input(pass);
-        let receipt = gate.evaluate(&input).unwrap();
-        let json = serde_json::to_string(&receipt).unwrap();
-        let receipt2: DecisionReceipt = serde_json::from_str(&json).unwrap();
+        let receipt = gate.evaluate(&input).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
+        let receipt2: DecisionReceipt = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(receipt, receipt2);
     }
 
@@ -2937,10 +2937,10 @@ mod tests {
                 2,
                 true,
             ))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let entry = &ledger.entries()[0];
-        let json = serde_json::to_string(entry).unwrap();
-        let entry2: ResidualLedgerEntry = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(entry).expect("serde deserialization should succeed");
+        let entry2: ResidualLedgerEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(*entry, entry2);
     }
 
@@ -2948,24 +2948,24 @@ mod tests {
     fn test_serde_round_trip_gate_summary() {
         let gate = CompressionResidualGate::new();
         let summary = gate.summary();
-        let json = serde_json::to_string(&summary).unwrap();
-        let summary2: GateSummary = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
+        let summary2: GateSummary = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(summary, summary2);
     }
 
     #[test]
     fn test_serde_round_trip_hidden_expansion() {
         let h = simple_hidden_expansion("s1", 1000, 100);
-        let json = serde_json::to_string(&h).unwrap();
-        let h2: HiddenExpansionRecord = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&h).expect("serde deserialization should succeed");
+        let h2: HiddenExpansionRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(h, h2);
     }
 
     #[test]
     fn test_serde_round_trip_support_cost() {
         let sc = simple_support_cost("s1", 100_000, 50_000);
-        let json = serde_json::to_string(&sc).unwrap();
-        let sc2: SupportCostRecord = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&sc).expect("serde deserialization should succeed");
+        let sc2: SupportCostRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(sc, sc2);
     }
 
@@ -2978,7 +2978,7 @@ mod tests {
             let arts = vec![simple_artifact(&format!("a{i}"), 1000, 500, true)];
             let pass = simple_pass(arts);
             let input = cold_start_input(pass);
-            gate.evaluate(&input).unwrap();
+            gate.evaluate(&input).expect("serde deserialization should succeed");
         }
         assert_eq!(gate.evaluations_run(), 5);
         assert_eq!(gate.claims_approved(), 5);
@@ -3000,7 +3000,7 @@ mod tests {
                     2,
                     true,
                 ))
-                .unwrap();
+                .expect("serde deserialization should succeed");
         }
 
         let pass = simple_pass(vec![simple_artifact("overflow", 1000, 500, true)]);
@@ -3034,7 +3034,7 @@ mod tests {
         })];
         let pass = simple_pass(arts);
         let input = cold_start_input(pass);
-        let receipt = gate.evaluate(&input).unwrap();
+        let receipt = gate.evaluate(&input).expect("serde deserialization should succeed");
         // Should not panic from overflow
         assert!(receipt.aggregate_compression_ratio_millionths > 0);
     }
@@ -3055,7 +3055,7 @@ mod tests {
             ..GateConfig::default()
         };
 
-        let mut gate = CompressionResidualGate::with_config(config).unwrap();
+        let mut gate = CompressionResidualGate::with_config(config).expect("serde deserialization should succeed");
         let arts = vec![build_artifact_record(&BuildArtifactInput {
             artifact_id: "a1".to_string(),
             original_size: 1000,
@@ -3077,7 +3077,7 @@ mod tests {
             stack_traces_accurate: false,
             explanation: "everything broken".to_string(),
         });
-        let receipt = gate.evaluate(&input).unwrap();
+        let receipt = gate.evaluate(&input).expect("serde deserialization should succeed");
         // Caveat expected: decompression ratio 999_999 > budget * 3/4 = 750_000.
         assert_eq!(
             receipt.verdict,
@@ -3108,12 +3108,12 @@ mod tests {
         // Approved
         let arts = vec![simple_artifact("a1", 1000, 500, true)];
         let pass = simple_pass(arts);
-        gate.evaluate(&cold_start_input(pass)).unwrap();
+        gate.evaluate(&cold_start_input(pass)).expect("serde deserialization should succeed");
 
         // Blocked (irreversible)
         let arts2 = vec![simple_artifact("a2", 1000, 500, false)];
         let pass2 = simple_pass(arts2);
-        gate.evaluate(&cold_start_input(pass2)).unwrap();
+        gate.evaluate(&cold_start_input(pass2)).expect("serde deserialization should succeed");
 
         assert_eq!(gate.evaluations_run(), 2);
         assert_eq!(gate.claims_approved(), 1);
@@ -3134,7 +3134,7 @@ mod tests {
                 simple_hidden_expansion("s2", 300, 5),
             ],
         );
-        let receipt = gate.evaluate(&input).unwrap();
+        let receipt = gate.evaluate(&input).expect("serde deserialization should succeed");
         // net = (500-10) + (300-5) = 490 + 295 = 785
         assert_eq!(receipt.net_memory_change_bytes, 785);
     }

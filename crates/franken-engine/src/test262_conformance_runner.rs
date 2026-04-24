@@ -774,10 +774,10 @@ mod tests {
 
     #[test]
     fn test_conformance_run_discovers_and_executes_fixture_files() {
-        let temp_dir = tempdir().unwrap();
+        let temp_dir = tempdir().expect("serde deserialization should succeed");
         let test_dir = temp_dir.path().join("test/language/literals");
-        fs::create_dir_all(&test_dir).unwrap();
-        fs::write(test_dir.join("numeric-literal.js"), "42").unwrap();
+        fs::create_dir_all(&test_dir).expect("serde deserialization should succeed");
+        fs::write(test_dir.join("numeric-literal.js"), "42").expect("serde deserialization should succeed");
 
         let config = RunnerConfig {
             test262_path: temp_dir.path().to_path_buf(),
@@ -789,7 +789,7 @@ mod tests {
 
         let result = runner.run_conformance(epoch);
         assert!(result.is_ok());
-        let report = result.unwrap();
+        let report = result.expect("serde deserialization should succeed");
         assert_eq!(report.overall.total_tests, 1);
         assert_eq!(report.total_discovered, 1);
         assert_eq!(report.security_epoch, epoch);
@@ -817,15 +817,15 @@ mod tests {
 
     #[test]
     fn test_conformance_run_filters_negative_fixtures_from_real_metadata() {
-        let temp_dir = tempdir().unwrap();
+        let temp_dir = tempdir().expect("serde deserialization should succeed");
         let test_dir = temp_dir.path().join("test/language");
-        fs::create_dir_all(&test_dir).unwrap();
-        fs::write(test_dir.join("positive.js"), "42").unwrap();
+        fs::create_dir_all(&test_dir).expect("serde deserialization should succeed");
+        fs::write(test_dir.join("positive.js"), "42").expect("serde deserialization should succeed");
         fs::write(
             test_dir.join("negative.js"),
             "/*---\nnegative:\n  phase: parse\n  type: SyntaxError\n---*/\nlet",
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let config = RunnerConfig {
             test262_path: temp_dir.path().to_path_buf(),
@@ -834,7 +834,7 @@ mod tests {
             ..RunnerConfig::default()
         };
         let runner = Test262Runner::new(config);
-        let report = runner.run_conformance(SecurityEpoch::from_raw(1)).unwrap();
+        let report = runner.run_conformance(SecurityEpoch::from_raw(1)).expect("serde deserialization should succeed");
 
         assert_eq!(report.overall.total_tests, 1);
         assert_eq!(
@@ -1536,7 +1536,7 @@ pub mod differential_testing {
             let result = harness.run_differential_tests(epoch);
 
             assert!(result.is_ok());
-            let report = result.unwrap();
+            let report = result.expect("serde deserialization should succeed");
             assert_eq!(report.test_results.len(), 8);
             assert_eq!(report.statistics.total_tests, 8);
             // All tests should be skipped since no reference engines are available
@@ -1555,7 +1555,7 @@ pub mod differential_testing {
             let harness = DifferentialHarness::new();
             let result = harness.execute_franken_engine("let x = ;", SecurityEpoch::from_raw(1));
             assert!(result.is_ok());
-            let output = result.unwrap();
+            let output = result.expect("serde deserialization should succeed");
             assert_eq!(output.exit_code, 1);
             assert!(output.stderr.contains("SyntaxError"));
         }
@@ -1589,7 +1589,7 @@ pub mod differential_testing {
         fn report_generates_readable_summary() {
             let harness = DifferentialHarness::new();
             let epoch = SecurityEpoch::from_raw(1);
-            let report = harness.run_differential_tests(epoch).unwrap();
+            let report = harness.run_differential_tests(epoch).expect("serde deserialization should succeed");
             let summary = report.generate_summary();
 
             assert!(summary.contains("Cross-Engine Differential Testing Report"));

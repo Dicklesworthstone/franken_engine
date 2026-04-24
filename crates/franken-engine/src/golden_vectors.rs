@@ -347,7 +347,7 @@ mod tests {
         // Derive an ID for each domain and verify they are all distinct.
         let mut ids = BTreeMap::new();
         for domain in ObjectDomain::ALL {
-            let id = derive_id(*domain, zone, &schema, canonical_bytes).unwrap();
+            let id = derive_id(*domain, zone, &schema, canonical_bytes).expect("serde deserialization should succeed");
             ids.insert(format!("{domain}"), id.to_hex());
         }
 
@@ -510,7 +510,7 @@ mod tests {
 
     #[test]
     fn golden_signature_creation_deterministic() {
-        let sk = SigningKey::from_bytes([0x42; 32]).unwrap();
+        let sk = SigningKey::from_bytes([0x42; 32]).expect("serde deserialization should succeed");
         let preimage = b"golden-preimage-for-signing";
         let sig1 = sign_preimage(&sk, preimage).expect("sign1");
         let sig2 = sign_preimage(&sk, preimage).expect("sign2");
@@ -519,7 +519,7 @@ mod tests {
 
     #[test]
     fn golden_signature_verify_valid() {
-        let sk = SigningKey::from_bytes([0x42; 32]).unwrap();
+        let sk = SigningKey::from_bytes([0x42; 32]).expect("serde deserialization should succeed");
         let vk = sk.verification_key();
         let preimage = b"golden-verify-payload";
         let sig = sign_preimage(&sk, preimage).expect("sign");
@@ -528,8 +528,8 @@ mod tests {
 
     #[test]
     fn golden_signature_verify_wrong_key() {
-        let sk1 = SigningKey::from_bytes([0x42; 32]).unwrap();
-        let sk2 = SigningKey::from_bytes([0x43; 32]).unwrap();
+        let sk1 = SigningKey::from_bytes([0x42; 32]).expect("serde deserialization should succeed");
+        let sk2 = SigningKey::from_bytes([0x43; 32]).expect("serde deserialization should succeed");
         let vk2 = sk2.verification_key();
         let preimage = b"golden-wrong-key-payload";
         let sig = sign_preimage(&sk1, preimage).expect("sign");
@@ -539,7 +539,7 @@ mod tests {
 
     #[test]
     fn golden_signature_verify_tampered_preimage() {
-        let sk = SigningKey::from_bytes([0x42; 32]).unwrap();
+        let sk = SigningKey::from_bytes([0x42; 32]).expect("serde deserialization should succeed");
         let vk = sk.verification_key();
         let sig = sign_preimage(&sk, b"original-preimage").expect("sign");
         let result = verify_signature(&vk, b"tampered-preimage", &sig);
@@ -554,7 +554,7 @@ mod tests {
 
     #[test]
     fn golden_signature_different_preimages_different_sigs() {
-        let sk = SigningKey::from_bytes([0x42; 32]).unwrap();
+        let sk = SigningKey::from_bytes([0x42; 32]).expect("serde deserialization should succeed");
         let sig1 = sign_preimage(&sk, b"preimage-alpha").expect("sig1");
         let sig2 = sign_preimage(&sk, b"preimage-beta").expect("sig2");
         assert_ne!(
@@ -565,8 +565,8 @@ mod tests {
 
     #[test]
     fn golden_signature_different_keys_different_sigs() {
-        let sk1 = SigningKey::from_bytes([0x42; 32]).unwrap();
-        let sk2 = SigningKey::from_bytes([0x43; 32]).unwrap();
+        let sk1 = SigningKey::from_bytes([0x42; 32]).expect("serde deserialization should succeed");
+        let sk2 = SigningKey::from_bytes([0x43; 32]).expect("serde deserialization should succeed");
         let preimage = b"same-preimage";
         let sig1 = sign_preimage(&sk1, preimage).expect("sig1");
         let sig2 = sign_preimage(&sk2, preimage).expect("sig2");
@@ -575,7 +575,7 @@ mod tests {
 
     #[test]
     fn golden_verification_key_derivation_deterministic() {
-        let sk = SigningKey::from_bytes([0x42; 32]).unwrap();
+        let sk = SigningKey::from_bytes([0x42; 32]).expect("serde deserialization should succeed");
         let vk1 = sk.verification_key();
         let vk2 = sk.verification_key();
         assert_eq!(vk1, vk2, "vk derivation must be deterministic");
@@ -583,8 +583,8 @@ mod tests {
 
     #[test]
     fn golden_verification_key_different_for_different_sk() {
-        let sk1 = SigningKey::from_bytes([0x42; 32]).unwrap();
-        let sk2 = SigningKey::from_bytes([0x43; 32]).unwrap();
+        let sk1 = SigningKey::from_bytes([0x42; 32]).expect("serde deserialization should succeed");
+        let sk2 = SigningKey::from_bytes([0x43; 32]).expect("serde deserialization should succeed");
         assert_ne!(
             sk1.verification_key(),
             sk2.verification_key(),
@@ -598,9 +598,9 @@ mod tests {
 
     #[test]
     fn golden_multisig_ordering_deterministic() {
-        let sk1 = SigningKey::from_bytes([0x01; 32]).unwrap();
-        let sk2 = SigningKey::from_bytes([0x02; 32]).unwrap();
-        let sk3 = SigningKey::from_bytes([0x03; 32]).unwrap();
+        let sk1 = SigningKey::from_bytes([0x01; 32]).expect("serde deserialization should succeed");
+        let sk2 = SigningKey::from_bytes([0x02; 32]).expect("serde deserialization should succeed");
+        let sk3 = SigningKey::from_bytes([0x03; 32]).expect("serde deserialization should succeed");
         let preimage = b"multisig-golden-payload";
 
         let sig1 = sign_preimage(&sk1, preimage).expect("sig1");
@@ -628,8 +628,8 @@ mod tests {
     #[test]
     fn golden_multisig_ordering_stable() {
         // Create the same set twice, verify identical ordering.
-        let sk1 = SigningKey::from_bytes([0x10; 32]).unwrap();
-        let sk2 = SigningKey::from_bytes([0x20; 32]).unwrap();
+        let sk1 = SigningKey::from_bytes([0x10; 32]).expect("serde deserialization should succeed");
+        let sk2 = SigningKey::from_bytes([0x20; 32]).expect("serde deserialization should succeed");
         let preimage = b"multisig-stable-test";
 
         let sig1 = sign_preimage(&sk1, preimage).expect("sig1");
@@ -657,7 +657,7 @@ mod tests {
 
     #[test]
     fn golden_multisig_duplicate_signer_rejected() {
-        let sk = SigningKey::from_bytes([0x42; 32]).unwrap();
+        let sk = SigningKey::from_bytes([0x42; 32]).expect("serde deserialization should succeed");
         let preimage = b"dup-signer-test";
         let sig1 = sign_preimage(&sk, preimage).expect("sig1");
         let sig2 = sign_preimage(&sk, preimage).expect("sig2");
@@ -708,11 +708,11 @@ mod tests {
     }
 
     fn golden_head_signing_key() -> SigningKey {
-        SigningKey::from_bytes([0x42; 32]).unwrap()
+        SigningKey::from_bytes([0x42; 32]).expect("serde deserialization should succeed")
     }
 
     fn golden_revocation_signing_key() -> SigningKey {
-        SigningKey::from_bytes([0xA1; 32]).unwrap()
+        SigningKey::from_bytes([0xA1; 32]).expect("serde deserialization should succeed")
     }
 
     fn golden_revocation_chain() -> RevocationChain {
@@ -790,8 +790,8 @@ mod tests {
         let chain1 = build_chain();
         let chain2 = build_chain();
         assert_eq!(
-            chain1.head().unwrap().chain_hash,
-            chain2.head().unwrap().chain_hash,
+            chain1.head().expect("serde deserialization should succeed").chain_hash,
+            chain2.head().expect("serde deserialization should succeed").chain_hash,
             "deterministic chains must produce identical hashes"
         );
     }
@@ -1006,8 +1006,8 @@ mod tests {
             expected,
             expect_error: false,
         };
-        let json = serde_json::to_string(&v).unwrap();
-        let back: GoldenVector = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let back: GoldenVector = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, back);
     }
 
@@ -1031,8 +1031,8 @@ mod tests {
             category: "schema_hash".to_string(),
             vectors: vec![vector],
         };
-        let json = serde_json::to_string(&set).unwrap();
-        let back: GoldenVectorSet = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&set).expect("serde deserialization should succeed");
+        let back: GoldenVectorSet = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(set, back);
         assert_eq!(back.vectors.len(), 1);
         assert!(back.vectors[0].expect_error);
@@ -1054,7 +1054,7 @@ mod tests {
 
     #[test]
     fn from_hex_empty_string() {
-        let result = from_hex("").unwrap();
+        let result = from_hex("").expect("serde deserialization should succeed");
         assert!(result.is_empty());
     }
 
@@ -1076,19 +1076,19 @@ mod tests {
     fn to_hex_from_hex_roundtrip() {
         let bytes = vec![0xde, 0xad, 0xbe, 0xef, 0x00, 0xff];
         let hex = to_hex(&bytes);
-        let recovered = from_hex(&hex).unwrap();
+        let recovered = from_hex(&hex).expect("serde deserialization should succeed");
         assert_eq!(bytes, recovered);
     }
 
     #[test]
     fn from_hex_accepts_uppercase() {
-        let result = from_hex("DEADBEEF").unwrap();
+        let result = from_hex("DEADBEEF").expect("serde deserialization should succeed");
         assert_eq!(result, vec![0xde, 0xad, 0xbe, 0xef]);
     }
 
     #[test]
     fn from_hex_accepts_mixed_case() {
-        let result = from_hex("DeAdBeEf").unwrap();
+        let result = from_hex("DeAdBeEf").expect("serde deserialization should succeed");
         assert_eq!(result, vec![0xde, 0xad, 0xbe, 0xef]);
     }
 
@@ -1118,7 +1118,7 @@ mod tests {
             expected: BTreeMap::new(),
             expect_error: false,
         };
-        let json = serde_json::to_string(&v).unwrap();
+        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
         assert!(json.contains("\"test_name\""));
         assert!(json.contains("\"description\""));
         assert!(json.contains("\"category\""));
@@ -1135,7 +1135,7 @@ mod tests {
             category: "test".into(),
             vectors: vec![],
         };
-        let json = serde_json::to_string(&set).unwrap();
+        let json = serde_json::to_string(&set).expect("serde deserialization should succeed");
         assert!(json.contains("\"vector_format_version\""));
         assert!(json.contains("\"category\""));
         assert!(json.contains("\"vectors\""));
@@ -1229,8 +1229,8 @@ mod tests {
             expected,
             expect_error: false,
         };
-        let json = serde_json::to_string(&v).unwrap();
-        let back: GoldenVector = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let back: GoldenVector = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, back);
     }
 
@@ -1241,8 +1241,8 @@ mod tests {
             category: "empty".into(),
             vectors: vec![],
         };
-        let json = serde_json::to_string(&set).unwrap();
-        let back: GoldenVectorSet = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&set).expect("serde deserialization should succeed");
+        let back: GoldenVectorSet = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.vectors.len(), 0);
     }
 
@@ -1258,7 +1258,7 @@ mod tests {
             expect_error: true,
         };
         assert!(v.expect_error);
-        let json = serde_json::to_string(&v).unwrap();
+        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
         assert!(json.contains("true"));
     }
 

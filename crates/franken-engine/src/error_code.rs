@@ -1372,8 +1372,8 @@ mod tests {
             ErrorSeverity::Warning,
             ErrorSeverity::Info,
         ] {
-            let json = serde_json::to_string(&severity).unwrap();
-            let decoded: ErrorSeverity = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&severity).expect("serde deserialization should succeed");
+            let decoded: ErrorSeverity = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(decoded, severity);
         }
     }
@@ -1396,8 +1396,8 @@ mod tests {
             ErrorSubsystem::LifecycleMigration,
             ErrorSubsystem::Reserved,
         ] {
-            let json = serde_json::to_string(&sub).unwrap();
-            let decoded: ErrorSubsystem = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&sub).expect("serde deserialization should succeed");
+            let decoded: ErrorSubsystem = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(decoded, sub);
         }
     }
@@ -1432,8 +1432,8 @@ mod tests {
     #[test]
     fn franken_error_code_serde_round_trip_all() {
         for code in ALL_ERROR_CODES {
-            let json = serde_json::to_string(code).unwrap();
-            let decoded: FrankenErrorCode = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(code).expect("serde deserialization should succeed");
+            let decoded: FrankenErrorCode = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(decoded, *code, "serde round-trip failed for {code:?}");
         }
     }
@@ -1812,8 +1812,8 @@ mod tests {
     #[test]
     fn error_code_entry_serde_round_trip() {
         let entry = FrankenErrorCode::CapabilityDeniedError.to_registry_entry();
-        let json = serde_json::to_string(&entry).unwrap();
-        let decoded: ErrorCodeEntry = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let decoded: ErrorCodeEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(decoded, entry);
     }
 
@@ -2041,19 +2041,19 @@ mod tests {
     #[test]
     fn error_severity_serde_exact_snake_case_strings() {
         assert_eq!(
-            serde_json::to_string(&ErrorSeverity::Critical).unwrap(),
+            serde_json::to_string(&ErrorSeverity::Critical).expect("serde deserialization should succeed"),
             "\"critical\""
         );
         assert_eq!(
-            serde_json::to_string(&ErrorSeverity::Error).unwrap(),
+            serde_json::to_string(&ErrorSeverity::Error).expect("serde deserialization should succeed"),
             "\"error\""
         );
         assert_eq!(
-            serde_json::to_string(&ErrorSeverity::Warning).unwrap(),
+            serde_json::to_string(&ErrorSeverity::Warning).expect("serde deserialization should succeed"),
             "\"warning\""
         );
         assert_eq!(
-            serde_json::to_string(&ErrorSeverity::Info).unwrap(),
+            serde_json::to_string(&ErrorSeverity::Info).expect("serde deserialization should succeed"),
             "\"info\""
         );
     }
@@ -2089,7 +2089,7 @@ mod tests {
         ];
         for (sub, json_str) in expected {
             assert_eq!(
-                serde_json::to_string(&sub).unwrap(),
+                serde_json::to_string(&sub).expect("serde deserialization should succeed"),
                 json_str,
                 "serde string mismatch for {sub:?}"
             );
@@ -2215,8 +2215,8 @@ mod tests {
     #[test]
     fn error_code_entry_serde_json_keys_present() {
         let entry = FrankenErrorCode::DeterministicSerdeError.to_registry_entry();
-        let json = serde_json::to_value(&entry).unwrap();
-        let obj = json.as_object().unwrap();
+        let json = serde_json::to_value(&entry).expect("serde deserialization should succeed");
+        let obj = json.as_object().expect("serde deserialization should succeed");
         assert!(obj.contains_key("code"));
         assert!(obj.contains_key("numeric"));
         assert!(obj.contains_key("subsystem"));

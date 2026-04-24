@@ -645,7 +645,7 @@ mod tests {
 
     fn make_sk(seed: u8) -> SigningKey {
         // SAFETY: Test helper unwrap, valid 32-byte array for signing key
-        SigningKey::from_bytes([seed; 32]).unwrap()
+        SigningKey::from_bytes([seed; 32]).expect("serde deserialization should succeed")
     }
 
     fn make_policy_head(pt: PolicyType, version: u64) -> PolicyHead {
@@ -666,7 +666,7 @@ mod tests {
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 1))
         .build(keys)
         // SAFETY: Test helper builds valid genesis checkpoint with test keys, build should succeed
-        .unwrap()
+        .expect("serde deserialization should succeed")
     }
 
     // -- Genesis creation --
@@ -717,7 +717,7 @@ mod tests {
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 2))
         .build(&[sk])
         // SAFETY: Test builds valid successor checkpoint with test keys, build should succeed
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         assert_eq!(cp1.checkpoint_seq, 1);
         assert_eq!(cp1.prev_checkpoint, Some(genesis.checkpoint_id));
@@ -739,7 +739,7 @@ mod tests {
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 2))
         .build(std::slice::from_ref(&sk))
         // SAFETY: Test builds valid checkpoint with test keys, build should succeed
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let cp2 = CheckpointBuilder::after(
             &cp1,
@@ -751,7 +751,7 @@ mod tests {
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 3))
         .build(&[sk])
         // SAFETY: Test builds valid checkpoint with test keys, build should succeed
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         assert_eq!(cp2.checkpoint_seq, 2);
         assert_eq!(cp2.prev_checkpoint, Some(cp1.checkpoint_id));
@@ -848,7 +848,7 @@ mod tests {
         )
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 2))
         .build(&[sk])
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         assert_eq!(cp1.epoch_id, SecurityEpoch::from_raw(1));
     }
@@ -864,7 +864,7 @@ mod tests {
         )
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 1))
         .build(std::slice::from_ref(&sk))
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let err = CheckpointBuilder::after(
             &genesis,
@@ -895,7 +895,7 @@ mod tests {
         )
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 2))
         .build(&[sk])
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         assert!(verify_chain_linkage(&genesis, &cp1).is_ok());
     }
@@ -915,7 +915,7 @@ mod tests {
         )
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 2))
         .build(std::slice::from_ref(&sk))
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let cp2 = CheckpointBuilder::after(
             &genesis,
@@ -926,7 +926,7 @@ mod tests {
         )
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 3))
         .build(&[sk])
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         // cp2 chains to genesis, not to cp1.
         let err = verify_chain_linkage(&cp1, &cp2).unwrap_err();
@@ -961,7 +961,7 @@ mod tests {
     fn quorum_fails_with_wrong_keys() {
         let sk1 = make_sk(1);
         let sk2 = make_sk(2);
-        let wrong_vk = VerificationKey::from_bytes([0xFF; 32]).unwrap();
+        let wrong_vk = VerificationKey::from_bytes([0xFF; 32]).expect("serde deserialization should succeed");
         let cp = build_genesis(&[sk1, sk2]);
 
         let err = verify_checkpoint_quorum(&cp, 2, &[wrong_vk]).unwrap_err();
@@ -982,7 +982,7 @@ mod tests {
         .add_policy_head(make_policy_head(PolicyType::CapabilityLattice, 1))
         .add_policy_head(make_policy_head(PolicyType::ExtensionTrust, 1))
         .build(&[sk])
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         assert_eq!(cp.policy_heads.len(), 3);
         // Should be sorted by policy type.
@@ -1017,10 +1017,10 @@ mod tests {
         let cp = build_genesis(&[sk]);
         // SAFETY: PolicyCheckpoint derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&cp).unwrap();
+        let json = serde_json::to_string(&cp).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid PolicyCheckpoint,
         // so from_str back to PolicyCheckpoint cannot fail (valid format + matching schema).
-        let restored: PolicyCheckpoint = serde_json::from_str(&json).unwrap();
+        let restored: PolicyCheckpoint = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cp, restored);
     }
 
@@ -1029,10 +1029,10 @@ mod tests {
         let head = make_policy_head(PolicyType::RuntimeExecution, 5);
         // SAFETY: PolicyHead derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&head).unwrap();
+        let json = serde_json::to_string(&head).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid PolicyHead,
         // so from_str back to PolicyHead cannot fail (valid format + matching schema).
-        let restored: PolicyHead = serde_json::from_str(&json).unwrap();
+        let restored: PolicyHead = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(head, restored);
     }
 
@@ -1046,8 +1046,8 @@ mod tests {
             PolicyType::RevocationGovernance,
         ];
         for pt in &types {
-            let json = serde_json::to_string(pt).unwrap();
-            let restored: PolicyType = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(pt).expect("serde deserialization should succeed");
+            let restored: PolicyType = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*pt, restored);
         }
     }
@@ -1065,8 +1065,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap();
-            let restored: CheckpointError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let restored: CheckpointError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, restored);
         }
     }
@@ -1122,8 +1122,8 @@ mod tests {
             checkpoint_seq: 0,
             trace_id: "t-event".to_string(),
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let restored: CheckpointEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let restored: CheckpointEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, restored);
     }
 
@@ -1163,8 +1163,8 @@ mod tests {
     #[test]
     fn deterministic_timestamp_serde_roundtrip() {
         let ts = DeterministicTimestamp(12345);
-        let json = serde_json::to_string(&ts).unwrap();
-        let restored: DeterministicTimestamp = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&ts).expect("serde deserialization should succeed");
+        let restored: DeterministicTimestamp = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ts, restored);
     }
 
@@ -1218,14 +1218,14 @@ mod tests {
             &checkpoint_schema_id(),
             b"a",
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let id2 = crate::engine_object_id::derive_id(
             ObjectDomain::CheckpointArtifact,
             "z",
             &checkpoint_schema_id(),
             b"b",
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let displays: std::collections::BTreeSet<String> = [
             CheckpointError::GenesisMustHaveNoPredecessor.to_string(),
             CheckpointError::MissingPredecessor.to_string(),
@@ -1326,7 +1326,7 @@ mod tests {
         .add_policy_head(make_policy_head(PolicyType::EvidenceRetention, 1))
         .add_policy_head(make_policy_head(PolicyType::RevocationGovernance, 1))
         .build(&[sk])
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(cp.policy_heads.len(), 5);
         // Verify sorted order
         for w in cp.policy_heads.windows(2) {
@@ -1400,8 +1400,8 @@ mod tests {
             },
         ];
         for event in &events {
-            let json = serde_json::to_string(event).unwrap();
-            let restored: CheckpointEvent = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(event).expect("serde deserialization should succeed");
+            let restored: CheckpointEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*event, restored);
         }
     }
@@ -1446,7 +1446,7 @@ mod tests {
         )
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 1))
         .build(std::slice::from_ref(&sk))
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         // Manually build a checkpoint at epoch 3 (regression)
         let cp1 = CheckpointBuilder::after(
@@ -1458,7 +1458,7 @@ mod tests {
         )
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 2))
         .build(std::slice::from_ref(&sk))
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let cp2 = CheckpointBuilder::after(
             &cp1,
@@ -1469,7 +1469,7 @@ mod tests {
         )
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 3))
         .build(&[sk])
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         // verify_chain_linkage with cp1 (epoch 5) → cp2 (epoch 5) is ok
         assert!(verify_chain_linkage(&cp1, &cp2).is_ok());
@@ -1493,7 +1493,7 @@ mod tests {
         )
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 2))
         .build(std::slice::from_ref(&sk))
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         // SAFETY: Test scenario with valid checkpoint parameters and signing key; build should succeed
         let cp2 = CheckpointBuilder::after(
@@ -1505,7 +1505,7 @@ mod tests {
         )
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 3))
         .build(&[sk])
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         // Verify cp1→cp2 is fine (5→6)
         assert!(verify_chain_linkage(&cp1, &cp2).is_ok());
@@ -1535,7 +1535,7 @@ mod tests {
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 1))
         // SAFETY: Test scenario with valid checkpoint parameters and signing key; build should succeed
         .build(&[sk])
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         assert_eq!(cp.policy_heads.len(), 5);
         // Builder sorts by policy type
@@ -1564,7 +1564,7 @@ mod tests {
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 1))
         // SAFETY: Test scenario with valid checkpoint parameters and signing key; build should succeed
         .build(std::slice::from_ref(&sk))
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let cp2 = CheckpointBuilder::genesis(
             SecurityEpoch::GENESIS,
@@ -1573,7 +1573,7 @@ mod tests {
         )
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 1))
         .build(&[sk])
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         assert_ne!(cp1.checkpoint_id, cp2.checkpoint_id);
     }
@@ -1590,14 +1590,14 @@ mod tests {
             &checkpoint_schema_id(),
             b"x",
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let id2 = crate::engine_object_id::derive_id(
             ObjectDomain::CheckpointArtifact,
             "z",
             &checkpoint_schema_id(),
             b"y",
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let errors = [
             CheckpointError::ChainLinkageBroken {
@@ -1623,8 +1623,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap();
-            let restored: CheckpointError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let restored: CheckpointError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, restored);
         }
     }
@@ -1646,7 +1646,7 @@ mod tests {
         )
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 1))
         .build(&[sk])
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         assert_ne!(genesis.checkpoint_id, cp1.checkpoint_id);
     }
@@ -1679,7 +1679,7 @@ mod tests {
         )
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 1))
         .build(std::slice::from_ref(&sk))
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let cp1 = CheckpointBuilder::after(
             &genesis,
@@ -1690,7 +1690,7 @@ mod tests {
         )
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 2))
         .build(&[sk])
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         assert!(verify_chain_linkage(&genesis, &cp1).is_ok());
     }
@@ -1710,7 +1710,7 @@ mod tests {
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 1))
         .add_policy_head(make_policy_head(PolicyType::CapabilityLattice, 1))
         .build(std::slice::from_ref(&sk))
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         // Update only RuntimeExecution to v2
         let cp1 = CheckpointBuilder::after(
@@ -1723,7 +1723,7 @@ mod tests {
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 2))
         .add_policy_head(make_policy_head(PolicyType::CapabilityLattice, 1))
         .build(&[sk])
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         assert!(verify_chain_linkage(&genesis, &cp1).is_ok());
         assert_eq!(cp1.policy_heads.len(), 2);
@@ -1733,7 +1733,7 @@ mod tests {
             .policy_heads
             .iter()
             .find(|h| h.policy_type == PolicyType::RuntimeExecution)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(re_head.policy_version, 2);
     }
 
@@ -1776,9 +1776,9 @@ mod tests {
         ];
         for t in &types {
             // SAFETY: CheckpointEventType derives Serialize and has no non-serializable fields
-            let json = serde_json::to_string(t).unwrap();
+            let json = serde_json::to_string(t).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by valid CheckpointEventType serialization
-            let restored: CheckpointEventType = serde_json::from_str(&json).unwrap();
+            let restored: CheckpointEventType = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*t, restored);
         }
     }
@@ -1808,7 +1808,7 @@ mod tests {
             PolicyType::RevocationGovernance,
         ]
         .iter()
-        .map(|p| serde_json::to_string(p).unwrap())
+        .map(|p| serde_json::to_string(p).expect("serde deserialization should succeed"))
         .collect();
         assert_eq!(set.len(), 5);
     }
@@ -1821,47 +1821,47 @@ mod tests {
             &checkpoint_schema_id(),
             b"err-a",
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let id2 = crate::engine_object_id::derive_id(
             ObjectDomain::CheckpointArtifact,
             "z",
             &checkpoint_schema_id(),
             b"err-b",
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let errors = [
-            serde_json::to_string(&CheckpointError::GenesisMustHaveNoPredecessor).unwrap(),
-            serde_json::to_string(&CheckpointError::MissingPredecessor).unwrap(),
+            serde_json::to_string(&CheckpointError::GenesisMustHaveNoPredecessor).expect("serde deserialization should succeed"),
+            serde_json::to_string(&CheckpointError::MissingPredecessor).expect("serde deserialization should succeed"),
             serde_json::to_string(&CheckpointError::NonMonotonicSequence {
                 prev_seq: 1,
                 current_seq: 0,
             })
-            .unwrap(),
-            serde_json::to_string(&CheckpointError::GenesisSequenceNotZero { actual: 5 }).unwrap(),
+            .expect("serde deserialization should succeed"),
+            serde_json::to_string(&CheckpointError::GenesisSequenceNotZero { actual: 5 }).expect("serde deserialization should succeed"),
             serde_json::to_string(&CheckpointError::ChainLinkageBroken {
                 expected: id1,
                 actual: id2,
             })
-            .unwrap(),
-            serde_json::to_string(&CheckpointError::EmptyPolicyHeads).unwrap(),
+            .expect("serde deserialization should succeed"),
+            serde_json::to_string(&CheckpointError::EmptyPolicyHeads).expect("serde deserialization should succeed"),
             serde_json::to_string(&CheckpointError::QuorumNotMet {
                 required: 3,
                 provided: 1,
             })
-            .unwrap(),
+            .expect("serde deserialization should succeed"),
             serde_json::to_string(&CheckpointError::DuplicatePolicyType {
                 policy_type: PolicyType::RuntimeExecution,
             })
-            .unwrap(),
+            .expect("serde deserialization should succeed"),
             serde_json::to_string(&CheckpointError::IdDerivationFailed { detail: "x".into() })
-                .unwrap(),
+                .expect("serde deserialization should succeed"),
             serde_json::to_string(&CheckpointError::SignatureInvalid { detail: "y".into() })
-                .unwrap(),
+                .expect("serde deserialization should succeed"),
             serde_json::to_string(&CheckpointError::EpochRegression {
                 prev_epoch: SecurityEpoch::from_raw(5),
                 current_epoch: SecurityEpoch::from_raw(3),
             })
-            .unwrap(),
+            .expect("serde deserialization should succeed"),
         ];
         let set: std::collections::BTreeSet<_> = errors.into_iter().collect();
         assert_eq!(set.len(), 11);
@@ -1870,20 +1870,20 @@ mod tests {
     #[test]
     fn checkpoint_event_type_serde_all_distinct() {
         let set: std::collections::BTreeSet<String> = [
-            serde_json::to_string(&CheckpointEventType::GenesisCreated).unwrap(),
+            serde_json::to_string(&CheckpointEventType::GenesisCreated).expect("serde deserialization should succeed"),
             serde_json::to_string(&CheckpointEventType::ChainCheckpointCreated { prev_seq: 0 })
-                .unwrap(),
+                .expect("serde deserialization should succeed"),
             serde_json::to_string(&CheckpointEventType::QuorumVerified {
                 valid: 1,
                 threshold: 1,
             })
-            .unwrap(),
-            serde_json::to_string(&CheckpointEventType::ChainLinkageVerified).unwrap(),
+            .expect("serde deserialization should succeed"),
+            serde_json::to_string(&CheckpointEventType::ChainLinkageVerified).expect("serde deserialization should succeed"),
             serde_json::to_string(&CheckpointEventType::EpochTransition {
                 from: SecurityEpoch::from_raw(0),
                 to: SecurityEpoch::from_raw(1),
             })
-            .unwrap(),
+            .expect("serde deserialization should succeed"),
         ]
         .into_iter()
         .collect();
@@ -1941,8 +1941,8 @@ mod tests {
     #[test]
     fn policy_head_json_field_names() {
         let head = make_policy_head(PolicyType::RuntimeExecution, 1);
-        let val: serde_json::Value = serde_json::to_value(&head).unwrap();
-        let obj = val.as_object().unwrap();
+        let val: serde_json::Value = serde_json::to_value(&head).expect("serde deserialization should succeed");
+        let obj = val.as_object().expect("serde deserialization should succeed");
         for key in ["policy_type", "policy_hash", "policy_version"] {
             assert!(obj.contains_key(key), "missing field: {key}");
         }
@@ -1956,8 +1956,8 @@ mod tests {
             checkpoint_seq: 0,
             trace_id: "t".to_string(),
         };
-        let val: serde_json::Value = serde_json::to_value(&event).unwrap();
-        let obj = val.as_object().unwrap();
+        let val: serde_json::Value = serde_json::to_value(&event).expect("serde deserialization should succeed");
+        let obj = val.as_object().expect("serde deserialization should succeed");
         for key in ["event_type", "checkpoint_seq", "trace_id"] {
             assert!(obj.contains_key(key), "missing field: {key}");
         }
@@ -1968,8 +1968,8 @@ mod tests {
     fn policy_checkpoint_json_field_names() {
         let sk = make_sk(1);
         let cp = build_genesis(&[sk]);
-        let val: serde_json::Value = serde_json::to_value(&cp).unwrap();
-        let obj = val.as_object().unwrap();
+        let val: serde_json::Value = serde_json::to_value(&cp).expect("serde deserialization should succeed");
+        let obj = val.as_object().expect("serde deserialization should succeed");
         for key in [
             "checkpoint_id",
             "prev_checkpoint",
@@ -2080,16 +2080,16 @@ mod tests {
     #[test]
     fn deterministic_timestamp_max_serde_roundtrip() {
         let ts = DeterministicTimestamp(u64::MAX);
-        let json = serde_json::to_string(&ts).unwrap();
-        let back: DeterministicTimestamp = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&ts).expect("serde deserialization should succeed");
+        let back: DeterministicTimestamp = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ts, back);
     }
 
     #[test]
     fn policy_head_version_zero() {
         let h = make_policy_head(PolicyType::RuntimeExecution, 0);
-        let json = serde_json::to_string(&h).unwrap();
-        let back: PolicyHead = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&h).expect("serde deserialization should succeed");
+        let back: PolicyHead = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(h, back);
     }
 
@@ -2100,8 +2100,8 @@ mod tests {
             policy_hash: ContentHash::compute(b"max-ver"),
             policy_version: u64::MAX,
         };
-        let json = serde_json::to_string(&h).unwrap();
-        let back: PolicyHead = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&h).expect("serde deserialization should succeed");
+        let back: PolicyHead = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(h, back);
     }
 
@@ -2115,7 +2115,7 @@ mod tests {
         )
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 1))
         .build(&[sk])
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(cp.epoch_id, SecurityEpoch::from_raw(u64::MAX));
     }
 
@@ -2129,7 +2129,7 @@ mod tests {
         )
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 1))
         .build(&[sk])
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(cp.created_at, DeterministicTimestamp(0));
     }
 
@@ -2146,7 +2146,7 @@ mod tests {
         )
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 2))
         .build(&[sk])
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(cp.checkpoint_seq, 1_000_000);
     }
 
@@ -2157,8 +2157,8 @@ mod tests {
             checkpoint_seq: u64::MAX,
             trace_id: "max-seq".to_string(),
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let back: CheckpointEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let back: CheckpointEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
     }
 
@@ -2169,8 +2169,8 @@ mod tests {
             checkpoint_seq: 1,
             trace_id: String::new(),
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let back: CheckpointEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let back: CheckpointEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
     }
 
@@ -2203,7 +2203,7 @@ mod tests {
         let sk = make_sk(1);
         let cp = build_genesis(&[sk]);
         let uv = cp.unsigned_view();
-        let uv_json = serde_json::to_string(&uv).unwrap();
+        let uv_json = serde_json::to_string(&uv).expect("serde deserialization should succeed");
         // The unsigned view should contain "quorum_signatures" with sentinel, not real sigs
         assert!(uv_json.contains("quorum_signatures"));
     }
@@ -2226,7 +2226,7 @@ mod tests {
         )
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 1))
         .build(std::slice::from_ref(&sk))
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let cp2 = CheckpointBuilder::genesis(
             SecurityEpoch::GENESIS,
@@ -2235,7 +2235,7 @@ mod tests {
         )
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 2))
         .build(&[sk])
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         assert_ne!(cp1.checkpoint_id, cp2.checkpoint_id);
     }
@@ -2250,7 +2250,7 @@ mod tests {
         )
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 1))
         .build(std::slice::from_ref(&sk))
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let cp2 = CheckpointBuilder::genesis(
             SecurityEpoch::GENESIS,
@@ -2259,7 +2259,7 @@ mod tests {
         )
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 1))
         .build(&[sk])
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         assert_ne!(cp1.checkpoint_id, cp2.checkpoint_id);
     }
@@ -2274,7 +2274,7 @@ mod tests {
         )
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 1))
         .build(std::slice::from_ref(&sk))
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let cp2 = CheckpointBuilder::genesis(
             SecurityEpoch::from_raw(1),
@@ -2283,7 +2283,7 @@ mod tests {
         )
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 1))
         .build(&[sk])
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         assert_ne!(cp1.checkpoint_id, cp2.checkpoint_id);
     }
@@ -2292,7 +2292,7 @@ mod tests {
     fn genesis_prev_checkpoint_is_null_in_json() {
         let sk = make_sk(1);
         let cp = build_genesis(&[sk]);
-        let val: serde_json::Value = serde_json::to_value(&cp).unwrap();
+        let val: serde_json::Value = serde_json::to_value(&cp).expect("serde deserialization should succeed");
         assert!(val["prev_checkpoint"].is_null());
     }
 
@@ -2309,8 +2309,8 @@ mod tests {
         )
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 2))
         .build(&[sk])
-        .unwrap();
-        let val: serde_json::Value = serde_json::to_value(&cp1).unwrap();
+        .expect("serde deserialization should succeed");
+        let val: serde_json::Value = serde_json::to_value(&cp1).expect("serde deserialization should succeed");
         assert!(!val["prev_checkpoint"].is_null());
     }
 
@@ -2405,7 +2405,7 @@ mod tests {
         )
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 2))
         .build(&[sk])
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(cp1.epoch_id, SecurityEpoch::from_raw(5));
         assert!(verify_chain_linkage(&genesis, &cp1).is_ok());
     }

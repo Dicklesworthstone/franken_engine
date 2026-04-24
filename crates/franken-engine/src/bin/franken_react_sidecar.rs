@@ -142,11 +142,11 @@ fn main() {
         )
         .get_matches();
 
-    let source_file = PathBuf::from(matches.get_one::<String>("source").unwrap());
-    let output_dir = PathBuf::from(matches.get_one::<String>("output").unwrap());
+    let source_file = PathBuf::from(matches.get_one::<String>("source").expect("serde deserialization should succeed"));
+    let output_dir = PathBuf::from(matches.get_one::<String>("output").expect("serde deserialization should succeed"));
     let alien_artifact_mode = matches.get_flag("alien-artifact");
 
-    let dom_strategy = match matches.get_one::<String>("dom-strategy").unwrap().as_str() {
+    let dom_strategy = match matches.get_one::<String>("dom-strategy").expect("serde deserialization should succeed").as_str() {
         "direct" => DomManipulationStrategy::Direct,
         "batched" => DomManipulationStrategy::Batched,
         "streaming" => DomManipulationStrategy::Streaming,

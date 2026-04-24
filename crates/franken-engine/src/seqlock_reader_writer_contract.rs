@@ -439,7 +439,7 @@ fn write_bundle(
             "policy_id": &context.policy_id,
         }
     }))
-    .unwrap();
+    .expect("serde deserialization should succeed");
 
     let mut primary_files = vec![
         FileArtifact::json("seqlock_reader_writer_contract.json", &evaluated.contract),
@@ -505,7 +505,7 @@ fn write_bundle(
             "policy_id": &context.policy_id,
         }
     }))
-    .unwrap();
+    .expect("serde deserialization should succeed");
     primary_files.push(FileArtifact::text("repro.lock", &repro_lock));
     primary_files.sort_by(|left, right| left.path.cmp(&right.path));
 
@@ -542,7 +542,7 @@ fn write_bundle(
         },
         "artifacts": &manifest_artifacts,
     }))
-    .unwrap();
+    .expect("serde deserialization should succeed");
     let manifest_artifact = FileArtifact::text("manifest.json", &manifest_json);
 
     let _bundle_lock = acquire_bundle_write_lock(&context.artifact_dir)?;
@@ -819,7 +819,7 @@ impl Drop for BundleWriteLock {
 }
 
 fn digest_json(value: &serde_json::Value) -> String {
-    let bytes = serde_json::to_vec(value).unwrap();
+    let bytes = serde_json::to_vec(value).expect("serde deserialization should succeed");
     sha256_hex(&bytes)
 }
 
@@ -833,14 +833,14 @@ impl FileArtifact {
     fn json<T: Serialize>(path: &str, value: &T) -> Self {
         Self {
             path: path.to_string(),
-            contents: serde_json::to_vec_pretty(value).unwrap(),
+            contents: serde_json::to_vec_pretty(value).expect("serde deserialization should succeed"),
         }
     }
 
     fn jsonl<T: Serialize>(path: &str, records: &[T]) -> Self {
         let mut contents = Vec::new();
         for record in records {
-            let mut line = serde_json::to_vec(record).unwrap();
+            let mut line = serde_json::to_vec(record).expect("serde deserialization should succeed");
             line.push(b'\n');
             contents.extend_from_slice(&line);
         }
@@ -1114,8 +1114,8 @@ mod tests {
             exact_fallback_conditions: vec!["uninitialized".to_string()],
             telemetry_fields: vec!["total_reads".to_string()],
         };
-        let json = serde_json::to_string(&row).unwrap();
-        let back: ContractCandidateRow = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&row).expect("serde deserialization should succeed");
+        let back: ContractCandidateRow = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(row, back);
     }
 
@@ -1131,8 +1131,8 @@ mod tests {
             writes: 5,
             latest_read_source: "fast_path".to_string(),
         };
-        let json = serde_json::to_string(&row).unwrap();
-        let back: ObservedTelemetryRow = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&row).expect("serde deserialization should succeed");
+        let back: ObservedTelemetryRow = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(row, back);
     }
 
@@ -1144,8 +1144,8 @@ mod tests {
             decision_id: "decision-1".to_string(),
             policy_id: "policy-1".to_string(),
         };
-        let json = serde_json::to_string(&artifact).unwrap();
-        let back: TraceIdsArtifact = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&artifact).expect("serde deserialization should succeed");
+        let back: TraceIdsArtifact = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(artifact, back);
     }
 
@@ -1187,8 +1187,8 @@ mod tests {
             max_retries: 5,
             max_writer_pressure_observations: 3,
         };
-        let json = serde_json::to_string(&row).unwrap();
-        let back: RetryBudgetPolicyRow = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&row).expect("serde deserialization should succeed");
+        let back: RetryBudgetPolicyRow = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(row, back);
     }
 
@@ -1213,8 +1213,8 @@ mod tests {
                 },
             ],
         };
-        let json = serde_json::to_string_pretty(&artifact).unwrap();
-        let back: RetryBudgetPolicyArtifact = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string_pretty(&artifact).expect("serde deserialization should succeed");
+        let back: RetryBudgetPolicyArtifact = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(artifact, back);
     }
 
@@ -1228,8 +1228,8 @@ mod tests {
                 "writer_active".to_string(),
             ],
         };
-        let json = serde_json::to_string(&row).unwrap();
-        let back: FallbackMatrixRow = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&row).expect("serde deserialization should succeed");
+        let back: FallbackMatrixRow = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(row, back);
     }
 
@@ -1247,8 +1247,8 @@ mod tests {
                 exact_fallback_conditions: vec!["uninitialized".to_string()],
             }],
         };
-        let json = serde_json::to_string_pretty(&artifact).unwrap();
-        let back: IncumbentFallbackMatrixArtifact = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string_pretty(&artifact).expect("serde deserialization should succeed");
+        let back: IncumbentFallbackMatrixArtifact = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(artifact, back);
     }
 
@@ -1265,8 +1265,8 @@ mod tests {
             candidate_id: Some("module-cache-snapshot".to_string()),
             detail: "read_api=ModuleCache::snapshot".to_string(),
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let back: StructuredLogEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let back: StructuredLogEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
     }
 
@@ -1283,8 +1283,8 @@ mod tests {
             candidate_id: None,
             detail: "no optional fields".to_string(),
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let back: StructuredLogEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let back: StructuredLogEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
         assert!(json.contains("\"error_code\":null"));
         assert!(json.contains("\"candidate_id\":null"));
@@ -1296,8 +1296,8 @@ mod tests {
             path: "seqlock_reader_writer_contract.json".to_string(),
             sha256: "sha256:abcdef0123456789".to_string(),
         };
-        let json = serde_json::to_string(&reference).unwrap();
-        let back: ManifestArtifactReference = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&reference).expect("serde deserialization should succeed");
+        let back: ManifestArtifactReference = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(reference, back);
     }
 
@@ -1331,16 +1331,16 @@ mod tests {
                 latest_read_source: "fast_path".to_string(),
             }],
         };
-        let json = serde_json::to_string_pretty(&artifact).unwrap();
-        let back: ReaderWriterContractArtifact = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string_pretty(&artifact).expect("serde deserialization should succeed");
+        let back: ReaderWriterContractArtifact = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(artifact, back);
     }
 
     #[test]
     fn docs_contract_fixture_serde_round_trip() {
         let fixture = build_docs_contract_fixture();
-        let json = serde_json::to_string_pretty(&fixture).unwrap();
-        let back: DocsContractFixture = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string_pretty(&fixture).expect("serde deserialization should succeed");
+        let back: DocsContractFixture = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(fixture, back);
     }
 
@@ -1351,8 +1351,8 @@ mod tests {
             max_retries: 7,
             max_writer_pressure_observations: 4,
         };
-        let json = serde_json::to_string(&policy).unwrap();
-        let back: DocsCandidatePolicy = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
+        let back: DocsCandidatePolicy = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(policy, back);
     }
 
@@ -1413,7 +1413,7 @@ mod tests {
     fn unique_temp_path_starts_with_dot_and_ends_with_tmp() {
         let base = Path::new("/tmp/myfile.json");
         let temp = unique_temp_path(base);
-        let file_name = temp.file_name().unwrap().to_str().unwrap();
+        let file_name = temp.file_name().expect("serde deserialization should succeed").to_str().expect("serde deserialization should succeed");
         assert!(
             file_name.starts_with('.'),
             "temp file should start with dot: {file_name}"

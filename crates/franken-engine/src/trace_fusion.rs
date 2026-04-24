@@ -143,7 +143,7 @@ impl FusionMotif {
         let mut data = Vec::new();
         // SAFETY: TraceFusionKind derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        data.extend_from_slice(serde_json::to_string(&self.kind).unwrap().as_bytes());
+        data.extend_from_slice(serde_json::to_string(&self.kind).expect("serde deserialization should succeed").as_bytes());
         for op in &self.opcode_pattern {
             data.extend_from_slice(op.as_bytes());
             data.push(b'|');
@@ -321,7 +321,7 @@ impl FusionGuard {
     pub fn new(kind: FusionGuardKind, side_exit_offset: u32) -> Self {
         // SAFETY: FusionGuardKind derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let kind_bytes = serde_json::to_string(&kind).unwrap();
+        let kind_bytes = serde_json::to_string(&kind).expect("serde deserialization should succeed");
         let mut hash_preimage = Vec::with_capacity(kind_bytes.len() + std::mem::size_of::<u32>());
         hash_preimage.extend_from_slice(kind_bytes.as_bytes());
         hash_preimage.extend_from_slice(&side_exit_offset.to_le_bytes());
@@ -2253,7 +2253,7 @@ mod tests {
         );
         let template = catalog.find_template(&motif);
         assert!(template.is_some());
-        assert_eq!(template.unwrap().opcode, "SuperArithChain");
+        assert_eq!(template.expect("serde deserialization should succeed").opcode, "SuperArithChain");
     }
 
     #[test]
@@ -2267,7 +2267,7 @@ mod tests {
         );
         let template = catalog.find_template(&motif);
         assert!(template.is_some());
-        assert_eq!(template.unwrap().opcode, "SuperPropChain");
+        assert_eq!(template.expect("serde deserialization should succeed").opcode, "SuperPropChain");
     }
 
     #[test]
@@ -2387,7 +2387,7 @@ mod tests {
         engine.policy.require_proof_lineage = false;
         let entries = arith_entries(4, 200);
         engine.fuse("fn_test", &entries, None);
-        let trace_id = engine.active_traces.keys().next().unwrap().clone();
+        let trace_id = engine.active_traces.keys().next().expect("serde deserialization should succeed").clone();
         assert!(engine.disable_trace(
             &trace_id,
             FusionDisableReason::OperatorDisabled {
@@ -2403,7 +2403,7 @@ mod tests {
         engine.policy.require_proof_lineage = false;
         let entries = arith_entries(4, 200);
         engine.fuse("fn_test", &entries, None);
-        let trace_id = engine.active_traces.keys().next().unwrap().clone();
+        let trace_id = engine.active_traces.keys().next().expect("serde deserialization should succeed").clone();
         engine.disable_trace(
             &trace_id,
             FusionDisableReason::OperatorDisabled {
@@ -2420,10 +2420,10 @@ mod tests {
         engine.policy.require_proof_lineage = false;
         let entries = arith_entries(4, 200);
         engine.fuse("fn_test", &entries, None);
-        let trace_id = engine.active_traces.keys().next().unwrap().clone();
+        let trace_id = engine.active_traces.keys().next().expect("serde deserialization should succeed").clone();
         assert!(engine.record_execution(&trace_id));
         assert!(engine.record_execution(&trace_id));
-        let trace = engine.get_trace(&trace_id).unwrap();
+        let trace = engine.get_trace(&trace_id).expect("serde deserialization should succeed");
         assert_eq!(trace.execution_count, 2);
     }
 
@@ -2434,7 +2434,7 @@ mod tests {
         engine.policy.max_exit_ratio_millionths = 200_000;
         let entries = arith_entries(4, 200);
         engine.fuse("fn_test", &entries, None);
-        let trace_id = engine.active_traces.keys().next().unwrap().clone();
+        let trace_id = engine.active_traces.keys().next().expect("serde deserialization should succeed").clone();
 
         // 3 executions, 1 exit = 33% > 20%.
         engine.record_execution(&trace_id);
@@ -2442,7 +2442,7 @@ mod tests {
         engine.record_execution(&trace_id);
         engine.record_side_exit(&trace_id);
 
-        let trace = engine.get_trace(&trace_id).unwrap();
+        let trace = engine.get_trace(&trace_id).expect("serde deserialization should succeed");
         assert!(!trace.enabled);
     }
 
@@ -2451,10 +2451,10 @@ mod tests {
         let mut engine = TraceFusionEngine::new(test_epoch());
         let entries = arith_entries(4, 200);
         engine.fuse("fn_test", &entries, Some(proof_lineage()));
-        let trace_id = engine.active_traces.keys().next().unwrap().clone();
+        let trace_id = engine.active_traces.keys().next().expect("serde deserialization should succeed").clone();
 
         engine.invalidate_proof("cap-proof-1");
-        let trace = engine.get_trace(&trace_id).unwrap();
+        let trace = engine.get_trace(&trace_id).expect("serde deserialization should succeed");
         assert!(!trace.enabled);
         assert!(matches!(
             trace.disable_reason,
@@ -2470,7 +2470,7 @@ mod tests {
         engine.fuse("fn_test", &entries, None);
 
         engine.advance_epoch(SecurityEpoch::from_raw(5));
-        let trace = engine.active_traces.values().next().unwrap();
+        let trace = engine.active_traces.values().next().expect("serde deserialization should succeed");
         assert!(!trace.enabled);
     }
 
@@ -2577,7 +2577,7 @@ mod tests {
         engine.policy.require_proof_lineage = false;
         let entries = arith_entries(4, 200);
         engine.fuse("fn_test", &entries, None);
-        let trace_id = engine.active_traces.keys().next().unwrap().clone();
+        let trace_id = engine.active_traces.keys().next().expect("serde deserialization should succeed").clone();
         engine.disable_trace(
             &trace_id,
             FusionDisableReason::OperatorDisabled {
@@ -2595,10 +2595,10 @@ mod tests {
         let kind = MotifKind::ArithmeticChain;
         // SAFETY: MotifKind derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&kind).unwrap();
+        let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid MotifKind,
         // so from_str back to MotifKind cannot fail (valid format + matching schema).
-        let decoded: MotifKind = serde_json::from_str(&json).unwrap();
+        let decoded: MotifKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(kind, decoded);
     }
 
@@ -2613,10 +2613,10 @@ mod tests {
         motif.observation_count = 100;
         // SAFETY: FusionMotif derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&motif).unwrap();
+        let json = serde_json::to_string(&motif).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid FusionMotif,
         // so from_str back to FusionMotif cannot fail (valid format + matching schema).
-        let decoded: FusionMotif = serde_json::from_str(&json).unwrap();
+        let decoded: FusionMotif = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(motif, decoded);
     }
 
@@ -2625,10 +2625,10 @@ mod tests {
         let lineage = proof_lineage();
         // SAFETY: FusionProofLineage derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&lineage).unwrap();
+        let json = serde_json::to_string(&lineage).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid FusionProofLineage,
         // so from_str back to FusionProofLineage cannot fail (valid format + matching schema).
-        let decoded: FusionProofLineage = serde_json::from_str(&json).unwrap();
+        let decoded: FusionProofLineage = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(lineage, decoded);
     }
 
@@ -2638,10 +2638,10 @@ mod tests {
         trace.add_instruction(FusedInstruction::passthrough(0, 0, "Add"));
         // SAFETY: FusedTrace derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&trace).unwrap();
+        let json = serde_json::to_string(&trace).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid FusedTrace,
         // so from_str back to FusedTrace cannot fail (valid format + matching schema).
-        let decoded: FusedTrace = serde_json::from_str(&json).unwrap();
+        let decoded: FusedTrace = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(trace, decoded);
     }
 
@@ -2650,10 +2650,10 @@ mod tests {
         let policy = FusionPolicy::default();
         // SAFETY: FusionPolicy derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&policy).unwrap();
+        let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid FusionPolicy,
         // so from_str back to FusionPolicy cannot fail (valid format + matching schema).
-        let decoded: FusionPolicy = serde_json::from_str(&json).unwrap();
+        let decoded: FusionPolicy = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(policy, decoded);
     }
 
@@ -2669,8 +2669,8 @@ mod tests {
             FusionOutcome::MissingProofLineage,
         ];
         for outcome in outcomes {
-            let json = serde_json::to_string(&outcome).unwrap();
-            let decoded: FusionOutcome = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&outcome).expect("serde deserialization should succeed");
+            let decoded: FusionOutcome = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(outcome, decoded);
         }
     }
@@ -2694,8 +2694,8 @@ mod tests {
             },
         ];
         for reason in reasons {
-            let json = serde_json::to_string(&reason).unwrap();
-            let decoded: FusionDisableReason = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&reason).expect("serde deserialization should succeed");
+            let decoded: FusionDisableReason = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(reason, decoded);
         }
     }
@@ -2718,8 +2718,8 @@ mod tests {
             },
         ];
         for kind in kinds {
-            let json = serde_json::to_string(&kind).unwrap();
-            let decoded: FusionGuardKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
+            let decoded: FusionGuardKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(kind, decoded);
         }
     }
@@ -2727,8 +2727,8 @@ mod tests {
     #[test]
     fn test_fusion_record_serde() {
         let record = FusionRecord::new("fn_test", test_epoch());
-        let json = serde_json::to_string(&record).unwrap();
-        let decoded: FusionRecord = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&record).expect("serde deserialization should succeed");
+        let decoded: FusionRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(record.function_id, decoded.function_id);
     }
 
@@ -2739,8 +2739,8 @@ mod tests {
         let entries = arith_entries(4, 200);
         engine.fuse("fn_test", &entries, None);
         let diag = engine.diagnostics();
-        let json = serde_json::to_string(&diag).unwrap();
-        let decoded: TraceFusionDiagnostics = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&diag).expect("serde deserialization should succeed");
+        let decoded: TraceFusionDiagnostics = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(diag, decoded);
     }
 
@@ -2777,7 +2777,7 @@ mod tests {
         let entries = prop_chain_entries(4, 200);
         let outcome = engine.fuse("fn_test", &entries, None);
         assert_eq!(outcome, FusionOutcome::Formed);
-        let trace = engine.active_traces.values().next().unwrap();
+        let trace = engine.active_traces.values().next().expect("serde deserialization should succeed");
         assert!(trace.super_instruction_count() > 0);
     }
 
@@ -2837,7 +2837,7 @@ mod tests {
 
         let outcome = engine.fuse("fn_test", &entries, None);
         assert_eq!(outcome, FusionOutcome::Formed);
-        let trace = engine.active_traces.values().next().unwrap();
+        let trace = engine.active_traces.values().next().expect("serde deserialization should succeed");
         // Should have some passthrough + some fused.
         assert!(trace.instruction_count() < entries.len());
         assert!(trace.super_instruction_count() > 0);

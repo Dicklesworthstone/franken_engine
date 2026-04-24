@@ -764,7 +764,7 @@ impl EpochInvalidationEngine {
             .specializations
             .iter_mut()
             .find(|s| &s.specialization_id == spec_id)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         spec_mut.state = FallbackState::BaselineFallback;
 
         // Build receipt.
@@ -982,7 +982,7 @@ mod tests {
             &SchemaId::from_definition(b"test-proof"),
             suffix.as_bytes(),
         )
-        .unwrap()
+        .expect("serde deserialization should succeed")
     }
 
     fn make_spec(
@@ -1025,7 +1025,7 @@ mod tests {
         let mut engine = test_engine();
         let spec = make_default_spec();
         let spec_id = spec.specialization_id.clone();
-        engine.register_specialization(spec, 1000).unwrap();
+        engine.register_specialization(spec, 1000).expect("serde deserialization should succeed");
 
         assert_eq!(engine.specializations().len(), 1);
         assert!(engine.get_specialization(&spec_id).is_some());
@@ -1036,7 +1036,7 @@ mod tests {
     fn register_duplicate_fails() {
         let mut engine = test_engine();
         let spec = make_default_spec();
-        engine.register_specialization(spec.clone(), 1000).unwrap();
+        engine.register_specialization(spec.clone(), 1000).expect("serde deserialization should succeed");
 
         let err = engine.register_specialization(spec, 2000).unwrap_err();
         assert!(matches!(
@@ -1085,7 +1085,7 @@ mod tests {
     fn epoch_advance_invalidates_expired_specializations() {
         let mut engine = test_engine();
         let spec = make_default_spec(); // valid 90..=110
-        engine.register_specialization(spec, 1000).unwrap();
+        engine.register_specialization(spec, 1000).expect("serde deserialization should succeed");
 
         assert_eq!(engine.active_count(), 1);
         assert_eq!(engine.fallback_count(), 0);
@@ -1101,7 +1101,7 @@ mod tests {
     fn epoch_advance_preserves_valid_specializations() {
         let mut engine = test_engine();
         let spec = make_default_spec(); // valid 90..=110
-        engine.register_specialization(spec, 1000).unwrap();
+        engine.register_specialization(spec, 1000).expect("serde deserialization should succeed");
 
         // Stay within validity window.
         let invalidated = engine.advance_epoch(SecurityEpoch::from_raw(105), 2000);
@@ -1126,8 +1126,8 @@ mod tests {
             "policy-001",
             "long-lived",
         );
-        engine.register_specialization(s1, 1000).unwrap();
-        engine.register_specialization(s2, 1000).unwrap();
+        engine.register_specialization(s1, 1000).expect("serde deserialization should succeed");
+        engine.register_specialization(s2, 1000).expect("serde deserialization should succeed");
 
         // Epoch 110: s1 expires (valid_until=105), s2 survives (valid_until=120).
         let invalidated = engine.advance_epoch(SecurityEpoch::from_raw(110), 2000);
@@ -1148,7 +1148,7 @@ mod tests {
                 "policy-001",
                 &format!("spec-{i}"),
             );
-            engine.register_specialization(spec, 1000).unwrap();
+            engine.register_specialization(spec, 1000).expect("serde deserialization should succeed");
         }
 
         let invalidated = engine.advance_epoch(SecurityEpoch::from_raw(101), 2000);
@@ -1172,7 +1172,7 @@ mod tests {
         let mut engine = test_engine();
         let spec = make_default_spec();
         let spec_id = spec.specialization_id.clone();
-        engine.register_specialization(spec, 1000).unwrap();
+        engine.register_specialization(spec, 1000).expect("serde deserialization should succeed");
 
         let receipt = engine
             .invalidate_specialization(
@@ -1182,7 +1182,7 @@ mod tests {
                 },
                 2000,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert_eq!(receipt.specialization_id, spec_id);
         assert!(!receipt.signature.is_empty());
@@ -1214,7 +1214,7 @@ mod tests {
         let mut engine = test_engine();
         let spec = make_default_spec();
         let spec_id = spec.specialization_id.clone();
-        engine.register_specialization(spec, 1000).unwrap();
+        engine.register_specialization(spec, 1000).expect("serde deserialization should succeed");
 
         engine
             .invalidate_specialization(
@@ -1224,7 +1224,7 @@ mod tests {
                 },
                 2000,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let err = engine
             .invalidate_specialization(
@@ -1258,8 +1258,8 @@ mod tests {
             activated_epoch: SecurityEpoch::from_raw(90),
             activated_at_ns: 1000,
         })
-        .unwrap();
-        engine.register_specialization(spec, 1000).unwrap();
+        .expect("serde deserialization should succeed");
+        engine.register_specialization(spec, 1000).expect("serde deserialization should succeed");
 
         let count = engine.invalidate_by_proof(&proof_id, 2000);
         assert_eq!(count, 1);
@@ -1292,9 +1292,9 @@ mod tests {
             "policy-B",
             "pb-1",
         );
-        engine.register_specialization(s1, 1000).unwrap();
-        engine.register_specialization(s2, 1000).unwrap();
-        engine.register_specialization(s3, 1000).unwrap();
+        engine.register_specialization(s1, 1000).expect("serde deserialization should succeed");
+        engine.register_specialization(s2, 1000).expect("serde deserialization should succeed");
+        engine.register_specialization(s3, 1000).expect("serde deserialization should succeed");
 
         let count = engine.invalidate_by_policy("policy-A", 2000);
         assert_eq!(count, 2);
@@ -1308,15 +1308,15 @@ mod tests {
         let mut engine = test_engine();
         let spec = make_default_spec();
         let spec_id = spec.specialization_id.clone();
-        engine.register_specialization(spec, 1000).unwrap();
+        engine.register_specialization(spec, 1000).expect("serde deserialization should succeed");
 
         // Invalidate.
         engine.advance_epoch(SecurityEpoch::from_raw(111), 2000);
         assert_eq!(engine.fallback_count(), 1);
 
         // Begin re-specialization.
-        engine.begin_respecialization(&spec_id, 3000).unwrap();
-        let spec = engine.get_specialization(&spec_id).unwrap();
+        engine.begin_respecialization(&spec_id, 3000).expect("serde deserialization should succeed");
+        let spec = engine.get_specialization(&spec_id).expect("serde deserialization should succeed");
         assert_eq!(spec.state, FallbackState::ReSpecializing);
 
         // Complete re-specialization with new bounds.
@@ -1333,9 +1333,9 @@ mod tests {
                 new_proofs,
                 4000,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
-        let spec = engine.get_specialization(&spec_id).unwrap();
+        let spec = engine.get_specialization(&spec_id).expect("serde deserialization should succeed");
         assert_eq!(spec.state, FallbackState::Active);
         assert_eq!(spec.valid_from_epoch, SecurityEpoch::from_raw(111));
         assert_eq!(spec.valid_until_epoch, SecurityEpoch::from_raw(130));
@@ -1346,7 +1346,7 @@ mod tests {
         let mut engine = test_engine();
         let spec = make_default_spec();
         let spec_id = spec.specialization_id.clone();
-        engine.register_specialization(spec, 1000).unwrap();
+        engine.register_specialization(spec, 1000).expect("serde deserialization should succeed");
 
         // Active spec can't begin re-specialization.
         let err = engine.begin_respecialization(&spec_id, 2000).unwrap_err();
@@ -1358,7 +1358,7 @@ mod tests {
         let mut engine = test_engine();
         let spec = make_default_spec();
         let spec_id = spec.specialization_id.clone();
-        engine.register_specialization(spec, 1000).unwrap();
+        engine.register_specialization(spec, 1000).expect("serde deserialization should succeed");
 
         // Invalidate but don't begin re-specialization.
         engine.advance_epoch(SecurityEpoch::from_raw(111), 2000);
@@ -1395,7 +1395,7 @@ mod tests {
             let spec_id = spec.specialization_id.clone();
             engine
                 .register_specialization(spec, 1000 + i * 100)
-                .unwrap();
+                .expect("serde deserialization should succeed");
             engine
                 .invalidate_specialization(
                     &spec_id,
@@ -1404,7 +1404,7 @@ mod tests {
                     },
                     1050 + i * 100,
                 )
-                .unwrap();
+                .expect("serde deserialization should succeed");
         }
 
         assert!(engine.is_conservative_mode());
@@ -1428,7 +1428,7 @@ mod tests {
             "damp-1",
         );
         let s1_id = s1.specialization_id.clone();
-        engine.register_specialization(s1, 100).unwrap();
+        engine.register_specialization(s1, 100).expect("serde deserialization should succeed");
         engine
             .invalidate_specialization(
                 &s1_id,
@@ -1437,7 +1437,7 @@ mod tests {
                 },
                 200,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let s2 = make_spec(
             OptimizationClass::Superinstruction,
@@ -1447,7 +1447,7 @@ mod tests {
             "damp-2",
         );
         let s2_id = s2.specialization_id.clone();
-        engine.register_specialization(s2, 300).unwrap();
+        engine.register_specialization(s2, 300).expect("serde deserialization should succeed");
         engine
             .invalidate_specialization(
                 &s2_id,
@@ -1456,7 +1456,7 @@ mod tests {
                 },
                 400,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert!(engine.is_conservative_mode());
 
@@ -1469,7 +1469,7 @@ mod tests {
             "damp-3",
         );
         let s3_id = s3.specialization_id.clone();
-        engine.register_specialization(s3, 5000).unwrap();
+        engine.register_specialization(s3, 5000).expect("serde deserialization should succeed");
         engine
             .invalidate_specialization(
                 &s3_id,
@@ -1478,7 +1478,7 @@ mod tests {
                 },
                 5100,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Old timestamps pruned; only 5100 remains < threshold of 2.
         assert!(!engine.is_conservative_mode());
@@ -1492,7 +1492,7 @@ mod tests {
         let mut engine = test_engine();
         let spec = make_default_spec();
         let spec_id = spec.specialization_id.clone();
-        engine.register_specialization(spec, 1000).unwrap();
+        engine.register_specialization(spec, 1000).expect("serde deserialization should succeed");
 
         engine.advance_epoch(SecurityEpoch::from_raw(111), 2000);
 
@@ -1510,7 +1510,7 @@ mod tests {
         let spec = make_default_spec();
         let expected_rollback = spec.rollback_token_hash;
         let expected_baseline = spec.baseline_ir_hash;
-        engine.register_specialization(spec, 1000).unwrap();
+        engine.register_specialization(spec, 1000).expect("serde deserialization should succeed");
 
         engine.advance_epoch(SecurityEpoch::from_raw(111), 2000);
 
@@ -1525,7 +1525,7 @@ mod tests {
     fn events_have_monotonic_sequence() {
         let mut engine = test_engine();
         let spec = make_default_spec();
-        engine.register_specialization(spec, 1000).unwrap();
+        engine.register_specialization(spec, 1000).expect("serde deserialization should succeed");
         engine.advance_epoch(SecurityEpoch::from_raw(111), 2000);
 
         for (i, event) in engine.events().iter().enumerate() {
@@ -1537,7 +1537,7 @@ mod tests {
     fn epoch_transition_emits_correct_events() {
         let mut engine = test_engine();
         let spec = make_default_spec();
-        engine.register_specialization(spec, 1000).unwrap();
+        engine.register_specialization(spec, 1000).expect("serde deserialization should succeed");
         engine.advance_epoch(SecurityEpoch::from_raw(111), 2000);
 
         let event_types: Vec<_> = engine
@@ -1583,8 +1583,8 @@ mod tests {
             "policy-001",
             "class-si",
         );
-        engine.register_specialization(s1, 1000).unwrap();
-        engine.register_specialization(s2, 1000).unwrap();
+        engine.register_specialization(s1, 1000).expect("serde deserialization should succeed");
+        engine.register_specialization(s2, 1000).expect("serde deserialization should succeed");
 
         let trace_specs = engine.specializations_by_class(&OptimizationClass::TraceSpecialization);
         assert_eq!(trace_specs.len(), 1);
@@ -1609,8 +1609,8 @@ mod tests {
             "policy-001",
             "state-2",
         );
-        engine.register_specialization(s1, 1000).unwrap();
-        engine.register_specialization(s2, 1000).unwrap();
+        engine.register_specialization(s1, 1000).expect("serde deserialization should succeed");
+        engine.register_specialization(s2, 1000).expect("serde deserialization should succeed");
 
         // Invalidate s1 via epoch advance.
         engine.advance_epoch(SecurityEpoch::from_raw(105), 2000);
@@ -1701,8 +1701,8 @@ mod tests {
     #[test]
     fn specialization_serde_roundtrip() {
         let spec = make_default_spec();
-        let json = serde_json::to_string(&spec).unwrap();
-        let restored: EpochBoundSpecialization = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&spec).expect("serde deserialization should succeed");
+        let restored: EpochBoundSpecialization = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(spec, restored);
     }
 
@@ -1711,7 +1711,7 @@ mod tests {
         let mut engine = test_engine();
         let spec = make_default_spec();
         let spec_id = spec.specialization_id.clone();
-        engine.register_specialization(spec, 1000).unwrap();
+        engine.register_specialization(spec, 1000).expect("serde deserialization should succeed");
 
         let receipt = engine
             .invalidate_specialization(
@@ -1721,10 +1721,10 @@ mod tests {
                 },
                 2000,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
-        let json = serde_json::to_string(&receipt).unwrap();
-        let restored: InvalidationReceipt = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
+        let restored: InvalidationReceipt = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(receipt, restored);
     }
 
@@ -1732,11 +1732,11 @@ mod tests {
     fn invalidation_event_serde_roundtrip() {
         let mut engine = test_engine();
         let spec = make_default_spec();
-        engine.register_specialization(spec, 1000).unwrap();
+        engine.register_specialization(spec, 1000).expect("serde deserialization should succeed");
 
         let event = &engine.events()[0];
-        let json = serde_json::to_string(event).unwrap();
-        let restored: InvalidationEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(event).expect("serde deserialization should succeed");
+        let restored: InvalidationEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(*event, restored);
     }
 
@@ -1744,10 +1744,10 @@ mod tests {
     fn engine_serde_roundtrip() {
         let mut engine = test_engine();
         let spec = make_default_spec();
-        engine.register_specialization(spec, 1000).unwrap();
+        engine.register_specialization(spec, 1000).expect("serde deserialization should succeed");
 
-        let json = serde_json::to_string(&engine).unwrap();
-        let restored: EpochInvalidationEngine = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&engine).expect("serde deserialization should succeed");
+        let restored: EpochInvalidationEngine = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(restored.current_epoch(), engine.current_epoch());
         assert_eq!(
             restored.specializations().len(),
@@ -1769,7 +1769,7 @@ mod tests {
                 "policy-001",
                 &format!("count-{i}"),
             );
-            engine.register_specialization(spec, 1000).unwrap();
+            engine.register_specialization(spec, 1000).expect("serde deserialization should succeed");
         }
 
         engine.advance_epoch(SecurityEpoch::from_raw(101), 2000);
@@ -1783,15 +1783,15 @@ mod tests {
         let mut engine = test_engine();
         let spec = make_default_spec();
         let spec_id = spec.specialization_id.clone();
-        engine.register_specialization(spec, 1000).unwrap();
+        engine.register_specialization(spec, 1000).expect("serde deserialization should succeed");
 
         engine.advance_epoch(SecurityEpoch::from_raw(111), 2000);
 
         // Simulate crash/restart via serde roundtrip.
-        let json = serde_json::to_string(&engine).unwrap();
-        let restored: EpochInvalidationEngine = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&engine).expect("serde deserialization should succeed");
+        let restored: EpochInvalidationEngine = serde_json::from_str(&json).expect("serde deserialization should succeed");
 
-        let spec = restored.get_specialization(&spec_id).unwrap();
+        let spec = restored.get_specialization(&spec_id).expect("serde deserialization should succeed");
         assert_eq!(spec.state, FallbackState::BaselineFallback);
     }
 
@@ -1851,8 +1851,8 @@ mod tests {
             },
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let restored: InvalidationReason = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let restored: InvalidationReason = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, restored);
         }
     }
@@ -1866,8 +1866,8 @@ mod tests {
             FallbackState::ReSpecializing,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let restored: FallbackState = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let restored: FallbackState = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, restored);
         }
     }
@@ -1900,8 +1900,8 @@ mod tests {
             },
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let restored: InvalidationError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let restored: InvalidationError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, restored);
         }
     }
@@ -1946,8 +1946,8 @@ mod tests {
             },
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let restored: InvalidationEventType = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let restored: InvalidationEventType = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, restored);
         }
     }
@@ -1955,16 +1955,16 @@ mod tests {
     #[test]
     fn churn_config_serde_roundtrip() {
         let cfg = ChurnConfig::default();
-        let json = serde_json::to_string(&cfg).unwrap();
-        let restored: ChurnConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
+        let restored: ChurnConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cfg, restored);
     }
 
     #[test]
     fn invalidation_config_serde_roundtrip() {
         let cfg = test_config();
-        let json = serde_json::to_string(&cfg).unwrap();
-        let restored: InvalidationConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
+        let restored: InvalidationConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cfg, restored);
     }
 
@@ -1983,8 +1983,8 @@ mod tests {
             activated_epoch: SecurityEpoch::from_raw(10),
             activated_at_ns: 500,
         };
-        let json = serde_json::to_string(&input).unwrap();
-        let restored: SpecializationInput = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
+        let restored: SpecializationInput = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(input.optimization_class, restored.optimization_class);
         assert_eq!(input.valid_from_epoch, restored.valid_from_epoch);
         assert_eq!(input.linked_policy_id, restored.linked_policy_id);
@@ -2053,7 +2053,7 @@ mod tests {
     fn invalidate_by_proof_no_match_returns_zero() {
         let mut engine = test_engine();
         let spec = make_default_spec();
-        engine.register_specialization(spec, 1000).unwrap();
+        engine.register_specialization(spec, 1000).expect("serde deserialization should succeed");
 
         let unrelated = make_proof_id("unrelated-proof");
         let count = engine.invalidate_by_proof(&unrelated, 2000);
@@ -2065,7 +2065,7 @@ mod tests {
     fn invalidate_by_policy_no_match_returns_zero() {
         let mut engine = test_engine();
         let spec = make_default_spec(); // policy-001
-        engine.register_specialization(spec, 1000).unwrap();
+        engine.register_specialization(spec, 1000).expect("serde deserialization should succeed");
 
         let count = engine.invalidate_by_policy("policy-nonexistent", 2000);
         assert_eq!(count, 0);
@@ -2111,11 +2111,11 @@ mod tests {
         let mut engine = test_engine();
         let spec = make_default_spec();
         let spec_id = spec.specialization_id.clone();
-        engine.register_specialization(spec, 1000).unwrap();
+        engine.register_specialization(spec, 1000).expect("serde deserialization should succeed");
 
         // Invalidate then begin re-specialization.
         engine.advance_epoch(SecurityEpoch::from_raw(111), 2000);
-        engine.begin_respecialization(&spec_id, 3000).unwrap();
+        engine.begin_respecialization(&spec_id, 3000).expect("serde deserialization should succeed");
 
         // Inverted range.
         let err = engine
@@ -2279,7 +2279,7 @@ mod tests {
                 &format!("churn-evt-{i}"),
             );
             let sid = spec.specialization_id.clone();
-            engine.register_specialization(spec, 1000 + i * 10).unwrap();
+            engine.register_specialization(spec, 1000 + i * 10).expect("serde deserialization should succeed");
             engine
                 .invalidate_specialization(
                     &sid,
@@ -2288,7 +2288,7 @@ mod tests {
                     },
                     1005 + i * 10,
                 )
-                .unwrap();
+                .expect("serde deserialization should succeed");
         }
 
         let has_churn_activated = engine.events().iter().any(|e| {
@@ -2317,7 +2317,7 @@ mod tests {
                 &format!("deact-{i}"),
             );
             let sid = spec.specialization_id.clone();
-            engine.register_specialization(spec, 100 + i * 10).unwrap();
+            engine.register_specialization(spec, 100 + i * 10).expect("serde deserialization should succeed");
             engine
                 .invalidate_specialization(
                     &sid,
@@ -2326,7 +2326,7 @@ mod tests {
                     },
                     200 + i * 10,
                 )
-                .unwrap();
+                .expect("serde deserialization should succeed");
         }
         assert!(engine.is_conservative_mode());
 
@@ -2339,7 +2339,7 @@ mod tests {
             "deact-late",
         );
         let s3_id = s3.specialization_id.clone();
-        engine.register_specialization(s3, 50_000).unwrap();
+        engine.register_specialization(s3, 50_000).expect("serde deserialization should succeed");
         engine
             .invalidate_specialization(
                 &s3_id,
@@ -2348,7 +2348,7 @@ mod tests {
                 },
                 50_100,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(!engine.is_conservative_mode());
 
         let has_churn_deactivated = engine.events().iter().any(|e| {
@@ -2383,8 +2383,8 @@ mod tests {
                 activated_epoch: SecurityEpoch::from_raw(90),
                 activated_at_ns: 1000,
             })
-            .unwrap();
-            engine.register_specialization(spec, 1000).unwrap();
+            .expect("serde deserialization should succeed");
+            engine.register_specialization(spec, 1000).expect("serde deserialization should succeed");
         }
 
         let count = engine.invalidate_by_proof(&shared_proof, 2000);
@@ -2417,7 +2417,7 @@ mod tests {
                 "shared-policy",
                 &format!("pol-multi-{i}"),
             );
-            engine.register_specialization(spec, 1000).unwrap();
+            engine.register_specialization(spec, 1000).expect("serde deserialization should succeed");
         }
 
         let count = engine.invalidate_by_policy("shared-policy", 2000);
@@ -2453,10 +2453,10 @@ mod tests {
         let mut engine = test_engine();
         let spec = make_default_spec();
         let spec_id = spec.specialization_id.clone();
-        engine.register_specialization(spec, 1000).unwrap();
+        engine.register_specialization(spec, 1000).expect("serde deserialization should succeed");
 
         engine.advance_epoch(SecurityEpoch::from_raw(111), 2000);
-        engine.begin_respecialization(&spec_id, 3000).unwrap();
+        engine.begin_respecialization(&spec_id, 3000).expect("serde deserialization should succeed");
 
         let new_proofs = {
             let mut s = BTreeSet::new();
@@ -2472,9 +2472,9 @@ mod tests {
                 new_proofs.clone(),
                 5000,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
-        let spec = engine.get_specialization(&spec_id).unwrap();
+        let spec = engine.get_specialization(&spec_id).expect("serde deserialization should succeed");
         assert_eq!(spec.state, FallbackState::Active);
         assert_eq!(spec.valid_from_epoch, SecurityEpoch::from_raw(111));
         assert_eq!(spec.valid_until_epoch, SecurityEpoch::from_raw(150));
@@ -2501,16 +2501,16 @@ mod tests {
         let spec2 = make_default_spec();
         let sid = spec1.specialization_id.clone();
 
-        e1.register_specialization(spec1, 1000).unwrap();
-        e2.register_specialization(spec2, 1000).unwrap();
+        e1.register_specialization(spec1, 1000).expect("serde deserialization should succeed");
+        e2.register_specialization(spec2, 1000).expect("serde deserialization should succeed");
 
         let reason = InvalidationReason::OperatorInvalidation {
             reason: "test".to_string(),
         };
         let r1 = e1
             .invalidate_specialization(&sid, reason.clone(), 2000)
-            .unwrap();
-        let r2 = e2.invalidate_specialization(&sid, reason, 2000).unwrap();
+            .expect("serde deserialization should succeed");
+        let r2 = e2.invalidate_specialization(&sid, reason, 2000).expect("serde deserialization should succeed");
 
         assert_ne!(r1.signature, r2.signature);
     }
@@ -2588,8 +2588,8 @@ mod tests {
     #[test]
     fn epoch_bound_specialization_serde_round_trip() {
         let spec = make_default_spec();
-        let json = serde_json::to_string(&spec).unwrap();
-        let back: EpochBoundSpecialization = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&spec).expect("serde deserialization should succeed");
+        let back: EpochBoundSpecialization = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(spec, back);
     }
 
@@ -2598,16 +2598,16 @@ mod tests {
         let mut engine = test_engine();
         let spec = make_default_spec();
         let sid = spec.specialization_id.clone();
-        engine.register_specialization(spec, 1000).unwrap();
+        engine.register_specialization(spec, 1000).expect("serde deserialization should succeed");
 
         let reason = InvalidationReason::OperatorInvalidation {
             reason: "test".into(),
         };
         let receipt = engine
             .invalidate_specialization(&sid, reason, 2000)
-            .unwrap();
-        let json = serde_json::to_string(&receipt).unwrap();
-        let back: InvalidationReceipt = serde_json::from_str(&json).unwrap();
+            .expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
+        let back: InvalidationReceipt = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(receipt, back);
     }
 
@@ -2615,13 +2615,13 @@ mod tests {
     fn invalidation_event_from_registration_serde() {
         let mut engine = test_engine();
         let spec = make_default_spec();
-        engine.register_specialization(spec, 1000).unwrap();
+        engine.register_specialization(spec, 1000).expect("serde deserialization should succeed");
 
         let events = engine.events();
         assert!(!events.is_empty());
         let event = &events[0];
-        let json = serde_json::to_string(event).unwrap();
-        let back: InvalidationEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(event).expect("serde deserialization should succeed");
+        let back: InvalidationEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(*event, back);
     }
 
@@ -2648,10 +2648,10 @@ mod tests {
     fn engine_serde_round_trip() {
         let mut engine = test_engine();
         let spec = make_default_spec();
-        engine.register_specialization(spec, 1000).unwrap();
+        engine.register_specialization(spec, 1000).expect("serde deserialization should succeed");
 
-        let json = serde_json::to_string(&engine).unwrap();
-        let back: EpochInvalidationEngine = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&engine).expect("serde deserialization should succeed");
+        let back: EpochInvalidationEngine = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.current_epoch(), engine.current_epoch());
         assert_eq!(back.specializations().len(), engine.specializations().len());
         assert_eq!(back.active_count(), engine.active_count());
@@ -2734,8 +2734,8 @@ mod tests {
             "policy-001",
             "seq-long",
         );
-        engine.register_specialization(s1, 1000).unwrap();
-        engine.register_specialization(s2, 1000).unwrap();
+        engine.register_specialization(s1, 1000).expect("serde deserialization should succeed");
+        engine.register_specialization(s2, 1000).expect("serde deserialization should succeed");
 
         // First advance: s1 expires (valid_until=105), s2 survives.
         let inv1 = engine.advance_epoch(SecurityEpoch::from_raw(110), 2000);
@@ -2768,7 +2768,7 @@ mod tests {
             activated_epoch: SecurityEpoch::from_raw(90),
             activated_at_ns: 1000,
         })
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let s1_id = s1.specialization_id.clone();
 
         let s2 = create_specialization(SpecializationInput {
@@ -2782,10 +2782,10 @@ mod tests {
             activated_epoch: SecurityEpoch::from_raw(90),
             activated_at_ns: 1000,
         })
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
-        engine.register_specialization(s1, 1000).unwrap();
-        engine.register_specialization(s2, 1000).unwrap();
+        engine.register_specialization(s1, 1000).expect("serde deserialization should succeed");
+        engine.register_specialization(s2, 1000).expect("serde deserialization should succeed");
 
         // Manually invalidate s1.
         engine
@@ -2796,7 +2796,7 @@ mod tests {
                 },
                 1500,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(engine.fallback_count(), 1);
 
         // invalidate_by_proof should only hit s2 (the still-active one).
@@ -2811,10 +2811,10 @@ mod tests {
         let mut engine = test_engine();
         let spec = make_default_spec();
         let spec_id = spec.specialization_id.clone();
-        engine.register_specialization(spec, 1000).unwrap();
+        engine.register_specialization(spec, 1000).expect("serde deserialization should succeed");
 
         engine.advance_epoch(SecurityEpoch::from_raw(111), 2000);
-        engine.begin_respecialization(&spec_id, 3000).unwrap();
+        engine.begin_respecialization(&spec_id, 3000).expect("serde deserialization should succeed");
 
         let has_respec = engine.events().iter().any(|e| {
             matches!(
@@ -2831,13 +2831,13 @@ mod tests {
         let mut engine = test_engine();
         let spec = make_default_spec();
         let spec_id = spec.specialization_id.clone();
-        engine.register_specialization(spec, 1000).unwrap();
+        engine.register_specialization(spec, 1000).expect("serde deserialization should succeed");
 
         // Invalidate then begin re-specialization.
         engine.advance_epoch(SecurityEpoch::from_raw(111), 2000);
-        engine.begin_respecialization(&spec_id, 3000).unwrap();
+        engine.begin_respecialization(&spec_id, 3000).expect("serde deserialization should succeed");
         assert_eq!(
-            engine.get_specialization(&spec_id).unwrap().state,
+            engine.get_specialization(&spec_id).expect("serde deserialization should succeed").state,
             FallbackState::ReSpecializing,
         );
 
@@ -2851,10 +2851,10 @@ mod tests {
                 },
                 4000,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(receipt.specialization_id, spec_id);
         assert_eq!(
-            engine.get_specialization(&spec_id).unwrap().state,
+            engine.get_specialization(&spec_id).expect("serde deserialization should succeed").state,
             FallbackState::BaselineFallback,
         );
     }
@@ -2869,7 +2869,7 @@ mod tests {
             "policy-001",
             "long-valid",
         );
-        engine.register_specialization(spec, 1000).unwrap();
+        engine.register_specialization(spec, 1000).expect("serde deserialization should succeed");
 
         // Advance within validity — 0 invalidated.
         let count = engine.advance_epoch(SecurityEpoch::from_raw(105), 2000);
@@ -2899,11 +2899,11 @@ mod tests {
             "cycle",
         );
         let spec_id = spec.specialization_id.clone();
-        engine.register_specialization(spec, 1000).unwrap();
+        engine.register_specialization(spec, 1000).expect("serde deserialization should succeed");
 
         // Cycle 1: invalidate -> respec.
         engine.advance_epoch(SecurityEpoch::from_raw(106), 2000);
-        engine.begin_respecialization(&spec_id, 3000).unwrap();
+        engine.begin_respecialization(&spec_id, 3000).expect("serde deserialization should succeed");
         engine
             .complete_respecialization(
                 &spec_id,
@@ -2912,19 +2912,19 @@ mod tests {
                 BTreeSet::new(),
                 4000,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(
-            engine.get_specialization(&spec_id).unwrap().state,
+            engine.get_specialization(&spec_id).expect("serde deserialization should succeed").state,
             FallbackState::Active,
         );
 
         // Cycle 2: invalidate again -> respec again.
         engine.advance_epoch(SecurityEpoch::from_raw(120), 5000);
         assert_eq!(
-            engine.get_specialization(&spec_id).unwrap().state,
+            engine.get_specialization(&spec_id).expect("serde deserialization should succeed").state,
             FallbackState::BaselineFallback,
         );
-        engine.begin_respecialization(&spec_id, 6000).unwrap();
+        engine.begin_respecialization(&spec_id, 6000).expect("serde deserialization should succeed");
         engine
             .complete_respecialization(
                 &spec_id,
@@ -2933,9 +2933,9 @@ mod tests {
                 BTreeSet::new(),
                 7000,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(
-            engine.get_specialization(&spec_id).unwrap().state,
+            engine.get_specialization(&spec_id).expect("serde deserialization should succeed").state,
             FallbackState::Active,
         );
         assert_eq!(engine.total_invalidations(), 2);
@@ -2955,18 +2955,18 @@ mod tests {
         let spec2 = make_default_spec();
         let sid = spec1.specialization_id.clone();
 
-        e1.register_specialization(spec1, 1000).unwrap();
-        e2.register_specialization(spec2, 1000).unwrap();
+        e1.register_specialization(spec1, 1000).expect("serde deserialization should succeed");
+        e2.register_specialization(spec2, 1000).expect("serde deserialization should succeed");
 
         let reason = InvalidationReason::OperatorInvalidation {
             reason: "ts-test".into(),
         };
         let r1 = e1
             .invalidate_specialization(&sid, reason.clone(), 2000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let r2 = e2
             .invalidate_specialization(&sid, reason, 3000) // different timestamp
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Receipt IDs should differ because timestamp is in the derivation input.
         assert_ne!(r1.receipt_id, r2.receipt_id);
@@ -2990,8 +2990,8 @@ mod tests {
             "pol-shared",
             "pol-skip-2",
         );
-        engine.register_specialization(s1, 1000).unwrap();
-        engine.register_specialization(s2, 1000).unwrap();
+        engine.register_specialization(s1, 1000).expect("serde deserialization should succeed");
+        engine.register_specialization(s2, 1000).expect("serde deserialization should succeed");
 
         // Manually invalidate s1.
         engine
@@ -3002,7 +3002,7 @@ mod tests {
                 },
                 1500,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // invalidate_by_policy should only hit s2.
         let count = engine.invalidate_by_policy("pol-shared", 2000);
@@ -3034,7 +3034,7 @@ mod tests {
                 &format!("p{i}"),
                 &format!("churn-canary-{i}"),
             );
-            engine.register_specialization(spec, 1000 + i).unwrap();
+            engine.register_specialization(spec, 1000 + i).expect("serde deserialization should succeed");
         }
         for i in 0..12 {
             let id = engine.specializations()[i].specialization_id.clone();
@@ -3091,7 +3091,7 @@ mod tests {
         assert!(engine.receipts().is_empty());
         let spec = make_default_spec();
         let spec_id = spec.specialization_id.clone();
-        engine.register_specialization(spec, 1000).unwrap();
+        engine.register_specialization(spec, 1000).expect("serde deserialization should succeed");
         engine
             .invalidate_specialization(
                 &spec_id,
@@ -3100,7 +3100,7 @@ mod tests {
                 },
                 2000,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(engine.receipts().len(), 1);
         assert_eq!(engine.receipts()[0].specialization_id, spec_id);
     }
@@ -3110,7 +3110,7 @@ mod tests {
         let mut engine = test_engine();
         assert!(engine.events().is_empty());
         let spec = make_default_spec();
-        engine.register_specialization(spec, 1000).unwrap();
+        engine.register_specialization(spec, 1000).expect("serde deserialization should succeed");
         assert_eq!(engine.events().len(), 1);
         if let InvalidationEventType::SpecializationRegistered { .. } =
             &engine.events()[0].event_type
@@ -3132,7 +3132,7 @@ mod tests {
         let mut engine = test_engine();
         let spec = make_default_spec();
         let spec_id = spec.specialization_id.clone();
-        engine.register_specialization(spec, 1000).unwrap();
+        engine.register_specialization(spec, 1000).expect("serde deserialization should succeed");
         let err = engine.begin_respecialization(&spec_id, 2000).unwrap_err();
         match err {
             InvalidationError::InvalidState {
@@ -3150,7 +3150,7 @@ mod tests {
         let mut engine = test_engine();
         let spec = make_default_spec();
         let spec_id = spec.specialization_id.clone();
-        engine.register_specialization(spec, 1000).unwrap();
+        engine.register_specialization(spec, 1000).expect("serde deserialization should succeed");
         engine
             .invalidate_specialization(
                 &spec_id,
@@ -3159,7 +3159,7 @@ mod tests {
                 },
                 2000,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let err = engine
             .invalidate_specialization(
                 &spec_id,
@@ -3185,8 +3185,8 @@ mod tests {
         );
         let s1_id = s1.specialization_id.clone();
         let s2_id = s2.specialization_id.clone();
-        engine.register_specialization(s1, 1000).unwrap();
-        engine.register_specialization(s2, 1000).unwrap();
+        engine.register_specialization(s1, 1000).expect("serde deserialization should succeed");
+        engine.register_specialization(s2, 1000).expect("serde deserialization should succeed");
         // Move s1 to BaselineFallback then ReSpecializing.
         engine
             .invalidate_specialization(
@@ -3196,17 +3196,17 @@ mod tests {
                 },
                 1500,
             )
-            .unwrap();
-        engine.begin_respecialization(&s1_id, 1600).unwrap();
+            .expect("serde deserialization should succeed");
+        engine.begin_respecialization(&s1_id, 1600).expect("serde deserialization should succeed");
         // s1 is ReSpecializing, s2 is Active.
         // Advance epoch past 100 — should only invalidate s2.
         let count = engine.advance_epoch(SecurityEpoch::from_raw(105), 2000);
         assert_eq!(count, 1);
         // s2 should be BaselineFallback.
-        let s2_state = engine.get_specialization(&s2_id).unwrap().state;
+        let s2_state = engine.get_specialization(&s2_id).expect("serde deserialization should succeed").state;
         assert_eq!(s2_state, FallbackState::BaselineFallback);
         // s1 should still be ReSpecializing.
-        let s1_state = engine.get_specialization(&s1_id).unwrap().state;
+        let s1_state = engine.get_specialization(&s1_id).expect("serde deserialization should succeed").state;
         assert_eq!(s1_state, FallbackState::ReSpecializing);
     }
 
@@ -3241,8 +3241,8 @@ mod tests {
         let spec = make_default_spec();
         let spec_id = spec.specialization_id.clone();
         let class = spec.optimization_class.clone();
-        engine.register_specialization(spec, 1000).unwrap();
-        let found = engine.get_specialization(&spec_id).unwrap();
+        engine.register_specialization(spec, 1000).expect("serde deserialization should succeed");
+        let found = engine.get_specialization(&spec_id).expect("serde deserialization should succeed");
         assert_eq!(found.optimization_class, class);
     }
 
@@ -3257,8 +3257,8 @@ mod tests {
             "p2",
             "seq2",
         );
-        engine.register_specialization(s1, 100).unwrap();
-        engine.register_specialization(s2, 200).unwrap();
+        engine.register_specialization(s1, 100).expect("serde deserialization should succeed");
+        engine.register_specialization(s2, 200).expect("serde deserialization should succeed");
         engine.advance_epoch(SecurityEpoch::from_raw(115), 300);
         let seqs: Vec<u64> = engine.events().iter().map(|e| e.seq).collect();
         for window in seqs.windows(2) {
@@ -3276,13 +3276,13 @@ mod tests {
         let mut engine = test_engine();
         let spec = make_default_spec();
         let spec_id = spec.specialization_id.clone();
-        engine.register_specialization(spec, 1000).unwrap();
+        engine.register_specialization(spec, 1000).expect("serde deserialization should succeed");
         let reason = InvalidationReason::KeyRotation {
             key_id: "k42".into(),
         };
         let receipt = engine
             .invalidate_specialization(&spec_id, reason.clone(), 2000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(receipt.reason, reason);
     }
 
@@ -3321,8 +3321,8 @@ mod tests {
             extended_canary_multiplier: 3_000_000,
             cooldown_ns: 15_000_000_000,
         };
-        let json = serde_json::to_string(&cfg).unwrap();
-        let deser: ChurnConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
+        let deser: ChurnConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(deser, cfg);
     }
 
@@ -3344,7 +3344,7 @@ mod tests {
                 &format!("p{i}"),
                 &format!("all-{i}"),
             );
-            engine.register_specialization(spec, 1000 + i).unwrap();
+            engine.register_specialization(spec, 1000 + i).expect("serde deserialization should succeed");
         }
         assert_eq!(engine.specializations().len(), 5);
         assert_eq!(engine.active_count(), 5);
@@ -3363,7 +3363,7 @@ mod tests {
                 &format!("p{i}"),
                 &format!("serde-cons-{i}"),
             );
-            engine.register_specialization(spec, 1000).unwrap();
+            engine.register_specialization(spec, 1000).expect("serde deserialization should succeed");
         }
         for i in 0..11 {
             let id = engine.specializations()[i].specialization_id.clone();
@@ -3379,8 +3379,8 @@ mod tests {
         let total = engine.total_invalidations();
         assert!(total >= 11);
 
-        let json = serde_json::to_string(&engine).unwrap();
-        let restored: EpochInvalidationEngine = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&engine).expect("serde deserialization should succeed");
+        let restored: EpochInvalidationEngine = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(
             restored.is_conservative_mode(),
             engine.is_conservative_mode()
@@ -3411,8 +3411,8 @@ mod tests {
             activated_epoch: SecurityEpoch::from_raw(90),
             activated_at_ns: 1000,
         })
-        .unwrap();
-        engine.register_specialization(spec, 1000).unwrap();
+        .expect("serde deserialization should succeed");
+        engine.register_specialization(spec, 1000).expect("serde deserialization should succeed");
         // Invalidation by proof_a should hit the spec.
         let count = engine.invalidate_by_proof(&proof_a, 2000);
         assert_eq!(count, 1);
@@ -3435,7 +3435,7 @@ mod tests {
         // create_specialization itself doesn't validate epoch range,
         // but register_specialization does. Let's verify the spec is created.
         // Actually, create_specialization doesn't validate. Let's register it.
-        let spec = result.unwrap();
+        let spec = result.expect("serde deserialization should succeed");
         let mut engine = test_engine();
         let err = engine.register_specialization(spec, 1000).unwrap_err();
         assert!(matches!(err, InvalidationError::InvalidEpochRange { .. }));
@@ -3446,7 +3446,7 @@ mod tests {
         let mut engine = test_engine();
         let spec = make_default_spec();
         let spec_id = spec.specialization_id.clone();
-        engine.register_specialization(spec, 1000).unwrap();
+        engine.register_specialization(spec, 1000).expect("serde deserialization should succeed");
         let err = engine
             .complete_respecialization(
                 &spec_id,
@@ -3471,7 +3471,7 @@ mod tests {
     fn advance_epoch_emits_transition_but_no_bulk_when_nothing_invalidated() {
         let mut engine = test_engine();
         let spec = make_spec(OptimizationClass::Superinstruction, 90, 200, "p", "wide");
-        engine.register_specialization(spec, 1000).unwrap();
+        engine.register_specialization(spec, 1000).expect("serde deserialization should succeed");
         let events_before = engine.events().len();
         let count = engine.advance_epoch(SecurityEpoch::from_raw(105), 2000);
         assert_eq!(count, 0);
@@ -3496,7 +3496,7 @@ mod tests {
                 &format!("p{i}"),
                 &format!("total-{i}"),
             );
-            engine.register_specialization(spec, 1000).unwrap();
+            engine.register_specialization(spec, 1000).expect("serde deserialization should succeed");
         }
         for i in 0..3 {
             let id = engine.specializations()[i].specialization_id.clone();
@@ -3508,7 +3508,7 @@ mod tests {
                     },
                     2000 + i as u64,
                 )
-                .unwrap();
+                .expect("serde deserialization should succeed");
         }
         assert_eq!(engine.total_invalidations(), 3);
     }
@@ -3580,8 +3580,8 @@ mod tests {
     #[test]
     fn invalidation_event_type_churn_dampening_deactivated_serde() {
         let evt = InvalidationEventType::ChurnDampeningDeactivated;
-        let json = serde_json::to_string(&evt).unwrap();
-        let deser: InvalidationEventType = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&evt).expect("serde deserialization should succeed");
+        let deser: InvalidationEventType = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(deser, evt);
     }
 
@@ -3592,22 +3592,22 @@ mod tests {
         let s2 = make_spec(OptimizationClass::Superinstruction, 90, 110, "p2", "sig-b");
         let s1_id = s1.specialization_id.clone();
         let s2_id = s2.specialization_id.clone();
-        engine.register_specialization(s1, 1000).unwrap();
-        engine.register_specialization(s2, 1000).unwrap();
+        engine.register_specialization(s1, 1000).expect("serde deserialization should succeed");
+        engine.register_specialization(s2, 1000).expect("serde deserialization should succeed");
         let r1 = engine
             .invalidate_specialization(
                 &s1_id,
                 InvalidationReason::OperatorInvalidation { reason: "a".into() },
                 2000,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let r2 = engine
             .invalidate_specialization(
                 &s2_id,
                 InvalidationReason::OperatorInvalidation { reason: "b".into() },
                 2000,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_ne!(r1.signature, r2.signature);
     }
 
@@ -3629,8 +3629,8 @@ mod tests {
             activated_epoch: SecurityEpoch::from_raw(50),
             activated_at_ns: 999,
         };
-        let json = serde_json::to_string(&input).unwrap();
-        let deser: SpecializationInput = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
+        let deser: SpecializationInput = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(deser.optimization_class, input.optimization_class);
         assert_eq!(deser.linked_policy_id, input.linked_policy_id);
         assert_eq!(deser.source_proof_ids.len(), 2);
@@ -3650,8 +3650,8 @@ mod tests {
                 cooldown_ns: 2_000,
             },
         };
-        let json = serde_json::to_string(&cfg).unwrap();
-        let deser: InvalidationConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
+        let deser: InvalidationConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(deser.signing_key, key);
         assert_eq!(deser.churn.threshold, 3);
     }

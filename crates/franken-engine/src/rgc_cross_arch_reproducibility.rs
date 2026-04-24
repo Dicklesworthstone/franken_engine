@@ -712,7 +712,7 @@ mod tests {
         let result = verify_cross_arch_reproducibility("test-session", 1);
         assert!(result.is_ok());
 
-        let comparison = result.unwrap();
+        let comparison = result.expect("serde deserialization should succeed");
         assert!(comparison.traces_identical);
         assert_eq!(comparison.assessment, ReproducibilityAssessment::Perfect);
     }
@@ -739,8 +739,8 @@ mod tests {
             .insert("session1".to_string(), trace);
 
         // Generate two reports with identical inputs
-        let report1 = controller.generate_report("session1").unwrap();
-        let report2 = controller.generate_report("session1").unwrap();
+        let report1 = controller.generate_report("session1").expect("serde deserialization should succeed");
+        let report2 = controller.generate_report("session1").expect("serde deserialization should succeed");
 
         // Reports should have identical object_id for reproducibility
         assert_eq!(report1.object_id, report2.object_id);
@@ -781,8 +781,8 @@ mod tests {
             .reference_traces
             .insert("session2".to_string(), trace2);
 
-        let report1 = controller.generate_report("session1").unwrap();
-        let report2 = controller.generate_report("session2").unwrap();
+        let report1 = controller.generate_report("session1").expect("serde deserialization should succeed");
+        let report2 = controller.generate_report("session2").expect("serde deserialization should succeed");
 
         // Different traces should produce different object_ids
         assert_ne!(report1.object_id, report2.object_id);
@@ -826,8 +826,8 @@ mod tests {
             .reference_traces
             .insert("config-test".to_string(), trace);
 
-        let report1 = controller1.generate_report("config-test").unwrap();
-        let report2 = controller2.generate_report("config-test").unwrap();
+        let report1 = controller1.generate_report("config-test").expect("serde deserialization should succeed");
+        let report2 = controller2.generate_report("config-test").expect("serde deserialization should succeed");
 
         // Same trace but different configs should produce different object_ids
         assert_ne!(report1.object_id, report2.object_id);
@@ -852,7 +852,7 @@ mod tests {
         let result = verify_cross_arch_reproducibility("test-session", 1);
         assert!(result.is_ok());
 
-        let comparison = result.unwrap();
+        let comparison = result.expect("serde deserialization should succeed");
         // Single iteration with identical trace should be perfect
         assert!(comparison.traces_identical);
         assert_eq!(comparison.assessment, ReproducibilityAssessment::Perfect);
@@ -867,8 +867,8 @@ mod tests {
         assert!(result_1.is_ok());
         assert!(result_3.is_ok());
 
-        let comparison_1 = result_1.unwrap();
-        let comparison_3 = result_3.unwrap();
+        let comparison_1 = result_1.expect("serde deserialization should succeed");
+        let comparison_3 = result_3.expect("serde deserialization should succeed");
 
         // Both should succeed, but multiple iterations test more scenarios
         assert!(comparison_1.traces_identical);

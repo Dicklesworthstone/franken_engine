@@ -9,9 +9,9 @@
 //! Used by: arrow_function, optional_chaining, iteration_statements, template_literal,
 //! iterator_protocol test262 conformance harnesses.
 
-use std::collections::BTreeMap;
-use serde::{Deserialize, Serialize};
 use frankenengine_engine::security_epoch::SecurityEpoch;
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 // ---------------------------------------------------------------------------
 // Common Test262 Enums and Types
@@ -82,10 +82,10 @@ pub struct Test262TestCase<Category> {
 pub struct LegacyTest262TestCase<Category> {
     pub id: String,
     pub description: String,
-    pub es_spec_section: String,  // Legacy field name
-    pub requirement_level: String,  // Legacy string type
+    pub es_spec_section: String,   // Legacy field name
+    pub requirement_level: String, // Legacy string type
     pub category: Category,
-    pub source_code: String,  // Legacy field name
+    pub source_code: String, // Legacy field name
 }
 
 /// Coverage statistics for Test262 conformance categories.
@@ -182,9 +182,15 @@ impl<Category: Serialize + Ord + Clone + std::fmt::Debug> Test262Report<Category
     pub fn generate_summary(&self) -> String {
         let mut summary = String::new();
 
-        summary.push_str(&format!("# {} Test262 Conformance Report\n\n", self.test_suite_name));
+        summary.push_str(&format!(
+            "# {} Test262 Conformance Report\n\n",
+            self.test_suite_name
+        ));
         summary.push_str(&format!("**Generated:** {}\n", self.timestamp));
-        summary.push_str(&format!("**Total Tests:** {}\n", self.statistics.total_tests));
+        summary.push_str(&format!(
+            "**Total Tests:** {}\n",
+            self.statistics.total_tests
+        ));
         summary.push_str(&format!(
             "**Pass Rate:** {:.1}%\n\n",
             self.statistics.pass_rate_millionths as f64 / 10_000.0

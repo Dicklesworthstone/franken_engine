@@ -1081,8 +1081,8 @@ mod tests {
     #[test]
     fn command_family_serde_roundtrip() {
         for fam in CommandFamily::ALL {
-            let json = serde_json::to_string(fam).unwrap();
-            let back: CommandFamily = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(fam).expect("serde deserialization should succeed");
+            let back: CommandFamily = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*fam, back);
         }
     }
@@ -1110,8 +1110,8 @@ mod tests {
     #[test]
     fn parity_status_serde_roundtrip() {
         let status = ParityStatus::ArtifactSchemaDrift;
-        let json = serde_json::to_string(&status).unwrap();
-        let back: ParityStatus = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&status).expect("serde deserialization should succeed");
+        let back: ParityStatus = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(status, back);
     }
 
@@ -1142,8 +1142,8 @@ mod tests {
         let o = ExecutionOutcome::Timeout {
             elapsed_millis: 5000,
         };
-        let json = serde_json::to_string(&o).unwrap();
-        let back: ExecutionOutcome = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&o).expect("serde deserialization should succeed");
+        let back: ExecutionOutcome = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(o, back);
     }
 
@@ -1167,7 +1167,7 @@ mod tests {
                 ParityInputLanguage::JavaScript,
                 ParityStatus::Identical,
             ))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(matrix.case_count(), 1);
         assert_eq!(matrix.covered_cell_count(), 1);
     }
@@ -1182,7 +1182,7 @@ mod tests {
                 ParityInputLanguage::JavaScript,
                 ParityStatus::Identical,
             ))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let err = matrix
             .add_case(make_case(
                 "c1",
@@ -1217,15 +1217,15 @@ mod tests {
             ParityInputLanguage::Jsx,
             ParityStatus::Identical,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_ne!(m1.content_hash(), m2.content_hash());
     }
 
     #[test]
     fn matrix_serde_roundtrip() {
         let matrix = build_seed_matrix();
-        let json = serde_json::to_string(&matrix).unwrap();
-        let back: ParityMatrix = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&matrix).expect("serde deserialization should succeed");
+        let back: ParityMatrix = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(matrix.case_count(), back.case_count());
         assert_eq!(matrix.content_hash(), back.content_hash());
     }
@@ -1288,7 +1288,7 @@ mod tests {
                 ParityInputLanguage::JavaScript,
                 ParityStatus::Identical,
             ))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let verifier = ShippedPathParityVerifier::with_defaults();
         let report = verifier.verify(&matrix);
         assert!(!report.verdict.is_pass());
@@ -1304,7 +1304,7 @@ mod tests {
                 ParityInputLanguage::JavaScript,
                 ParityStatus::SuccessFailureSplit,
             ))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let config = VerifierConfig {
             min_coverage_ratio_millionths: 0,
             required_families: BTreeSet::new(),
@@ -1321,8 +1321,8 @@ mod tests {
         let verifier = ShippedPathParityVerifier::with_defaults();
         let matrix = build_seed_matrix();
         let report = verifier.verify(&matrix);
-        let json = serde_json::to_string(&report).unwrap();
-        let back: VerificationReport = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let back: VerificationReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report.total_cases, back.total_cases);
     }
 
@@ -1497,8 +1497,8 @@ mod tests {
     #[test]
     fn config_serde_roundtrip() {
         let config = VerifierConfig::default();
-        let json = serde_json::to_string(&config).unwrap();
-        let back: VerifierConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let back: VerifierConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, back);
     }
 
@@ -1571,8 +1571,8 @@ mod tests {
     #[test]
     fn input_language_serde_roundtrip() {
         for lang in ParityInputLanguage::ALL {
-            let json = serde_json::to_string(lang).unwrap();
-            let back: ParityInputLanguage = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(lang).expect("serde deserialization should succeed");
+            let back: ParityInputLanguage = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*lang, back);
         }
     }

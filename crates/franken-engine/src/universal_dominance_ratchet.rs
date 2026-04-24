@@ -1119,7 +1119,7 @@ mod tests {
         let mut log = RatchetEventLog::new();
         let cell = make_cell(CellDomain::ColdStart, ComparisonTarget::V8Node, "fwd");
         let cell_id = cell.cell_id.clone();
-        add_cell(&mut board, &mut log, cell).unwrap();
+        add_cell(&mut board, &mut log, cell).expect("serde deserialization should succeed");
 
         assert!(
             advance_cell(
@@ -1133,7 +1133,7 @@ mod tests {
             .is_ok()
         );
 
-        let found = board.find_cell(&cell_id).unwrap();
+        let found = board.find_cell(&cell_id).expect("serde deserialization should succeed");
         assert_eq!(found.state, CellState::Claimed);
         assert_eq!(found.margin_millionths, 150_000);
         assert_eq!(found.evidence_ids, vec!["ev-1"]);
@@ -1145,7 +1145,7 @@ mod tests {
         let mut log = RatchetEventLog::new();
         let cell = make_cell(CellDomain::Throughput, ComparisonTarget::Bun, "steady");
         let cell_id = cell.cell_id.clone();
-        add_cell(&mut board, &mut log, cell).unwrap();
+        add_cell(&mut board, &mut log, cell).expect("serde deserialization should succeed");
 
         advance_cell(
             &mut board,
@@ -1155,7 +1155,7 @@ mod tests {
             100_000,
             vec!["ev-a".to_string()],
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         advance_cell(
             &mut board,
             &mut log,
@@ -1164,9 +1164,9 @@ mod tests {
             200_000,
             vec!["ev-b".to_string()],
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
-        let found = board.find_cell(&cell_id).unwrap();
+        let found = board.find_cell(&cell_id).expect("serde deserialization should succeed");
         assert_eq!(found.state, CellState::Proven);
         assert_eq!(found.margin_millionths, 200_000);
         assert_eq!(found.evidence_ids, vec!["ev-a", "ev-b"]);
@@ -1179,7 +1179,7 @@ mod tests {
         let mut log = RatchetEventLog::new();
         let cell = make_cell(CellDomain::Memory, ComparisonTarget::Deno, "footprint");
         let cell_id = cell.cell_id.clone();
-        add_cell(&mut board, &mut log, cell).unwrap();
+        add_cell(&mut board, &mut log, cell).expect("serde deserialization should succeed");
 
         advance_cell(
             &mut board,
@@ -1189,7 +1189,7 @@ mod tests {
             500_000,
             vec!["ev-x".to_string()],
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let err = advance_cell(
             &mut board,
@@ -1202,7 +1202,7 @@ mod tests {
         .unwrap_err();
         assert!(matches!(err, RatchetError::RegressionRejected { .. }));
         // Cell should remain proven
-        assert_eq!(board.find_cell(&cell_id).unwrap().state, CellState::Proven);
+        assert_eq!(board.find_cell(&cell_id).expect("serde deserialization should succeed").state, CellState::Proven);
     }
 
     #[test]
@@ -1211,7 +1211,7 @@ mod tests {
         let mut log = RatchetEventLog::new();
         let cell = make_cell(CellDomain::TailLatency, ComparisonTarget::V8Node, "p99");
         let cell_id = cell.cell_id.clone();
-        add_cell(&mut board, &mut log, cell).unwrap();
+        add_cell(&mut board, &mut log, cell).expect("serde deserialization should succeed");
 
         advance_cell(
             &mut board,
@@ -1221,7 +1221,7 @@ mod tests {
             300_000,
             vec!["ev-p".to_string()],
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let err = advance_cell(
             &mut board,
@@ -1268,7 +1268,7 @@ mod tests {
     fn reject_epoch_regression() {
         let mut board = RatchetBoard::new();
         let mut log = RatchetEventLog::new();
-        advance_epoch(&mut board, &mut log, 10).unwrap();
+        advance_epoch(&mut board, &mut log, 10).expect("serde deserialization should succeed");
         let err = advance_epoch(&mut board, &mut log, 5).unwrap_err();
         assert!(matches!(err, RatchetError::EpochRegression { .. }));
     }
@@ -1277,7 +1277,7 @@ mod tests {
     fn reject_epoch_same() {
         let mut board = RatchetBoard::new();
         let mut log = RatchetEventLog::new();
-        advance_epoch(&mut board, &mut log, 3).unwrap();
+        advance_epoch(&mut board, &mut log, 3).expect("serde deserialization should succeed");
         let err = advance_epoch(&mut board, &mut log, 3).unwrap_err();
         assert!(matches!(err, RatchetError::EpochRegression { .. }));
     }
@@ -1305,7 +1305,7 @@ mod tests {
         );
         assert_eq!(ledger.open_count(), 0);
         assert_eq!(ledger.closed_count(), 1);
-        let entry = ledger.find_gap("gap-1").unwrap();
+        let entry = ledger.find_gap("gap-1").expect("serde deserialization should succeed");
         assert_eq!(entry.state, GapState::Closed);
         assert_eq!(entry.resolution, Some(GapResolution::ProvenOnBoard));
     }
@@ -1316,7 +1316,7 @@ mod tests {
         let mut log = RatchetEventLog::new();
         let gap1 = make_gap("gap-dup", CellDomain::Memory, GapKind::PartiallyExplored);
         let gap2 = make_gap("gap-dup", CellDomain::Memory, GapKind::Unknown);
-        register_gap(&mut ledger, &mut log, gap1).unwrap();
+        register_gap(&mut ledger, &mut log, gap1).expect("serde deserialization should succeed");
         let err = register_gap(&mut ledger, &mut log, gap2).unwrap_err();
         assert!(matches!(err, RatchetError::DuplicateGap { .. }));
     }
@@ -1341,7 +1341,7 @@ mod tests {
         let mut ledger = FrontierGapLedger::new();
         let mut log = RatchetEventLog::new();
         let gap = make_gap("gap-2", CellDomain::Throughput, GapKind::KnownDeficient);
-        register_gap(&mut ledger, &mut log, gap).unwrap();
+        register_gap(&mut ledger, &mut log, gap).expect("serde deserialization should succeed");
         close_gap(
             &mut ledger,
             &mut log,
@@ -1349,7 +1349,7 @@ mod tests {
             GapResolution::SubsumedByOther,
             1,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let err = close_gap(
             &mut ledger,
             &mut log,
@@ -1373,9 +1373,9 @@ mod tests {
         let mut gap_mid = make_gap("mid", CellDomain::Throughput, GapKind::PartiallyExplored);
         gap_mid.priority_millionths = 500_000;
 
-        register_gap(&mut ledger, &mut log, gap_lo).unwrap();
-        register_gap(&mut ledger, &mut log, gap_hi).unwrap();
-        register_gap(&mut ledger, &mut log, gap_mid).unwrap();
+        register_gap(&mut ledger, &mut log, gap_lo).expect("serde deserialization should succeed");
+        register_gap(&mut ledger, &mut log, gap_hi).expect("serde deserialization should succeed");
+        register_gap(&mut ledger, &mut log, gap_mid).expect("serde deserialization should succeed");
 
         let sorted = ledger.open_gaps_by_priority();
         assert_eq!(sorted[0].gap_id, "hi");
@@ -1393,19 +1393,19 @@ mod tests {
             &mut log,
             make_gap("g1", CellDomain::ColdStart, GapKind::Unknown),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         register_gap(
             &mut ledger,
             &mut log,
             make_gap("g2", CellDomain::Memory, GapKind::Unknown),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         register_gap(
             &mut ledger,
             &mut log,
             make_gap("g3", CellDomain::Throughput, GapKind::KnownDeficient),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let kinds = ledger.open_gap_kinds();
         assert_eq!(kinds.get(&GapKind::Unknown), Some(&2));
@@ -1422,7 +1422,7 @@ mod tests {
 
         let cell = make_cell(CellDomain::ColdStart, ComparisonTarget::V8Node, "full");
         let cell_id = cell.cell_id.clone();
-        add_cell(&mut board, &mut log, cell).unwrap();
+        add_cell(&mut board, &mut log, cell).expect("serde deserialization should succeed");
         advance_cell(
             &mut board,
             &mut log,
@@ -1431,7 +1431,7 @@ mod tests {
             1_000_000,
             vec!["ev-full".to_string()],
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let snapshot = compute_dominance_snapshot(&board, &ledger, &mut log);
         assert!(snapshot.universal_dominance_achieved);
@@ -1448,7 +1448,7 @@ mod tests {
 
         let cell = make_cell(CellDomain::ColdStart, ComparisonTarget::V8Node, "partial");
         let cell_id = cell.cell_id.clone();
-        add_cell(&mut board, &mut log, cell).unwrap();
+        add_cell(&mut board, &mut log, cell).expect("serde deserialization should succeed");
         advance_cell(
             &mut board,
             &mut log,
@@ -1457,14 +1457,14 @@ mod tests {
             500_000,
             vec![],
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         register_gap(
             &mut ledger,
             &mut log,
             make_gap("gap-block", CellDomain::Memory, GapKind::Unknown),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let snapshot = compute_dominance_snapshot(&board, &ledger, &mut log);
         assert!(!snapshot.universal_dominance_achieved);
@@ -1484,7 +1484,7 @@ mod tests {
             (CellDomain::TailLatency, ComparisonTarget::Jsc, "tl-1"),
         ] {
             let cell = make_cell(domain, target, dim);
-            add_cell(&mut board, &mut log, cell).unwrap();
+            add_cell(&mut board, &mut log, cell).expect("serde deserialization should succeed");
         }
 
         // Prove 2 of 4
@@ -1498,7 +1498,7 @@ mod tests {
             100_000,
             vec![],
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         advance_cell(
             &mut board,
             &mut log,
@@ -1507,7 +1507,7 @@ mod tests {
             50_000,
             vec![],
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let snapshot = compute_dominance_snapshot(&board, &ledger, &mut log);
         assert_eq!(snapshot.proven_cells, 1);
@@ -1587,10 +1587,10 @@ mod tests {
         let mut board = RatchetBoard::new();
         let mut log = RatchetEventLog::new();
         let cell = make_cell(CellDomain::Memory, ComparisonTarget::Bun, "serde-test");
-        add_cell(&mut board, &mut log, cell).unwrap();
+        add_cell(&mut board, &mut log, cell).expect("serde deserialization should succeed");
 
-        let json = serde_json::to_string(&board).unwrap();
-        let deser: RatchetBoard = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&board).expect("serde deserialization should succeed");
+        let deser: RatchetBoard = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(board, deser);
     }
 
@@ -1603,10 +1603,10 @@ mod tests {
             &mut log,
             make_gap("serde-gap", CellDomain::Throughput, GapKind::Unknown),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
-        let json = serde_json::to_string(&ledger).unwrap();
-        let deser: FrontierGapLedger = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&ledger).expect("serde deserialization should succeed");
+        let deser: FrontierGapLedger = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ledger, deser);
     }
 
@@ -1616,7 +1616,7 @@ mod tests {
         let mut log = RatchetEventLog::new();
         let cell = make_cell(CellDomain::ColdStart, ComparisonTarget::V8Node, "ev-serde");
         let cell_id = cell.cell_id.clone();
-        add_cell(&mut board, &mut log, cell).unwrap();
+        add_cell(&mut board, &mut log, cell).expect("serde deserialization should succeed");
         advance_cell(
             &mut board,
             &mut log,
@@ -1625,10 +1625,10 @@ mod tests {
             100_000,
             vec!["ev-1".to_string()],
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
-        let json = serde_json::to_string(&log).unwrap();
-        let deser: RatchetEventLog = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&log).expect("serde deserialization should succeed");
+        let deser: RatchetEventLog = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(log, deser);
     }
 
@@ -1642,11 +1642,11 @@ mod tests {
             ComparisonTarget::V8Node,
             "snap-serde",
         );
-        add_cell(&mut board, &mut log, cell).unwrap();
+        add_cell(&mut board, &mut log, cell).expect("serde deserialization should succeed");
 
         let snapshot = compute_dominance_snapshot(&board, &ledger, &mut log);
-        let json = serde_json::to_string(&snapshot).unwrap();
-        let deser: DominanceSnapshot = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&snapshot).expect("serde deserialization should succeed");
+        let deser: DominanceSnapshot = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(snapshot, deser);
     }
 
@@ -1657,8 +1657,8 @@ mod tests {
             ComparisonTarget::Jsc,
             "ssr-hydration",
         );
-        let json = serde_json::to_string(&id).unwrap();
-        let deser: CellId = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&id).expect("serde deserialization should succeed");
+        let deser: CellId = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(id, deser);
     }
 
@@ -1672,7 +1672,7 @@ mod tests {
 
         let cell = make_cell(CellDomain::ColdStart, ComparisonTarget::V8Node, "track");
         let cell_id = cell.cell_id.clone();
-        add_cell(&mut board, &mut log, cell).unwrap();
+        add_cell(&mut board, &mut log, cell).expect("serde deserialization should succeed");
         advance_cell(
             &mut board,
             &mut log,
@@ -1681,14 +1681,14 @@ mod tests {
             50_000,
             vec![],
         )
-        .unwrap();
-        advance_epoch(&mut board, &mut log, 1).unwrap();
+        .expect("serde deserialization should succeed");
+        advance_epoch(&mut board, &mut log, 1).expect("serde deserialization should succeed");
         register_gap(
             &mut ledger,
             &mut log,
             make_gap("tracked-gap", CellDomain::Memory, GapKind::Unknown),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         close_gap(
             &mut ledger,
             &mut log,
@@ -1696,7 +1696,7 @@ mod tests {
             GapResolution::ProvenOnBoard,
             1,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         compute_dominance_snapshot(&board, &ledger, &mut log);
 
         assert_eq!(log.events.len(), 6);
@@ -1737,7 +1737,7 @@ mod tests {
                 ComparisonTarget::V8Node,
                 &format!("seq-{i}"),
             );
-            add_cell(&mut board, &mut log, cell).unwrap();
+            add_cell(&mut board, &mut log, cell).expect("serde deserialization should succeed");
         }
 
         for (idx, event) in log.events.iter().enumerate() {
@@ -1758,7 +1758,7 @@ mod tests {
                 ComparisonTarget::V8Node,
                 &format!("frac-{i}"),
             );
-            add_cell(&mut board, &mut log, cell).unwrap();
+            add_cell(&mut board, &mut log, cell).expect("serde deserialization should succeed");
         }
         let id0 = make_cell_id(CellDomain::ColdStart, ComparisonTarget::V8Node, "frac-0");
         advance_cell(
@@ -1769,7 +1769,7 @@ mod tests {
             100_000,
             vec![],
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         // 1 of 3 proven = 333333 millionths
         assert_eq!(board.dominance_fraction_millionths(), 333_333);
@@ -1788,7 +1788,7 @@ mod tests {
                 ComparisonTarget::V8Node,
                 &format!("cnt-{i}"),
             );
-            add_cell(&mut board, &mut log, cell).unwrap();
+            add_cell(&mut board, &mut log, cell).expect("serde deserialization should succeed");
         }
 
         let id0 = make_cell_id(CellDomain::ColdStart, ComparisonTarget::V8Node, "cnt-0");
@@ -1801,7 +1801,7 @@ mod tests {
             100_000,
             vec![],
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         advance_cell(
             &mut board,
             &mut log,
@@ -1810,7 +1810,7 @@ mod tests {
             50_000,
             vec![],
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let counts = board.state_counts();
         assert_eq!(counts.get(&CellState::Proven), Some(&1));
@@ -1849,7 +1849,7 @@ mod tests {
             "skip-claimed",
         );
         let cell_id = cell.cell_id.clone();
-        add_cell(&mut board, &mut log, cell).unwrap();
+        add_cell(&mut board, &mut log, cell).expect("serde deserialization should succeed");
 
         // Direct jump from Unproven to Proven is allowed.
         advance_cell(
@@ -1860,9 +1860,9 @@ mod tests {
             750_000,
             vec!["direct-proof".to_string()],
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
-        let found = board.find_cell(&cell_id).unwrap();
+        let found = board.find_cell(&cell_id).expect("serde deserialization should succeed");
         assert_eq!(found.state, CellState::Proven);
         assert_eq!(found.margin_millionths, 750_000);
     }
@@ -1878,7 +1878,7 @@ mod tests {
             "margin-claim",
         );
         let cell_id = cell.cell_id.clone();
-        add_cell(&mut board, &mut log, cell).unwrap();
+        add_cell(&mut board, &mut log, cell).expect("serde deserialization should succeed");
 
         advance_cell(
             &mut board,
@@ -1888,7 +1888,7 @@ mod tests {
             500_000,
             vec!["ev-claim".to_string()],
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         // Advance to Proven with lower margin than the Claimed margin — should succeed
         // because margin regression is only enforced on Proven cells.
@@ -1900,9 +1900,9 @@ mod tests {
             200_000,
             vec!["ev-proven".to_string()],
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
-        let found = board.find_cell(&cell_id).unwrap();
+        let found = board.find_cell(&cell_id).expect("serde deserialization should succeed");
         assert_eq!(found.state, CellState::Proven);
         assert_eq!(found.margin_millionths, 200_000);
     }
@@ -1917,7 +1917,7 @@ mod tests {
             "margin-up",
         );
         let cell_id = cell.cell_id.clone();
-        add_cell(&mut board, &mut log, cell).unwrap();
+        add_cell(&mut board, &mut log, cell).expect("serde deserialization should succeed");
 
         advance_cell(
             &mut board,
@@ -1927,7 +1927,7 @@ mod tests {
             100_000,
             vec![],
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         // Increasing margin on a Proven cell should succeed.
         advance_cell(
@@ -1938,9 +1938,9 @@ mod tests {
             300_000,
             vec!["better-evidence".to_string()],
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
-        let found = board.find_cell(&cell_id).unwrap();
+        let found = board.find_cell(&cell_id).expect("serde deserialization should succeed");
         assert_eq!(found.margin_millionths, 300_000);
     }
 
@@ -1954,7 +1954,7 @@ mod tests {
             "margin-same",
         );
         let cell_id = cell.cell_id.clone();
-        add_cell(&mut board, &mut log, cell).unwrap();
+        add_cell(&mut board, &mut log, cell).expect("serde deserialization should succeed");
 
         advance_cell(
             &mut board,
@@ -1964,7 +1964,7 @@ mod tests {
             250_000,
             vec![],
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         // Same margin on Proven should not be rejected.
         advance_cell(
@@ -1975,10 +1975,10 @@ mod tests {
             250_000,
             vec!["re-confirm".to_string()],
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         assert_eq!(
-            board.find_cell(&cell_id).unwrap().margin_millionths,
+            board.find_cell(&cell_id).expect("serde deserialization should succeed").margin_millionths,
             250_000
         );
     }
@@ -1989,7 +1989,7 @@ mod tests {
         let mut log = RatchetEventLog::new();
         let cell = make_cell(CellDomain::ReplayFidelity, ComparisonTarget::Deno, "accum");
         let cell_id = cell.cell_id.clone();
-        add_cell(&mut board, &mut log, cell).unwrap();
+        add_cell(&mut board, &mut log, cell).expect("serde deserialization should succeed");
 
         advance_cell(
             &mut board,
@@ -1999,7 +1999,7 @@ mod tests {
             10_000,
             vec!["ev-a".to_string(), "ev-b".to_string()],
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         advance_cell(
             &mut board,
             &mut log,
@@ -2008,9 +2008,9 @@ mod tests {
             50_000,
             vec!["ev-c".to_string()],
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
-        let found = board.find_cell(&cell_id).unwrap();
+        let found = board.find_cell(&cell_id).expect("serde deserialization should succeed");
         assert_eq!(found.evidence_ids, vec!["ev-a", "ev-b", "ev-c"]);
     }
 
@@ -2024,9 +2024,9 @@ mod tests {
             "epoch-track",
         );
         let cell_id = cell.cell_id.clone();
-        add_cell(&mut board, &mut log, cell).unwrap();
+        add_cell(&mut board, &mut log, cell).expect("serde deserialization should succeed");
 
-        advance_epoch(&mut board, &mut log, 5).unwrap();
+        advance_epoch(&mut board, &mut log, 5).expect("serde deserialization should succeed");
         advance_cell(
             &mut board,
             &mut log,
@@ -2035,11 +2035,11 @@ mod tests {
             10_000,
             vec![],
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
-        assert_eq!(board.find_cell(&cell_id).unwrap().last_advanced_epoch, 5);
+        assert_eq!(board.find_cell(&cell_id).expect("serde deserialization should succeed").last_advanced_epoch, 5);
 
-        advance_epoch(&mut board, &mut log, 10).unwrap();
+        advance_epoch(&mut board, &mut log, 10).expect("serde deserialization should succeed");
         advance_cell(
             &mut board,
             &mut log,
@@ -2048,9 +2048,9 @@ mod tests {
             20_000,
             vec![],
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
-        assert_eq!(board.find_cell(&cell_id).unwrap().last_advanced_epoch, 10);
+        assert_eq!(board.find_cell(&cell_id).expect("serde deserialization should succeed").last_advanced_epoch, 10);
     }
 
     #[test]
@@ -2059,7 +2059,7 @@ mod tests {
         let mut log = RatchetEventLog::new();
         let cell = make_cell(CellDomain::ColdStart, ComparisonTarget::V8Node, "reg-log");
         let cell_id = cell.cell_id.clone();
-        add_cell(&mut board, &mut log, cell).unwrap();
+        add_cell(&mut board, &mut log, cell).expect("serde deserialization should succeed");
 
         advance_cell(
             &mut board,
@@ -2069,7 +2069,7 @@ mod tests {
             100_000,
             vec![],
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         // This should fail and log a RegressionRejected event.
         let _ = advance_cell(
@@ -2081,7 +2081,7 @@ mod tests {
             vec![],
         );
 
-        let last_event = log.events.last().unwrap();
+        let last_event = log.events.last().expect("serde deserialization should succeed");
         assert!(matches!(
             last_event.kind,
             RatchetEventKind::RegressionRejected { .. }
@@ -2125,7 +2125,7 @@ mod tests {
         {
             let cell = make_cell(CellDomain::ColdStart, *target, &format!("full-{i}"));
             let cell_id = cell.cell_id.clone();
-            add_cell(&mut board, &mut log, cell).unwrap();
+            add_cell(&mut board, &mut log, cell).expect("serde deserialization should succeed");
             advance_cell(
                 &mut board,
                 &mut log,
@@ -2134,7 +2134,7 @@ mod tests {
                 1_000_000,
                 vec![],
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         }
 
         assert_eq!(board.dominance_fraction_millionths(), 1_000_000);
@@ -2151,7 +2151,7 @@ mod tests {
                 ComparisonTarget::V8Node,
                 &format!("frac5-{i}"),
             );
-            add_cell(&mut board, &mut log, cell).unwrap();
+            add_cell(&mut board, &mut log, cell).expect("serde deserialization should succeed");
         }
 
         for i in 0..2 {
@@ -2168,7 +2168,7 @@ mod tests {
                 100_000,
                 vec![],
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         }
 
         // 2/5 = 400_000 millionths
@@ -2184,9 +2184,9 @@ mod tests {
         // Add 2 ColdStart cells, prove 1
         let c1 = make_cell(CellDomain::ColdStart, ComparisonTarget::V8Node, "d1");
         let c1_id = c1.cell_id.clone();
-        add_cell(&mut board, &mut log, c1).unwrap();
+        add_cell(&mut board, &mut log, c1).expect("serde deserialization should succeed");
         let c2 = make_cell(CellDomain::ColdStart, ComparisonTarget::Bun, "d2");
-        add_cell(&mut board, &mut log, c2).unwrap();
+        add_cell(&mut board, &mut log, c2).expect("serde deserialization should succeed");
         advance_cell(
             &mut board,
             &mut log,
@@ -2195,12 +2195,12 @@ mod tests {
             100_000,
             vec![],
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         // Add 1 Memory cell, prove it
         let m1 = make_cell(CellDomain::Memory, ComparisonTarget::Deno, "m1");
         let m1_id = m1.cell_id.clone();
-        add_cell(&mut board, &mut log, m1).unwrap();
+        add_cell(&mut board, &mut log, m1).expect("serde deserialization should succeed");
         advance_cell(
             &mut board,
             &mut log,
@@ -2209,7 +2209,7 @@ mod tests {
             200_000,
             vec![],
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let snapshot = compute_dominance_snapshot(&board, &ledger, &mut log);
 
@@ -2217,7 +2217,7 @@ mod tests {
             .domain_proven_counts
             .iter()
             .find(|d| d.domain == CellDomain::ColdStart)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(cs_domain.proven, 1);
         assert_eq!(cs_domain.total, 2);
 
@@ -2225,7 +2225,7 @@ mod tests {
             .domain_proven_counts
             .iter()
             .find(|d| d.domain == CellDomain::Memory)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(mem_domain.proven, 1);
         assert_eq!(mem_domain.total, 1);
     }
@@ -2238,9 +2238,9 @@ mod tests {
 
         let c1 = make_cell(CellDomain::ColdStart, ComparisonTarget::V8Node, "t1");
         let c1_id = c1.cell_id.clone();
-        add_cell(&mut board, &mut log, c1).unwrap();
+        add_cell(&mut board, &mut log, c1).expect("serde deserialization should succeed");
         let c2 = make_cell(CellDomain::Memory, ComparisonTarget::V8Node, "t2");
-        add_cell(&mut board, &mut log, c2).unwrap();
+        add_cell(&mut board, &mut log, c2).expect("serde deserialization should succeed");
         advance_cell(
             &mut board,
             &mut log,
@@ -2249,7 +2249,7 @@ mod tests {
             100_000,
             vec![],
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let snapshot = compute_dominance_snapshot(&board, &ledger, &mut log);
 
@@ -2257,7 +2257,7 @@ mod tests {
             .target_proven_counts
             .iter()
             .find(|t| t.target == ComparisonTarget::V8Node)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(v8_target.proven, 1);
         assert_eq!(v8_target.total, 2);
     }
@@ -2287,7 +2287,7 @@ mod tests {
             "univ-block",
         );
         let cell_id = cell.cell_id.clone();
-        add_cell(&mut board, &mut log, cell).unwrap();
+        add_cell(&mut board, &mut log, cell).expect("serde deserialization should succeed");
         advance_cell(
             &mut board,
             &mut log,
@@ -2296,7 +2296,7 @@ mod tests {
             1_000_000,
             vec![],
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         // Register an open gap — this should block universal dominance.
         register_gap(
@@ -2304,7 +2304,7 @@ mod tests {
             &mut log,
             make_gap("blocker", CellDomain::Memory, GapKind::Unknown),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let snapshot = compute_dominance_snapshot(&board, &ledger, &mut log);
         assert!(!snapshot.universal_dominance_achieved);
@@ -2323,8 +2323,8 @@ mod tests {
         let mut gap_closed = make_gap("closed-g", CellDomain::Memory, GapKind::KnownDeficient);
         gap_closed.priority_millionths = 999_000;
 
-        register_gap(&mut ledger, &mut log, gap_open).unwrap();
-        register_gap(&mut ledger, &mut log, gap_closed).unwrap();
+        register_gap(&mut ledger, &mut log, gap_open).expect("serde deserialization should succeed");
+        register_gap(&mut ledger, &mut log, gap_closed).expect("serde deserialization should succeed");
         close_gap(
             &mut ledger,
             &mut log,
@@ -2332,7 +2332,7 @@ mod tests {
             GapResolution::ProvenOnBoard,
             1,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let sorted = ledger.open_gaps_by_priority();
         assert_eq!(sorted.len(), 1);
@@ -2353,7 +2353,7 @@ mod tests {
                 GapKind::PartiallyExplored,
             ),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         close_gap(
             &mut ledger,
@@ -2362,9 +2362,9 @@ mod tests {
             GapResolution::DimensionInvalidated,
             42,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
-        let entry = ledger.find_gap("res-gap").unwrap();
+        let entry = ledger.find_gap("res-gap").expect("serde deserialization should succeed");
         assert_eq!(entry.closed_epoch, Some(42));
         assert_eq!(entry.resolution, Some(GapResolution::DimensionInvalidated));
         assert_eq!(entry.state, GapState::Closed);
@@ -2380,13 +2380,13 @@ mod tests {
             &mut log,
             make_gap("ik-1", CellDomain::ColdStart, GapKind::Unknown),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         register_gap(
             &mut ledger,
             &mut log,
             make_gap("ik-2", CellDomain::Memory, GapKind::Unknown),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         close_gap(
             &mut ledger,
             &mut log,
@@ -2394,7 +2394,7 @@ mod tests {
             GapResolution::ProvenOnBoard,
             1,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let kinds = ledger.open_gap_kinds();
         assert_eq!(kinds.get(&GapKind::Unknown), Some(&1));
@@ -2478,8 +2478,8 @@ mod tests {
             current_state: CellState::Proven,
             attempted_state: CellState::Unproven,
         };
-        let json = serde_json::to_string(&err).unwrap();
-        let deser: RatchetError = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let deser: RatchetError = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, deser);
     }
 
@@ -2496,8 +2496,8 @@ mod tests {
         cell.last_advanced_epoch = 7;
         cell.owning_bead = "bd-test".to_string();
 
-        let json = serde_json::to_string(&cell).unwrap();
-        let deser: RatchetCell = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&cell).expect("serde deserialization should succeed");
+        let deser: RatchetCell = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cell, deser);
     }
 
@@ -2510,8 +2510,8 @@ mod tests {
         entry.resolution = Some(GapResolution::SubsumedByOther);
         entry.priority_millionths = 750_000;
 
-        let json = serde_json::to_string(&entry).unwrap();
-        let deser: FrontierGapEntry = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let deser: FrontierGapEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, deser);
     }
 
@@ -2519,8 +2519,8 @@ mod tests {
     fn serde_deterministic_serialization_for_cell_domain() {
         // Serialize the same domain twice and ensure identical JSON.
         let d = CellDomain::ReactPerformance;
-        let json1 = serde_json::to_string(&d).unwrap();
-        let json2 = serde_json::to_string(&d).unwrap();
+        let json1 = serde_json::to_string(&d).expect("serde deserialization should succeed");
+        let json2 = serde_json::to_string(&d).expect("serde deserialization should succeed");
         assert_eq!(json1, json2);
         assert_eq!(json1, "\"react_performance\"");
     }
@@ -2528,8 +2528,8 @@ mod tests {
     #[test]
     fn serde_deterministic_serialization_for_comparison_target() {
         let t = ComparisonTarget::Jsc;
-        let json1 = serde_json::to_string(&t).unwrap();
-        let json2 = serde_json::to_string(&t).unwrap();
+        let json1 = serde_json::to_string(&t).expect("serde deserialization should succeed");
+        let json2 = serde_json::to_string(&t).expect("serde deserialization should succeed");
         assert_eq!(json1, json2);
         assert_eq!(json1, "\"jsc\"");
     }
@@ -2541,7 +2541,7 @@ mod tests {
             (CellState::Claimed, "\"claimed\""),
             (CellState::Proven, "\"proven\""),
         ] {
-            let json = serde_json::to_string(&state).unwrap();
+            let json = serde_json::to_string(&state).expect("serde deserialization should succeed");
             assert_eq!(json, expected);
         }
     }
@@ -2575,7 +2575,7 @@ mod tests {
 
         let cell = make_cell(CellDomain::ColdStart, ComparisonTarget::V8Node, "sum-1");
         let cell_id = cell.cell_id.clone();
-        add_cell(&mut board, &mut log, cell).unwrap();
+        add_cell(&mut board, &mut log, cell).expect("serde deserialization should succeed");
         advance_cell(
             &mut board,
             &mut log,
@@ -2584,16 +2584,16 @@ mod tests {
             800_000,
             vec![],
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         register_gap(
             &mut ledger,
             &mut log,
             make_gap("sum-gap", CellDomain::Memory, GapKind::KnownDeficient),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
-        advance_epoch(&mut board, &mut log, 3).unwrap();
+        advance_epoch(&mut board, &mut log, 3).expect("serde deserialization should succeed");
 
         let summary = render_ratchet_summary(&board, &ledger);
         assert!(summary.contains("epoch: 3"));
@@ -2664,7 +2664,7 @@ mod tests {
         let mut log = RatchetEventLog::new();
         let cell = make_cell(CellDomain::Memory, ComparisonTarget::Jsc, "neg-margin");
         let cell_id = cell.cell_id.clone();
-        add_cell(&mut board, &mut log, cell).unwrap();
+        add_cell(&mut board, &mut log, cell).expect("serde deserialization should succeed");
 
         advance_cell(
             &mut board,
@@ -2674,10 +2674,10 @@ mod tests {
             -200_000,
             vec!["neg-ev".to_string()],
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         assert_eq!(
-            board.find_cell(&cell_id).unwrap().margin_millionths,
+            board.find_cell(&cell_id).expect("serde deserialization should succeed").margin_millionths,
             -200_000
         );
     }
@@ -2703,7 +2703,7 @@ mod tests {
             for target in &targets {
                 let dim = format!("{domain}-{target}");
                 let cell = make_cell(*domain, *target, &dim);
-                add_cell(&mut board, &mut log, cell).unwrap();
+                add_cell(&mut board, &mut log, cell).expect("serde deserialization should succeed");
             }
         }
         assert_eq!(board.cell_count(), 9);
@@ -2731,7 +2731,7 @@ mod tests {
                 100_000,
                 vec![],
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         }
 
         let claimed_ids: Vec<CellId> = vec![
@@ -2755,7 +2755,7 @@ mod tests {
                 50_000,
                 vec![],
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         }
 
         let counts = board.state_counts();
@@ -2775,8 +2775,8 @@ mod tests {
         );
         gap.target = Some(ComparisonTarget::Bun);
 
-        let json = serde_json::to_string(&gap).unwrap();
-        let deser: FrontierGapEntry = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&gap).expect("serde deserialization should succeed");
+        let deser: FrontierGapEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(gap, deser);
         assert_eq!(deser.target, Some(ComparisonTarget::Bun));
     }
@@ -2784,8 +2784,8 @@ mod tests {
     #[test]
     fn gap_without_target_serde_round_trip() {
         let gap = make_gap("no-target-gap", CellDomain::Memory, GapKind::OutOfScope);
-        let json = serde_json::to_string(&gap).unwrap();
-        let deser: FrontierGapEntry = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&gap).expect("serde deserialization should succeed");
+        let deser: FrontierGapEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(deser.target, None);
     }
 
@@ -2807,9 +2807,9 @@ mod tests {
                 &mut log,
                 make_gap(&gap_id, CellDomain::ColdStart, GapKind::Unknown),
             )
-            .unwrap();
-            close_gap(&mut ledger, &mut log, &gap_id, *resolution, 1).unwrap();
-            let entry = ledger.find_gap(&gap_id).unwrap();
+            .expect("serde deserialization should succeed");
+            close_gap(&mut ledger, &mut log, &gap_id, *resolution, 1).expect("serde deserialization should succeed");
+            let entry = ledger.find_gap(&gap_id).expect("serde deserialization should succeed");
             assert_eq!(entry.resolution, Some(*resolution));
         }
     }
@@ -2819,12 +2819,12 @@ mod tests {
         let mut board = RatchetBoard::new();
         let mut log = RatchetEventLog::new();
 
-        advance_epoch(&mut board, &mut log, 5).unwrap();
+        advance_epoch(&mut board, &mut log, 5).expect("serde deserialization should succeed");
         let cell = make_cell(CellDomain::ColdStart, ComparisonTarget::V8Node, "ep-match");
-        add_cell(&mut board, &mut log, cell).unwrap();
+        add_cell(&mut board, &mut log, cell).expect("serde deserialization should succeed");
 
         // The CellAdded event should be logged at the board's current epoch (5).
-        let last = log.events.last().unwrap();
+        let last = log.events.last().expect("serde deserialization should succeed");
         assert_eq!(last.epoch, 5);
     }
 
@@ -2834,7 +2834,7 @@ mod tests {
         let mut log = RatchetEventLog::new();
 
         for epoch in [1, 5, 10, 100, 1000, u64::MAX] {
-            advance_epoch(&mut board, &mut log, epoch).unwrap();
+            advance_epoch(&mut board, &mut log, epoch).expect("serde deserialization should succeed");
             assert_eq!(board.current_epoch, epoch);
         }
     }
@@ -2914,8 +2914,8 @@ mod tests {
         ];
 
         for variant in &variants {
-            let json = serde_json::to_string(variant).unwrap();
-            let deser: RatchetEventKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(variant).expect("serde deserialization should succeed");
+            let deser: RatchetEventKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*variant, deser);
         }
     }
@@ -2953,15 +2953,15 @@ mod tests {
                 ComparisonTarget::V8Node,
                 &format!("seq-nr-{i}"),
             );
-            add_cell(&mut board, &mut log, cell).unwrap();
+            add_cell(&mut board, &mut log, cell).expect("serde deserialization should succeed");
         }
-        advance_epoch(&mut board, &mut log, 1).unwrap();
+        advance_epoch(&mut board, &mut log, 1).expect("serde deserialization should succeed");
         register_gap(
             &mut ledger,
             &mut log,
             make_gap("seq-gap", CellDomain::Memory, GapKind::Unknown),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         compute_dominance_snapshot(&board, &ledger, &mut log);
 
         // Verify no duplicate sequence numbers.

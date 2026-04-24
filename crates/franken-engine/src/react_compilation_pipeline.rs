@@ -271,7 +271,7 @@ pub fn compile_react_source(
     // Step 5: Compute metadata
     let metadata = ReactCompileMetadata {
         input_hash: ContentHash::compute(source.as_bytes()),
-        config_hash: ContentHash::compute(&serde_json::to_vec(config).unwrap()),
+        config_hash: ContentHash::compute(&serde_json::to_vec(config).expect("serde deserialization should succeed")),
         timestamp: std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -387,7 +387,7 @@ fn compute_process_hash(result: &ReactCompileResult, _config: &ReactCompileConfi
         "transform_counts": result.metadata.transform_counts
     });
 
-    ContentHash::compute(&serde_json::to_vec(&process_data).unwrap())
+    ContentHash::compute(&serde_json::to_vec(&process_data).expect("serde deserialization should succeed"))
 }
 
 // ---------------------------------------------------------------------------
@@ -409,7 +409,7 @@ mod tests {
             "Compilation should succeed for simple element"
         );
 
-        let result = result.unwrap();
+        let result = result.expect("serde deserialization should succeed");
         assert_eq!(result.source, source);
         assert!(
             !result.generated_code.is_empty(),
@@ -441,7 +441,7 @@ mod tests {
         let source = r#"<span>Test</span>"#;
         let config = ReactCompileConfig::default();
 
-        let result = compile_react_source(source, ReactInputLanguage::Jsx, &config).unwrap();
+        let result = compile_react_source(source, ReactInputLanguage::Jsx, &config).expect("serde deserialization should succeed");
         let evidence = generate_compilation_evidence(&result, &config, ReactInputLanguage::Jsx);
 
         assert!(evidence.output_spec.success);

@@ -899,7 +899,7 @@ mod tests {
         assert!(result.evidence_hash.is_none());
         // SAFETY: Test verifies error_message is Some when status is Error
         assert_eq!(
-            result.error_message.as_ref().unwrap(),
+            result.error_message.as_ref().expect("serde deserialization should succeed"),
             "Evidence validation failed"
         );
     }
@@ -1050,7 +1050,7 @@ mod tests {
         );
         assert!(result.is_ok());
         // SAFETY: Just verified result.is_ok() above
-        let execution = result.unwrap();
+        let execution = result.expect("serde deserialization should succeed");
         assert!(execution.scorecard_result.is_some());
         assert_eq!(execution.overall_status(), DisruptionTrackStatus::Pass);
     }
@@ -1067,7 +1067,7 @@ mod tests {
         );
         assert!(result.is_ok());
         // SAFETY: Just verified result.is_ok() above
-        let execution = result.unwrap();
+        let execution = result.expect("serde deserialization should succeed");
         assert!(execution.scorecard_result.is_none()); // No scorecard if gates fail
         assert_eq!(execution.overall_status(), DisruptionTrackStatus::Fail);
     }
@@ -1084,7 +1084,7 @@ mod tests {
         );
         assert!(result.is_ok());
         // SAFETY: Just verified result.is_ok() above
-        let execution = result.unwrap();
+        let execution = result.expect("serde deserialization should succeed");
         assert_eq!(execution.overall_status(), DisruptionTrackStatus::Pending);
     }
 
@@ -1103,7 +1103,7 @@ mod tests {
             SecurityEpoch::from_raw(1),
             "test-env".to_string(),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert!(allows_frontier_release(&execution));
     }
 
@@ -1118,7 +1118,7 @@ mod tests {
             SecurityEpoch::from_raw(1),
             "test-env".to_string(),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert!(!allows_frontier_release(&execution));
     }
 
@@ -1159,7 +1159,7 @@ mod tests {
             SecurityEpoch::from_raw(1),
             "test-env".to_string(),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let entries = generate_log_entries("trace-1", &execution);
         // Should have one overall status entry + one per gate
         assert_eq!(entries.len(), 1 + MoonshotGateId::all().len());
@@ -1176,7 +1176,7 @@ mod tests {
             SecurityEpoch::from_raw(1),
             "test-env".to_string(),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let entries = generate_log_entries("trace-42", &execution);
         assert!(entries.iter().all(|e| e.trace_id == "trace-42"));
     }
@@ -1189,9 +1189,9 @@ mod tests {
     fn moonshot_gate_id_serde_roundtrip() {
         for gate_id in MoonshotGateId::all() {
             // SAFETY: MoonshotGateId derives Serialize and has no non-serializable fields
-            let json = serde_json::to_string(gate_id).unwrap();
+            let json = serde_json::to_string(gate_id).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by valid MoonshotGateId serialization
-            let back: MoonshotGateId = serde_json::from_str(&json).unwrap();
+            let back: MoonshotGateId = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*gate_id, back);
         }
     }
@@ -1207,9 +1207,9 @@ mod tests {
         ];
         for status in &statuses {
             // SAFETY: MoonshotGateStatus derives Serialize and has no non-serializable fields
-            let json = serde_json::to_string(status).unwrap();
+            let json = serde_json::to_string(status).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by valid MoonshotGateStatus serialization
-            let back: MoonshotGateStatus = serde_json::from_str(&json).unwrap();
+            let back: MoonshotGateStatus = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*status, back);
         }
     }
@@ -1218,9 +1218,9 @@ mod tests {
     fn moonshot_gate_result_serde_roundtrip() {
         let result = sample_gate_result(MoonshotGateId::NodeBunComparisonHarness, true);
         // SAFETY: MoonshotGateResult derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&result).unwrap();
+        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid MoonshotGateResult serialization
-        let back: MoonshotGateResult = serde_json::from_str(&json).unwrap();
+        let back: MoonshotGateResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, back);
     }
 
@@ -1235,11 +1235,11 @@ mod tests {
             SecurityEpoch::from_raw(1),
             "test-env".to_string(),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         // SAFETY: DisruptionTrackExecution derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&execution).unwrap();
+        let json = serde_json::to_string(&execution).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid DisruptionTrackExecution serialization
-        let back: DisruptionTrackExecution = serde_json::from_str(&json).unwrap();
+        let back: DisruptionTrackExecution = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(execution, back);
     }
 
@@ -1250,9 +1250,9 @@ mod tests {
             reason: "timeout".to_string(),
         };
         // SAFETY: DisruptionTrackError derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&error).unwrap();
+        let json = serde_json::to_string(&error).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid DisruptionTrackError serialization
-        let back: DisruptionTrackError = serde_json::from_str(&json).unwrap();
+        let back: DisruptionTrackError = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(error, back);
     }
 
@@ -1268,9 +1268,9 @@ mod tests {
             error_message: None,
         };
         // SAFETY: DisruptionTrackLogEntry derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&entry).unwrap();
+        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid DisruptionTrackLogEntry serialization
-        let back: DisruptionTrackLogEntry = serde_json::from_str(&json).unwrap();
+        let back: DisruptionTrackLogEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, back);
     }
 
@@ -1386,8 +1386,9 @@ mod tests {
     #[test]
     fn validate_moonshot_contracts_triggered_kill_criteria_fails() {
         use crate::moonshot_contract::{
-            ContractVersion, EvModel, Hypothesis, KillCriterion, KillTrigger, MoonshotContract,
-            MoonshotStage, RiskBudget, RollbackPlan,
+            ContractVersion, EvModel, Hypothesis, KillCriterion, KillTrigger, MeasurementMethod,
+            MetricDirection, MoonshotContract, MoonshotStage, RiskBudget, RollbackPlan,
+            TargetMetric,
         };
 
         let mut execution =
@@ -1419,7 +1420,14 @@ mod tests {
                 expected_outcome: "Test outcome".to_string(),
                 falsification_criteria: vec!["Test criteria".to_string()],
             },
-            target_metrics: vec![],
+            target_metrics: vec![TargetMetric {
+                metric_id: "bd-1ze_status".to_string(),
+                description: "failed gate status triggers regression".to_string(),
+                threshold_millionths: 1,
+                direction: MetricDirection::HigherIsBetter,
+                measurement_method: MeasurementMethod::EvidenceQuery,
+                evaluation_cadence_ns: 1,
+            }],
             ev_model: EvModel {
                 success_distribution: DistributionType::PointEstimate,
                 distribution_params: {

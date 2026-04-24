@@ -274,7 +274,7 @@ impl DiagnosticsEnvelope {
 
     /// Compute the canonical hash for a set of diagnostics.
     fn compute_hash(entries: &[NormalizedDiagnostic]) -> String {
-        let canonical = serde_json::to_vec(entries).unwrap();
+        let canonical = serde_json::to_vec(entries).expect("serde deserialization should succeed");
         let hash = ContentHash::compute(&canonical);
         format!("sha256:{}", hash.to_hex())
     }
@@ -1026,13 +1026,13 @@ mod tests {
         );
         parser
             .register_backend(make_registration(BackendId::swc(), 1, true))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         parser
             .register_backend(make_registration(BackendId::oxc(), 2, true))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         parser
             .register_backend(make_registration(BackendId::franken_canonical(), 3, true))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         parser
     }
 
@@ -1080,8 +1080,8 @@ mod tests {
     #[test]
     fn backend_id_serde_roundtrip() {
         let id = BackendId::swc();
-        let json = serde_json::to_string(&id).unwrap();
-        let back: BackendId = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&id).expect("serde deserialization should succeed");
+        let back: BackendId = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(id, back);
     }
 
@@ -1185,8 +1185,8 @@ mod tests {
     #[test]
     fn diagnostics_serde_roundtrip() {
         let env = DiagnosticsEnvelope::empty();
-        let json = serde_json::to_string(&env).unwrap();
-        let back: DiagnosticsEnvelope = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&env).expect("serde deserialization should succeed");
+        let back: DiagnosticsEnvelope = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(env.envelope_hash, back.envelope_hash);
     }
 
@@ -1362,8 +1362,8 @@ mod tests {
     #[test]
     fn policy_serde_roundtrip() {
         let policy = BackendSelectionPolicy::default_swc_primary();
-        let json = serde_json::to_string(&policy).unwrap();
-        let back: BackendSelectionPolicy = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
+        let back: BackendSelectionPolicy = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(policy.policy_id, back.policy_id);
     }
 
@@ -1391,15 +1391,15 @@ mod tests {
     #[test]
     fn parser_selects_swc_primary() {
         let mut parser = make_parser();
-        let selected = parser.select_backend(ParseGoal::Module, None).unwrap();
+        let selected = parser.select_backend(ParseGoal::Module, None).expect("serde deserialization should succeed");
         assert_eq!(selected, BackendId::swc());
     }
 
     #[test]
     fn parser_fallback_when_primary_unhealthy() {
         let mut parser = make_parser();
-        parser.set_backend_health(&BackendId::swc(), false).unwrap();
-        let selected = parser.select_backend(ParseGoal::Module, None).unwrap();
+        parser.set_backend_health(&BackendId::swc(), false).expect("serde deserialization should succeed");
+        let selected = parser.select_backend(ParseGoal::Module, None).expect("serde deserialization should succeed");
         assert_eq!(selected, BackendId::franken_canonical());
         assert_eq!(parser.fallback_count, 1);
     }
@@ -1407,9 +1407,9 @@ mod tests {
     #[test]
     fn parser_health_toggle() {
         let mut parser = make_parser();
-        parser.set_backend_health(&BackendId::swc(), false).unwrap();
+        parser.set_backend_health(&BackendId::swc(), false).expect("serde deserialization should succeed");
         assert_eq!(parser.healthy_backend_count(), 2);
-        parser.set_backend_health(&BackendId::swc(), true).unwrap();
+        parser.set_backend_health(&BackendId::swc(), true).expect("serde deserialization should succeed");
         assert_eq!(parser.healthy_backend_count(), 3);
     }
 
@@ -1443,7 +1443,7 @@ mod tests {
         );
         for i in 0..MAX_BACKENDS {
             let reg = make_registration(BackendId(format!("b{i}")), i as u32, true);
-            parser.register_backend(reg).unwrap();
+            parser.register_backend(reg).expect("serde deserialization should succeed");
         }
         let extra = make_registration(BackendId("extra".into()), 99, true);
         let result = parser.register_backend(extra);
@@ -1461,13 +1461,13 @@ mod tests {
             priority: 0,
             healthy: true,
         };
-        parser.register_backend(updated).unwrap();
+        parser.register_backend(updated).expect("serde deserialization should succeed");
         assert_eq!(parser.backend_count(), 3); // same count, not duplicated
         let swc = parser
             .backends
             .iter()
             .find(|b| b.backend_id == BackendId::swc())
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(swc.version, "2.0.0");
     }
 
@@ -1482,8 +1482,8 @@ mod tests {
     #[test]
     fn parser_serde_roundtrip() {
         let parser = make_parser();
-        let json = serde_json::to_string(&parser).unwrap();
-        let back: DualBackendParser = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&parser).expect("serde deserialization should succeed");
+        let back: DualBackendParser = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(parser.parser_id, back.parser_id);
         assert_eq!(parser.backend_count(), back.backend_count());
     }
@@ -1545,8 +1545,8 @@ mod tests {
             distinct_hashes: vec!["sha256:abc".into()],
             divergence: None,
         };
-        let json = serde_json::to_string(&result).unwrap();
-        let back: DifferentialComparisonResult = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let back: DifferentialComparisonResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result.source_label, back.source_label);
     }
 
@@ -1566,8 +1566,8 @@ mod tests {
                 m
             },
         };
-        let json = serde_json::to_string(&diag).unwrap();
-        let back: NormalizedDiagnostic = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&diag).expect("serde deserialization should succeed");
+        let back: NormalizedDiagnostic = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(diag.code, back.code);
     }
 
@@ -1590,8 +1590,8 @@ mod tests {
             latency_us: 1_000,
             hash: "sha256:abc".into(),
         };
-        let json = serde_json::to_string(&kind).unwrap();
-        let back: DualBackendEventKind = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
+        let back: DualBackendEventKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(kind, back);
     }
 
@@ -1604,10 +1604,10 @@ mod tests {
         );
         parser
             .register_backend(make_registration(BackendId::swc(), 1, false))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         parser
             .register_backend(make_registration(BackendId::franken_canonical(), 2, false))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let result = parser.select_backend(ParseGoal::Module, None);
         assert!(matches!(
             result,
@@ -1699,8 +1699,8 @@ mod tests {
     fn backend_capability_serde_roundtrip() {
         let caps = [BackendCapability::full(), BackendCapability::minimal()];
         for cap in &caps {
-            let json = serde_json::to_string(cap).unwrap();
-            let back: BackendCapability = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(cap).expect("serde deserialization should succeed");
+            let back: BackendCapability = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(cap.typescript, back.typescript);
             assert_eq!(cap.jsx, back.jsx);
             assert_eq!(cap.source_maps, back.source_maps);
@@ -1714,8 +1714,8 @@ mod tests {
     #[test]
     fn backend_registration_serde_roundtrip() {
         let reg = make_registration(BackendId::swc(), 1, true);
-        let json = serde_json::to_string(&reg).unwrap();
-        let back: BackendRegistration = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&reg).expect("serde deserialization should succeed");
+        let back: BackendRegistration = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(reg.backend_id, back.backend_id);
         assert_eq!(reg.priority, back.priority);
         assert_eq!(reg.healthy, back.healthy);
@@ -1744,8 +1744,8 @@ mod tests {
             DivergenceClass::SpanDivergence,
             DivergenceClass::ErrorDivergence,
         ] {
-            let json = serde_json::to_string(dc).unwrap();
-            let back: DivergenceClass = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(dc).expect("serde deserialization should succeed");
+            let back: DivergenceClass = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*dc, back);
         }
     }
@@ -1866,8 +1866,8 @@ mod tests {
             needs_source_maps: false,
             needs_incremental: true,
         };
-        let json = serde_json::to_string(&req).unwrap();
-        let back: BackendRequirements = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&req).expect("serde deserialization should succeed");
+        let back: BackendRequirements = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(req, back);
     }
 
@@ -1884,8 +1884,8 @@ mod tests {
             epoch: epoch(7),
             timestamp_ns: 42_000_000,
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let back: DualBackendParseEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let back: DualBackendParseEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
     }
 
@@ -1900,8 +1900,8 @@ mod tests {
             latency_us: 2_000,
             fidelity_score_millionths: 995_000,
         };
-        let json = serde_json::to_string(&result).unwrap();
-        let back: BackendParseResult = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let back: BackendParseResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, back);
     }
 
@@ -1938,8 +1938,8 @@ mod tests {
             },
         ];
         let report = FidelityReport::from_mappings(BackendId::swc(), &mappings, 990_000);
-        let json = serde_json::to_string(&report).unwrap();
-        let back: FidelityReport = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let back: FidelityReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report, back);
     }
 
@@ -2003,8 +2003,8 @@ mod tests {
             DualBackendParserError::InvalidConfig("bad".into()),
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: DualBackendParserError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: DualBackendParserError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -2056,14 +2056,14 @@ mod tests {
         );
         parser
             .register_backend(make_registration(BackendId::swc(), 1, false))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         parser
             .register_backend(make_registration(BackendId::franken_canonical(), 2, false))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         parser
             .register_backend(make_registration(BackendId::oxc(), 3, true))
-            .unwrap();
-        let selected = parser.select_backend(ParseGoal::Module, None).unwrap();
+            .expect("serde deserialization should succeed");
+        let selected = parser.select_backend(ParseGoal::Module, None).expect("serde deserialization should succeed");
         assert_eq!(selected, BackendId::oxc());
     }
 
@@ -2075,8 +2075,8 @@ mod tests {
             backend_span: make_span(10, 21),
             deviation_bytes: 1,
         };
-        let json = serde_json::to_string(&entry).unwrap();
-        let back: SpanMappingEntry = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let back: SpanMappingEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, back);
     }
 
@@ -2088,8 +2088,8 @@ mod tests {
             DiagnosticSeverity::Error,
             DiagnosticSeverity::Fatal,
         ] {
-            let json = serde_json::to_string(&sev).unwrap();
-            let back: DiagnosticSeverity = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&sev).expect("serde deserialization should succeed");
+            let back: DiagnosticSeverity = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(sev, back);
         }
     }
@@ -2103,8 +2103,8 @@ mod tests {
             DiagnosticCategory::Resource,
             DiagnosticCategory::Encoding,
         ] {
-            let json = serde_json::to_string(&cat).unwrap();
-            let back: DiagnosticCategory = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&cat).expect("serde deserialization should succeed");
+            let back: DiagnosticCategory = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(cat, back);
         }
     }
@@ -2147,8 +2147,8 @@ mod tests {
             DualBackendEventKind::HealthChanged { healthy: false },
         ];
         for kind in &kinds {
-            let json = serde_json::to_string(kind).unwrap();
-            let back: DualBackendEventKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(kind).expect("serde deserialization should succeed");
+            let back: DualBackendEventKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*kind, back);
         }
     }
@@ -2224,8 +2224,8 @@ mod tests {
         assert_eq!(result.distinct_hashes.len(), 2);
         assert_eq!(result.divergence, Some(DivergenceClass::AstDivergence));
 
-        let json = serde_json::to_string(&result).unwrap();
-        let back: DifferentialComparisonResult = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let back: DifferentialComparisonResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, back);
     }
 
@@ -2244,8 +2244,8 @@ mod tests {
         };
         assert_eq!(diag.context.len(), 2);
         assert!(diag.span.is_some());
-        let json = serde_json::to_string(&diag).unwrap();
-        let back: NormalizedDiagnostic = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&diag).expect("serde deserialization should succeed");
+        let back: NormalizedDiagnostic = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(diag, back);
     }
 
@@ -2260,10 +2260,10 @@ mod tests {
     #[test]
     fn parser_multiple_fallbacks_counted() {
         let mut parser = make_parser();
-        parser.set_backend_health(&BackendId::swc(), false).unwrap();
+        parser.set_backend_health(&BackendId::swc(), false).expect("serde deserialization should succeed");
         // Each select_backend when primary is unhealthy increments fallback_count
-        parser.select_backend(ParseGoal::Module, None).unwrap();
-        parser.select_backend(ParseGoal::Script, None).unwrap();
+        parser.select_backend(ParseGoal::Module, None).expect("serde deserialization should succeed");
+        parser.select_backend(ParseGoal::Script, None).expect("serde deserialization should succeed");
         assert_eq!(parser.fallback_count, 2);
     }
 }

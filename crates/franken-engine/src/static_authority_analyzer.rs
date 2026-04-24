@@ -1657,24 +1657,24 @@ mod tests {
             )
             .expect("analysis");
 
-        let json = serde_json::to_string(&report).unwrap();
-        let restored: StaticAnalysisReport = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let restored: StaticAnalysisReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report, restored);
     }
 
     #[test]
     fn effect_graph_serde_roundtrip() {
         let graph = branching_graph();
-        let json = serde_json::to_string(&graph).unwrap();
-        let restored: EffectGraph = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&graph).expect("serde deserialization should succeed");
+        let restored: EffectGraph = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(graph, restored);
     }
 
     #[test]
     fn manifest_intents_serde_roundtrip() {
         let manifest = branching_manifest();
-        let json = serde_json::to_string(&manifest).unwrap();
-        let restored: ManifestIntents = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&manifest).expect("serde deserialization should succeed");
+        let restored: ManifestIntents = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(manifest, restored);
     }
 
@@ -1698,8 +1698,8 @@ mod tests {
         };
         cache.insert(key, report);
 
-        let json = serde_json::to_string(&cache).unwrap();
-        let restored: AnalysisCache = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&cache).expect("serde deserialization should succeed");
+        let restored: AnalysisCache = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cache.len(), restored.len());
     }
 
@@ -1784,8 +1784,8 @@ mod tests {
         ];
 
         for kind in &kinds {
-            let json = serde_json::to_string(kind).unwrap();
-            let restored: EffectNodeKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(kind).expect("serde deserialization should succeed");
+            let restored: EffectNodeKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(kind, &restored);
         }
     }
@@ -1824,8 +1824,8 @@ mod tests {
             AnalysisMethod::TimeoutFallback,
             AnalysisMethod::ExcludedDeadPath,
         ] {
-            let json = serde_json::to_string(&v).unwrap();
-            let restored: AnalysisMethod = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let restored: AnalysisMethod = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(v, restored);
         }
     }
@@ -1850,8 +1850,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap();
-            let restored: AnalysisError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let restored: AnalysisError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, restored);
         }
     }
@@ -1869,8 +1869,8 @@ mod tests {
             },
             source_location: Some("module.rs:42".to_string()),
         };
-        let json = serde_json::to_string(&node).unwrap();
-        let restored: EffectNode = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&node).expect("serde deserialization should succeed");
+        let restored: EffectNode = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(node, restored);
     }
 
@@ -1881,8 +1881,8 @@ mod tests {
             to: "b".to_string(),
             provably_dead: true,
         };
-        let json = serde_json::to_string(&e).unwrap();
-        let restored: EffectEdge = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
+        let restored: EffectEdge = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(e, restored);
     }
 
@@ -1898,8 +1898,8 @@ mod tests {
             analysis_method: AnalysisMethod::LatticeReachability,
             summary: "found via lattice".to_string(),
         };
-        let json = serde_json::to_string(&ev).unwrap();
-        let restored: PerCapabilityEvidence = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
+        let restored: PerCapabilityEvidence = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ev, restored);
     }
 
@@ -1911,8 +1911,8 @@ mod tests {
             ratio_millionths: 1_666_667,
             excluded_by_path_sensitivity: 1,
         };
-        let json = serde_json::to_string(&pe).unwrap();
-        let restored: PrecisionEstimate = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&pe).expect("serde deserialization should succeed");
+        let restored: PrecisionEstimate = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(pe, restored);
     }
 
@@ -1923,8 +1923,8 @@ mod tests {
             path_sensitive: false,
             zone: "us-east".to_string(),
         };
-        let json = serde_json::to_string(&cfg).unwrap();
-        let restored: AnalysisConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
+        let restored: AnalysisConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cfg, restored);
     }
 
@@ -1935,8 +1935,8 @@ mod tests {
             manifest_hash: ContentHash::compute(b"manifest"),
             path_sensitive: true,
         };
-        let json = serde_json::to_string(&key).unwrap();
-        let restored: AnalysisCacheKey = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&key).expect("serde deserialization should succeed");
+        let restored: AnalysisCacheKey = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(key, restored);
     }
 
@@ -2062,8 +2062,8 @@ mod tests {
     #[test]
     fn empty_effect_graph_serde_roundtrip() {
         let graph = EffectGraph::new("ext-empty-serde");
-        let json = serde_json::to_string(&graph).unwrap();
-        let restored: EffectGraph = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&graph).expect("serde deserialization should succeed");
+        let restored: EffectGraph = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(graph, restored);
     }
 
@@ -2157,7 +2157,7 @@ mod tests {
         cache.insert(key.clone(), r2.clone());
         assert_eq!(cache.len(), 1);
 
-        let cached = cache.get(&key).unwrap();
+        let cached = cache.get(&key).expect("serde deserialization should succeed");
         assert_eq!(cached.timestamp_ns, r2.timestamp_ns);
     }
 
@@ -2325,8 +2325,8 @@ mod tests {
     #[test]
     fn capability_serde_roundtrip() {
         let c = Capability::new("net_send");
-        let json = serde_json::to_string(&c).unwrap();
-        let back: Capability = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let back: Capability = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c, back);
     }
 
@@ -2422,7 +2422,7 @@ mod tests {
             "ExcludedDeadPath evidence expected"
         );
         assert_eq!(
-            dead_evidence.unwrap().analysis_method,
+            dead_evidence.expect("serde deserialization should succeed").analysis_method,
             AnalysisMethod::ExcludedDeadPath
         );
     }
@@ -2449,8 +2449,8 @@ mod tests {
     fn different_zones_produce_different_report_ids() {
         let gh = ContentHash::compute(b"graph");
         let mh = ContentHash::compute(b"manifest");
-        let id1 = StaticAnalysisReport::derive_report_id("ext", &gh, &mh, 100, "zone-a").unwrap();
-        let id2 = StaticAnalysisReport::derive_report_id("ext", &gh, &mh, 100, "zone-b").unwrap();
+        let id1 = StaticAnalysisReport::derive_report_id("ext", &gh, &mh, 100, "zone-a").expect("serde deserialization should succeed");
+        let id2 = StaticAnalysisReport::derive_report_id("ext", &gh, &mh, 100, "zone-b").expect("serde deserialization should succeed");
         assert_ne!(
             id1, id2,
             "different zones should produce different report IDs"
@@ -2730,7 +2730,7 @@ mod tests {
             .per_capability_evidence
             .iter()
             .find(|e| e.capability == cap("shared_cap"))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         // Only one hostcall node despite 3 entry paths.
         assert_eq!(ev.requiring_nodes.len(), 1);
         assert!(ev.requiring_nodes.contains("h"));
@@ -2824,7 +2824,7 @@ mod tests {
             .per_capability_evidence
             .iter()
             .find(|e| e.capability == cap("fs_read"))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(fs_ev.analysis_method, AnalysisMethod::LatticeReachability);
 
         // net_send via ManifestFallback (dead path, but declared)
@@ -2982,7 +2982,7 @@ mod tests {
             .per_capability_evidence
             .iter()
             .find(|e| e.capability == cap("cap_a"))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(ev.requiring_nodes.len(), 1);
         assert!(ev.requiring_nodes.contains("h1"));
     }
@@ -3037,7 +3037,7 @@ mod tests {
             .per_capability_evidence
             .iter()
             .find(|e| e.capability == cap("phantom_cap"))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(ev.analysis_method, AnalysisMethod::ManifestFallback);
         assert!(ev.summary.contains("conservatively"));
     }

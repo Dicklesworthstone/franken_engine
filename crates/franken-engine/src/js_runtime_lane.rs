@@ -1029,46 +1029,46 @@ mod tests {
         let id = g.next_signal_id();
         assert!(g.register(id, SignalKind::Source, BTreeSet::new()).is_ok());
         assert_eq!(g.node_count(), 1);
-        assert_eq!(g.get(id).unwrap().depth, 0);
+        assert_eq!(g.get(id).expect("serde deserialization should succeed").depth, 0);
     }
 
     #[test]
     fn signal_graph_register_derived() {
         let mut g = SignalGraph::new();
         let s1 = g.next_signal_id();
-        g.register(s1, SignalKind::Source, BTreeSet::new()).unwrap();
+        g.register(s1, SignalKind::Source, BTreeSet::new()).expect("serde deserialization should succeed");
 
         let d1 = g.next_signal_id();
         let mut deps = BTreeSet::new();
         deps.insert(s1);
-        g.register(d1, SignalKind::Derived, deps).unwrap();
+        g.register(d1, SignalKind::Derived, deps).expect("serde deserialization should succeed");
 
-        assert_eq!(g.get(d1).unwrap().depth, 1);
-        assert!(g.get(s1).unwrap().dependents.contains(&d1));
+        assert_eq!(g.get(d1).expect("serde deserialization should succeed").depth, 1);
+        assert!(g.get(s1).expect("serde deserialization should succeed").dependents.contains(&d1));
     }
 
     #[test]
     fn signal_graph_register_deep_chain() {
         let mut g = SignalGraph::new();
         let s = g.next_signal_id();
-        g.register(s, SignalKind::Source, BTreeSet::new()).unwrap();
+        g.register(s, SignalKind::Source, BTreeSet::new()).expect("serde deserialization should succeed");
 
         let mut prev = s;
         for _ in 0..5 {
             let next = g.next_signal_id();
             let mut deps = BTreeSet::new();
             deps.insert(prev);
-            g.register(next, SignalKind::Derived, deps).unwrap();
+            g.register(next, SignalKind::Derived, deps).expect("serde deserialization should succeed");
             prev = next;
         }
-        assert_eq!(g.get(prev).unwrap().depth, 5);
+        assert_eq!(g.get(prev).expect("serde deserialization should succeed").depth, 5);
     }
 
     #[test]
     fn signal_graph_duplicate_rejected() {
         let mut g = SignalGraph::new();
         let id = g.next_signal_id();
-        g.register(id, SignalKind::Source, BTreeSet::new()).unwrap();
+        g.register(id, SignalKind::Source, BTreeSet::new()).expect("serde deserialization should succeed");
         assert!(matches!(
             g.register(id, SignalKind::Source, BTreeSet::new()),
             Err(SignalGraphError::DuplicateSignal(_))
@@ -1092,22 +1092,22 @@ mod tests {
     fn signal_graph_mark_dirty_propagates() {
         let mut g = SignalGraph::new();
         let s = g.next_signal_id();
-        g.register(s, SignalKind::Source, BTreeSet::new()).unwrap();
-        g.mark_clean(s).unwrap();
+        g.register(s, SignalKind::Source, BTreeSet::new()).expect("serde deserialization should succeed");
+        g.mark_clean(s).expect("serde deserialization should succeed");
 
         let d1 = g.next_signal_id();
         let mut deps = BTreeSet::new();
         deps.insert(s);
-        g.register(d1, SignalKind::Derived, deps).unwrap();
-        g.mark_clean(d1).unwrap();
+        g.register(d1, SignalKind::Derived, deps).expect("serde deserialization should succeed");
+        g.mark_clean(d1).expect("serde deserialization should succeed");
 
         let d2 = g.next_signal_id();
         let mut deps2 = BTreeSet::new();
         deps2.insert(d1);
-        g.register(d2, SignalKind::Effect, deps2).unwrap();
-        g.mark_clean(d2).unwrap();
+        g.register(d2, SignalKind::Effect, deps2).expect("serde deserialization should succeed");
+        g.mark_clean(d2).expect("serde deserialization should succeed");
 
-        let dirty = g.mark_dirty(s).unwrap();
+        let dirty = g.mark_dirty(s).expect("serde deserialization should succeed");
         assert_eq!(dirty.len(), 3);
         // Should be in topological order
         assert_eq!(dirty[0], s);
@@ -1128,15 +1128,15 @@ mod tests {
     fn signal_graph_dispose() {
         let mut g = SignalGraph::new();
         let s = g.next_signal_id();
-        g.register(s, SignalKind::Source, BTreeSet::new()).unwrap();
+        g.register(s, SignalKind::Source, BTreeSet::new()).expect("serde deserialization should succeed");
         let d = g.next_signal_id();
         let mut deps = BTreeSet::new();
         deps.insert(s);
-        g.register(d, SignalKind::Derived, deps).unwrap();
+        g.register(d, SignalKind::Derived, deps).expect("serde deserialization should succeed");
 
-        g.dispose(d).unwrap();
+        g.dispose(d).expect("serde deserialization should succeed");
         assert_eq!(g.node_count(), 1); // only source remains active
-        assert!(g.get(s).unwrap().dependents.is_empty());
+        assert!(g.get(s).expect("serde deserialization should succeed").dependents.is_empty());
     }
 
     #[test]
@@ -1144,20 +1144,20 @@ mod tests {
         let mut g = SignalGraph::new();
         let s1 = g.next_signal_id();
         let s2 = g.next_signal_id();
-        g.register(s1, SignalKind::Source, BTreeSet::new()).unwrap();
-        g.register(s2, SignalKind::Source, BTreeSet::new()).unwrap();
+        g.register(s1, SignalKind::Source, BTreeSet::new()).expect("serde deserialization should succeed");
+        g.register(s2, SignalKind::Source, BTreeSet::new()).expect("serde deserialization should succeed");
 
         let d = g.next_signal_id();
         let mut deps = BTreeSet::new();
         deps.insert(s1);
         deps.insert(s2);
-        g.register(d, SignalKind::Derived, deps).unwrap();
+        g.register(d, SignalKind::Derived, deps).expect("serde deserialization should succeed");
 
         let order = g.dirty_evaluation_order();
         // Sources first (depth 0), derived last (depth 1)
         assert!(
-            order.iter().position(|&x| x == d).unwrap()
-                > order.iter().position(|&x| x == s1).unwrap()
+            order.iter().position(|&x| x == d).expect("serde deserialization should succeed")
+                > order.iter().position(|&x| x == s1).expect("serde deserialization should succeed")
         );
     }
 
@@ -1165,9 +1165,9 @@ mod tests {
     fn signal_graph_serde_roundtrip() {
         let mut g = SignalGraph::new();
         let s = g.next_signal_id();
-        g.register(s, SignalKind::Source, BTreeSet::new()).unwrap();
-        let json = serde_json::to_string(&g).unwrap();
-        let g2: SignalGraph = serde_json::from_str(&json).unwrap();
+        g.register(s, SignalKind::Source, BTreeSet::new()).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&g).expect("serde deserialization should succeed");
+        let g2: SignalGraph = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(g, g2);
     }
 
@@ -1236,8 +1236,8 @@ mod tests {
     fn scheduler_serde_roundtrip() {
         let mut s = UpdateScheduler::new();
         s.schedule(SignalId(0), UpdatePriority::Normal, "App".into());
-        let json = serde_json::to_string(&s).unwrap();
-        let s2: UpdateScheduler = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+        let s2: UpdateScheduler = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(s, s2);
     }
 
@@ -1264,9 +1264,9 @@ mod tests {
             tag: "div".into(),
             parent: None,
         })
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(t.element_count(), 1);
-        assert_eq!(t.get(id).unwrap().tag, "div");
+        assert_eq!(t.get(id).expect("serde deserialization should succeed").tag, "div");
     }
 
     #[test]
@@ -1279,15 +1279,15 @@ mod tests {
             tag: "div".into(),
             parent: None,
         })
-        .unwrap();
+        .expect("serde deserialization should succeed");
         t.apply_patch(&DomPatch::CreateElement {
             id: child,
             tag: "span".into(),
             parent: Some(root),
         })
-        .unwrap();
-        assert_eq!(t.get(root).unwrap().children.len(), 1);
-        assert_eq!(t.get(child).unwrap().parent, Some(root));
+        .expect("serde deserialization should succeed");
+        assert_eq!(t.get(root).expect("serde deserialization should succeed").children.len(), 1);
+        assert_eq!(t.get(child).expect("serde deserialization should succeed").parent, Some(root));
     }
 
     #[test]
@@ -1301,22 +1301,22 @@ mod tests {
             tag: "div".into(),
             parent: None,
         })
-        .unwrap();
+        .expect("serde deserialization should succeed");
         t.apply_patch(&DomPatch::CreateElement {
             id: child,
             tag: "ul".into(),
             parent: Some(root),
         })
-        .unwrap();
+        .expect("serde deserialization should succeed");
         t.apply_patch(&DomPatch::CreateElement {
             id: grandchild,
             tag: "li".into(),
             parent: Some(child),
         })
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         t.apply_patch(&DomPatch::RemoveElement { id: child })
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(t.element_count(), 1); // only root remains
         assert!(!t.contains(child));
         assert!(!t.contains(grandchild));
@@ -1331,14 +1331,14 @@ mod tests {
             tag: "input".into(),
             parent: None,
         })
-        .unwrap();
+        .expect("serde deserialization should succeed");
         t.apply_patch(&DomPatch::SetProperty {
             id,
             key: "type".into(),
             value: "text".into(),
         })
-        .unwrap();
-        assert_eq!(t.get(id).unwrap().properties.get("type").unwrap(), "text");
+        .expect("serde deserialization should succeed");
+        assert_eq!(t.get(id).expect("serde deserialization should succeed").properties.get("type").expect("serde deserialization should succeed"), "text");
     }
 
     #[test]
@@ -1350,19 +1350,19 @@ mod tests {
             tag: "div".into(),
             parent: None,
         })
-        .unwrap();
+        .expect("serde deserialization should succeed");
         t.apply_patch(&DomPatch::SetProperty {
             id,
             key: "class".into(),
             value: "active".into(),
         })
-        .unwrap();
+        .expect("serde deserialization should succeed");
         t.apply_patch(&DomPatch::RemoveProperty {
             id,
             key: "class".into(),
         })
-        .unwrap();
-        assert!(t.get(id).unwrap().properties.is_empty());
+        .expect("serde deserialization should succeed");
+        assert!(t.get(id).expect("serde deserialization should succeed").properties.is_empty());
     }
 
     #[test]
@@ -1374,13 +1374,13 @@ mod tests {
             tag: "p".into(),
             parent: None,
         })
-        .unwrap();
+        .expect("serde deserialization should succeed");
         t.apply_patch(&DomPatch::SetTextContent {
             id,
             text: "hello".into(),
         })
-        .unwrap();
-        assert_eq!(t.get(id).unwrap().text_content.as_deref(), Some("hello"));
+        .expect("serde deserialization should succeed");
+        assert_eq!(t.get(id).expect("serde deserialization should succeed").text_content.as_deref(), Some("hello"));
     }
 
     #[test]
@@ -1394,29 +1394,29 @@ mod tests {
             tag: "div".into(),
             parent: None,
         })
-        .unwrap();
+        .expect("serde deserialization should succeed");
         t.apply_patch(&DomPatch::CreateElement {
             id: b,
             tag: "div".into(),
             parent: None,
         })
-        .unwrap();
+        .expect("serde deserialization should succeed");
         t.apply_patch(&DomPatch::CreateElement {
             id: child,
             tag: "span".into(),
             parent: Some(a),
         })
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         t.apply_patch(&DomPatch::MoveElement {
             id: child,
             new_parent: b,
             before_sibling: None,
         })
-        .unwrap();
-        assert!(t.get(a).unwrap().children.is_empty());
-        assert_eq!(t.get(b).unwrap().children, vec![child]);
-        assert_eq!(t.get(child).unwrap().parent, Some(b));
+        .expect("serde deserialization should succeed");
+        assert!(t.get(a).expect("serde deserialization should succeed").children.is_empty());
+        assert_eq!(t.get(b).expect("serde deserialization should succeed").children, vec![child]);
+        assert_eq!(t.get(child).expect("serde deserialization should succeed").parent, Some(b));
     }
 
     #[test]
@@ -1430,23 +1430,23 @@ mod tests {
             tag: "div".into(),
             parent: None,
         })
-        .unwrap();
+        .expect("serde deserialization should succeed");
         t.apply_patch(&DomPatch::CreateElement {
             id: old,
             tag: "span".into(),
             parent: Some(root),
         })
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         t.apply_patch(&DomPatch::ReplaceElement {
             old,
             new_id,
             tag: "strong".into(),
         })
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert!(!t.contains(old));
-        assert_eq!(t.get(new_id).unwrap().tag, "strong");
-        assert_eq!(t.get(root).unwrap().children, vec![new_id]);
+        assert_eq!(t.get(new_id).expect("serde deserialization should succeed").tag, "strong");
+        assert_eq!(t.get(root).expect("serde deserialization should succeed").children, vec![new_id]);
     }
 
     #[test]
@@ -1469,7 +1469,7 @@ mod tests {
             tag: "div".into(),
             parent: None,
         })
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert!(matches!(
             t.apply_patch(&DomPatch::CreateElement {
                 id,
@@ -1505,9 +1505,9 @@ mod tests {
             cycle_sequence: 0,
             component: "App".into(),
         };
-        t.apply_batch(&batch).unwrap();
+        t.apply_batch(&batch).expect("serde deserialization should succeed");
         assert_eq!(t.element_count(), 2);
-        assert_eq!(t.get(child).unwrap().text_content.as_deref(), Some("hello"));
+        assert_eq!(t.get(child).expect("serde deserialization should succeed").text_content.as_deref(), Some("hello"));
     }
 
     #[test]
@@ -1519,9 +1519,9 @@ mod tests {
             tag: "div".into(),
             parent: None,
         })
-        .unwrap();
-        let json = serde_json::to_string(&t).unwrap();
-        let t2: DomTree = serde_json::from_str(&json).unwrap();
+        .expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&t).expect("serde deserialization should succeed");
+        let t2: DomTree = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(t, t2);
     }
 
@@ -1624,8 +1624,8 @@ mod tests {
     fn event_delegation_serde_roundtrip() {
         let mut d = EventDelegation::new();
         d.register(EventType::Click, DomElementId(1), "App", false);
-        let json = serde_json::to_string(&d).unwrap();
-        let d2: EventDelegation = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
+        let d2: EventDelegation = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(d, d2);
     }
 
@@ -1653,8 +1653,8 @@ mod tests {
     #[test]
     fn config_serde_roundtrip() {
         let c = JsLaneConfig::default_config();
-        let json = serde_json::to_string(&c).unwrap();
-        let c2: JsLaneConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let c2: JsLaneConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c, c2);
     }
 
@@ -1676,8 +1676,8 @@ mod tests {
     #[test]
     fn lane_serde_roundtrip() {
         let lane = JsRuntimeLane::with_defaults();
-        let json = serde_json::to_string(&lane).unwrap();
-        let l2: JsRuntimeLane = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&lane).expect("serde deserialization should succeed");
+        let l2: JsRuntimeLane = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(lane, l2);
     }
 
@@ -1703,8 +1703,8 @@ mod tests {
         let counter_signal = lane.signal_graph.next_signal_id();
         lane.signal_graph
             .register(counter_signal, SignalKind::Source, BTreeSet::new())
-            .unwrap();
-        lane.signal_graph.mark_clean(counter_signal).unwrap();
+            .expect("serde deserialization should succeed");
+        lane.signal_graph.mark_clean(counter_signal).expect("serde deserialization should succeed");
 
         // 2. Create derived signal (display text)
         let display_signal = lane.signal_graph.next_signal_id();
@@ -1712,8 +1712,8 @@ mod tests {
         deps.insert(counter_signal);
         lane.signal_graph
             .register(display_signal, SignalKind::Derived, deps)
-            .unwrap();
-        lane.signal_graph.mark_clean(display_signal).unwrap();
+            .expect("serde deserialization should succeed");
+        lane.signal_graph.mark_clean(display_signal).expect("serde deserialization should succeed");
 
         // 3. Create DOM tree
         let root = lane.dom_tree.next_element_id();
@@ -1724,14 +1724,14 @@ mod tests {
                 tag: "div".into(),
                 parent: None,
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
         lane.dom_tree
             .apply_patch(&DomPatch::CreateElement {
                 id: text_node,
                 tag: "span".into(),
                 parent: Some(root),
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // 4. Register click handler
         lane.event_delegation
@@ -1745,12 +1745,12 @@ mod tests {
         let updates = lane.scheduler.drain_batch();
         assert_eq!(updates.len(), 1);
 
-        let dirty = lane.signal_graph.mark_dirty(counter_signal).unwrap();
+        let dirty = lane.signal_graph.mark_dirty(counter_signal).expect("serde deserialization should succeed");
         assert_eq!(dirty.len(), 2); // counter + display
 
         // Evaluate signals in order
         for sig in &dirty {
-            lane.signal_graph.mark_clean(*sig).unwrap();
+            lane.signal_graph.mark_clean(*sig).expect("serde deserialization should succeed");
         }
 
         // Apply DOM patch
@@ -1759,13 +1759,13 @@ mod tests {
             id: text_node,
             text: "Count: 1".into(),
         });
-        lane.dom_tree.apply_batch(&batch).unwrap();
+        lane.dom_tree.apply_batch(&batch).expect("serde deserialization should succeed");
         lane.flush_count += 1;
 
         assert_eq!(
             lane.dom_tree
                 .get(text_node)
-                .unwrap()
+                .expect("serde deserialization should succeed")
                 .text_content
                 .as_deref(),
             Some("Count: 1")
@@ -1786,14 +1786,14 @@ mod tests {
                 tag: "div".into(),
                 parent: None,
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
         lane.dom_tree
             .apply_patch(&DomPatch::CreateElement {
                 id: button,
                 tag: "button".into(),
                 parent: Some(root),
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
         lane.event_delegation
             .register(EventType::Click, button, "MyComponent", false);
         lane.event_delegation
@@ -1806,7 +1806,7 @@ mod tests {
         lane.event_delegation.cleanup_component("MyComponent");
         lane.dom_tree
             .apply_patch(&DomPatch::RemoveElement { id: root })
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert_eq!(lane.dom_tree.element_count(), 0);
         assert_eq!(lane.event_delegation.handler_count(), 0);
@@ -1838,21 +1838,21 @@ mod tests {
         let s = lane.signal_graph.next_signal_id();
         lane.signal_graph
             .register(s, SignalKind::Source, BTreeSet::new())
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let effect = lane.signal_graph.next_signal_id();
         let mut deps = BTreeSet::new();
         deps.insert(s);
         lane.signal_graph
             .register(effect, SignalKind::Effect, deps)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Dispose effect
-        lane.signal_graph.dispose(effect).unwrap();
+        lane.signal_graph.dispose(effect).expect("serde deserialization should succeed");
         assert_eq!(lane.signal_graph.node_count(), 1);
 
         // Source should have no dependents
-        assert!(lane.signal_graph.get(s).unwrap().dependents.is_empty());
+        assert!(lane.signal_graph.get(s).expect("serde deserialization should succeed").dependents.is_empty());
     }
 
     // -- Enrichment: PearlTower 2026-02-26 --
@@ -1861,8 +1861,8 @@ mod tests {
     fn signal_kind_serde_roundtrip() {
         let variants = [SignalKind::Source, SignalKind::Derived, SignalKind::Effect];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: SignalKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: SignalKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -1876,8 +1876,8 @@ mod tests {
             SignalStatus::Disposed,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: SignalStatus = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: SignalStatus = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -1892,8 +1892,8 @@ mod tests {
             UpdatePriority::Idle,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: UpdatePriority = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: UpdatePriority = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -1913,8 +1913,8 @@ mod tests {
             EventType::MouseLeave,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: EventType = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: EventType = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -1928,8 +1928,8 @@ mod tests {
             LaneState::Shutdown,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: LaneState = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: LaneState = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -1946,8 +1946,8 @@ mod tests {
             SignalGraphError::DuplicateSignal(SignalId(4)),
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: SignalGraphError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: SignalGraphError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -1964,8 +1964,8 @@ mod tests {
             },
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: DomPatchError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: DomPatchError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -1976,8 +1976,8 @@ mod tests {
     fn signal_graph_mark_dirty_on_disposed_returns_error() {
         let mut g = SignalGraph::new();
         let s = g.next_signal_id();
-        g.register(s, SignalKind::Source, BTreeSet::new()).unwrap();
-        g.dispose(s).unwrap();
+        g.register(s, SignalKind::Source, BTreeSet::new()).expect("serde deserialization should succeed");
+        g.dispose(s).expect("serde deserialization should succeed");
         assert!(matches!(
             g.mark_dirty(s),
             Err(SignalGraphError::Disposed(_))
@@ -1988,8 +1988,8 @@ mod tests {
     fn signal_graph_mark_clean_on_disposed_returns_error() {
         let mut g = SignalGraph::new();
         let s = g.next_signal_id();
-        g.register(s, SignalKind::Source, BTreeSet::new()).unwrap();
-        g.dispose(s).unwrap();
+        g.register(s, SignalKind::Source, BTreeSet::new()).expect("serde deserialization should succeed");
+        g.dispose(s).expect("serde deserialization should succeed");
         assert!(matches!(
             g.mark_clean(s),
             Err(SignalGraphError::Disposed(_))
@@ -2009,12 +2009,12 @@ mod tests {
     fn signal_graph_generation_increments_on_dirty() {
         let mut g = SignalGraph::new();
         let s = g.next_signal_id();
-        g.register(s, SignalKind::Source, BTreeSet::new()).unwrap();
-        g.mark_clean(s).unwrap();
+        g.register(s, SignalKind::Source, BTreeSet::new()).expect("serde deserialization should succeed");
+        g.mark_clean(s).expect("serde deserialization should succeed");
 
-        let gen_before = g.get(s).unwrap().generation;
-        g.mark_dirty(s).unwrap();
-        let gen_after = g.get(s).unwrap().generation;
+        let gen_before = g.get(s).expect("serde deserialization should succeed").generation;
+        g.mark_dirty(s).expect("serde deserialization should succeed");
+        let gen_after = g.get(s).expect("serde deserialization should succeed").generation;
         assert!(gen_after > gen_before);
     }
 
@@ -2041,7 +2041,7 @@ mod tests {
             tag: "div".into(),
             parent: None,
         })
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert!(matches!(
             t.apply_patch(&DomPatch::MoveElement {
                 id: DomElementId(999),
@@ -2061,7 +2061,7 @@ mod tests {
             tag: "span".into(),
             parent: None,
         })
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert!(matches!(
             t.apply_patch(&DomPatch::MoveElement {
                 id: elem,
@@ -2121,34 +2121,34 @@ mod tests {
             tag: "ul".into(),
             parent: None,
         })
-        .unwrap();
+        .expect("serde deserialization should succeed");
         t.apply_patch(&DomPatch::CreateElement {
             id: a,
             tag: "li".into(),
             parent: Some(parent),
         })
-        .unwrap();
+        .expect("serde deserialization should succeed");
         t.apply_patch(&DomPatch::CreateElement {
             id: b,
             tag: "li".into(),
             parent: Some(parent),
         })
-        .unwrap();
+        .expect("serde deserialization should succeed");
         // Create c as orphan, then move before b
         t.apply_patch(&DomPatch::CreateElement {
             id: c,
             tag: "li".into(),
             parent: None,
         })
-        .unwrap();
+        .expect("serde deserialization should succeed");
         t.apply_patch(&DomPatch::MoveElement {
             id: c,
             new_parent: parent,
             before_sibling: Some(b),
         })
-        .unwrap();
+        .expect("serde deserialization should succeed");
         // Should be: a, c, b
-        let children = &t.get(parent).unwrap().children;
+        let children = &t.get(parent).expect("serde deserialization should succeed").children;
         assert_eq!(children, &[a, c, b]);
     }
 
@@ -2260,8 +2260,8 @@ mod tests {
             },
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: DomPatch = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: DomPatch = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -2336,8 +2336,8 @@ mod tests {
             handlers_cleaned: 2,
             cycle_sequence: 42,
         };
-        let json = serde_json::to_string(&s).unwrap();
-        let back: FlushSummary = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+        let back: FlushSummary = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(s, back);
     }
 
@@ -2355,7 +2355,7 @@ mod tests {
         let s = lane.signal_graph.next_signal_id();
         lane.signal_graph
             .register(s, SignalKind::Source, BTreeSet::new())
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let id_after = lane.derive_id();
         assert_ne!(id_before, id_after);
     }
@@ -2368,8 +2368,8 @@ mod tests {
             sequence: 7,
             component: "Counter".into(),
         };
-        let json = serde_json::to_string(&u).unwrap();
-        let back: ScheduledUpdate = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&u).expect("serde deserialization should succeed");
+        let back: ScheduledUpdate = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(u, back);
     }
 
@@ -2385,8 +2385,8 @@ mod tests {
             properties: props,
             text_content: Some("hello".into()),
         };
-        let json = serde_json::to_string(&rec).unwrap();
-        let back: DomElementRecord = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&rec).expect("serde deserialization should succeed");
+        let back: DomElementRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(rec, back);
     }
 
@@ -2399,8 +2399,8 @@ mod tests {
             component: "Form".into(),
             capture: true,
         };
-        let json = serde_json::to_string(&h).unwrap();
-        let back: EventHandler = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&h).expect("serde deserialization should succeed");
+        let back: EventHandler = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(h, back);
     }
 
@@ -2421,10 +2421,10 @@ mod tests {
         let mut g = SignalGraph::new();
         let s1 = g.next_signal_id();
         let s2 = g.next_signal_id();
-        g.register(s1, SignalKind::Source, BTreeSet::new()).unwrap();
-        g.register(s2, SignalKind::Source, BTreeSet::new()).unwrap();
+        g.register(s1, SignalKind::Source, BTreeSet::new()).expect("serde deserialization should succeed");
+        g.register(s2, SignalKind::Source, BTreeSet::new()).expect("serde deserialization should succeed");
         assert_eq!(g.node_count(), 2);
-        g.dispose(s1).unwrap();
+        g.dispose(s1).expect("serde deserialization should succeed");
         assert_eq!(g.node_count(), 1);
     }
 

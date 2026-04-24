@@ -2212,7 +2212,7 @@ mod tests {
         plane.record_exact("e3", "dom", 200, b"c");
 
         // SAFETY: Test recorded events with "dom" domain; windows map contains this key.
-        let windows = plane.windows.get("dom").unwrap();
+        let windows = plane.windows.get("dom").expect("serde deserialization should succeed");
         assert_eq!(windows.len(), 2);
         assert_eq!(windows[0].event_count(), 2);
         assert_eq!(windows[1].event_count(), 1);
@@ -2329,13 +2329,13 @@ mod tests {
             .mode_breakdowns
             .iter()
             .find(|b| b.mode == CaptureMode::ExactCounting)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         // SAFETY: Test setup creates both ExactCounting and ProbabilisticSampling modes; both exist in breakdowns.
         let prob_bd = report
             .mode_breakdowns
             .iter()
             .find(|b| b.mode == CaptureMode::ProbabilisticSampling)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(exact_bd.event_count, 3);
         assert_eq!(prob_bd.event_count, 7);
         assert_eq!(exact_bd.fraction_millionths, 300_000);

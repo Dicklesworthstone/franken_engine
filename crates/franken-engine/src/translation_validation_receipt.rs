@@ -1352,7 +1352,7 @@ impl ValidationReceiptEmitter {
                         .applied_rules
                         .first()
                         .map(|r| r.pack_id.clone())
-                        .unwrap(),
+                        .expect("serde deserialization should succeed"),
                     input
                         .applied_rules
                         .first()
@@ -1406,7 +1406,7 @@ impl ValidationReceiptEmitter {
                         .applied_rules
                         .first()
                         .map(|r| r.pack_id.clone())
-                        .unwrap(),
+                        .expect("serde deserialization should succeed"),
                     input
                         .applied_rules
                         .first()
@@ -1612,8 +1612,8 @@ mod tests {
             ProofMode::Axiomatic,
             ProofMode::Composite,
         ] {
-            let json = serde_json::to_string(&mode).unwrap();
-            let restored: ProofMode = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&mode).expect("serde deserialization should succeed");
+            let restored: ProofMode = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(mode, restored);
         }
     }
@@ -1634,7 +1634,7 @@ mod tests {
             .with_metadata("solver", "z3")
             .with_metadata("timeout", "30s");
         assert_eq!(ev.metadata.len(), 2);
-        assert_eq!(ev.metadata.get("solver").unwrap(), "z3");
+        assert_eq!(ev.metadata.get("solver").expect("serde deserialization should succeed"), "z3");
     }
 
     #[test]
@@ -1659,8 +1659,8 @@ mod tests {
     #[test]
     fn test_proof_evidence_serde() {
         let ev = test_evidence().with_metadata("k", "v");
-        let json = serde_json::to_string(&ev).unwrap();
-        let restored: ProofEvidence = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
+        let restored: ProofEvidence = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ev, restored);
     }
 
@@ -1690,8 +1690,8 @@ mod tests {
     #[test]
     fn test_rule_serde() {
         let rule = test_rule("r1", -100_000);
-        let json = serde_json::to_string(&rule).unwrap();
-        let restored: AppliedRuleRecord = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&rule).expect("serde deserialization should succeed");
+        let restored: AppliedRuleRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(rule, restored);
     }
 
@@ -1725,24 +1725,24 @@ mod tests {
     #[test]
     fn test_verdict_serde_proven() {
         let v = proven_verdict();
-        let json = serde_json::to_string(&v).unwrap();
-        let restored: ReceiptVerdict = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let restored: ReceiptVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, restored);
     }
 
     #[test]
     fn test_verdict_serde_disproven() {
         let v = disproven_verdict();
-        let json = serde_json::to_string(&v).unwrap();
-        let restored: ReceiptVerdict = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let restored: ReceiptVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, restored);
     }
 
     #[test]
     fn test_verdict_serde_inconclusive() {
         let v = inconclusive_verdict();
-        let json = serde_json::to_string(&v).unwrap();
-        let restored: ReceiptVerdict = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let restored: ReceiptVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, restored);
     }
 
@@ -1964,8 +1964,8 @@ mod tests {
             "cm",
         )
         .sign(b"key123");
-        let json = serde_json::to_string(&receipt).unwrap();
-        let restored: TranslationValidationReceipt = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
+        let restored: TranslationValidationReceipt = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(receipt, restored);
     }
 
@@ -2026,8 +2026,8 @@ mod tests {
             test_epoch(),
             500,
         );
-        let json = serde_json::to_string(&fr).unwrap();
-        let restored: FailureReceipt = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&fr).expect("serde deserialization should succeed");
+        let restored: FailureReceipt = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(fr, restored);
     }
 
@@ -2083,8 +2083,8 @@ mod tests {
             FailureKind::MalformedOutput { detail: "d".into() },
         ];
         for k in kinds {
-            let json = serde_json::to_string(&k).unwrap();
-            let restored: FailureKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&k).expect("serde deserialization should succeed");
+            let restored: FailureKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(k, restored);
         }
     }
@@ -2114,7 +2114,7 @@ mod tests {
             proven_verdict(),
             "cm",
         );
-        chain.append(r).unwrap();
+        chain.append(r).expect("serde deserialization should succeed");
         assert_eq!(chain.receipts.len(), 1);
         assert_eq!(chain.next_sequence, 2);
     }
@@ -2134,9 +2134,9 @@ mod tests {
             proven_verdict(),
             "cm",
         );
-        chain.append(r1).unwrap();
+        chain.append(r1).expect("serde deserialization should succeed");
 
-        let parent = chain.last_receipt().unwrap().content_hash;
+        let parent = chain.last_receipt().expect("serde deserialization should succeed").content_hash;
         let r2 = TranslationValidationReceipt::new(
             2,
             "opt-2",
@@ -2149,7 +2149,7 @@ mod tests {
             proven_verdict(),
             "cm",
         );
-        chain.append(r2).unwrap();
+        chain.append(r2).expect("serde deserialization should succeed");
         assert_eq!(chain.receipts.len(), 2);
     }
 
@@ -2168,7 +2168,7 @@ mod tests {
             proven_verdict(),
             "cm",
         );
-        chain.append(r1).unwrap();
+        chain.append(r1).expect("serde deserialization should succeed");
 
         let r2 = TranslationValidationReceipt::new(
             2,
@@ -2283,7 +2283,7 @@ mod tests {
                 "cm",
             );
             parent = Some(r.content_hash);
-            chain.append(r).unwrap();
+            chain.append(r).expect("serde deserialization should succeed");
         }
 
         assert_eq!(chain.receipts.len(), 3);
@@ -2307,9 +2307,9 @@ mod tests {
             proven_verdict(),
             "cm",
         );
-        chain.append(r1).unwrap();
+        chain.append(r1).expect("serde deserialization should succeed");
 
-        let parent = chain.last_receipt().unwrap().content_hash;
+        let parent = chain.last_receipt().expect("serde deserialization should succeed").content_hash;
         let r2 = TranslationValidationReceipt::new(
             2,
             "opt-2",
@@ -2322,7 +2322,7 @@ mod tests {
             disproven_verdict(),
             "cm",
         );
-        chain.append(r2).unwrap();
+        chain.append(r2).expect("serde deserialization should succeed");
 
         assert_eq!(chain.success_count(), 1);
         assert_eq!(chain.rejected_count(), 1);
@@ -2343,7 +2343,7 @@ mod tests {
             proven_verdict(),
             "cm",
         );
-        chain.append(r).unwrap();
+        chain.append(r).expect("serde deserialization should succeed");
         assert_eq!(chain.total_cost_improvement(), -500_000);
     }
 
@@ -2362,7 +2362,7 @@ mod tests {
             proven_verdict(),
             "cm",
         );
-        chain.append(r).unwrap();
+        chain.append(r).expect("serde deserialization should succeed");
         let result = chain.verify_integrity();
         assert!(result.valid);
         assert_eq!(result.receipt_count, 1);
@@ -2383,7 +2383,7 @@ mod tests {
             proven_verdict(),
             "cm",
         );
-        chain.append(r).unwrap();
+        chain.append(r).expect("serde deserialization should succeed");
         chain.receipts[0].optimization_id = "opt-tampered".into();
 
         let result = chain.verify_integrity();
@@ -2443,7 +2443,7 @@ mod tests {
             proven_verdict(),
             "cm",
         );
-        chain.append(receipt).unwrap();
+        chain.append(receipt).expect("serde deserialization should succeed");
         chain.next_sequence = 99;
 
         let result = chain.verify_integrity();
@@ -2472,7 +2472,7 @@ mod tests {
             test_epoch(),
             0,
         );
-        chain.record_failure(f).unwrap();
+        chain.record_failure(f).expect("serde deserialization should succeed");
         assert_eq!(chain.failure_count(), 1);
     }
 
@@ -2516,7 +2516,7 @@ mod tests {
             proven_verdict(),
             "cm",
         );
-        chain.append(r).unwrap();
+        chain.append(r).expect("serde deserialization should succeed");
         let found = chain.receipts_for_optimization("target-opt");
         assert_eq!(found.len(), 1);
         assert!(chain.receipts_for_optimization("other").is_empty());
@@ -2537,9 +2537,9 @@ mod tests {
             proven_verdict(),
             "cm",
         );
-        chain.append(r).unwrap();
-        let json = serde_json::to_string(&chain).unwrap();
-        let restored: ReceiptChain = serde_json::from_str(&json).unwrap();
+        chain.append(r).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&chain).expect("serde deserialization should succeed");
+        let restored: ReceiptChain = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(chain, restored);
     }
 
@@ -2612,7 +2612,7 @@ mod tests {
     fn test_emitter_verify_receipt() {
         let mut em = default_emitter();
         let result = em.emit(make_input("opt-1", proven_verdict()));
-        let receipt = result.receipt().unwrap();
+        let receipt = result.receipt().expect("serde deserialization should succeed");
         assert!(em.verify_receipt(receipt));
         assert_eq!(em.stats.total_verifications, 1);
         assert_eq!(em.stats.verification_failures, 0);
@@ -2622,7 +2622,7 @@ mod tests {
     fn test_emitter_verify_wrong_key() {
         let mut em = default_emitter();
         let result = em.emit(make_input("opt-1", proven_verdict()));
-        let mut receipt = result.receipt().unwrap().clone();
+        let mut receipt = result.receipt().expect("serde deserialization should succeed").clone();
         // Tamper with signature
         receipt.signature = AuthenticityHash::compute_keyed(b"wrong", b"data");
         assert!(!em.verify_receipt(&receipt));
@@ -2723,8 +2723,8 @@ mod tests {
         let mut em = default_emitter();
         em.emit(make_input("opt-1", proven_verdict()));
         em.emit(make_input("opt-2", disproven_verdict()));
-        let json = serde_json::to_string(&em).unwrap();
-        let restored: ValidationReceiptEmitter = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&em).expect("serde deserialization should succeed");
+        let restored: ValidationReceiptEmitter = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(em.stats.total_receipts, restored.stats.total_receipts);
         assert_eq!(em.quarantine, restored.quarantine);
     }
@@ -2875,8 +2875,8 @@ mod tests {
             test_epoch(),
             0,
         );
-        chain.record_failure(f1).unwrap();
-        chain.record_failure(f2).unwrap();
+        chain.record_failure(f1).expect("serde deserialization should succeed");
+        chain.record_failure(f2).expect("serde deserialization should succeed");
         assert_eq!(chain.failures_for_pack("pack-alpha").len(), 1);
         assert_eq!(chain.failures_for_pack("pack-beta").len(), 1);
         assert_eq!(chain.failures_for_pack("pack-gamma").len(), 0);

@@ -925,8 +925,8 @@ mod tests {
             RegressionSeverity::High,
             RegressionSeverity::Critical,
         ] {
-            let json = serde_json::to_string(&sev).unwrap();
-            let back: RegressionSeverity = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&sev).expect("serde deserialization should succeed");
+            let back: RegressionSeverity = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(sev, back);
         }
     }
@@ -946,8 +946,8 @@ mod tests {
     #[test]
     fn status_serde_roundtrip() {
         for st in [RegressionStatus::Active, RegressionStatus::Waived] {
-            let json = serde_json::to_string(&st).unwrap();
-            let back: RegressionStatus = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&st).expect("serde deserialization should succeed");
+            let back: RegressionStatus = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(st, back);
         }
     }
@@ -966,8 +966,8 @@ mod tests {
     #[test]
     fn policy_serde_roundtrip() {
         let p = baseline_policy();
-        let json = serde_json::to_string(&p).unwrap();
-        let back: RegressionGatePolicy = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
+        let back: RegressionGatePolicy = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(p, back);
     }
 
@@ -1351,7 +1351,7 @@ mod tests {
             .logs
             .iter()
             .find(|l| l.event == "gate_decision")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(decision.outcome, "promote");
     }
 
@@ -1366,7 +1366,7 @@ mod tests {
             .logs
             .iter()
             .find(|l| l.event == "gate_decision")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(decision.outcome, "hold");
     }
 
@@ -1409,8 +1409,8 @@ mod tests {
             vec![mk_obs("w", 100, 200, 5000)],
             vec![RegressionWaiver::new("wv", "w", "o", 200, "r")],
         );
-        let json = serde_json::to_string(&input).unwrap();
-        let back: RegressionGateInput = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
+        let back: RegressionGateInput = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(input, back);
     }
 
@@ -1421,8 +1421,8 @@ mod tests {
             &RegressionGateInput::new("t", "d", "p", 100, vec![obs], Vec::new()),
             &baseline_policy(),
         );
-        let json = serde_json::to_string(&report).unwrap();
-        let back: RegressionGateReport = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let back: RegressionGateReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report, back);
     }
 
@@ -1438,8 +1438,8 @@ mod tests {
             error_codes: vec![ERROR_FAIL_REGRESSION.to_string()],
             commit_id: Some("abc".to_string()),
         };
-        let json = serde_json::to_string(&candidate).unwrap();
-        let back: CulpritCandidate = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&candidate).expect("serde deserialization should succeed");
+        let back: CulpritCandidate = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(candidate, back);
     }
 

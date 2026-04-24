@@ -2161,7 +2161,7 @@ mod tests {
         );
         assert!(result.is_ok());
         // SAFETY: result verified to be Ok above
-        let d = result.unwrap();
+        let d = result.expect("serde deserialization should succeed");
         assert_eq!(d.strategy, DispatchStrategy::InlinedCallback);
     }
 
@@ -2412,9 +2412,9 @@ mod tests {
     fn test_serde_stdlib_method() {
         let method = StdlibMethod::ArrayFlatMap;
         // SAFETY: to_string cannot fail on derived Serialize enum
-        let json = serde_json::to_string(&method).unwrap();
+        let json = serde_json::to_string(&method).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let back: StdlibMethod = serde_json::from_str(&json).unwrap();
+        let back: StdlibMethod = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, method);
     }
 
@@ -2422,9 +2422,9 @@ mod tests {
     fn test_serde_dispatch_decision() {
         let d = build_decision(StdlibMethod::ArrayReduce, CallbackKind::MutatingFunction);
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&d).unwrap();
+        let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let back: DispatchDecision = serde_json::from_str(&json).unwrap();
+        let back: DispatchDecision = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, d);
     }
 
@@ -2432,9 +2432,9 @@ mod tests {
     fn test_serde_dispatch_trace() {
         let trace = franken_engine_stdlib_dispatch_manifest();
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&trace).unwrap();
+        let json = serde_json::to_string(&trace).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let back: DispatchTrace = serde_json::from_str(&json).unwrap();
+        let back: DispatchTrace = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.decisions.len(), trace.decisions.len());
         assert_eq!(back.total_cost_millionths, trace.total_cost_millionths);
     }
@@ -2443,9 +2443,9 @@ mod tests {
     fn test_serde_dispatch_error() {
         let e = StdlibDispatchError::InternalError("test".into());
         // SAFETY: to_string cannot fail on derived Serialize enum
-        let json = serde_json::to_string(&e).unwrap();
+        let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let back: StdlibDispatchError = serde_json::from_str(&json).unwrap();
+        let back: StdlibDispatchError = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, e);
     }
 
@@ -2575,9 +2575,9 @@ mod tests {
     fn test_arity_serde_round_trip() {
         let profile = CallbackArityProfile::AccumulatorAndElement;
         // SAFETY: to_string cannot fail on derived Serialize enum
-        let json = serde_json::to_string(&profile).unwrap();
+        let json = serde_json::to_string(&profile).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let back: CallbackArityProfile = serde_json::from_str(&json).unwrap();
+        let back: CallbackArityProfile = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, profile);
     }
 
@@ -2637,9 +2637,9 @@ mod tests {
             stack_depth: 10,
         };
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&inv).unwrap();
+        let json = serde_json::to_string(&inv).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let back: CallbackInvocation = serde_json::from_str(&json).unwrap();
+        let back: CallbackInvocation = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, inv);
     }
 
@@ -2805,9 +2805,9 @@ mod tests {
             invocations,
         );
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&exec).unwrap();
+        let json = serde_json::to_string(&exec).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let back: DispatchExecution = serde_json::from_str(&json).unwrap();
+        let back: DispatchExecution = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(
             back.total_actual_cost_millionths,
             exec.total_actual_cost_millionths
@@ -2972,9 +2972,9 @@ mod tests {
             (StdlibMethod::ArrayReduce, CallbackKind::PureFunction, 100),
         ]);
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&chain).unwrap();
+        let json = serde_json::to_string(&chain).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let back: DispatchChain = serde_json::from_str(&json).unwrap();
+        let back: DispatchChain = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.len(), chain.len());
         assert_eq!(
             back.combined_cost_millionths,
@@ -3101,9 +3101,9 @@ mod tests {
             SecurityEpoch::from_raw(2),
         );
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&report).unwrap();
+        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let back: DispatchRegressionReport = serde_json::from_str(&json).unwrap();
+        let back: DispatchRegressionReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.strategy_changes, report.strategy_changes);
         assert_eq!(back.is_regression, report.is_regression);
     }
@@ -3172,9 +3172,9 @@ mod tests {
         let trace = franken_engine_stdlib_dispatch_manifest();
         let matrix = MethodCoverageMatrix::from_trace(&trace);
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&matrix).unwrap();
+        let json = serde_json::to_string(&matrix).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let back: MethodCoverageMatrix = serde_json::from_str(&json).unwrap();
+        let back: MethodCoverageMatrix = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.exercised.len(), matrix.exercised.len());
     }
 
@@ -3248,7 +3248,7 @@ mod tests {
         );
         assert!(result.is_ok());
         // SAFETY: result verified to be Ok above
-        assert_eq!(result.unwrap().strategy, DispatchStrategy::FallbackSlow);
+        assert_eq!(result.expect("serde deserialization should succeed").strategy, DispatchStrategy::FallbackSlow);
     }
 
     #[test]

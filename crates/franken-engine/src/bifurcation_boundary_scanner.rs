@@ -560,7 +560,7 @@ impl BifurcationBoundaryScanner {
                 buf.extend_from_slice(&bp.critical_value_millionths.to_le_bytes());
                 buf.extend_from_slice(
                     serde_json::to_string(&bp.bifurcation_type)
-                        .unwrap()
+                        .expect("serde deserialization should succeed")
                         .as_bytes(),
                 );
             }
@@ -574,7 +574,7 @@ impl BifurcationBoundaryScanner {
             buf.extend_from_slice(&(preemptive_actions.len() as u64).to_le_bytes());
             for pa in &preemptive_actions {
                 buf.extend_from_slice(pa.parameter_id.as_bytes());
-                buf.extend_from_slice(serde_json::to_string(&pa.lane_action).unwrap().as_bytes());
+                buf.extend_from_slice(serde_json::to_string(&pa.lane_action).expect("serde deserialization should succeed").as_bytes());
             }
             // regime_summary is BTreeMap — deterministic iteration.
             for (regime, count) in &regime_summary {
@@ -920,7 +920,7 @@ mod tests {
             make_envelope("threshold-1", 100_000, 900_000, 500_000),
             make_envelope("calibration-1", 200_000, 800_000, 500_000),
         ];
-        BifurcationBoundaryScanner::new(ScannerConfig::default(), params, envelopes).unwrap()
+        BifurcationBoundaryScanner::new(ScannerConfig::default(), params, envelopes).expect("serde deserialization should succeed")
     }
 
     // ── Constructor tests ────────────────────────────────────────
@@ -1053,7 +1053,7 @@ mod tests {
     #[test]
     fn scan_stable_parameters() {
         let mut scanner = default_scanner();
-        let result = scanner.scan().unwrap();
+        let result = scanner.scan().expect("serde deserialization should succeed");
         assert_eq!(result.schema_version, BIFURCATION_SCHEMA_VERSION);
         assert_eq!(result.parameters_scanned, 2);
         assert!(result.stability_score_millionths > 0);
@@ -1063,9 +1063,9 @@ mod tests {
     fn scan_count_increments() {
         let mut scanner = default_scanner();
         assert_eq!(scanner.scan_count(), 0);
-        scanner.scan().unwrap();
+        scanner.scan().expect("serde deserialization should succeed");
         assert_eq!(scanner.scan_count(), 1);
-        scanner.scan().unwrap();
+        scanner.scan().expect("serde deserialization should succeed");
         assert_eq!(scanner.scan_count(), 2);
     }
 
@@ -1075,9 +1075,9 @@ mod tests {
         let params = vec![make_param("threshold", 110_000)]; // Close to 100k lower bound
         let envelopes = vec![make_envelope("threshold", 100_000, 900_000, 500_000)];
         let mut scanner =
-            BifurcationBoundaryScanner::new(ScannerConfig::default(), params, envelopes).unwrap();
+            BifurcationBoundaryScanner::new(ScannerConfig::default(), params, envelopes).expect("serde deserialization should succeed");
 
-        let result = scanner.scan().unwrap();
+        let result = scanner.scan().expect("serde deserialization should succeed");
         // Should have a warning active
         assert!(result.has_active_warnings());
     }
@@ -1087,9 +1087,9 @@ mod tests {
         let params = vec![make_param("threshold", 50_000)]; // Below lower bound
         let envelopes = vec![make_envelope("threshold", 100_000, 900_000, 500_000)];
         let mut scanner =
-            BifurcationBoundaryScanner::new(ScannerConfig::default(), params, envelopes).unwrap();
+            BifurcationBoundaryScanner::new(ScannerConfig::default(), params, envelopes).expect("serde deserialization should succeed");
 
-        let result = scanner.scan().unwrap();
+        let result = scanner.scan().expect("serde deserialization should succeed");
         assert!(result.has_preemptive_actions());
     }
 
@@ -1098,9 +1098,9 @@ mod tests {
         let params = vec![make_param("threshold", 500_000)]; // At nominal
         let envelopes = vec![make_envelope("threshold", 100_000, 900_000, 500_000)];
         let mut scanner =
-            BifurcationBoundaryScanner::new(ScannerConfig::default(), params, envelopes).unwrap();
+            BifurcationBoundaryScanner::new(ScannerConfig::default(), params, envelopes).expect("serde deserialization should succeed");
 
-        let result = scanner.scan().unwrap();
+        let result = scanner.scan().expect("serde deserialization should succeed");
         assert!(!result.has_active_warnings());
         assert!(!result.has_preemptive_actions());
     }
@@ -1108,7 +1108,7 @@ mod tests {
     #[test]
     fn scan_produces_bifurcation_points() {
         let mut scanner = default_scanner();
-        let result = scanner.scan().unwrap();
+        let result = scanner.scan().expect("serde deserialization should succeed");
         // Scanning should find regime transitions
         assert!(!result.bifurcation_points.is_empty());
     }
@@ -1116,14 +1116,14 @@ mod tests {
     #[test]
     fn scan_result_has_artifact_hash() {
         let mut scanner = default_scanner();
-        let result = scanner.scan().unwrap();
+        let result = scanner.scan().expect("serde deserialization should succeed");
         assert_ne!(result.artifact_hash.as_bytes(), &[0u8; 32]);
     }
 
     #[test]
     fn scan_result_has_regime_summary() {
         let mut scanner = default_scanner();
-        let result = scanner.scan().unwrap();
+        let result = scanner.scan().expect("serde deserialization should succeed");
         assert!(!result.regime_summary.is_empty());
     }
 
@@ -1146,7 +1146,7 @@ mod tests {
         let mut scanner = default_scanner();
         scanner.update_parameter("threshold-1", 300_000);
         // Scan should use updated value
-        let result = scanner.scan().unwrap();
+        let result = scanner.scan().expect("serde deserialization should succeed");
         assert!(result.parameters_scanned > 0);
     }
 
@@ -1162,13 +1162,13 @@ mod tests {
                 regime: RegimeLabel::Normal,
             });
         }
-        let result = scanner.scan().unwrap();
+        let result = scanner.scan().expect("serde deserialization should succeed");
         // With enough observations, warning should have trend computed
         let warning = result
             .warnings
             .iter()
             .find(|w| w.parameter_id == "threshold-1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(warning.observation_count >= 10);
     }
 
@@ -1182,19 +1182,19 @@ mod tests {
         };
         let params = vec![make_param("x", 500_000)];
         let envelopes = vec![make_envelope("x", 0, MILLION, 500_000)];
-        let mut scanner = BifurcationBoundaryScanner::new(config, params, envelopes).unwrap();
+        let mut scanner = BifurcationBoundaryScanner::new(config, params, envelopes).expect("serde deserialization should succeed");
 
-        scanner.scan().unwrap();
+        scanner.scan().expect("serde deserialization should succeed");
         assert!(!scanner.stability_maps().is_empty());
 
-        let map = scanner.stability_maps().get("x").unwrap();
+        let map = scanner.stability_maps().get("x").expect("serde deserialization should succeed");
         assert!(!map.is_empty());
     }
 
     #[test]
     fn stability_maps_not_recorded_when_disabled() {
         let mut scanner = default_scanner();
-        scanner.scan().unwrap();
+        scanner.scan().expect("serde deserialization should succeed");
         assert!(scanner.stability_maps().is_empty());
     }
 
@@ -1205,9 +1205,9 @@ mod tests {
         let params = vec![make_param("x", -100_000)]; // Way below bounds
         let envelopes = vec![make_envelope("x", 100_000, 900_000, 500_000)];
         let mut scanner =
-            BifurcationBoundaryScanner::new(ScannerConfig::default(), params, envelopes).unwrap();
+            BifurcationBoundaryScanner::new(ScannerConfig::default(), params, envelopes).expect("serde deserialization should succeed");
 
-        let result = scanner.scan().unwrap();
+        let result = scanner.scan().expect("serde deserialization should succeed");
         assert!(result.has_preemptive_actions());
 
         let action = &result.preemptive_actions[0];
@@ -1220,9 +1220,9 @@ mod tests {
         let params = vec![make_param("x", 105_000)];
         let envelopes = vec![make_envelope("x", 100_000, 900_000, 500_000)];
         let mut scanner =
-            BifurcationBoundaryScanner::new(ScannerConfig::default(), params, envelopes).unwrap();
+            BifurcationBoundaryScanner::new(ScannerConfig::default(), params, envelopes).expect("serde deserialization should succeed");
 
-        let result = scanner.scan().unwrap();
+        let result = scanner.scan().expect("serde deserialization should succeed");
         if result.has_preemptive_actions() {
             let action = &result.preemptive_actions[0];
             // Should be Demote or FallbackSafe depending on proximity
@@ -1246,8 +1246,8 @@ mod tests {
             make_envelope("calibration-1", 200_000, 800_000, 500_000),
         ];
         let mut scanner =
-            BifurcationBoundaryScanner::new(ScannerConfig::default(), params, envelopes).unwrap();
-        let result = scanner.scan().unwrap();
+            BifurcationBoundaryScanner::new(ScannerConfig::default(), params, envelopes).expect("serde deserialization should succeed");
+        let result = scanner.scan().expect("serde deserialization should succeed");
         assert!(result.is_stable());
     }
 
@@ -1256,9 +1256,9 @@ mod tests {
         let params = vec![make_param("x", 50_000)];
         let envelopes = vec![make_envelope("x", 100_000, 900_000, 500_000)];
         let mut scanner =
-            BifurcationBoundaryScanner::new(ScannerConfig::default(), params, envelopes).unwrap();
+            BifurcationBoundaryScanner::new(ScannerConfig::default(), params, envelopes).expect("serde deserialization should succeed");
 
-        let result = scanner.scan().unwrap();
+        let result = scanner.scan().expect("serde deserialization should succeed");
         assert!(!result.is_stable());
     }
 
@@ -1267,9 +1267,9 @@ mod tests {
         let params = vec![make_param("x", 105_000)]; // Near boundary
         let envelopes = vec![make_envelope("x", 100_000, 900_000, 500_000)];
         let mut scanner =
-            BifurcationBoundaryScanner::new(ScannerConfig::default(), params, envelopes).unwrap();
+            BifurcationBoundaryScanner::new(ScannerConfig::default(), params, envelopes).expect("serde deserialization should succeed");
 
-        let result = scanner.scan().unwrap();
+        let result = scanner.scan().expect("serde deserialization should succeed");
         let critical = result.critical_warning_count();
         // May or may not be critical depending on exact proximity calculation
         assert!(critical <= 1);
@@ -1280,17 +1280,17 @@ mod tests {
     #[test]
     fn config_serde_roundtrip() {
         let config = ScannerConfig::default();
-        let json = serde_json::to_string(&config).unwrap();
-        let back: ScannerConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let back: ScannerConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, back);
     }
 
     #[test]
     fn scan_result_serde_roundtrip() {
         let mut scanner = default_scanner();
-        let result = scanner.scan().unwrap();
-        let json = serde_json::to_string(&result).unwrap();
-        let back: ScanResult = serde_json::from_str(&json).unwrap();
+        let result = scanner.scan().expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let back: ScanResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result.artifact_hash, back.artifact_hash);
         assert_eq!(result.parameters_scanned, back.parameters_scanned);
     }
@@ -1313,8 +1313,8 @@ mod tests {
             ScannerError::InvalidRiskBudget { value: -1 },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap();
-            let back: ScannerError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let back: ScannerError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, back);
         }
     }
@@ -1465,12 +1465,12 @@ mod tests {
             params.clone(),
             envelopes.clone(),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let mut s2 =
-            BifurcationBoundaryScanner::new(ScannerConfig::default(), params, envelopes).unwrap();
+            BifurcationBoundaryScanner::new(ScannerConfig::default(), params, envelopes).expect("serde deserialization should succeed");
 
-        let r1 = s1.scan().unwrap();
-        let r2 = s2.scan().unwrap();
+        let r1 = s1.scan().expect("serde deserialization should succeed");
+        let r2 = s2.scan().expect("serde deserialization should succeed");
 
         assert_eq!(r1.artifact_hash, r2.artifact_hash);
         assert_eq!(r1.stability_score_millionths, r2.stability_score_millionths);
@@ -1508,8 +1508,8 @@ mod tests {
             ParameterDomain::SafetyBoundary,
             ParameterDomain::Environment,
         ] {
-            let json = serde_json::to_string(&d).unwrap();
-            let back: ParameterDomain = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
+            let back: ParameterDomain = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(d, back);
         }
     }
@@ -1528,8 +1528,8 @@ mod tests {
             BifurcationType::Catastrophic,
             BifurcationType::Gradual,
         ] {
-            let json = serde_json::to_string(&t).unwrap();
-            let back: BifurcationType = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&t).expect("serde deserialization should succeed");
+            let back: BifurcationType = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(t, back);
         }
     }
@@ -1550,8 +1550,8 @@ mod tests {
             },
         ];
         for err in errors {
-            let json = serde_json::to_string(&err).unwrap();
-            let back: ScannerError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+            let back: ScannerError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(err, back);
         }
     }
@@ -1563,8 +1563,8 @@ mod tests {
     #[test]
     fn control_parameter_serde_roundtrip() {
         let p = make_param("test", 500_000);
-        let json = serde_json::to_string(&p).unwrap();
-        let back: ControlParameter = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
+        let back: ControlParameter = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(p, back);
     }
 
@@ -1581,8 +1581,8 @@ mod tests {
             epoch: crate::security_epoch::SecurityEpoch::from_raw(7),
             record_stability_maps: true,
         };
-        let json = serde_json::to_string(&config).unwrap();
-        let back: ScannerConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let back: ScannerConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, back);
     }
 
@@ -1685,8 +1685,8 @@ mod tests {
     #[test]
     fn json_field_presence_scan_result() {
         let mut scanner = default_scanner();
-        let result = scanner.scan().unwrap();
-        let j = serde_json::to_string(&result).unwrap();
+        let result = scanner.scan().expect("serde deserialization should succeed");
+        let j = serde_json::to_string(&result).expect("serde deserialization should succeed");
         assert!(j.contains("\"schema_version\""));
         assert!(j.contains("\"stability_score_millionths\""));
         assert!(j.contains("\"artifact_hash\""));
@@ -1704,7 +1704,7 @@ mod tests {
             trigger_risk_millionths: 700_000,
             rationale: "json-test".to_string(),
         };
-        let j = serde_json::to_string(&action).unwrap();
+        let j = serde_json::to_string(&action).expect("serde deserialization should succeed");
         assert!(j.contains("\"action_id\""));
         assert!(j.contains("\"trigger_indicator_id\""));
         assert!(j.contains("\"rationale\""));
@@ -1720,7 +1720,7 @@ mod tests {
             regime_after: RegimeLabel::Attack,
             confidence_millionths: 900_000,
         };
-        let j = serde_json::to_string(&bp).unwrap();
+        let j = serde_json::to_string(&bp).expect("serde deserialization should succeed");
         assert!(j.contains("\"parameter_id\""));
         assert!(j.contains("\"critical_value_millionths\""));
         assert!(j.contains("\"bifurcation_type\""));
@@ -1818,8 +1818,8 @@ mod tests {
             regime: RegimeLabel::Elevated,
             stability_millionths: 200_000,
         };
-        let json = serde_json::to_string(&entry).unwrap();
-        let back: StabilityMapEntry = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let back: StabilityMapEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, back);
     }
 
@@ -1834,8 +1834,8 @@ mod tests {
             trend_millionths: 15_000,
             observation_count: 30,
         };
-        let json = serde_json::to_string(&ewi).unwrap();
-        let back: EarlyWarningIndicator = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&ewi).expect("serde deserialization should succeed");
+        let back: EarlyWarningIndicator = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ewi, back);
     }
 
@@ -1850,8 +1850,8 @@ mod tests {
             trigger_risk_millionths: 800_000,
             rationale: "serde roundtrip test".to_string(),
         };
-        let json = serde_json::to_string(&action).unwrap();
-        let back: PreemptiveAction = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&action).expect("serde deserialization should succeed");
+        let back: PreemptiveAction = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(action, back);
     }
 
@@ -1863,8 +1863,8 @@ mod tests {
             tick: 42,
             regime: RegimeLabel::Normal,
         };
-        let json = serde_json::to_string(&obs).unwrap();
-        let back: ParameterObservation = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&obs).expect("serde deserialization should succeed");
+        let back: ParameterObservation = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(obs, back);
     }
 
@@ -1878,8 +1878,8 @@ mod tests {
             regime_after: RegimeLabel::Degraded,
             confidence_millionths: 850_000,
         };
-        let json = serde_json::to_string(&bp).unwrap();
-        let back: BifurcationPoint = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&bp).expect("serde deserialization should succeed");
+        let back: BifurcationPoint = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(bp, back);
     }
 
@@ -1890,7 +1890,7 @@ mod tests {
     #[test]
     fn enrichment_json_field_presence_control_parameter() {
         let p = make_param("cp-json", 500_000);
-        let j = serde_json::to_string(&p).unwrap();
+        let j = serde_json::to_string(&p).expect("serde deserialization should succeed");
         assert!(j.contains("\"id\""));
         assert!(j.contains("\"label\""));
         assert!(j.contains("\"domain\""));
@@ -1909,7 +1909,7 @@ mod tests {
             trend_millionths: 0,
             observation_count: 5,
         };
-        let j = serde_json::to_string(&ewi).unwrap();
+        let j = serde_json::to_string(&ewi).expect("serde deserialization should succeed");
         assert!(j.contains("\"indicator_id\""));
         assert!(j.contains("\"risk_value_millionths\""));
         assert!(j.contains("\"threshold_millionths\""));
@@ -1933,7 +1933,7 @@ mod tests {
         });
         assert_eq!(scanner.observation_count(), 1);
         // Scan still works
-        let result = scanner.scan().unwrap();
+        let result = scanner.scan().expect("serde deserialization should succeed");
         assert_eq!(result.parameters_scanned, 2);
     }
 
@@ -1950,8 +1950,8 @@ mod tests {
         ];
         let envelopes = vec![make_envelope("monitored", 100_000, 900_000, 500_000)];
         let mut scanner =
-            BifurcationBoundaryScanner::new(ScannerConfig::default(), params, envelopes).unwrap();
-        let result = scanner.scan().unwrap();
+            BifurcationBoundaryScanner::new(ScannerConfig::default(), params, envelopes).expect("serde deserialization should succeed");
+        let result = scanner.scan().expect("serde deserialization should succeed");
         assert_eq!(result.parameters_scanned, 2);
         assert!(result.regime_summary.contains_key("unmonitored"));
     }
@@ -1968,9 +1968,9 @@ mod tests {
         };
         let params = vec![make_param("x", 500_000)];
         let envelopes = vec![make_envelope("x", 0, MILLION, 500_000)];
-        let mut scanner = BifurcationBoundaryScanner::new(config, params, envelopes).unwrap();
-        scanner.scan().unwrap();
-        let map = scanner.stability_maps().get("x").unwrap();
+        let mut scanner = BifurcationBoundaryScanner::new(config, params, envelopes).expect("serde deserialization should succeed");
+        scanner.scan().expect("serde deserialization should succeed");
+        let map = scanner.stability_maps().get("x").expect("serde deserialization should succeed");
         // Entries should be in ascending order of value_millionths
         for w in map.windows(2) {
             assert!(w[0].value_millionths <= w[1].value_millionths);
@@ -1988,11 +1988,11 @@ mod tests {
         let envs = vec![make_envelope("x", 100_000, 900_000, 500_000)];
         let mut sa =
             BifurcationBoundaryScanner::new(ScannerConfig::default(), params_a, envs.clone())
-                .unwrap();
+                .expect("serde deserialization should succeed");
         let mut sb =
-            BifurcationBoundaryScanner::new(ScannerConfig::default(), params_b, envs).unwrap();
-        let ra = sa.scan().unwrap();
-        let rb = sb.scan().unwrap();
+            BifurcationBoundaryScanner::new(ScannerConfig::default(), params_b, envs).expect("serde deserialization should succeed");
+        let ra = sa.scan().expect("serde deserialization should succeed");
+        let rb = sb.scan().expect("serde deserialization should succeed");
         // Different parameter states should produce different artifact hashes
         assert_ne!(ra.artifact_hash, rb.artifact_hash);
     }

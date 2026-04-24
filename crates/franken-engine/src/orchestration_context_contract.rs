@@ -1072,7 +1072,7 @@ mod tests {
             ContextOrigin::ChildDerivation,
             &rule,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(child.context_id, "child-1");
         assert_eq!(child.origin, ContextOrigin::ChildDerivation);
         assert_eq!(child.budget_ms, 5000);
@@ -1094,7 +1094,7 @@ mod tests {
             ContextOrigin::ChildDerivation,
             &rule,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert!(child.trace_id.starts_with("trace-parent.child."));
     }
 
@@ -1171,7 +1171,7 @@ mod tests {
         let mut parent = root_ctx("parent", 10_000);
         let rule = default_rule();
         let (cleanup, event) =
-            carve_cleanup_context(&mut parent, "cleanup-1".to_string(), &rule).unwrap();
+            carve_cleanup_context(&mut parent, "cleanup-1".to_string(), &rule).expect("serde deserialization should succeed");
         assert_eq!(cleanup.origin, ContextOrigin::CleanupCarve);
         // 10% of 10_000 = 1000ms.
         assert_eq!(cleanup.budget_ms, 1000);
@@ -1192,7 +1192,7 @@ mod tests {
     #[test]
     fn consume_budget_basic() {
         let mut ctx = root_ctx("ctx", 1000);
-        consume_budget(&mut ctx, 500).unwrap();
+        consume_budget(&mut ctx, 500).expect("serde deserialization should succeed");
         assert_eq!(ctx.consumed_ms, 500);
         assert_eq!(ctx.remaining_ms(), 500);
         assert_eq!(ctx.state, ContextState::Active);
@@ -1201,7 +1201,7 @@ mod tests {
     #[test]
     fn consume_budget_exhausts() {
         let mut ctx = root_ctx("ctx", 1000);
-        consume_budget(&mut ctx, 1000).unwrap();
+        consume_budget(&mut ctx, 1000).expect("serde deserialization should succeed");
         assert_eq!(ctx.state, ContextState::Exhausted);
     }
 
@@ -1261,7 +1261,7 @@ mod tests {
             ContextOrigin::ChildDerivation,
             &rule,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let contexts = vec![parent, child];
         let events = vec![event];
         let report = validate_threading(&contexts, &events, &[], &rule, epoch(1));
@@ -1349,15 +1349,15 @@ mod tests {
     #[test]
     fn serde_context_roundtrip() {
         let ctx = root_ctx("serde-ctx", 5000);
-        let json = serde_json::to_string(&ctx).unwrap();
-        let restored: CanonicalContextDescriptor = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&ctx).expect("serde deserialization should succeed");
+        let restored: CanonicalContextDescriptor = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ctx, restored);
     }
 
     #[test]
     fn serde_origin_snake_case() {
         let origin = ContextOrigin::CleanupCarve;
-        let json = serde_json::to_string(&origin).unwrap();
+        let json = serde_json::to_string(&origin).expect("serde deserialization should succeed");
         assert_eq!(json, "\"cleanup_carve\"");
     }
 
@@ -1368,8 +1368,8 @@ mod tests {
             remaining_ms: 100,
             requested_ms: 200,
         };
-        let json = serde_json::to_string(&err).unwrap();
-        let restored: ContextError = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let restored: ContextError = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, restored);
     }
 
@@ -1415,15 +1415,15 @@ mod tests {
             ContextOrigin::ChildDerivation,
             &rule,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         // Consume budget in child.
-        consume_budget(&mut child, 2000).unwrap();
+        consume_budget(&mut child, 2000).expect("serde deserialization should succeed");
         assert_eq!(child.remaining_ms(), 2000);
 
         // Carve cleanup from remaining parent budget.
         let (mut cleanup, ev2) =
-            carve_cleanup_context(&mut root, "cleanup-1".to_string(), &rule).unwrap();
+            carve_cleanup_context(&mut root, "cleanup-1".to_string(), &rule).expect("serde deserialization should succeed");
 
         // Release everything.
         release_context(&mut child);
@@ -1452,8 +1452,8 @@ mod tests {
             ContextOrigin::CellClose,
             ContextOrigin::Replay,
         ] {
-            let json = serde_json::to_string(&origin).unwrap();
-            let back: ContextOrigin = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&origin).expect("serde deserialization should succeed");
+            let back: ContextOrigin = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(origin, back);
         }
     }
@@ -1479,8 +1479,8 @@ mod tests {
             ContextState::Released,
             ContextState::Cancelled,
         ] {
-            let json = serde_json::to_string(&state).unwrap();
-            let back: ContextState = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&state).expect("serde deserialization should succeed");
+            let back: ContextState = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(state, back);
         }
     }
@@ -1505,8 +1505,8 @@ mod tests {
             MockSeamClassification::FalsePositive,
             MockSeamClassification::UnderInvestigation,
         ] {
-            let json = serde_json::to_string(&cls).unwrap();
-            let back: MockSeamClassification = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&cls).expect("serde deserialization should succeed");
+            let back: MockSeamClassification = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(cls, back);
         }
     }
@@ -1564,8 +1564,8 @@ mod tests {
     #[test]
     fn derivation_rule_serde() {
         let rule = default_rule();
-        let json = serde_json::to_string(&rule).unwrap();
-        let back: DerivationRule = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&rule).expect("serde deserialization should succeed");
+        let back: DerivationRule = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(rule, back);
     }
 
@@ -1588,9 +1588,9 @@ mod tests {
             ContextOrigin::ChildDerivation,
             &rule,
         )
-        .unwrap();
-        let json = serde_json::to_string(&event).unwrap();
-        let back: DerivationEvent = serde_json::from_str(&json).unwrap();
+        .expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let back: DerivationEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
     }
 
@@ -1605,7 +1605,7 @@ mod tests {
             ContextOrigin::ChildDerivation,
             &rule,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let s = format!("{event}");
         assert!(s.contains("p"));
         assert!(s.contains("c"));
@@ -1638,8 +1638,8 @@ mod tests {
     fn validation_report_serde() {
         let rule = default_rule();
         let report = validate_threading(&[], &[], &[], &rule, epoch(1));
-        let json = serde_json::to_string(&report).unwrap();
-        let back: ValidationReport = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let back: ValidationReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report, back);
     }
 
@@ -1706,7 +1706,7 @@ mod tests {
             ContextOrigin::ChildDerivation,
             &rule,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let (c2, _) = derive_child_context(
             &mut parent,
             "c2".to_string(),
@@ -1714,7 +1714,7 @@ mod tests {
             ContextOrigin::ChildDerivation,
             &rule,
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(parent.consumed_ms, 6000);
         assert_eq!(c1.depth, 1);
         assert_eq!(c2.depth, 1);

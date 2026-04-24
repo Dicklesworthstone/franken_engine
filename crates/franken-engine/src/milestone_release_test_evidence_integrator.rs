@@ -548,22 +548,19 @@ pub fn integrate_milestone_release_test_evidence(
                     .cmp(&right.artifact_id)
                     .then_with(|| left.path.cmp(&right.path))
             });
-            if let Some(artifact) = artifacts
-                .iter()
-                .find(|artifact| {
-                    artifact.signature_status == SignatureStatus::Signed
-                        && artifact
-                            .signer
-                            .as_deref()
-                            .map(str::trim)
-                            .is_some_and(|signer| !signer.is_empty())
-                        && artifact
-                            .signature_ref
-                            .as_deref()
-                            .map(str::trim)
-                            .is_some_and(|signature_ref| !signature_ref.is_empty())
-                })
-            {
+            if let Some(artifact) = artifacts.iter().find(|artifact| {
+                artifact.signature_status == SignatureStatus::Signed
+                    && artifact
+                        .signer
+                        .as_deref()
+                        .map(str::trim)
+                        .is_some_and(|signer| !signer.is_empty())
+                    && artifact
+                        .signature_ref
+                        .as_deref()
+                        .map(str::trim)
+                        .is_some_and(|signature_ref| !signature_ref.is_empty())
+            }) {
                 for category in source.gate_categories() {
                     signed_evidence_links.push(SignedEvidenceLink {
                         evidence_source: source,
@@ -1038,9 +1035,9 @@ mod tests {
     fn evidence_source_serde_roundtrip() {
         for source in EvidenceSource::REQUIRED {
             // SAFETY: EvidenceSource derives Serialize and has no non-serializable fields.
-            let json = serde_json::to_string(&source).unwrap();
+            let json = serde_json::to_string(&source).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by valid EvidenceSource serialization.
-            let back: EvidenceSource = serde_json::from_str(&json).unwrap();
+            let back: EvidenceSource = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(back, source);
         }
     }
@@ -1053,9 +1050,9 @@ mod tests {
             SignatureStatus::Invalid,
         ] {
             // SAFETY: SignatureStatus derives Serialize and has no non-serializable fields.
-            let json = serde_json::to_string(&status).unwrap();
+            let json = serde_json::to_string(&status).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by valid SignatureStatus serialization.
-            let back: SignatureStatus = serde_json::from_str(&json).unwrap();
+            let back: SignatureStatus = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(back, status);
         }
     }
@@ -1348,7 +1345,7 @@ mod tests {
             .signals
             .iter_mut()
             .find(|s| s.source == EvidenceSource::UnitDepthGate)
-            .unwrap()
+            .expect("serde deserialization should succeed")
             .score_millionths = 1_000_000;
         let decision =
             integrate_milestone_release_test_evidence(&input, &IntegratorPolicy::default());
@@ -1495,7 +1492,7 @@ mod tests {
             .signals
             .iter_mut()
             .find(|s| s.source == EvidenceSource::TestLoggingSchema)
-            .unwrap()
+            .expect("serde deserialization should succeed")
             .collected_at_ns = 0; // extremely old → stale
         input.now_ns = 10_000_000_000_000;
         // Also update other signals so they are not stale
@@ -1512,7 +1509,7 @@ mod tests {
         let logging_gate = gate_inputs
             .iter()
             .find(|g| g.category == GateCategory::ObservabilityIntegrity)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(!logging_gate.passed);
     }
 
@@ -1584,7 +1581,7 @@ mod tests {
             .items
             .iter()
             .find(|i| i.item_id == "security.conformance_suite")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(item.status, ChecklistItemStatus::Pass);
         assert_eq!(item.category, ChecklistCategory::Security);
         assert!(item.required);
@@ -1695,9 +1692,9 @@ mod tests {
             message: "something went wrong".to_string(),
         };
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&f).unwrap();
+        let json = serde_json::to_string(&f).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let back: IntegrationFinding = serde_json::from_str(&json).unwrap();
+        let back: IntegrationFinding = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(f, back);
     }
 
@@ -1713,8 +1710,8 @@ mod tests {
             artifact_integrity_score_millionths: 930_000,
             delta_from_previous_millionths: BTreeMap::new(),
         };
-        let json = serde_json::to_string(&summary).unwrap();
-        let back: MilestoneQualitySummary = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
+        let back: MilestoneQualitySummary = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(summary, back);
     }
 
@@ -1787,7 +1784,7 @@ mod tests {
     fn evidence_source_serde_variants_distinct() {
         let json_set: BTreeSet<String> = EvidenceSource::REQUIRED
             .iter()
-            .map(|v| serde_json::to_string(v).unwrap())
+            .map(|v| serde_json::to_string(v).expect("serde deserialization should succeed"))
             .collect();
         assert_eq!(json_set.len(), 5);
     }
@@ -1800,32 +1797,32 @@ mod tests {
             SignatureStatus::Invalid,
         ]
         .iter()
-        .map(|v| serde_json::to_string(v).unwrap())
+        .map(|v| serde_json::to_string(v).expect("serde deserialization should succeed"))
         .collect();
         assert_eq!(json_set.len(), 3);
     }
 
     #[test]
     fn evidence_source_serde_snake_case_convention() {
-        let json = serde_json::to_string(&EvidenceSource::UnitDepthGate).unwrap();
+        let json = serde_json::to_string(&EvidenceSource::UnitDepthGate).expect("serde deserialization should succeed");
         assert_eq!(json, "\"unit_depth_gate\"");
 
-        let json = serde_json::to_string(&EvidenceSource::EndToEndScenarioMatrix).unwrap();
+        let json = serde_json::to_string(&EvidenceSource::EndToEndScenarioMatrix).expect("serde deserialization should succeed");
         assert_eq!(json, "\"end_to_end_scenario_matrix\"");
 
-        let json = serde_json::to_string(&EvidenceSource::ProofCarryingArtifactGate).unwrap();
+        let json = serde_json::to_string(&EvidenceSource::ProofCarryingArtifactGate).expect("serde deserialization should succeed");
         assert_eq!(json, "\"proof_carrying_artifact_gate\"");
     }
 
     #[test]
     fn signature_status_serde_snake_case_convention() {
-        let json = serde_json::to_string(&SignatureStatus::Signed).unwrap();
+        let json = serde_json::to_string(&SignatureStatus::Signed).expect("serde deserialization should succeed");
         assert_eq!(json, "\"signed\"");
 
-        let json = serde_json::to_string(&SignatureStatus::Unsigned).unwrap();
+        let json = serde_json::to_string(&SignatureStatus::Unsigned).expect("serde deserialization should succeed");
         assert_eq!(json, "\"unsigned\"");
 
-        let json = serde_json::to_string(&SignatureStatus::Invalid).unwrap();
+        let json = serde_json::to_string(&SignatureStatus::Invalid).expect("serde deserialization should succeed");
         assert_eq!(json, "\"invalid\"");
     }
 
@@ -1938,7 +1935,7 @@ mod tests {
     #[test]
     fn evidence_artifact_link_json_field_names() {
         let link = signed_artifact("test", 50_000);
-        let json = serde_json::to_string(&link).unwrap();
+        let json = serde_json::to_string(&link).expect("serde deserialization should succeed");
         assert!(json.contains("\"artifact_id\""));
         assert!(json.contains("\"path\""));
         assert!(json.contains("\"sha256\""));
@@ -1952,7 +1949,7 @@ mod tests {
     #[test]
     fn evidence_signal_json_field_names() {
         let signal = baseline_signal(EvidenceSource::UnitDepthGate, 980_000, 50_000);
-        let json = serde_json::to_string(&signal).unwrap();
+        let json = serde_json::to_string(&signal).expect("serde deserialization should succeed");
         assert!(json.contains("\"source\""));
         assert!(json.contains("\"passed\""));
         assert!(json.contains("\"score_millionths\""));
@@ -1966,7 +1963,7 @@ mod tests {
     #[test]
     fn integrator_policy_json_field_names() {
         let policy = IntegratorPolicy::default();
-        let json = serde_json::to_string(&policy).unwrap();
+        let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
         assert!(json.contains("\"max_signal_age_ns\""));
         assert!(json.contains("\"min_schema_major\""));
         assert!(json.contains("\"require_signed_artifacts\""));
@@ -1977,7 +1974,7 @@ mod tests {
     #[test]
     fn integration_finding_json_field_names() {
         let f = finding(Some(EvidenceSource::UnitDepthGate), "test");
-        let json = serde_json::to_string(&f).unwrap();
+        let json = serde_json::to_string(&f).expect("serde deserialization should succeed");
         assert!(json.contains("\"source\""));
         assert!(json.contains("\"error_code\""));
         assert!(json.contains("\"message\""));
@@ -1993,7 +1990,7 @@ mod tests {
             signer: "admin@test".to_string(),
             signature_ref: "sig:001".to_string(),
         };
-        let json = serde_json::to_string(&link).unwrap();
+        let json = serde_json::to_string(&link).expect("serde deserialization should succeed");
         assert!(json.contains("\"evidence_source\""));
         assert!(json.contains("\"gate_category\""));
         assert!(json.contains("\"artifact_id\""));
@@ -2014,7 +2011,7 @@ mod tests {
             artifact_integrity_score_millionths: 0,
             delta_from_previous_millionths: BTreeMap::new(),
         };
-        let json = serde_json::to_string(&summary).unwrap();
+        let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
         assert!(json.contains("\"cut_line\""));
         assert!(json.contains("\"aggregate_score_millionths\""));
         assert!(json.contains("\"unit_depth_score_millionths\""));
@@ -2030,7 +2027,7 @@ mod tests {
         let input = baseline_input(50_000);
         let decision =
             integrate_milestone_release_test_evidence(&input, &IntegratorPolicy::default());
-        let json = serde_json::to_string(&decision).unwrap();
+        let json = serde_json::to_string(&decision).expect("serde deserialization should succeed");
         assert!(json.contains("\"schema_version\""));
         assert!(json.contains("\"trace_id\""));
         assert!(json.contains("\"decision_id\""));
@@ -2052,7 +2049,7 @@ mod tests {
         let decision =
             integrate_milestone_release_test_evidence(&input, &IntegratorPolicy::default());
         let events = emit_integration_events(&decision);
-        let json = serde_json::to_string(&events[0]).unwrap();
+        let json = serde_json::to_string(&events[0]).expect("serde deserialization should succeed");
         assert!(json.contains("\"schema_version\""));
         assert!(json.contains("\"trace_id\""));
         assert!(json.contains("\"decision_id\""));
@@ -2109,8 +2106,8 @@ mod tests {
             generated_at_ns: u64::MAX,
             schema_major: u32::MAX,
         };
-        let json = serde_json::to_string(&link).unwrap();
-        let back: EvidenceArtifactLink = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&link).expect("serde deserialization should succeed");
+        let back: EvidenceArtifactLink = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.generated_at_ns, u64::MAX);
         assert_eq!(back.schema_major, u32::MAX);
     }
@@ -2152,8 +2149,8 @@ mod tests {
             generated_at_ns: 100,
             schema_major: 1,
         };
-        let json = serde_json::to_string(&link).unwrap();
-        let back: EvidenceArtifactLink = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&link).expect("serde deserialization should succeed");
+        let back: EvidenceArtifactLink = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.signer, None);
         assert_eq!(back.signature_ref, None);
     }
@@ -2170,8 +2167,8 @@ mod tests {
             artifact_links: vec![signed_artifact("test", 50_000)],
             metadata: BTreeMap::new(),
         };
-        let json = serde_json::to_string(&signal).unwrap();
-        let back: EvidenceSignal = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&signal).expect("serde deserialization should succeed");
+        let back: EvidenceSignal = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert!(back.metadata.is_empty());
     }
 
@@ -2182,8 +2179,8 @@ mod tests {
             error_code: "ERR".to_string(),
             message: "global".to_string(),
         };
-        let json = serde_json::to_string(&f).unwrap();
-        let back: IntegrationFinding = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&f).expect("serde deserialization should succeed");
+        let back: IntegrationFinding = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.source, None);
     }
 
@@ -2298,24 +2295,24 @@ mod tests {
     #[test]
     fn evidence_artifact_link_serde_roundtrip() {
         let link = signed_artifact("roundtrip-test", 50_000);
-        let json = serde_json::to_string(&link).unwrap();
-        let back: EvidenceArtifactLink = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&link).expect("serde deserialization should succeed");
+        let back: EvidenceArtifactLink = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(link, back);
     }
 
     #[test]
     fn evidence_signal_serde_roundtrip() {
         let signal = baseline_signal(EvidenceSource::TestLoggingSchema, 970_000, 50_000);
-        let json = serde_json::to_string(&signal).unwrap();
-        let back: EvidenceSignal = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&signal).expect("serde deserialization should succeed");
+        let back: EvidenceSignal = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(signal, back);
     }
 
     #[test]
     fn integrator_policy_serde_roundtrip() {
         let policy = IntegratorPolicy::default();
-        let json = serde_json::to_string(&policy).unwrap();
-        let back: IntegratorPolicy = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
+        let back: IntegratorPolicy = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(policy, back);
     }
 
@@ -2329,8 +2326,8 @@ mod tests {
             signer: "ci-system@example.com".to_string(),
             signature_ref: "sig:flake:001".to_string(),
         };
-        let json = serde_json::to_string(&link).unwrap();
-        let back: SignedEvidenceLink = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&link).expect("serde deserialization should succeed");
+        let back: SignedEvidenceLink = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(link, back);
     }
 
@@ -2339,8 +2336,8 @@ mod tests {
         let input = baseline_input(50_000);
         let decision =
             integrate_milestone_release_test_evidence(&input, &IntegratorPolicy::default());
-        let json = serde_json::to_string(&decision).unwrap();
-        let back: TestEvidenceIntegrationDecision = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&decision).expect("serde deserialization should succeed");
+        let back: TestEvidenceIntegrationDecision = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(decision, back);
     }
 
@@ -2350,16 +2347,16 @@ mod tests {
         let decision =
             integrate_milestone_release_test_evidence(&input, &IntegratorPolicy::default());
         let events = emit_integration_events(&decision);
-        let json = serde_json::to_string(&events[0]).unwrap();
-        let back: TestEvidenceIntegratorEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&events[0]).expect("serde deserialization should succeed");
+        let back: TestEvidenceIntegratorEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(events[0], back);
     }
 
     #[test]
     fn test_evidence_integrator_input_serde_roundtrip() {
         let input = baseline_input(50_000);
-        let json = serde_json::to_string(&input).unwrap();
-        let back: TestEvidenceIntegratorInput = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
+        let back: TestEvidenceIntegratorInput = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(input, back);
     }
 
@@ -2378,8 +2375,8 @@ mod tests {
             artifact_integrity_score_millionths: 870_000,
             delta_from_previous_millionths: deltas,
         });
-        let json = serde_json::to_string(&input).unwrap();
-        let back: TestEvidenceIntegratorInput = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
+        let back: TestEvidenceIntegratorInput = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(input, back);
     }
 
@@ -2596,7 +2593,7 @@ mod tests {
             .signals
             .iter_mut()
             .find(|s| s.source == EvidenceSource::UnitDepthGate)
-            .unwrap()
+            .expect("serde deserialization should succeed")
             .passed = false;
         let decision =
             integrate_milestone_release_test_evidence(&input, &IntegratorPolicy::default());
@@ -2614,7 +2611,7 @@ mod tests {
             .items
             .iter()
             .find(|i| i.item_id == "security.conformance_suite")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(item.status, ChecklistItemStatus::Fail);
     }
 

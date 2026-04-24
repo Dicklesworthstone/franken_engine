@@ -577,7 +577,7 @@ mod tests {
     use tempfile::TempDir;
 
     fn test_config() -> ConvergenceSloConfig {
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = TempDir::new().expect("serde deserialization should succeed");
         ConvergenceSloConfig {
             max_convergence_time_ms: 500,
             artifacts_directory: temp_dir.path().to_path_buf(),
@@ -647,7 +647,7 @@ mod tests {
         let mut meter = ConvergenceMeter::new(config);
 
         let decision = test_decision();
-        meter.start_measurement(&decision, 3).unwrap();
+        meter.start_measurement(&decision, 3).expect("serde deserialization should succeed");
 
         assert_eq!(meter.active_measurements.len(), 1);
         assert_eq!(meter.completed_measurements.len(), 0);
@@ -662,7 +662,7 @@ mod tests {
                 NodeId("instance-1".to_string()),
                 ack_time_1,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(!converged);
         assert_eq!(meter.active_measurements.len(), 1);
 
@@ -673,7 +673,7 @@ mod tests {
                 NodeId("instance-2".to_string()),
                 ack_time_2,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(converged);
         assert_eq!(meter.active_measurements.len(), 0);
         assert_eq!(meter.completed_measurements.len(), 1);
@@ -699,7 +699,7 @@ mod tests {
             meter.completed_measurements.push(measurement);
         }
 
-        let statistics = meter.compute_statistics().unwrap();
+        let statistics = meter.compute_statistics().expect("serde deserialization should succeed");
         assert_eq!(statistics.total_measurements, 5);
         assert_eq!(statistics.converged_count, 5);
         assert_eq!(statistics.slo_violations, 2); // 400ms and 500ms exceed 350ms threshold
@@ -770,7 +770,7 @@ mod tests {
 
         // Add some active and completed measurements
         let decision = test_decision();
-        meter.start_measurement(&decision, 3).unwrap();
+        meter.start_measurement(&decision, 3).expect("serde deserialization should succeed");
 
         let mut completed_measurement = ConvergenceMeasurement::new(&decision, 2);
         completed_measurement.convergence_duration_ms = Some(100);

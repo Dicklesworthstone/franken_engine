@@ -1652,7 +1652,7 @@ mod tests {
     fn add_package_and_retrieve() {
         let mut m = NpmCompatibilityMatrix::new();
         m.add_package(sample_package("lodash", CohortTier::Tier1Critical))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(m.total_packages(), 1);
         assert_eq!(m.packages_in_tier(CohortTier::Tier1Critical).len(), 1);
         assert_eq!(m.packages_in_tier(CohortTier::Tier2Popular).len(), 0);
@@ -1662,7 +1662,7 @@ mod tests {
     fn duplicate_package_rejected() {
         let mut m = NpmCompatibilityMatrix::new();
         m.add_package(sample_package("lodash", CohortTier::Tier1Critical))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let err = m
             .add_package(sample_package("lodash", CohortTier::Tier1Critical))
             .unwrap_err();
@@ -1688,15 +1688,15 @@ mod tests {
     fn record_and_retrieve_test_result() {
         let mut m = NpmCompatibilityMatrix::new();
         m.add_package(sample_package("lodash", CohortTier::Tier1Critical))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         m.record_test_result(sample_test_result(
             "lodash",
             PackageTestOutcome::Compatible,
             100,
             100,
         ))
-        .unwrap();
-        let result = m.get_test_result("lodash").unwrap();
+        .expect("serde deserialization should succeed");
+        let result = m.get_test_result("lodash").expect("serde deserialization should succeed");
         assert_eq!(result.outcome, PackageTestOutcome::Compatible);
         assert_eq!(result.pass_rate_millionths(), 1_000_000);
     }
@@ -1705,22 +1705,22 @@ mod tests {
     fn test_result_replacement() {
         let mut m = NpmCompatibilityMatrix::new();
         m.add_package(sample_package("lodash", CohortTier::Tier1Critical))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         m.record_test_result(sample_test_result(
             "lodash",
             PackageTestOutcome::Incompatible,
             10,
             0,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         m.record_test_result(sample_test_result(
             "lodash",
             PackageTestOutcome::Compatible,
             10,
             10,
         ))
-        .unwrap();
-        let result = m.get_test_result("lodash").unwrap();
+        .expect("serde deserialization should succeed");
+        let result = m.get_test_result("lodash").expect("serde deserialization should succeed");
         assert_eq!(result.outcome, PackageTestOutcome::Compatible);
     }
 
@@ -1734,13 +1734,13 @@ mod tests {
     fn add_and_retrieve_incompatibility() {
         let mut m = NpmCompatibilityMatrix::new();
         m.add_package(sample_package("express", CohortTier::Tier1Critical))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         m.add_incompatibility(sample_incompatibility(
             "INC-express-001",
             "express",
             IncompatibilitySeverity::Blocker,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(m.total_incompatibilities(), 1);
         assert_eq!(m.incompatibilities_for_package("express").len(), 1);
         assert_eq!(m.open_incompatibilities().len(), 1);
@@ -1754,7 +1754,7 @@ mod tests {
             "foo",
             IncompatibilitySeverity::Minor,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let err = m
             .add_incompatibility(sample_incompatibility(
                 "INC-001",
@@ -1776,15 +1776,15 @@ mod tests {
             "foo",
             IncompatibilitySeverity::Blocker,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         m.transition_remediation("INC-001", RemediationState::Triaged, 2)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         m.transition_remediation("INC-001", RemediationState::InProgress, 3)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         m.transition_remediation("INC-001", RemediationState::FixLanded, 4)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         m.transition_remediation("INC-001", RemediationState::Verified, 5)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(m.open_incompatibilities().is_empty());
     }
 
@@ -1796,7 +1796,7 @@ mod tests {
             "foo",
             IncompatibilitySeverity::Minor,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let err = m
             .transition_remediation("INC-001", RemediationState::Verified, 2)
             .unwrap_err();
@@ -1814,7 +1814,7 @@ mod tests {
                 &format!("pkg-{i}"),
                 CohortTier::Tier1Critical,
             ))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         }
         // 8 compatible, 1 incompatible, 1 untested
         for i in 0..8 {
@@ -1824,7 +1824,7 @@ mod tests {
                 10,
                 10,
             ))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         }
         m.record_test_result(sample_test_result(
             "pkg-8",
@@ -1832,7 +1832,7 @@ mod tests {
             10,
             0,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let summary = m.cohort_summary(CohortTier::Tier1Critical);
         assert_eq!(summary.total_packages, 10);
@@ -1852,7 +1852,7 @@ mod tests {
                 &format!("pkg-{i}"),
                 CohortTier::Tier1Critical,
             ))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         }
         // Only 2 tested = 80% untested > 50%
         m.record_test_result(sample_test_result(
@@ -1861,14 +1861,14 @@ mod tests {
             10,
             10,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         m.record_test_result(sample_test_result(
             "pkg-1",
             PackageTestOutcome::Compatible,
             10,
             10,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(m.verdict(), MatrixVerdict::InsufficientData);
     }
 
@@ -1876,23 +1876,23 @@ mod tests {
     fn verdict_all_unblocked() {
         let mut m = NpmCompatibilityMatrix::new();
         m.add_package(sample_package("a", CohortTier::Tier1Critical))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         m.record_test_result(sample_test_result(
             "a",
             PackageTestOutcome::Compatible,
             10,
             10,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         m.add_package(sample_package("b", CohortTier::Tier2Popular))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         m.record_test_result(sample_test_result(
             "b",
             PackageTestOutcome::Compatible,
             10,
             10,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(m.verdict(), MatrixVerdict::AllCohortsUnblocked);
     }
 
@@ -1900,14 +1900,14 @@ mod tests {
     fn verdict_blocked() {
         let mut m = NpmCompatibilityMatrix::new();
         m.add_package(sample_package("a", CohortTier::Tier1Critical))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         m.record_test_result(sample_test_result(
             "a",
             PackageTestOutcome::Incompatible,
             10,
             0,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(m.verdict(), MatrixVerdict::Blocked);
     }
 
@@ -1916,15 +1916,15 @@ mod tests {
         let mut m = NpmCompatibilityMatrix::new();
         let mut inc1 = sample_incompatibility("INC-001", "a", IncompatibilitySeverity::Blocker);
         inc1.root_cause = IncompatibilityRootCause::MissingNodeApi;
-        m.add_incompatibility(inc1).unwrap();
+        m.add_incompatibility(inc1).expect("serde deserialization should succeed");
 
         let mut inc2 = sample_incompatibility("INC-002", "b", IncompatibilitySeverity::Major);
         inc2.root_cause = IncompatibilityRootCause::MissingNodeApi;
-        m.add_incompatibility(inc2).unwrap();
+        m.add_incompatibility(inc2).expect("serde deserialization should succeed");
 
         let mut inc3 = sample_incompatibility("INC-003", "c", IncompatibilitySeverity::Minor);
         inc3.root_cause = IncompatibilityRootCause::CjsRequireDivergence;
-        m.add_incompatibility(inc3).unwrap();
+        m.add_incompatibility(inc3).expect("serde deserialization should succeed");
 
         let dist = m.root_cause_distribution();
         assert_eq!(dist[&IncompatibilityRootCause::MissingNodeApi], 2);
@@ -1939,19 +1939,19 @@ mod tests {
             "a",
             IncompatibilitySeverity::Blocker,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         m.add_incompatibility(sample_incompatibility(
             "INC-002",
             "a",
             IncompatibilitySeverity::Major,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         m.add_incompatibility(sample_incompatibility(
             "INC-003",
             "b",
             IncompatibilitySeverity::Minor,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let top = m.top_blockers(10);
         assert_eq!(top[0].0, "a");
@@ -1962,15 +1962,15 @@ mod tests {
     fn normalize_and_hash_deterministic() {
         let mut m1 = NpmCompatibilityMatrix::new();
         m1.add_package(sample_package("b", CohortTier::Tier1Critical))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         m1.add_package(sample_package("a", CohortTier::Tier1Critical))
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let mut m2 = NpmCompatibilityMatrix::new();
         m2.add_package(sample_package("a", CohortTier::Tier1Critical))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         m2.add_package(sample_package("b", CohortTier::Tier1Critical))
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let h1 = m1.normalize_and_hash();
         let h2 = m2.normalize_and_hash();
@@ -2016,12 +2016,12 @@ mod tests {
             weekly_downloads: 100,
             ..sample_package("low", CohortTier::Tier1Critical)
         })
-        .unwrap();
+        .expect("serde deserialization should succeed");
         m.add_package(PackageRecord {
             weekly_downloads: 10_000,
             ..sample_package("high", CohortTier::Tier1Critical)
         })
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let sorted = m.packages_by_downloads();
         assert_eq!(sorted[0].name, "high");
         assert_eq!(sorted[1].name, "low");
@@ -2033,11 +2033,11 @@ mod tests {
         let mut pkg1 = sample_package("a", CohortTier::Tier1Critical);
         pkg1.node_api_deps.insert("fs".to_string());
         pkg1.node_api_deps.insert("path".to_string());
-        m.add_package(pkg1).unwrap();
+        m.add_package(pkg1).expect("serde deserialization should succeed");
 
         let mut pkg2 = sample_package("b", CohortTier::Tier1Critical);
         pkg2.node_api_deps.insert("crypto".to_string());
-        m.add_package(pkg2).unwrap();
+        m.add_package(pkg2).expect("serde deserialization should succeed");
 
         assert_eq!(m.packages_requiring_api("fs").len(), 1);
         assert_eq!(m.packages_requiring_api("crypto").len(), 1);
@@ -2052,11 +2052,11 @@ mod tests {
             "foo",
             IncompatibilitySeverity::Minor,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         m.transition_remediation("INC-001", RemediationState::Triaged, 2)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         m.transition_remediation("INC-001", RemediationState::WontFix, 3)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(m.open_incompatibilities().is_empty());
     }
 
@@ -2068,16 +2068,16 @@ mod tests {
             "foo",
             IncompatibilitySeverity::Major,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         m.transition_remediation("INC-001", RemediationState::Triaged, 2)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         m.transition_remediation("INC-001", RemediationState::InProgress, 3)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         m.transition_remediation("INC-001", RemediationState::FixLanded, 4)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         // Regression: go back to in-progress
         m.transition_remediation("INC-001", RemediationState::InProgress, 5)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(m.open_incompatibilities().len(), 1);
     }
 
@@ -2117,23 +2117,23 @@ mod tests {
     fn serde_round_trip_matrix() {
         let mut m = NpmCompatibilityMatrix::new();
         m.add_package(sample_package("express", CohortTier::Tier1Critical))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         m.add_incompatibility(sample_incompatibility(
             "INC-001",
             "express",
             IncompatibilitySeverity::Blocker,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         m.record_test_result(sample_test_result(
             "express",
             PackageTestOutcome::Incompatible,
             50,
             10,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
-        let json = serde_json::to_string(&m).unwrap();
-        let deserialized: NpmCompatibilityMatrix = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
+        let deserialized: NpmCompatibilityMatrix = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(m, deserialized);
     }
 
@@ -2145,8 +2145,8 @@ mod tests {
             CohortTier::Tier3LongTail,
         ];
         for tier in tiers {
-            let json = serde_json::to_string(&tier).unwrap();
-            let back: CohortTier = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&tier).expect("serde deserialization should succeed");
+            let back: CohortTier = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(tier, back);
         }
 
@@ -2164,8 +2164,8 @@ mod tests {
             PackageCategory::Other,
         ];
         for cat in categories {
-            let json = serde_json::to_string(&cat).unwrap();
-            let back: PackageCategory = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&cat).expect("serde deserialization should succeed");
+            let back: PackageCategory = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(cat, back);
         }
 
@@ -2176,8 +2176,8 @@ mod tests {
             IncompatibilitySeverity::Cosmetic,
         ];
         for sev in severities {
-            let json = serde_json::to_string(&sev).unwrap();
-            let back: IncompatibilitySeverity = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&sev).expect("serde deserialization should succeed");
+            let back: IncompatibilitySeverity = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(sev, back);
         }
     }
@@ -2225,9 +2225,9 @@ mod tests {
     fn skipped_packages_excluded_from_rate() {
         let mut m = NpmCompatibilityMatrix::new();
         m.add_package(sample_package("a", CohortTier::Tier1Critical))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         m.add_package(sample_package("b", CohortTier::Tier1Critical))
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         m.record_test_result(sample_test_result(
             "a",
@@ -2235,9 +2235,9 @@ mod tests {
             10,
             10,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         m.record_test_result(sample_test_result("b", PackageTestOutcome::Skipped, 0, 0))
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let summary = m.cohort_summary(CohortTier::Tier1Critical);
         // 1 compatible / 1 testable = 100%
@@ -2253,24 +2253,24 @@ mod tests {
         let mut m = NpmCompatibilityMatrix::new();
         // Tier1: 1 compatible (100%) -> unblocked
         m.add_package(sample_package("a", CohortTier::Tier1Critical))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         m.record_test_result(sample_test_result(
             "a",
             PackageTestOutcome::Compatible,
             10,
             10,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         // Tier2: 1 incompatible (0%) -> blocked
         m.add_package(sample_package("b", CohortTier::Tier2Popular))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         m.record_test_result(sample_test_result(
             "b",
             PackageTestOutcome::Incompatible,
             10,
             0,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(m.verdict(), MatrixVerdict::PartiallyUnblocked);
     }
 
@@ -2281,7 +2281,7 @@ mod tests {
         pkg.version = "  1.0.0  ".to_string();
         pkg.node_api_deps.insert("  fs  ".to_string());
         pkg.node_api_deps.insert("".to_string());
-        m.add_package(pkg).unwrap();
+        m.add_package(pkg).expect("serde deserialization should succeed");
         assert_eq!(m.packages[0].name, "lodash");
         assert_eq!(m.packages[0].version, "1.0.0");
         assert!(m.packages[0].node_api_deps.contains("fs"));
@@ -2297,7 +2297,7 @@ mod tests {
         inc.owner = "  agent  ".to_string();
         inc.related_beads.insert("  bd-123  ".to_string());
         inc.related_beads.insert("".to_string());
-        m.add_incompatibility(inc).unwrap();
+        m.add_incompatibility(inc).expect("serde deserialization should succeed");
         assert_eq!(m.incompatibilities[0].incompatibility_id, "INC-001");
         assert_eq!(m.incompatibilities[0].package_name, "foo");
         assert_eq!(m.incompatibilities[0].summary, "summary");
@@ -2310,8 +2310,8 @@ mod tests {
     fn types_only_package_field() {
         let mut pkg = sample_package("types-node", CohortTier::Tier1Critical);
         pkg.types_only = true;
-        let json = serde_json::to_string(&pkg).unwrap();
-        let back: PackageRecord = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&pkg).expect("serde deserialization should succeed");
+        let back: PackageRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert!(back.types_only);
     }
 
@@ -2324,8 +2324,8 @@ mod tests {
             ModuleSystemReq::Unknown,
         ];
         for v in variants {
-            let json = serde_json::to_string(&v).unwrap();
-            let back: ModuleSystemReq = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let back: ModuleSystemReq = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(v, back);
             assert!(!v.as_str().is_empty());
         }
@@ -2339,8 +2339,8 @@ mod tests {
             NativeAddonMode::Required,
         ];
         for mode in variants {
-            let json = serde_json::to_string(&mode).unwrap();
-            let back: NativeAddonMode = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&mode).expect("serde deserialization should succeed");
+            let back: NativeAddonMode = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(mode, back);
             assert!(!mode.as_str().is_empty());
         }
@@ -2357,8 +2357,8 @@ mod tests {
             RemediationState::WontFix,
         ];
         for s in states {
-            let json = serde_json::to_string(&s).unwrap();
-            let back: RemediationState = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+            let back: RemediationState = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(s, back);
         }
     }
@@ -2373,8 +2373,8 @@ mod tests {
             (PackageTestOutcome::Untested, false),
         ];
         for (outcome, expected_compat) in outcomes {
-            let json = serde_json::to_string(&outcome).unwrap();
-            let back: PackageTestOutcome = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&outcome).expect("serde deserialization should succeed");
+            let back: PackageTestOutcome = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(outcome, back);
             assert_eq!(outcome.counts_as_compatible(), expected_compat);
         }
@@ -2397,8 +2397,8 @@ mod tests {
             IncompatibilityRootCause::Other,
         ];
         for cause in causes {
-            let json = serde_json::to_string(&cause).unwrap();
-            let back: IncompatibilityRootCause = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&cause).expect("serde deserialization should succeed");
+            let back: IncompatibilityRootCause = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(cause, back);
             assert!(!cause.as_str().is_empty());
         }
@@ -2413,8 +2413,8 @@ mod tests {
             MatrixVerdict::InsufficientData,
         ];
         for v in verdicts {
-            let json = serde_json::to_string(&v).unwrap();
-            let back: MatrixVerdict = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let back: MatrixVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(v, back);
             assert_eq!(format!("{v}"), v.as_str());
         }
@@ -2446,13 +2446,13 @@ mod tests {
     fn cohort_summary_all_skipped_zero_rate() {
         let mut m = NpmCompatibilityMatrix::new();
         m.add_package(sample_package("a", CohortTier::Tier1Critical))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         m.add_package(sample_package("b", CohortTier::Tier1Critical))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         m.record_test_result(sample_test_result("a", PackageTestOutcome::Skipped, 0, 0))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         m.record_test_result(sample_test_result("b", PackageTestOutcome::Skipped, 0, 0))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let summary = m.cohort_summary(CohortTier::Tier1Critical);
         assert_eq!(summary.skipped_count, 2);
         // testable = 0, so rate = 0
@@ -2463,24 +2463,24 @@ mod tests {
     fn cohort_summary_blocker_count_filters_resolved() {
         let mut m = NpmCompatibilityMatrix::new();
         m.add_package(sample_package("a", CohortTier::Tier1Critical))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         m.add_incompatibility(sample_incompatibility(
             "INC-001",
             "a",
             IncompatibilitySeverity::Blocker,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         m.add_incompatibility(sample_incompatibility(
             "INC-002",
             "a",
             IncompatibilitySeverity::Blocker,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         // Resolve one
         m.transition_remediation("INC-001", RemediationState::Triaged, 2)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         m.transition_remediation("INC-001", RemediationState::WontFix, 3)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let summary = m.cohort_summary(CohortTier::Tier1Critical);
         assert_eq!(summary.blocker_count, 1);
         assert_eq!(summary.open_incompatibilities, 1);
@@ -2494,13 +2494,13 @@ mod tests {
             "foo",
             IncompatibilitySeverity::Minor,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         m.transition_remediation("INC-001", RemediationState::Triaged, 2)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         m.transition_remediation("INC-001", RemediationState::InProgress, 3)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         m.transition_remediation("INC-001", RemediationState::WontFix, 4)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(m.open_incompatibilities().is_empty());
     }
 
@@ -2512,7 +2512,7 @@ mod tests {
             "foo",
             IncompatibilitySeverity::Minor,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let err = m
             .transition_remediation("INC-001", RemediationState::InProgress, 2)
             .unwrap_err();
@@ -2530,15 +2530,15 @@ mod tests {
             "foo",
             IncompatibilitySeverity::Minor,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         m.transition_remediation("INC-001", RemediationState::Triaged, 2)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         m.transition_remediation("INC-001", RemediationState::InProgress, 3)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         m.transition_remediation("INC-001", RemediationState::FixLanded, 4)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         m.transition_remediation("INC-001", RemediationState::Verified, 5)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         // Verified is terminal — can't transition further
         let err = m
             .transition_remediation("INC-001", RemediationState::InProgress, 6)
@@ -2596,18 +2596,18 @@ mod tests {
             "a",
             IncompatibilitySeverity::Blocker,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         m.add_incompatibility(sample_incompatibility(
             "INC-002",
             "b",
             IncompatibilitySeverity::Blocker,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         // Resolve the "a" blocker
         m.transition_remediation("INC-001", RemediationState::Triaged, 2)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         m.transition_remediation("INC-001", RemediationState::WontFix, 3)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let top = m.top_blockers(10);
         assert_eq!(top.len(), 1);
         assert_eq!(top[0].0, "b");
@@ -2622,7 +2622,7 @@ mod tests {
                 &format!("pkg-{i}"),
                 IncompatibilitySeverity::Minor,
             ))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         }
         let top = m.top_blockers(3);
         assert_eq!(top.len(), 3);
@@ -2643,11 +2643,11 @@ mod tests {
             "a",
             IncompatibilitySeverity::Minor,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         m.transition_remediation("INC-001", RemediationState::Triaged, 2)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         m.transition_remediation("INC-001", RemediationState::WontFix, 3)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let dist = m.root_cause_distribution();
         assert!(dist.is_empty());
     }
@@ -2656,7 +2656,7 @@ mod tests {
     fn seed_tier1_into_matrix() {
         let mut m = NpmCompatibilityMatrix::new();
         for pkg in seed_tier1_critical_packages() {
-            m.add_package(pkg).unwrap();
+            m.add_package(pkg).expect("serde deserialization should succeed");
         }
         assert_eq!(m.packages_in_tier(CohortTier::Tier1Critical).len(), 10);
         // All should be tier 1
@@ -2669,7 +2669,7 @@ mod tests {
     fn seed_tier2_into_matrix() {
         let mut m = NpmCompatibilityMatrix::new();
         for pkg in seed_tier2_popular_packages() {
-            m.add_package(pkg).unwrap();
+            m.add_package(pkg).expect("serde deserialization should succeed");
         }
         assert_eq!(m.packages_in_tier(CohortTier::Tier2Popular).len(), 10);
     }
@@ -2678,10 +2678,10 @@ mod tests {
     fn seed_both_tiers_no_overlap() {
         let mut m = NpmCompatibilityMatrix::new();
         for pkg in seed_tier1_critical_packages() {
-            m.add_package(pkg).unwrap();
+            m.add_package(pkg).expect("serde deserialization should succeed");
         }
         for pkg in seed_tier2_popular_packages() {
-            m.add_package(pkg).unwrap();
+            m.add_package(pkg).expect("serde deserialization should succeed");
         }
         assert_eq!(m.total_packages(), 20);
     }
@@ -2760,13 +2760,13 @@ mod tests {
     fn normalize_and_hash_idempotent() {
         let mut m = NpmCompatibilityMatrix::new();
         m.add_package(sample_package("a", CohortTier::Tier1Critical))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         m.add_incompatibility(sample_incompatibility(
             "INC-001",
             "a",
             IncompatibilitySeverity::Minor,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let h1 = m.normalize_and_hash();
         let h2 = m.normalize_and_hash();
         assert_eq!(h1, h2);
@@ -2776,11 +2776,11 @@ mod tests {
     fn packages_sorted_after_add() {
         let mut m = NpmCompatibilityMatrix::new();
         m.add_package(sample_package("zlib", CohortTier::Tier1Critical))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         m.add_package(sample_package("axios", CohortTier::Tier1Critical))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         m.add_package(sample_package("express", CohortTier::Tier1Critical))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(m.packages[0].name, "axios");
         assert_eq!(m.packages[1].name, "express");
         assert_eq!(m.packages[2].name, "zlib");
@@ -2794,13 +2794,13 @@ mod tests {
             "c",
             IncompatibilitySeverity::Minor,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         m.add_incompatibility(sample_incompatibility(
             "INC-001",
             "a",
             IncompatibilitySeverity::Blocker,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(m.incompatibilities[0].incompatibility_id, "INC-001");
         assert_eq!(m.incompatibilities[1].incompatibility_id, "INC-003");
     }
@@ -2809,23 +2809,23 @@ mod tests {
     fn test_results_sorted_after_record() {
         let mut m = NpmCompatibilityMatrix::new();
         m.add_package(sample_package("z", CohortTier::Tier1Critical))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         m.add_package(sample_package("a", CohortTier::Tier1Critical))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         m.record_test_result(sample_test_result(
             "z",
             PackageTestOutcome::Compatible,
             5,
             5,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         m.record_test_result(sample_test_result(
             "a",
             PackageTestOutcome::Compatible,
             5,
             5,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(m.test_results[0].package_name, "a");
         assert_eq!(m.test_results[1].package_name, "z");
     }
@@ -2850,10 +2850,10 @@ mod tests {
             "foo",
             IncompatibilitySeverity::Minor,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(m.incompatibilities[0].last_updated_epoch, 1);
         m.transition_remediation("INC-001", RemediationState::Triaged, 42)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(m.incompatibilities[0].last_updated_epoch, 42);
     }
 
@@ -2897,7 +2897,7 @@ mod tests {
     fn multiple_incompatibilities_same_package_filtered() {
         let mut m = NpmCompatibilityMatrix::new();
         m.add_package(sample_package("express", CohortTier::Tier1Critical))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         for i in 0..5 {
             let mut inc = sample_incompatibility(
                 &format!("INC-express-{i:03}"),
@@ -2909,7 +2909,7 @@ mod tests {
             } else {
                 IncompatibilityRootCause::CjsRequireDivergence
             };
-            m.add_incompatibility(inc).unwrap();
+            m.add_incompatibility(inc).expect("serde deserialization should succeed");
         }
         assert_eq!(m.incompatibilities_for_package("express").len(), 5);
         assert_eq!(
@@ -2928,14 +2928,14 @@ mod tests {
     fn verdict_with_tier3_only() {
         let mut m = NpmCompatibilityMatrix::new();
         m.add_package(sample_package("niche-pkg", CohortTier::Tier3LongTail))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         m.record_test_result(sample_test_result(
             "niche-pkg",
             PackageTestOutcome::Compatible,
             5,
             5,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(m.verdict(), MatrixVerdict::AllCohortsUnblocked);
     }
 
@@ -2984,12 +2984,12 @@ mod tests {
     fn hash_changes_when_content_differs() {
         let mut m1 = NpmCompatibilityMatrix::new();
         m1.add_package(sample_package("a", CohortTier::Tier1Critical))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let h1 = m1.normalize_and_hash();
 
         let mut m2 = NpmCompatibilityMatrix::new();
         m2.add_package(sample_package("b", CohortTier::Tier1Critical))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let h2 = m2.normalize_and_hash();
 
         assert_ne!(h1, h2, "different content must produce different hashes");
@@ -2999,7 +2999,7 @@ mod tests {
     fn hash_changes_when_incompatibility_added() {
         let mut m = NpmCompatibilityMatrix::new();
         m.add_package(sample_package("a", CohortTier::Tier1Critical))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let h_before = m.normalize_and_hash();
 
         m.add_incompatibility(sample_incompatibility(
@@ -3007,7 +3007,7 @@ mod tests {
             "a",
             IncompatibilitySeverity::Minor,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let h_after = m.normalize_and_hash();
 
         assert_ne!(h_before, h_after);
@@ -3017,7 +3017,7 @@ mod tests {
     fn hash_changes_when_test_result_recorded() {
         let mut m = NpmCompatibilityMatrix::new();
         m.add_package(sample_package("a", CohortTier::Tier1Critical))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let h_before = m.normalize_and_hash();
 
         m.record_test_result(sample_test_result(
@@ -3026,7 +3026,7 @@ mod tests {
             10,
             10,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let h_after = m.normalize_and_hash();
 
         assert_ne!(h_before, h_after);
@@ -3058,13 +3058,13 @@ mod tests {
         pkg.node_api_deps.insert("http".to_string());
         pkg.node_api_deps.insert("path".to_string());
         pkg.types_only = false;
-        m.add_package(pkg).unwrap();
+        m.add_package(pkg).expect("serde deserialization should succeed");
 
         let mut result =
             sample_test_result("express", PackageTestOutcome::PartiallyCompatible, 100, 75);
         result.output_hash = Some("sha256:abcdef".to_string());
         result.test_epoch = 99;
-        m.record_test_result(result).unwrap();
+        m.record_test_result(result).expect("serde deserialization should succeed");
 
         let mut inc = sample_incompatibility(
             "INC-express-001",
@@ -3076,10 +3076,10 @@ mod tests {
         inc.related_beads.insert("bd-1lsy.5.4".to_string());
         inc.discovered_epoch = 10;
         inc.last_updated_epoch = 20;
-        m.add_incompatibility(inc).unwrap();
+        m.add_incompatibility(inc).expect("serde deserialization should succeed");
 
-        let json = serde_json::to_string_pretty(&m).unwrap();
-        let back: NpmCompatibilityMatrix = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string_pretty(&m).expect("serde deserialization should succeed");
+        let back: NpmCompatibilityMatrix = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(m, back);
         assert_eq!(back.snapshot_epoch, 42);
         assert_eq!(back.packages[0].node_api_deps.len(), 2);
@@ -3107,8 +3107,8 @@ mod tests {
             open_incompatibilities: 8,
             blocker_count: 2,
         };
-        let json = serde_json::to_string(&summary).unwrap();
-        let back: CohortSummary = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
+        let back: CohortSummary = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(summary, back);
     }
 
@@ -3146,8 +3146,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap();
-            let back: NpmCompatibilityError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let back: NpmCompatibilityError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, back);
         }
     }
@@ -3180,32 +3180,32 @@ mod tests {
     fn cohort_summary_partially_compatible_counted_separately() {
         let mut m = NpmCompatibilityMatrix::new();
         m.add_package(sample_package("a", CohortTier::Tier2Popular))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         m.add_package(sample_package("b", CohortTier::Tier2Popular))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         m.add_package(sample_package("c", CohortTier::Tier2Popular))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         m.record_test_result(sample_test_result(
             "a",
             PackageTestOutcome::Compatible,
             10,
             10,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         m.record_test_result(sample_test_result(
             "b",
             PackageTestOutcome::PartiallyCompatible,
             10,
             5,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         m.record_test_result(sample_test_result(
             "c",
             PackageTestOutcome::Incompatible,
             10,
             0,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let summary = m.cohort_summary(CohortTier::Tier2Popular);
         assert_eq!(summary.compatible_count, 1);
@@ -3223,7 +3223,7 @@ mod tests {
         let mut m = NpmCompatibilityMatrix::new();
         for name in &["a", "b", "c", "d"] {
             m.add_package(sample_package(name, CohortTier::Tier3LongTail))
-                .unwrap();
+                .expect("serde deserialization should succeed");
         }
         for name in &["a", "b", "c"] {
             m.record_test_result(sample_test_result(
@@ -3232,7 +3232,7 @@ mod tests {
                 10,
                 10,
             ))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         }
         m.record_test_result(sample_test_result(
             "d",
@@ -3240,7 +3240,7 @@ mod tests {
             10,
             0,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let summary = m.cohort_summary(CohortTier::Tier3LongTail);
         assert_eq!(summary.compatibility_rate_millionths, 750_000);
         assert!(summary.unblocked, "rate equal to threshold should unblock");
@@ -3256,7 +3256,7 @@ mod tests {
                 &format!("pkg-{i:03}"),
                 CohortTier::Tier1Critical,
             ))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         }
         for i in 0..19 {
             m.record_test_result(sample_test_result(
@@ -3265,7 +3265,7 @@ mod tests {
                 10,
                 10,
             ))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         }
         for i in 19..21 {
             m.record_test_result(sample_test_result(
@@ -3274,7 +3274,7 @@ mod tests {
                 10,
                 0,
             ))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         }
         let summary = m.cohort_summary(CohortTier::Tier1Critical);
         assert!(summary.compatibility_rate_millionths < 950_000);
@@ -3286,16 +3286,16 @@ mod tests {
         // >50% untested means insufficient. Exactly 50% is NOT insufficient.
         let mut m = NpmCompatibilityMatrix::new();
         m.add_package(sample_package("a", CohortTier::Tier1Critical))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         m.add_package(sample_package("b", CohortTier::Tier1Critical))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         m.record_test_result(sample_test_result(
             "a",
             PackageTestOutcome::Compatible,
             10,
             10,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         // b is untested: 1 untested out of 2 = 50%, which is NOT >50%
         // untested_count * 2 > total_packages => 1*2 > 2 => false
         let verdict = m.verdict();
@@ -3316,7 +3316,7 @@ mod tests {
                 "minor-many",
                 IncompatibilitySeverity::Minor,
             ))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         }
         // Package "blocker-one" has 1 Blocker: 1_000_000
         m.add_incompatibility(sample_incompatibility(
@@ -3324,7 +3324,7 @@ mod tests {
             "blocker-one",
             IncompatibilitySeverity::Blocker,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         // Package "cosmetic-many" has 5 Cosmetic: 5 * 10_000 = 50_000
         for i in 0..5 {
             m.add_incompatibility(sample_incompatibility(
@@ -3332,7 +3332,7 @@ mod tests {
                 "cosmetic-many",
                 IncompatibilitySeverity::Cosmetic,
             ))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         }
 
         let top = m.top_blockers(10);
@@ -3358,12 +3358,12 @@ mod tests {
             weekly_downloads: 5000,
             ..sample_package("alpha", CohortTier::Tier1Critical)
         })
-        .unwrap();
+        .expect("serde deserialization should succeed");
         m.add_package(PackageRecord {
             weekly_downloads: 5000,
             ..sample_package("beta", CohortTier::Tier1Critical)
         })
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let sorted = m.packages_by_downloads();
         assert_eq!(sorted.len(), 2);
         // Both have the same download count; just verify both are present
@@ -3376,23 +3376,23 @@ mod tests {
     fn cohort_summary_cross_tier_isolation() {
         let mut m = NpmCompatibilityMatrix::new();
         m.add_package(sample_package("t1", CohortTier::Tier1Critical))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         m.add_package(sample_package("t2", CohortTier::Tier2Popular))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         m.record_test_result(sample_test_result(
             "t1",
             PackageTestOutcome::Compatible,
             10,
             10,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         m.record_test_result(sample_test_result(
             "t2",
             PackageTestOutcome::Incompatible,
             10,
             0,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let s1 = m.cohort_summary(CohortTier::Tier1Critical);
         assert_eq!(s1.compatible_count, 1);
@@ -3407,21 +3407,21 @@ mod tests {
     fn cohort_summary_open_incompatibilities_cross_tier() {
         let mut m = NpmCompatibilityMatrix::new();
         m.add_package(sample_package("t1-pkg", CohortTier::Tier1Critical))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         m.add_package(sample_package("t2-pkg", CohortTier::Tier2Popular))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         m.add_incompatibility(sample_incompatibility(
             "INC-t1",
             "t1-pkg",
             IncompatibilitySeverity::Blocker,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         m.add_incompatibility(sample_incompatibility(
             "INC-t2",
             "t2-pkg",
             IncompatibilitySeverity::Major,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let s1 = m.cohort_summary(CohortTier::Tier1Critical);
         assert_eq!(s1.open_incompatibilities, 1);
@@ -3440,11 +3440,11 @@ mod tests {
             "foo",
             IncompatibilitySeverity::Minor,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         m.transition_remediation("INC-001", RemediationState::Triaged, 2)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         m.transition_remediation("INC-001", RemediationState::WontFix, 3)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         // WontFix is terminal
         let err = m
             .transition_remediation("INC-001", RemediationState::Discovered, 4)
@@ -3463,7 +3463,7 @@ mod tests {
             "foo",
             IncompatibilitySeverity::Minor,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let err = m
             .transition_remediation("INC-001", RemediationState::Discovered, 2)
             .unwrap_err();
@@ -3481,9 +3481,9 @@ mod tests {
             "foo",
             IncompatibilitySeverity::Minor,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         m.transition_remediation("INC-001", RemediationState::Triaged, 2)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let err = m
             .transition_remediation("INC-001", RemediationState::Discovered, 3)
             .unwrap_err();
@@ -3534,7 +3534,7 @@ mod tests {
     #[test]
     fn seed_tier1_express_has_node_api_deps() {
         let packages = seed_tier1_critical_packages();
-        let express = packages.iter().find(|p| p.name == "express").unwrap();
+        let express = packages.iter().find(|p| p.name == "express").expect("serde deserialization should succeed");
         assert!(express.node_api_deps.contains("http"));
         assert!(express.node_api_deps.contains("path"));
         assert!(express.node_api_deps.contains("fs"));
@@ -3552,10 +3552,10 @@ mod tests {
         assert!(names.contains("vitest"));
         assert!(names.contains("prisma"));
         assert!(names.contains("ws"));
-        let prisma = packages.iter().find(|p| p.name == "prisma").unwrap();
+        let prisma = packages.iter().find(|p| p.name == "prisma").expect("serde deserialization should succeed");
         assert_eq!(prisma.native_addon_mode, NativeAddonMode::Required);
         assert!(prisma.capability_safe_membrane_fallback);
-        let ws = packages.iter().find(|p| p.name == "ws").unwrap();
+        let ws = packages.iter().find(|p| p.name == "ws").expect("serde deserialization should succeed");
         assert_eq!(ws.native_addon_mode, NativeAddonMode::Optional);
         assert!(!ws.capability_safe_membrane_fallback);
         assert_eq!(packages.len(), 10);
@@ -3565,10 +3565,10 @@ mod tests {
     fn packages_requiring_api_across_tiers() {
         let mut m = NpmCompatibilityMatrix::new();
         for pkg in seed_tier1_critical_packages() {
-            m.add_package(pkg).unwrap();
+            m.add_package(pkg).expect("serde deserialization should succeed");
         }
         for pkg in seed_tier2_popular_packages() {
-            m.add_package(pkg).unwrap();
+            m.add_package(pkg).expect("serde deserialization should succeed");
         }
         // "fs" is used by many packages across both tiers
         let fs_pkgs = m.packages_requiring_api("fs");
@@ -3591,20 +3591,20 @@ mod tests {
     fn matrix_clone_equality() {
         let mut m = NpmCompatibilityMatrix::new();
         m.add_package(sample_package("a", CohortTier::Tier1Critical))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         m.add_incompatibility(sample_incompatibility(
             "INC-001",
             "a",
             IncompatibilitySeverity::Major,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         m.record_test_result(sample_test_result(
             "a",
             PackageTestOutcome::Compatible,
             10,
             10,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let cloned = m.clone();
         assert_eq!(m, cloned);
     }
@@ -3617,7 +3617,7 @@ mod tests {
             "a",
             IncompatibilitySeverity::Minor,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         // Default root cause is MissingNodeApi
         assert!(
             m.incompatibilities_by_root_cause(IncompatibilityRootCause::NativeAddon)

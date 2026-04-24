@@ -431,7 +431,7 @@ impl Default for RegimeShiftConfig {
 impl RegimeShiftConfig {
     /// Content hash for audit.
     pub fn config_hash(&self) -> ContentHash {
-        let bytes = serde_json::to_vec(self).unwrap();
+        let bytes = serde_json::to_vec(self).expect("serde deserialization should succeed");
         ContentHash::compute(&bytes)
     }
 }
@@ -708,7 +708,7 @@ impl RegimeShiftManifest {
         let mut h = Sha256::new();
         h.update(REGIME_SHIFT_SCHEMA_VERSION.as_bytes());
         h.update(REGIME_SHIFT_BEAD_ID.as_bytes());
-        let summary_bytes = serde_json::to_vec(&summary).unwrap();
+        let summary_bytes = serde_json::to_vec(&summary).expect("serde deserialization should succeed");
         h.update(&summary_bytes);
         let hash_bytes: [u8; 32] = h.finalize().into();
 
@@ -1028,8 +1028,8 @@ mod tests {
     #[test]
     fn test_serde_round_trip_config() {
         let config = make_config();
-        let json = serde_json::to_string(&config).unwrap();
-        let restored: RegimeShiftConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let restored: RegimeShiftConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, restored);
     }
 
@@ -1042,8 +1042,8 @@ mod tests {
             ShiftSeverity::Major,
             ShiftSeverity::Critical,
         ] {
-            let json = serde_json::to_string(&sev).unwrap();
-            let restored: ShiftSeverity = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&sev).expect("serde deserialization should succeed");
+            let restored: ShiftSeverity = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(sev, restored);
         }
     }
@@ -1052,8 +1052,8 @@ mod tests {
     fn test_serde_round_trip_manifest() {
         let engine = make_engine();
         let manifest = RegimeShiftManifest::from_engine(&engine);
-        let json = serde_json::to_string(&manifest).unwrap();
-        let restored: RegimeShiftManifest = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&manifest).expect("serde deserialization should succeed");
+        let restored: RegimeShiftManifest = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(manifest, restored);
     }
 
@@ -1063,8 +1063,8 @@ mod tests {
             stage: Some(ExecutionStage::Parse),
             reason: "test".to_string(),
         };
-        let json = serde_json::to_string(&action).unwrap();
-        let restored: DowngradeAction = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&action).expect("serde deserialization should succeed");
+        let restored: DowngradeAction = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(action, restored);
     }
 
@@ -1103,11 +1103,11 @@ mod tests {
             engine.observe(MetricKind::Latency, None, 900_000);
             engine.observe(MetricKind::Throughput, None, 500_000);
         }
-        let det_lat = engine.detectors.get(&(MetricKind::Latency, None)).unwrap();
+        let det_lat = engine.detectors.get(&(MetricKind::Latency, None)).expect("serde deserialization should succeed");
         let det_thr = engine
             .detectors
             .get(&(MetricKind::Throughput, None))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         // Latency detector should have much higher CUSUM
         assert!(det_lat.cusum_upper > det_thr.cusum_upper);
     }
@@ -1223,7 +1223,7 @@ mod tests {
         let det_before = engine
             .detectors
             .get(&(MetricKind::Latency, None))
-            .unwrap()
+            .expect("serde deserialization should succeed")
             .reference_millionths;
 
         // Tick enough to trigger auto-adaptation
@@ -1234,7 +1234,7 @@ mod tests {
         let det_after = engine
             .detectors
             .get(&(MetricKind::Latency, None))
-            .unwrap()
+            .expect("serde deserialization should succeed")
             .reference_millionths;
 
         // Reference should have adapted toward the EWMA
@@ -1256,7 +1256,7 @@ mod tests {
         let ref_before = engine
             .detectors
             .get(&(MetricKind::Latency, None))
-            .unwrap()
+            .expect("serde deserialization should succeed")
             .reference_millionths;
 
         for _ in 0..10 {
@@ -1266,7 +1266,7 @@ mod tests {
         let ref_after = engine
             .detectors
             .get(&(MetricKind::Latency, None))
-            .unwrap()
+            .expect("serde deserialization should succeed")
             .reference_millionths;
 
         assert_eq!(ref_before, ref_after);
@@ -1375,8 +1375,8 @@ mod tests {
         }
 
         let manifest = RegimeShiftManifest::from_engine(&engine);
-        let json = serde_json::to_string(&manifest).unwrap();
-        let restored: RegimeShiftManifest = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&manifest).expect("serde deserialization should succeed");
+        let restored: RegimeShiftManifest = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(manifest.summary, restored.summary);
         assert_eq!(
             manifest.recent_certificates.len(),
@@ -1416,8 +1416,8 @@ mod tests {
             MetricKind::Custom,
         ];
         for m in &metrics {
-            let json = serde_json::to_string(m).unwrap();
-            let back: MetricKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(m).expect("serde deserialization should succeed");
+            let back: MetricKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*m, back);
         }
     }
@@ -1481,8 +1481,8 @@ mod tests {
             },
         ];
         for action in &actions {
-            let json = serde_json::to_string(action).unwrap();
-            let back: DowngradeAction = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(action).expect("serde deserialization should succeed");
+            let back: DowngradeAction = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*action, back);
         }
     }
@@ -1501,8 +1501,8 @@ mod tests {
             cooldown_remaining: 3,
             in_cooldown: true,
         };
-        let json = serde_json::to_string(&summary).unwrap();
-        let back: RegimeShiftSummary = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
+        let back: RegimeShiftSummary = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(summary, back);
     }
 }

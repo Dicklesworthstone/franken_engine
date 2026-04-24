@@ -796,7 +796,7 @@ impl CertifiedRewriteOptimizer {
                 break;
             }
 
-            step = step.with_validation_receipt(validation_result.receipt().unwrap());
+            step = step.with_validation_receipt(validation_result.receipt().expect("serde deserialization should succeed"));
 
             // Generate optimization certificate if required
             if request.require_formal_proofs {
@@ -1359,7 +1359,7 @@ mod tests {
         let result = optimizer.optimize(request);
         assert!(result.is_ok());
 
-        let result = result.unwrap();
+        let result = result.expect("serde deserialization should succeed");
         assert!(result.success);
         assert_eq!(result.optimized_program, Some("x".to_string()));
         assert!(result.all_steps_validated());
@@ -1379,7 +1379,7 @@ mod tests {
             "call_with_side_effects(x)".to_string(),
         );
 
-        let result = optimizer.optimize(request).unwrap();
+        let result = optimizer.optimize(request).expect("serde deserialization should succeed");
 
         assert!(result.success);
         assert_eq!(
@@ -1401,14 +1401,14 @@ mod tests {
 
         let result = optimizer
             .validate_transformation("x + 0", "x + 0", &"const_fold".to_string(), &mode)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert!(!result.is_valid());
         assert!(result
             .error_message()
-            .unwrap()
+            .expect("serde deserialization should succeed")
             .contains("no-op"));
-        assert!(!result.receipt().unwrap().validation_passed());
+        assert!(!result.receipt().expect("serde deserialization should succeed").validation_passed());
     }
 
     #[test]

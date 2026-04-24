@@ -120,10 +120,10 @@ fn integrate_with_gate_manifest(
 fn main() {
     let matches = parse_args();
 
-    let input_path = Path::new(matches.get_one::<String>("input").unwrap());
-    let output_path = Path::new(matches.get_one::<String>("output").unwrap());
-    let format = matches.get_one::<String>("format").unwrap();
-    let export_type = matches.get_one::<String>("type").unwrap();
+    let input_path = Path::new(matches.get_one::<String>("input").expect("serde deserialization should succeed"));
+    let output_path = Path::new(matches.get_one::<String>("output").expect("serde deserialization should succeed"));
+    let format = matches.get_one::<String>("format").expect("serde deserialization should succeed");
+    let export_type = matches.get_one::<String>("type").expect("serde deserialization should succeed");
     let verbose = matches.get_flag("verbose");
 
     if verbose {

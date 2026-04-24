@@ -1081,7 +1081,7 @@ mod tests {
         let cat = MorselKernelCatalog::with_defaults();
         // SAFETY: Test lookup of TypedArrayFill from default catalog is guaranteed to succeed.
         // lookup only fails on missing builtin families (impossible with known BuiltinFamily variants).
-        let k = cat.lookup(BuiltinFamily::TypedArrayFill).unwrap();
+        let k = cat.lookup(BuiltinFamily::TypedArrayFill).expect("serde deserialization should succeed");
         assert_eq!(k.family, BuiltinFamily::TypedArrayFill);
         assert_eq!(k.lane_width, LaneWidth::Lane16);
         assert_eq!(k.callback_fence, CallbackFenceKind::NoCallback);
@@ -1154,7 +1154,7 @@ mod tests {
             None,
         );
         assert!(receipt.is_some());
-        let r = receipt.unwrap();
+        let r = receipt.expect("serde deserialization should succeed");
         assert_eq!(r.family, BuiltinFamily::ArrayMap);
         assert_eq!(r.input_length, 500);
         assert!(r.vectorized_count > 0);
@@ -1171,7 +1171,7 @@ mod tests {
             None,
         );
         assert!(receipt.is_some());
-        let r = receipt.unwrap();
+        let r = receipt.expect("serde deserialization should succeed");
         assert!(r.vectorized_count > 0);
         assert_eq!(r.scalar_count, 0);
     }
@@ -1293,7 +1293,7 @@ mod tests {
                 CallbackFenceKind::NoCallback,
                 None,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(receipt.vectorization_rate_millionths(), 1_000_000);
     }
 
@@ -1307,8 +1307,8 @@ mod tests {
             MorselSize::Large,
             MorselSize::Huge,
         ] {
-            let json = serde_json::to_string(&size).unwrap();
-            let decoded: MorselSize = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&size).expect("serde deserialization should succeed");
+            let decoded: MorselSize = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(size, decoded);
         }
     }
@@ -1322,8 +1322,8 @@ mod tests {
             CallbackFenceKind::ThrowingCallback,
             CallbackFenceKind::MutatingCallback,
         ] {
-            let json = serde_json::to_string(&kind).unwrap();
-            let decoded: CallbackFenceKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
+            let decoded: CallbackFenceKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(kind, decoded);
         }
     }
@@ -1335,8 +1335,8 @@ mod tests {
             CliffBehavior::NarrowLane,
             CliffBehavior::PaddedLane,
         ] {
-            let json = serde_json::to_string(&b).unwrap();
-            let decoded: CliffBehavior = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&b).expect("serde deserialization should succeed");
+            let decoded: CliffBehavior = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(b, decoded);
         }
     }
@@ -1350,8 +1350,8 @@ mod tests {
             MorselOutcome::AbortedKillSwitch,
             MorselOutcome::Skipped,
         ] {
-            let json = serde_json::to_string(&o).unwrap();
-            let decoded: MorselOutcome = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&o).expect("serde deserialization should succeed");
+            let decoded: MorselOutcome = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(o, decoded);
         }
     }
@@ -1364,8 +1364,8 @@ mod tests {
             MorselSize::Medium,
             CallbackFenceKind::PureCallback,
         );
-        let json = serde_json::to_string(&k).unwrap();
-        let decoded: MorselKernelDescriptor = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&k).expect("serde deserialization should succeed");
+        let decoded: MorselKernelDescriptor = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(k, decoded);
     }
 
@@ -1373,8 +1373,8 @@ mod tests {
     fn test_diagnostics_serde() {
         let engine = MorselKernelEngine::new(epoch(1));
         let diag = engine.diagnostics();
-        let json = serde_json::to_string(&diag).unwrap();
-        let decoded: MorselKernelDiagnostics = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&diag).expect("serde deserialization should succeed");
+        let decoded: MorselKernelDiagnostics = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(diag, decoded);
     }
 
@@ -1431,7 +1431,7 @@ mod tests {
                 CallbackFenceKind::PureCallback,
                 None,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let r2 = e2
             .execute(
                 BuiltinFamily::ArrayMap,
@@ -1439,7 +1439,7 @@ mod tests {
                 CallbackFenceKind::PureCallback,
                 None,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(r1.receipt_hash, r2.receipt_hash);
     }
 
@@ -1518,7 +1518,7 @@ mod tests {
         }
         // First starts at 0, last ends at input_length
         assert_eq!(parts[0].start, 0);
-        assert_eq!(parts.last().unwrap().end, 999);
+        assert_eq!(parts.last().expect("serde deserialization should succeed").end, 999);
     }
 
     // ---------------------------------------------------------------
@@ -1536,7 +1536,7 @@ mod tests {
                 CallbackFenceKind::PureCallback,
                 Some(&sel),
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(receipt.total_elements, 100);
     }
 
@@ -1555,7 +1555,7 @@ mod tests {
                 CallbackFenceKind::PureCallback,
                 Some(&sel),
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         // 70 active out of 100
         assert_eq!(receipt.total_elements, 70);
     }
@@ -1574,7 +1574,7 @@ mod tests {
                 CallbackFenceKind::PureCallback,
                 Some(&sel),
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(receipt.total_elements, 0);
     }
 
@@ -1594,7 +1594,7 @@ mod tests {
                 CallbackFenceKind::PureCallback,
                 Some(&sel),
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         // Partition [0..256]: end=min(256,50)=50, scan [0..50], 0 inactive
         //   => masked=0, processed=256-0=256
         // Partition [256..300]: start=256 >= sel_len=50
@@ -1647,7 +1647,7 @@ mod tests {
                 CallbackFenceKind::ThrowingCallback,
                 None,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(receipt.vectorized_count, 0);
         assert!(receipt.scalar_count > 0);
     }
@@ -1662,7 +1662,7 @@ mod tests {
                 CallbackFenceKind::SideEffectCallback,
                 None,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         // SideEffectCallback requires_ordering => one fence per morsel
         assert!(receipt.total_fences > 0);
         assert_eq!(receipt.total_fences, receipt.morsel_count);
@@ -1679,7 +1679,7 @@ mod tests {
                 CallbackFenceKind::MutatingCallback,
                 None,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(receipt.vectorized_count, 0);
         assert_eq!(receipt.scalar_count, 0);
         assert!(receipt.aborted_count > 0);
@@ -1774,8 +1774,8 @@ mod tests {
         ks.add_family(BuiltinFamily::JsonParse);
         ks.engage("serde test", epoch(6));
 
-        let json = serde_json::to_string(&ks).unwrap();
-        let decoded: KillSwitch = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&ks).expect("serde deserialization should succeed");
+        let decoded: KillSwitch = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ks.engaged, decoded.engaged);
         assert_eq!(ks.reason, decoded.reason);
         assert_eq!(ks.affected_families, decoded.affected_families);
@@ -1789,8 +1789,8 @@ mod tests {
             behavior: CliffBehavior::PaddedLane,
             min_parallel_length: 512,
         };
-        let json = serde_json::to_string(&policy).unwrap();
-        let decoded: CliffPolicy = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
+        let decoded: CliffPolicy = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(policy, decoded);
     }
 
@@ -1803,8 +1803,8 @@ mod tests {
             lane_width: LaneWidth::Lane16,
             is_tail: true,
         };
-        let json = serde_json::to_string(&part).unwrap();
-        let decoded: MorselPartition = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&part).expect("serde deserialization should succeed");
+        let decoded: MorselPartition = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(part, decoded);
     }
 
@@ -1816,8 +1816,8 @@ mod tests {
             flushed_effects: true,
             callback_invocations: 42,
         };
-        let json = serde_json::to_string(&fence).unwrap();
-        let decoded: CallbackFence = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&fence).expect("serde deserialization should succeed");
+        let decoded: CallbackFence = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(fence, decoded);
     }
 
@@ -1831,9 +1831,9 @@ mod tests {
                 CallbackFenceKind::PureCallback,
                 None,
             )
-            .unwrap();
-        let json = serde_json::to_string(&receipt).unwrap();
-        let decoded: KernelExecutionReceipt = serde_json::from_str(&json).unwrap();
+            .expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
+        let decoded: KernelExecutionReceipt = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(receipt.receipt_id, decoded.receipt_id);
         assert_eq!(receipt.receipt_hash, decoded.receipt_hash);
         assert_eq!(receipt.family, decoded.family);
@@ -1843,11 +1843,11 @@ mod tests {
     #[test]
     fn test_catalog_serde_roundtrip() {
         let catalog = MorselKernelCatalog::with_defaults();
-        let json = serde_json::to_string(&catalog).unwrap();
-        let decoded: MorselKernelCatalog = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&catalog).expect("serde deserialization should succeed");
+        let decoded: MorselKernelCatalog = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(catalog.kernel_count(), decoded.kernel_count());
         // Verify lookup still works after deserialization
-        let k = decoded.lookup(BuiltinFamily::ArrayMap).unwrap();
+        let k = decoded.lookup(BuiltinFamily::ArrayMap).expect("serde deserialization should succeed");
         assert_eq!(k.family, BuiltinFamily::ArrayMap);
     }
 
@@ -1887,7 +1887,7 @@ mod tests {
                 CallbackFenceKind::PureCallback,
                 None,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(receipt.vectorized_count, 0);
         assert_eq!(receipt.scalar_count, 1);
         assert_eq!(engine.total_scalar_fallbacks, 1);
@@ -1997,7 +1997,7 @@ mod tests {
         catalog.register(k2);
 
         // The family_map should point to the latest registered kernel
-        let looked_up = catalog.lookup(BuiltinFamily::ArrayMap).unwrap();
+        let looked_up = catalog.lookup(BuiltinFamily::ArrayMap).expect("serde deserialization should succeed");
         assert_eq!(looked_up.lane_width, LaneWidth::Lane8);
         assert_eq!(looked_up.morsel_size, MorselSize::Large);
         // Both kernel_ids remain in the kernels map since they differ
@@ -2071,7 +2071,7 @@ mod tests {
                 CallbackFenceKind::PureCallback,
                 None,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(receipt.receipt_id.starts_with("mkr-"));
         // "mkr-" + 16 hex chars = 20 total
         assert_eq!(receipt.receipt_id.len(), 20);
@@ -2088,7 +2088,7 @@ mod tests {
                 CallbackFenceKind::PureCallback,
                 None,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let r2 = e2
             .execute(
                 BuiltinFamily::ArrayMap,
@@ -2096,7 +2096,7 @@ mod tests {
                 CallbackFenceKind::PureCallback,
                 None,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_ne!(r1.receipt_hash, r2.receipt_hash);
     }
 
@@ -2111,7 +2111,7 @@ mod tests {
                 CallbackFenceKind::PureCallback,
                 None,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let r2 = e2
             .execute(
                 BuiltinFamily::ArrayMap,
@@ -2119,7 +2119,7 @@ mod tests {
                 CallbackFenceKind::PureCallback,
                 None,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_ne!(r1.receipt_hash, r2.receipt_hash);
     }
 
@@ -2195,8 +2195,8 @@ mod tests {
             }],
             epoch: epoch(1),
         };
-        let json = serde_json::to_string(&record).unwrap();
-        let decoded: MorselExecutionRecord = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&record).expect("serde deserialization should succeed");
+        let decoded: MorselExecutionRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(record, decoded);
     }
 
@@ -2233,7 +2233,7 @@ mod tests {
                 CallbackFenceKind::PureCallback,
                 None,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         // PureCallback does not require ordering => no fences
         assert_eq!(receipt.total_fences, 0);
     }
@@ -2248,7 +2248,7 @@ mod tests {
                 CallbackFenceKind::NoCallback,
                 None,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(receipt.total_fences, 0);
     }
 }

@@ -417,7 +417,7 @@ mod tests {
     #[test]
     fn send_creates_pending_obligation() {
         let mut chan = test_channel();
-        let id = chan.send("trace-a").unwrap();
+        let id = chan.send("trace-a").expect("serde deserialization should succeed");
         assert_eq!(id, 1);
         assert_eq!(chan.pending_count(), 1);
     }
@@ -425,25 +425,25 @@ mod tests {
     #[test]
     fn commit_resolves_obligation() {
         let mut chan = test_channel();
-        let id = chan.send("trace-a").unwrap();
-        chan.commit(id, "hash-1").unwrap();
+        let id = chan.send("trace-a").expect("serde deserialization should succeed");
+        chan.commit(id, "hash-1").expect("serde deserialization should succeed");
         assert_eq!(chan.pending_count(), 0);
     }
 
     #[test]
     fn abort_resolves_obligation() {
         let mut chan = test_channel();
-        let id = chan.send("trace-a").unwrap();
+        let id = chan.send("trace-a").expect("serde deserialization should succeed");
         chan.abort(id, &AbortReason::UpstreamFailure, "hash-2")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(chan.pending_count(), 0);
     }
 
     #[test]
     fn double_commit_fails() {
         let mut chan = test_channel();
-        let id = chan.send("trace-a").unwrap();
-        chan.commit(id, "h").unwrap();
+        let id = chan.send("trace-a").expect("serde deserialization should succeed");
+        chan.commit(id, "h").expect("serde deserialization should succeed");
         let err = chan.commit(id, "h").unwrap_err();
         assert_eq!(err, ObligationError::AlreadyResolved { obligation_id: id });
     }
@@ -451,8 +451,8 @@ mod tests {
     #[test]
     fn commit_after_abort_fails() {
         let mut chan = test_channel();
-        let id = chan.send("trace-a").unwrap();
-        chan.abort(id, &AbortReason::DrainTimeout, "h").unwrap();
+        let id = chan.send("trace-a").expect("serde deserialization should succeed");
+        chan.abort(id, &AbortReason::DrainTimeout, "h").expect("serde deserialization should succeed");
         assert!(chan.commit(id, "h").is_err());
     }
 
@@ -475,9 +475,9 @@ mod tests {
                 lab_mode: false,
             },
         );
-        chan.send("t").unwrap();
-        chan.send("t").unwrap();
-        chan.send("t").unwrap();
+        chan.send("t").expect("serde deserialization should succeed");
+        chan.send("t").expect("serde deserialization should succeed");
+        chan.send("t").expect("serde deserialization should succeed");
 
         let err = chan.send("t").unwrap_err();
         assert_eq!(err, ObligationError::Backpressure { max_pending: 3 });
@@ -493,11 +493,11 @@ mod tests {
                 lab_mode: false,
             },
         );
-        let id1 = chan.send("t").unwrap();
-        chan.send("t").unwrap();
+        let id1 = chan.send("t").expect("serde deserialization should succeed");
+        chan.send("t").expect("serde deserialization should succeed");
         assert!(chan.send("t").is_err());
 
-        chan.commit(id1, "h").unwrap();
+        chan.commit(id1, "h").expect("serde deserialization should succeed");
         assert!(chan.send("t").is_ok());
     }
 
@@ -506,8 +506,8 @@ mod tests {
     #[test]
     fn mark_leaked() {
         let mut chan = test_channel();
-        let id = chan.send("t").unwrap();
-        chan.mark_leaked(id).unwrap();
+        let id = chan.send("t").expect("serde deserialization should succeed");
+        chan.mark_leaked(id).expect("serde deserialization should succeed");
         assert_eq!(chan.leak_count(), 1);
         assert_eq!(chan.pending_count(), 0);
     }
@@ -515,8 +515,8 @@ mod tests {
     #[test]
     fn leak_already_resolved_fails() {
         let mut chan = test_channel();
-        let id = chan.send("t").unwrap();
-        chan.commit(id, "h").unwrap();
+        let id = chan.send("t").expect("serde deserialization should succeed");
+        chan.commit(id, "h").expect("serde deserialization should succeed");
         assert!(chan.mark_leaked(id).is_err());
     }
 
@@ -526,11 +526,11 @@ mod tests {
     fn oldest_pending_returns_earliest() {
         let mut chan = test_channel();
         chan.set_tick(10);
-        chan.send("t").unwrap();
+        chan.send("t").expect("serde deserialization should succeed");
         chan.set_tick(20);
-        chan.send("t").unwrap();
+        chan.send("t").expect("serde deserialization should succeed");
 
-        let oldest = chan.oldest_pending().unwrap();
+        let oldest = chan.oldest_pending().expect("serde deserialization should succeed");
         assert_eq!(oldest.created_at_tick, 10);
     }
 
@@ -545,25 +545,25 @@ mod tests {
     #[test]
     fn drain_check_true_when_no_pending() {
         let mut chan = test_channel();
-        let id = chan.send("t").unwrap();
-        chan.commit(id, "h").unwrap();
+        let id = chan.send("t").expect("serde deserialization should succeed");
+        chan.commit(id, "h").expect("serde deserialization should succeed");
         assert!(chan.drain_check());
     }
 
     #[test]
     fn drain_check_false_when_pending() {
         let mut chan = test_channel();
-        chan.send("t").unwrap();
+        chan.send("t").expect("serde deserialization should succeed");
         assert!(!chan.drain_check());
     }
 
     #[test]
     fn force_abort_all_pending() {
         let mut chan = test_channel();
-        chan.send("t").unwrap();
-        chan.send("t").unwrap();
-        let id3 = chan.send("t").unwrap();
-        chan.commit(id3, "h").unwrap();
+        chan.send("t").expect("serde deserialization should succeed");
+        chan.send("t").expect("serde deserialization should succeed");
+        let id3 = chan.send("t").expect("serde deserialization should succeed");
+        chan.commit(id3, "h").expect("serde deserialization should succeed");
 
         let aborted = chan.force_abort_all_pending("timeout-hash");
         assert_eq!(aborted, 2);
@@ -575,8 +575,8 @@ mod tests {
     #[test]
     fn events_emitted_on_lifecycle() {
         let mut chan = test_channel();
-        let id = chan.send("t").unwrap();
-        chan.commit(id, "h").unwrap();
+        let id = chan.send("t").expect("serde deserialization should succeed");
+        chan.commit(id, "h").expect("serde deserialization should succeed");
 
         let events = chan.drain_events();
         assert_eq!(events.len(), 2);
@@ -587,8 +587,8 @@ mod tests {
     #[test]
     fn event_carries_correct_fields() {
         let mut chan = test_channel();
-        let id = chan.send("t").unwrap();
-        chan.commit(id, "evidence-hash").unwrap();
+        let id = chan.send("t").expect("serde deserialization should succeed");
+        chan.commit(id, "evidence-hash").expect("serde deserialization should succeed");
 
         let events = chan.drain_events();
         let commit_event = &events[1];
@@ -609,11 +609,11 @@ mod tests {
         let run = || -> Vec<ObligationEvent> {
             let mut chan = test_channel();
             chan.set_tick(10);
-            let id1 = chan.send("t").unwrap();
+            let id1 = chan.send("t").expect("serde deserialization should succeed");
             chan.set_tick(20);
-            let id2 = chan.send("t").unwrap();
-            chan.commit(id1, "h1").unwrap();
-            chan.abort(id2, &AbortReason::DrainTimeout, "h2").unwrap();
+            let id2 = chan.send("t").expect("serde deserialization should succeed");
+            chan.commit(id1, "h1").expect("serde deserialization should succeed");
+            chan.abort(id2, &AbortReason::DrainTimeout, "h2").expect("serde deserialization should succeed");
             chan.drain_events()
         };
 
@@ -674,8 +674,8 @@ mod tests {
             state: ObligationState::Committed,
             resolution_evidence_hash: Some("h".to_string()),
         };
-        let json = serde_json::to_string(&record).unwrap();
-        let restored: ObligationRecord = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&record).expect("serde deserialization should succeed");
+        let restored: ObligationRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(record, restored);
     }
 
@@ -689,16 +689,16 @@ mod tests {
             resolution_type: Some("commit".to_string()),
             evidence_hash: Some("h".to_string()),
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let restored: ObligationEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let restored: ObligationEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, restored);
     }
 
     #[test]
     fn channel_config_serialization_round_trip() {
         let config = ChannelConfig::default();
-        let json = serde_json::to_string(&config).unwrap();
-        let restored: ChannelConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let restored: ChannelConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, restored);
     }
 
@@ -714,8 +714,8 @@ mod tests {
             ObligationState::Aborted,
             ObligationState::Leaked,
         ] {
-            let json = serde_json::to_string(&state).unwrap();
-            let restored: ObligationState = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&state).expect("serde deserialization should succeed");
+            let restored: ObligationState = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(state, restored);
         }
     }
@@ -730,8 +730,8 @@ mod tests {
             AbortReason::Custom("custom-reason".to_string()),
         ];
         for reason in &reasons {
-            let json = serde_json::to_string(reason).unwrap();
-            let restored: AbortReason = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(reason).expect("serde deserialization should succeed");
+            let restored: AbortReason = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*reason, restored);
         }
     }
@@ -760,13 +760,13 @@ mod tests {
     #[test]
     fn multiple_obligations_independent() {
         let mut chan = test_channel();
-        let id1 = chan.send("t").unwrap();
-        let id2 = chan.send("t").unwrap();
-        let id3 = chan.send("t").unwrap();
+        let id1 = chan.send("t").expect("serde deserialization should succeed");
+        let id2 = chan.send("t").expect("serde deserialization should succeed");
+        let id3 = chan.send("t").expect("serde deserialization should succeed");
 
-        chan.commit(id1, "h1").unwrap();
-        chan.abort(id2, &AbortReason::OperatorAbort, "h2").unwrap();
-        chan.mark_leaked(id3).unwrap();
+        chan.commit(id1, "h1").expect("serde deserialization should succeed");
+        chan.abort(id2, &AbortReason::OperatorAbort, "h2").expect("serde deserialization should succeed");
+        chan.mark_leaked(id3).expect("serde deserialization should succeed");
 
         assert_eq!(chan.pending_count(), 0);
         assert_eq!(chan.total_count(), 3);
@@ -810,9 +810,9 @@ mod tests {
     #[test]
     fn obligation_ids_are_sequential() {
         let mut chan = test_channel();
-        let id1 = chan.send("t").unwrap();
-        let id2 = chan.send("t").unwrap();
-        let id3 = chan.send("t").unwrap();
+        let id1 = chan.send("t").expect("serde deserialization should succeed");
+        let id2 = chan.send("t").expect("serde deserialization should succeed");
+        let id3 = chan.send("t").expect("serde deserialization should succeed");
         assert_eq!(id1, 1);
         assert_eq!(id2, 2);
         assert_eq!(id3, 3);
@@ -821,7 +821,7 @@ mod tests {
     #[test]
     fn drain_events_clears_buffer() {
         let mut chan = test_channel();
-        chan.send("t").unwrap();
+        chan.send("t").expect("serde deserialization should succeed");
         assert!(!chan.drain_events().is_empty());
         assert!(chan.drain_events().is_empty());
     }
@@ -851,8 +851,8 @@ mod tests {
     #[test]
     fn double_commit_returns_already_resolved() {
         let mut chan = test_channel();
-        let id = chan.send("t").unwrap();
-        chan.commit(id, "h1").unwrap();
+        let id = chan.send("t").expect("serde deserialization should succeed");
+        chan.commit(id, "h1").expect("serde deserialization should succeed");
         let err = chan.commit(id, "h2").unwrap_err();
         assert!(matches!(err, ObligationError::AlreadyResolved { .. }));
     }
@@ -866,8 +866,8 @@ mod tests {
             ObligationError::Leaked { obligation_id: 3 },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap();
-            let restored: ObligationError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let restored: ObligationError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, restored);
         }
     }
@@ -924,12 +924,12 @@ mod tests {
     #[test]
     fn channel_total_count_includes_all_states() {
         let mut chan = test_channel();
-        let id1 = chan.send("t").unwrap();
-        let id2 = chan.send("t").unwrap();
-        let id3 = chan.send("t").unwrap();
-        chan.commit(id1, "h").unwrap();
-        chan.abort(id2, &AbortReason::DrainTimeout, "h").unwrap();
-        chan.mark_leaked(id3).unwrap();
+        let id1 = chan.send("t").expect("serde deserialization should succeed");
+        let id2 = chan.send("t").expect("serde deserialization should succeed");
+        let id3 = chan.send("t").expect("serde deserialization should succeed");
+        chan.commit(id1, "h").expect("serde deserialization should succeed");
+        chan.abort(id2, &AbortReason::DrainTimeout, "h").expect("serde deserialization should succeed");
+        chan.mark_leaked(id3).expect("serde deserialization should succeed");
         assert_eq!(chan.total_count(), 3);
         assert_eq!(chan.pending_count(), 0);
     }
@@ -937,8 +937,8 @@ mod tests {
     #[test]
     fn force_abort_all_pending_with_no_pending() {
         let mut chan = test_channel();
-        let id = chan.send("t").unwrap();
-        chan.commit(id, "h").unwrap();
+        let id = chan.send("t").expect("serde deserialization should succeed");
+        chan.commit(id, "h").expect("serde deserialization should succeed");
         let aborted = chan.force_abort_all_pending("timeout-hash");
         assert_eq!(aborted, 0);
     }
@@ -947,9 +947,9 @@ mod tests {
     fn send_after_drain_check_true() {
         let mut chan = test_channel();
         assert!(chan.drain_check());
-        let id = chan.send("t").unwrap();
+        let id = chan.send("t").expect("serde deserialization should succeed");
         assert!(!chan.drain_check());
-        chan.commit(id, "h").unwrap();
+        chan.commit(id, "h").expect("serde deserialization should succeed");
         assert!(chan.drain_check());
     }
 
@@ -967,25 +967,25 @@ mod tests {
     fn oldest_pending_skips_resolved() {
         let mut chan = test_channel();
         chan.set_tick(10);
-        let id1 = chan.send("t").unwrap();
+        let id1 = chan.send("t").expect("serde deserialization should succeed");
         chan.set_tick(20);
-        chan.send("t").unwrap();
-        chan.commit(id1, "h").unwrap();
+        chan.send("t").expect("serde deserialization should succeed");
+        chan.commit(id1, "h").expect("serde deserialization should succeed");
 
-        let oldest = chan.oldest_pending().unwrap();
+        let oldest = chan.oldest_pending().expect("serde deserialization should succeed");
         assert_eq!(oldest.created_at_tick, 20);
     }
 
     #[test]
     fn abort_event_has_correct_resolution_type() {
         let mut chan = test_channel();
-        let id = chan.send("t").unwrap();
-        chan.abort(id, &AbortReason::PolicyViolation, "h").unwrap();
+        let id = chan.send("t").expect("serde deserialization should succeed");
+        chan.abort(id, &AbortReason::PolicyViolation, "h").expect("serde deserialization should succeed");
         let events = chan.drain_events();
         let abort_event = events
             .iter()
             .find(|e| e.state == ObligationState::Aborted)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(abort_event.resolution_type, Some("abort".to_string()));
     }
 
@@ -1054,7 +1054,7 @@ mod tests {
             state: ObligationState::Pending,
             resolution_evidence_hash: None,
         };
-        let json = serde_json::to_string(&rec).unwrap();
+        let json = serde_json::to_string(&rec).expect("serde deserialization should succeed");
         assert!(json.contains("\"obligation_id\""));
         assert!(json.contains("\"created_at_tick\""));
         assert!(json.contains("\"creator_trace_id\""));
@@ -1072,7 +1072,7 @@ mod tests {
             resolution_type: None,
             evidence_hash: None,
         };
-        let json = serde_json::to_string(&evt).unwrap();
+        let json = serde_json::to_string(&evt).expect("serde deserialization should succeed");
         assert!(json.contains("\"trace_id\""));
         assert!(json.contains("\"channel_id\""));
         assert!(json.contains("\"obligation_id\""));
@@ -1085,8 +1085,8 @@ mod tests {
     fn set_tick_updates_created_at_tick() {
         let mut chan = test_channel();
         chan.set_tick(500);
-        let id = chan.send("t").unwrap();
-        let oldest = chan.oldest_pending().unwrap();
+        let id = chan.send("t").expect("serde deserialization should succeed");
+        let oldest = chan.oldest_pending().expect("serde deserialization should succeed");
         assert_eq!(oldest.obligation_id, id);
         assert_eq!(oldest.created_at_tick, 500);
     }
@@ -1094,9 +1094,9 @@ mod tests {
     #[test]
     fn force_abort_all_pending_emits_events_for_each() {
         let mut chan = test_channel();
-        chan.send("t").unwrap();
-        chan.send("t").unwrap();
-        chan.send("t").unwrap();
+        chan.send("t").expect("serde deserialization should succeed");
+        chan.send("t").expect("serde deserialization should succeed");
+        chan.send("t").expect("serde deserialization should succeed");
         chan.drain_events(); // clear send events
         chan.force_abort_all_pending("timeout-h");
         let events = chan.drain_events();
@@ -1110,9 +1110,9 @@ mod tests {
     #[test]
     fn leak_event_has_resolution_type_leak() {
         let mut chan = test_channel();
-        let id = chan.send("t").unwrap();
+        let id = chan.send("t").expect("serde deserialization should succeed");
         chan.drain_events(); // clear send event
-        chan.mark_leaked(id).unwrap();
+        chan.mark_leaked(id).expect("serde deserialization should succeed");
         let events = chan.drain_events();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].state, ObligationState::Leaked);
@@ -1123,14 +1123,14 @@ mod tests {
     #[test]
     fn multiple_leaks_increment_count() {
         let mut chan = test_channel();
-        let id1 = chan.send("t").unwrap();
-        let id2 = chan.send("t").unwrap();
-        let id3 = chan.send("t").unwrap();
-        chan.mark_leaked(id1).unwrap();
+        let id1 = chan.send("t").expect("serde deserialization should succeed");
+        let id2 = chan.send("t").expect("serde deserialization should succeed");
+        let id3 = chan.send("t").expect("serde deserialization should succeed");
+        chan.mark_leaked(id1).expect("serde deserialization should succeed");
         assert_eq!(chan.leak_count(), 1);
-        chan.mark_leaked(id2).unwrap();
+        chan.mark_leaked(id2).expect("serde deserialization should succeed");
         assert_eq!(chan.leak_count(), 2);
-        chan.mark_leaked(id3).unwrap();
+        chan.mark_leaked(id3).expect("serde deserialization should succeed");
         assert_eq!(chan.leak_count(), 3);
     }
 
@@ -1144,22 +1144,22 @@ mod tests {
                 lab_mode: false,
             },
         );
-        let id1 = chan.send("t").unwrap();
-        let id2 = chan.send("t").unwrap();
-        chan.commit(id1, "h").unwrap();
-        chan.abort(id2, &AbortReason::DrainTimeout, "h").unwrap();
+        let id1 = chan.send("t").expect("serde deserialization should succeed");
+        let id2 = chan.send("t").expect("serde deserialization should succeed");
+        chan.commit(id1, "h").expect("serde deserialization should succeed");
+        chan.abort(id2, &AbortReason::DrainTimeout, "h").expect("serde deserialization should succeed");
         // Both resolved, total_count is 2 but pending_count is 0
         assert_eq!(chan.total_count(), 2);
         // Should allow 2 more sends since only pending counts
-        chan.send("t").unwrap();
-        chan.send("t").unwrap();
+        chan.send("t").expect("serde deserialization should succeed");
+        chan.send("t").expect("serde deserialization should succeed");
         assert!(chan.send("t").is_err());
     }
 
     #[test]
     fn pending_event_has_no_resolution_type() {
         let mut chan = test_channel();
-        chan.send("t").unwrap();
+        chan.send("t").expect("serde deserialization should succeed");
         let events = chan.drain_events();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].state, ObligationState::Pending);
@@ -1185,8 +1185,8 @@ mod tests {
     #[test]
     fn abort_reason_custom_long_string_serde() {
         let reason = AbortReason::Custom("a".repeat(1000));
-        let json = serde_json::to_string(&reason).unwrap();
-        let back: AbortReason = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&reason).expect("serde deserialization should succeed");
+        let back: AbortReason = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(reason, back);
     }
 
@@ -1224,8 +1224,8 @@ mod tests {
             max_pending: 50,
             lab_mode: true,
         };
-        let json = serde_json::to_string(&cfg).unwrap();
-        let back: ChannelConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
+        let back: ChannelConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cfg, back);
     }
 
@@ -1238,8 +1238,8 @@ mod tests {
             state: ObligationState::Pending,
             resolution_evidence_hash: None,
         };
-        let json = serde_json::to_string(&rec).unwrap();
-        let back: ObligationRecord = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&rec).expect("serde deserialization should succeed");
+        let back: ObligationRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(rec, back);
     }
 
@@ -1298,12 +1298,12 @@ mod tests {
         let mut ids = Vec::new();
         for i in 0..20 {
             chan.set_tick(i as u64);
-            ids.push(chan.send("t").unwrap());
+            ids.push(chan.send("t").expect("serde deserialization should succeed"));
         }
         assert_eq!(chan.pending_count(), 20);
         assert!(chan.send("t").is_err());
         for id in &ids {
-            chan.commit(*id, "h").unwrap();
+            chan.commit(*id, "h").expect("serde deserialization should succeed");
         }
         assert_eq!(chan.pending_count(), 0);
         assert_eq!(chan.total_count(), 20);
@@ -1314,11 +1314,11 @@ mod tests {
         let mut chan = test_channel();
         for i in 0u64..30 {
             chan.set_tick(i);
-            let id = chan.send("t").unwrap();
+            let id = chan.send("t").expect("serde deserialization should succeed");
             if i % 3 == 0 {
-                chan.abort(id, &AbortReason::OperatorAbort, "h").unwrap();
+                chan.abort(id, &AbortReason::OperatorAbort, "h").expect("serde deserialization should succeed");
             } else {
-                chan.commit(id, "h").unwrap();
+                chan.commit(id, "h").expect("serde deserialization should succeed");
             }
         }
         assert_eq!(chan.pending_count(), 0);
@@ -1337,15 +1337,15 @@ mod tests {
                 },
             );
             chan.set_tick(100);
-            let id1 = chan.send("t").unwrap();
+            let id1 = chan.send("t").expect("serde deserialization should succeed");
             chan.set_tick(200);
-            let id2 = chan.send("t").unwrap();
+            let id2 = chan.send("t").expect("serde deserialization should succeed");
             chan.set_tick(300);
-            let id3 = chan.send("t").unwrap();
-            chan.commit(id1, "h1").unwrap();
-            chan.mark_leaked(id2).unwrap();
+            let id3 = chan.send("t").expect("serde deserialization should succeed");
+            chan.commit(id1, "h1").expect("serde deserialization should succeed");
+            chan.mark_leaked(id2).expect("serde deserialization should succeed");
             chan.abort(id3, &AbortReason::PolicyViolation, "h3")
-                .unwrap();
+                .expect("serde deserialization should succeed");
             chan.drain_events()
         };
         let events1 = run();
@@ -1359,7 +1359,7 @@ mod tests {
     #[test]
     fn channel_id_propagates_to_events() {
         let mut chan = ObligationChannel::new("my-channel", "my-trace", ChannelConfig::default());
-        chan.send("t").unwrap();
+        chan.send("t").expect("serde deserialization should succeed");
         let events = chan.drain_events();
         assert_eq!(events[0].channel_id, "my-channel");
         assert_eq!(events[0].trace_id, "my-trace");
@@ -1368,21 +1368,21 @@ mod tests {
     #[test]
     fn oldest_pending_after_all_resolved_is_none() {
         let mut chan = test_channel();
-        let id1 = chan.send("t").unwrap();
-        let id2 = chan.send("t").unwrap();
-        chan.commit(id1, "h").unwrap();
-        chan.commit(id2, "h").unwrap();
+        let id1 = chan.send("t").expect("serde deserialization should succeed");
+        let id2 = chan.send("t").expect("serde deserialization should succeed");
+        chan.commit(id1, "h").expect("serde deserialization should succeed");
+        chan.commit(id2, "h").expect("serde deserialization should succeed");
         assert!(chan.oldest_pending().is_none());
     }
 
     #[test]
     fn force_abort_skips_already_committed() {
         let mut chan = test_channel();
-        let id1 = chan.send("t").unwrap();
-        let id2 = chan.send("t").unwrap();
-        let _id3 = chan.send("t").unwrap();
-        chan.commit(id1, "h").unwrap();
-        chan.mark_leaked(id2).unwrap();
+        let id1 = chan.send("t").expect("serde deserialization should succeed");
+        let id2 = chan.send("t").expect("serde deserialization should succeed");
+        let _id3 = chan.send("t").expect("serde deserialization should succeed");
+        chan.commit(id1, "h").expect("serde deserialization should succeed");
+        chan.mark_leaked(id2).expect("serde deserialization should succeed");
         let aborted = chan.force_abort_all_pending("timeout");
         assert_eq!(aborted, 1);
         assert!(chan.drain_check());
@@ -1391,8 +1391,8 @@ mod tests {
     #[test]
     fn send_with_empty_creator_trace_id() {
         let mut chan = test_channel();
-        let id = chan.send("").unwrap();
-        let oldest = chan.oldest_pending().unwrap();
+        let id = chan.send("").expect("serde deserialization should succeed");
+        let oldest = chan.oldest_pending().expect("serde deserialization should succeed");
         assert_eq!(oldest.obligation_id, id);
         assert_eq!(oldest.creator_trace_id, "");
     }
@@ -1400,11 +1400,11 @@ mod tests {
     #[test]
     fn drain_then_new_events_accumulate() {
         let mut chan = test_channel();
-        chan.send("t").unwrap();
+        chan.send("t").expect("serde deserialization should succeed");
         let batch1 = chan.drain_events();
         assert_eq!(batch1.len(), 1);
-        chan.send("t").unwrap();
-        chan.send("t").unwrap();
+        chan.send("t").expect("serde deserialization should succeed");
+        chan.send("t").expect("serde deserialization should succeed");
         let batch2 = chan.drain_events();
         assert_eq!(batch2.len(), 2);
     }
@@ -1412,8 +1412,8 @@ mod tests {
     #[test]
     fn abort_reason_serde_custom_special_chars() {
         let reason = AbortReason::Custom("special: \"chars\" \n\t".into());
-        let json = serde_json::to_string(&reason).unwrap();
-        let back: AbortReason = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&reason).expect("serde deserialization should succeed");
+        let back: AbortReason = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(reason, back);
     }
 
@@ -1422,8 +1422,8 @@ mod tests {
         let err = ObligationError::Backpressure {
             max_pending: usize::MAX,
         };
-        let json = serde_json::to_string(&err).unwrap();
-        let back: ObligationError = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let back: ObligationError = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, back);
     }
 
@@ -1448,11 +1448,11 @@ mod tests {
     fn multiple_channels_independent_state() {
         let mut chan1 = ObligationChannel::new("c1", "t1", ChannelConfig::default());
         let mut chan2 = ObligationChannel::new("c2", "t2", ChannelConfig::default());
-        let id1 = chan1.send("t").unwrap();
-        let id2 = chan2.send("t").unwrap();
+        let id1 = chan1.send("t").expect("serde deserialization should succeed");
+        let id2 = chan2.send("t").expect("serde deserialization should succeed");
         assert_eq!(id1, 1);
         assert_eq!(id2, 1);
-        chan1.commit(id1, "h").unwrap();
+        chan1.commit(id1, "h").expect("serde deserialization should succeed");
         assert_eq!(chan1.pending_count(), 0);
         assert_eq!(chan2.pending_count(), 1);
     }
@@ -1460,21 +1460,21 @@ mod tests {
     #[test]
     fn leak_count_accumulates_across_ops() {
         let mut chan = test_channel();
-        let id1 = chan.send("t").unwrap();
-        chan.mark_leaked(id1).unwrap();
-        let id2 = chan.send("t").unwrap();
-        chan.commit(id2, "h").unwrap();
-        let id3 = chan.send("t").unwrap();
-        chan.mark_leaked(id3).unwrap();
+        let id1 = chan.send("t").expect("serde deserialization should succeed");
+        chan.mark_leaked(id1).expect("serde deserialization should succeed");
+        let id2 = chan.send("t").expect("serde deserialization should succeed");
+        chan.commit(id2, "h").expect("serde deserialization should succeed");
+        let id3 = chan.send("t").expect("serde deserialization should succeed");
+        chan.mark_leaked(id3).expect("serde deserialization should succeed");
         assert_eq!(chan.leak_count(), 2);
     }
 
     #[test]
     fn event_obligation_ids_match_send_ids() {
         let mut chan = test_channel();
-        let id1 = chan.send("t").unwrap();
-        let id2 = chan.send("t").unwrap();
-        chan.commit(id1, "h").unwrap();
+        let id1 = chan.send("t").expect("serde deserialization should succeed");
+        let id2 = chan.send("t").expect("serde deserialization should succeed");
+        chan.commit(id1, "h").expect("serde deserialization should succeed");
         let events = chan.drain_events();
         let event_ids: Vec<u64> = events.iter().map(|e| e.obligation_id).collect();
         assert_eq!(event_ids, vec![id1, id2, id1]);
@@ -1498,16 +1498,16 @@ mod tests {
     #[test]
     fn obligation_error_not_found_zero_id_serde() {
         let err = ObligationError::NotFound { obligation_id: 0 };
-        let json = serde_json::to_string(&err).unwrap();
-        let back: ObligationError = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let back: ObligationError = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, back);
     }
 
     #[test]
     fn obligation_state_serde_leaked() {
         let state = ObligationState::Leaked;
-        let json = serde_json::to_string(&state).unwrap();
-        let back: ObligationState = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&state).expect("serde deserialization should succeed");
+        let back: ObligationState = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(state, back);
     }
 
@@ -1521,10 +1521,10 @@ mod tests {
     fn tick_monotonicity_in_oldest() {
         let mut chan = test_channel();
         chan.set_tick(100);
-        chan.send("t").unwrap();
+        chan.send("t").expect("serde deserialization should succeed");
         chan.set_tick(50);
-        chan.send("t").unwrap();
-        let oldest = chan.oldest_pending().unwrap();
+        chan.send("t").expect("serde deserialization should succeed");
+        let oldest = chan.oldest_pending().expect("serde deserialization should succeed");
         assert_eq!(oldest.created_at_tick, 50);
     }
 }

@@ -527,7 +527,7 @@ mod tests {
     #[test]
     fn cancel_from_non_running_fails() {
         let mut region = test_region();
-        region.cancel(CancelReason::OperatorShutdown).unwrap();
+        region.cancel(CancelReason::OperatorShutdown).expect("serde deserialization should succeed");
         let err = region.cancel(CancelReason::Quarantine).unwrap_err();
         assert_eq!(err.current_state, RegionState::CancelRequested);
         assert_eq!(err.attempted_transition, "cancel");
@@ -544,7 +544,7 @@ mod tests {
     #[test]
     fn drain_from_cancel_requested_succeeds() {
         let mut region = test_region();
-        region.cancel(CancelReason::OperatorShutdown).unwrap();
+        region.cancel(CancelReason::OperatorShutdown).expect("serde deserialization should succeed");
         assert!(region.drain(DrainDeadline::default()).is_ok());
         assert_eq!(region.state(), RegionState::Draining);
     }
@@ -552,7 +552,7 @@ mod tests {
     #[test]
     fn finalize_before_drain_fails() {
         let mut region = test_region();
-        region.cancel(CancelReason::OperatorShutdown).unwrap();
+        region.cancel(CancelReason::OperatorShutdown).expect("serde deserialization should succeed");
         let err = region.finalize().unwrap_err();
         assert_eq!(err.current_state, RegionState::CancelRequested);
         assert_eq!(err.attempted_transition, "finalize");
@@ -570,9 +570,9 @@ mod tests {
     #[test]
     fn full_lifecycle_cancel_drain_finalize() {
         let mut region = test_region();
-        region.cancel(CancelReason::OperatorShutdown).unwrap();
-        region.drain(DrainDeadline::default()).unwrap();
-        let result = region.finalize().unwrap();
+        region.cancel(CancelReason::OperatorShutdown).expect("serde deserialization should succeed");
+        region.drain(DrainDeadline::default()).expect("serde deserialization should succeed");
+        let result = region.finalize().expect("serde deserialization should succeed");
         assert!(result.success);
         assert_eq!(region.state(), RegionState::Closed);
     }
@@ -582,7 +582,7 @@ mod tests {
         let mut region = test_region();
         let result = region
             .close(CancelReason::Quarantine, DrainDeadline::default())
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(result.success);
         assert_eq!(region.state(), RegionState::Closed);
     }
@@ -613,9 +613,9 @@ mod tests {
         region.commit_obligation("ob-1");
         region.abort_obligation("ob-2");
 
-        region.cancel(CancelReason::OperatorShutdown).unwrap();
-        region.drain(DrainDeadline::default()).unwrap();
-        let result = region.finalize().unwrap();
+        region.cancel(CancelReason::OperatorShutdown).expect("serde deserialization should succeed");
+        region.drain(DrainDeadline::default()).expect("serde deserialization should succeed");
+        let result = region.finalize().expect("serde deserialization should succeed");
 
         assert!(result.success);
         assert_eq!(result.obligations_committed, 1);
@@ -628,9 +628,9 @@ mod tests {
         let mut region = test_region();
         region.register_obligation("ob-1", "flush");
 
-        region.cancel(CancelReason::OperatorShutdown).unwrap();
-        region.drain(DrainDeadline::default()).unwrap();
-        let result = region.finalize().unwrap();
+        region.cancel(CancelReason::OperatorShutdown).expect("serde deserialization should succeed");
+        region.drain(DrainDeadline::default()).expect("serde deserialization should succeed");
+        let result = region.finalize().expect("serde deserialization should succeed");
 
         // Pending obligations remain but since no timeout escalation, they stay pending
         // and the result is not success.
@@ -644,8 +644,8 @@ mod tests {
         let mut region = test_region();
         region.register_obligation("ob-1", "slow task");
 
-        region.cancel(CancelReason::OperatorShutdown).unwrap();
-        region.drain(DrainDeadline { max_ticks: 5 }).unwrap();
+        region.cancel(CancelReason::OperatorShutdown).expect("serde deserialization should succeed");
+        region.drain(DrainDeadline { max_ticks: 5 }).expect("serde deserialization should succeed");
 
         for _ in 0..4 {
             assert!(!region.drain_tick());
@@ -653,7 +653,7 @@ mod tests {
         // 5th tick triggers timeout
         assert!(region.drain_tick());
 
-        let result = region.finalize().unwrap();
+        let result = region.finalize().expect("serde deserialization should succeed");
         assert!(result.drain_timeout_escalated);
         // Pending obligations force-aborted by timeout escalation
         assert_eq!(result.obligations_aborted, 1);
@@ -670,7 +670,7 @@ mod tests {
         parent.add_child(child1);
         parent.add_child(child2);
 
-        parent.cancel(CancelReason::OperatorShutdown).unwrap();
+        parent.cancel(CancelReason::OperatorShutdown).expect("serde deserialization should succeed");
         assert_eq!(parent.state(), RegionState::CancelRequested);
     }
 
@@ -682,8 +682,8 @@ mod tests {
         parent.add_child(child);
         parent.register_obligation("ob-p1", "parent flush");
 
-        parent.cancel(CancelReason::OperatorShutdown).unwrap();
-        parent.drain(DrainDeadline::default()).unwrap();
+        parent.cancel(CancelReason::OperatorShutdown).expect("serde deserialization should succeed");
+        parent.drain(DrainDeadline::default()).expect("serde deserialization should succeed");
 
         // Resolve obligations
         parent.commit_obligation("ob-p1");
@@ -703,9 +703,9 @@ mod tests {
     #[test]
     fn events_emitted_at_each_phase() {
         let mut region = test_region();
-        region.cancel(CancelReason::OperatorShutdown).unwrap();
-        region.drain(DrainDeadline::default()).unwrap();
-        region.finalize().unwrap();
+        region.cancel(CancelReason::OperatorShutdown).expect("serde deserialization should succeed");
+        region.drain(DrainDeadline::default()).expect("serde deserialization should succeed");
+        region.finalize().expect("serde deserialization should succeed");
 
         let events = region.drain_events();
         // cancel_initiated, drain_started, finalize_success, closed
@@ -719,7 +719,7 @@ mod tests {
     #[test]
     fn events_carry_correct_fields() {
         let mut region = test_region();
-        region.cancel(CancelReason::OperatorShutdown).unwrap();
+        region.cancel(CancelReason::OperatorShutdown).expect("serde deserialization should succeed");
 
         let events = region.drain_events();
         let event = &events[0];
@@ -735,9 +735,9 @@ mod tests {
         let child = Region::new("child", "extension_cell", "t");
         parent.add_child(child);
 
-        parent.cancel(CancelReason::OperatorShutdown).unwrap();
-        parent.drain(DrainDeadline::default()).unwrap();
-        parent.finalize().unwrap();
+        parent.cancel(CancelReason::OperatorShutdown).expect("serde deserialization should succeed");
+        parent.drain(DrainDeadline::default()).expect("serde deserialization should succeed");
+        parent.finalize().expect("serde deserialization should succeed");
 
         let events = parent.drain_events();
         let parent_events: Vec<_> = events.iter().filter(|e| e.region_id == "parent").collect();
@@ -753,12 +753,12 @@ mod tests {
         let run = || -> Vec<RegionEvent> {
             let mut region = Region::new("r", "ext", "t");
             region.register_obligation("ob-1", "flush");
-            region.cancel(CancelReason::Quarantine).unwrap();
-            region.drain(DrainDeadline { max_ticks: 3 }).unwrap();
+            region.cancel(CancelReason::Quarantine).expect("serde deserialization should succeed");
+            region.drain(DrainDeadline { max_ticks: 3 }).expect("serde deserialization should succeed");
             for _ in 0..3 {
                 region.drain_tick();
             }
-            region.finalize().unwrap();
+            region.finalize().expect("serde deserialization should succeed");
             region.drain_events()
         };
 
@@ -788,7 +788,7 @@ mod tests {
     #[test]
     fn double_cancel_fails() {
         let mut region = test_region();
-        region.cancel(CancelReason::OperatorShutdown).unwrap();
+        region.cancel(CancelReason::OperatorShutdown).expect("serde deserialization should succeed");
         assert!(region.cancel(CancelReason::Quarantine).is_err());
     }
 
@@ -797,7 +797,7 @@ mod tests {
         let mut region = test_region();
         region
             .close(CancelReason::OperatorShutdown, DrainDeadline::default())
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(
             region
                 .close(CancelReason::Quarantine, DrainDeadline::default())
@@ -817,8 +817,8 @@ mod tests {
             RegionState::Closed,
         ];
         for state in &states {
-            let json = serde_json::to_string(state).unwrap();
-            let restored: RegionState = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(state).expect("serde deserialization should succeed");
+            let restored: RegionState = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*state, restored);
         }
     }
@@ -831,8 +831,8 @@ mod tests {
             CancelReason::Custom("test".to_string()),
         ];
         for reason in &reasons {
-            let json = serde_json::to_string(reason).unwrap();
-            let restored: CancelReason = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(reason).expect("serde deserialization should succeed");
+            let restored: CancelReason = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*reason, restored);
         }
     }
@@ -846,8 +846,8 @@ mod tests {
             obligations_aborted: 1,
             drain_timeout_escalated: false,
         };
-        let json = serde_json::to_string(&result).unwrap();
-        let restored: FinalizeResult = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let restored: FinalizeResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, restored);
     }
 
@@ -862,8 +862,8 @@ mod tests {
             obligations_pending: 0,
             drain_elapsed_ticks: 0,
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let restored: RegionEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let restored: RegionEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, restored);
     }
 
@@ -876,8 +876,8 @@ mod tests {
             ObligationStatus::Committed,
             ObligationStatus::Aborted,
         ] {
-            let json = serde_json::to_string(&status).unwrap();
-            let restored: ObligationStatus = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&status).expect("serde deserialization should succeed");
+            let restored: ObligationStatus = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(status, restored);
         }
     }
@@ -889,16 +889,16 @@ mod tests {
             description: "must finalize".to_string(),
             status: ObligationStatus::Pending,
         };
-        let json = serde_json::to_string(&ob).unwrap();
-        let restored: Obligation = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&ob).expect("serde deserialization should succeed");
+        let restored: Obligation = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ob, restored);
     }
 
     #[test]
     fn drain_deadline_serde_roundtrip() {
         let dd = DrainDeadline { max_ticks: 5000 };
-        let json = serde_json::to_string(&dd).unwrap();
-        let restored: DrainDeadline = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&dd).expect("serde deserialization should succeed");
+        let restored: DrainDeadline = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(dd, restored);
     }
 
@@ -989,8 +989,8 @@ mod tests {
             attempted_transition: "cancel".to_string(),
             region_id: "r-42".to_string(),
         };
-        let json = serde_json::to_string(&v).unwrap();
-        let restored: PhaseOrderViolation = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let restored: PhaseOrderViolation = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, restored);
     }
 
@@ -1005,8 +1005,8 @@ mod tests {
             CancelReason::Custom("my_reason".to_string()),
         ];
         for reason in &reasons {
-            let json = serde_json::to_string(reason).unwrap();
-            let restored: CancelReason = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(reason).expect("serde deserialization should succeed");
+            let restored: CancelReason = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*reason, restored);
         }
     }
@@ -1024,7 +1024,7 @@ mod tests {
         assert!(!region.drain_tick());
 
         // CancelRequested state
-        region.cancel(CancelReason::OperatorShutdown).unwrap();
+        region.cancel(CancelReason::OperatorShutdown).expect("serde deserialization should succeed");
         assert!(!region.drain_tick());
     }
 
@@ -1032,7 +1032,7 @@ mod tests {
     fn region_cancel_reason_accessor() {
         let mut region = test_region();
         assert!(region.cancel_reason().is_none());
-        region.cancel(CancelReason::Quarantine).unwrap();
+        region.cancel(CancelReason::Quarantine).expect("serde deserialization should succeed");
         assert_eq!(region.cancel_reason(), Some(&CancelReason::Quarantine));
     }
 
@@ -1050,7 +1050,7 @@ mod tests {
     fn region_event_count_tracks_own_events_only() {
         let mut parent = Region::new("parent", "svc", "t");
         parent.add_child(Region::new("child", "ext", "t"));
-        parent.cancel(CancelReason::OperatorShutdown).unwrap();
+        parent.cancel(CancelReason::OperatorShutdown).expect("serde deserialization should succeed");
         // Parent should have 1 event (cancel_initiated), child should also have 1
         // event_count() only counts the parent's own events
         assert_eq!(parent.event_count(), 1);
@@ -1069,7 +1069,7 @@ mod tests {
                 CancelReason::OperatorShutdown,
                 DrainDeadline { max_ticks: 10 },
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(result.success);
         assert_eq!(result.obligations_committed, 2);
         assert_eq!(result.obligations_aborted, 0);
@@ -1084,8 +1084,8 @@ mod tests {
             obligations_aborted: 3,
             drain_timeout_escalated: true,
         };
-        let json = serde_json::to_string(&result).unwrap();
-        let restored: FinalizeResult = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let restored: FinalizeResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, restored);
     }
 
@@ -1093,8 +1093,8 @@ mod tests {
     fn drain_timeout_fires_only_once() {
         let mut region = test_region();
         region.register_obligation("ob-1", "slow");
-        region.cancel(CancelReason::OperatorShutdown).unwrap();
-        region.drain(DrainDeadline { max_ticks: 2 }).unwrap();
+        region.cancel(CancelReason::OperatorShutdown).expect("serde deserialization should succeed");
+        region.drain(DrainDeadline { max_ticks: 2 }).expect("serde deserialization should succeed");
 
         // Tick 1: no timeout
         assert!(!region.drain_tick());
@@ -1164,7 +1164,7 @@ mod tests {
             obligations_aborted: 0,
             drain_timeout_escalated: false,
         };
-        let json = serde_json::to_string(&result).unwrap();
+        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
         for field in &[
             "region_id",
             "success",
@@ -1192,9 +1192,9 @@ mod tests {
     #[test]
     fn finalize_no_obligations_reports_zero_counts() {
         let mut region = test_region();
-        region.cancel(CancelReason::OperatorShutdown).unwrap();
-        region.drain(DrainDeadline::default()).unwrap();
-        let result = region.finalize().unwrap();
+        region.cancel(CancelReason::OperatorShutdown).expect("serde deserialization should succeed");
+        region.drain(DrainDeadline::default()).expect("serde deserialization should succeed");
+        let result = region.finalize().expect("serde deserialization should succeed");
         assert!(result.success);
         assert_eq!(result.obligations_committed, 0);
         assert_eq!(result.obligations_aborted, 0);
@@ -1204,7 +1204,7 @@ mod tests {
     #[test]
     fn drain_events_clears_after_drain() {
         let mut region = test_region();
-        region.cancel(CancelReason::OperatorShutdown).unwrap();
+        region.cancel(CancelReason::OperatorShutdown).expect("serde deserialization should succeed");
         let events1 = region.drain_events();
         assert!(!events1.is_empty());
         let events2 = region.drain_events();
@@ -1216,7 +1216,7 @@ mod tests {
         let mut region = test_region();
         region
             .close(CancelReason::BudgetExhausted, DrainDeadline::default())
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(region.cancel_reason(), Some(&CancelReason::BudgetExhausted));
     }
 
@@ -1231,7 +1231,7 @@ mod tests {
             obligations_pending: 0,
             drain_elapsed_ticks: 0,
         };
-        let json = serde_json::to_string(&event).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
         for field in &[
             "trace_id",
             "region_id",
@@ -1257,7 +1257,7 @@ mod tests {
 
         let result = parent
             .close(CancelReason::OperatorShutdown, DrainDeadline::default())
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(result.success);
         assert_eq!(parent.state(), RegionState::Closed);
     }
@@ -1345,7 +1345,7 @@ mod tests {
         ];
         let set: BTreeSet<String> = variants
             .iter()
-            .map(|v| serde_json::to_string(v).unwrap())
+            .map(|v| serde_json::to_string(v).expect("serde deserialization should succeed"))
             .collect();
         assert_eq!(set.len(), 5);
     }
@@ -1362,7 +1362,7 @@ mod tests {
         ];
         let set: BTreeSet<String> = variants
             .iter()
-            .map(|v| serde_json::to_string(v).unwrap())
+            .map(|v| serde_json::to_string(v).expect("serde deserialization should succeed"))
             .collect();
         assert_eq!(set.len(), 6);
     }
@@ -1376,7 +1376,7 @@ mod tests {
         ];
         let set: BTreeSet<String> = variants
             .iter()
-            .map(|v| serde_json::to_string(v).unwrap())
+            .map(|v| serde_json::to_string(v).expect("serde deserialization should succeed"))
             .collect();
         assert_eq!(set.len(), 3);
     }
@@ -1447,7 +1447,7 @@ mod tests {
             attempted_transition: "drain".to_string(),
             region_id: "r".to_string(),
         };
-        let json = serde_json::to_string(&v).unwrap();
+        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
         assert!(json.contains("\"current_state\""));
         assert!(json.contains("\"attempted_transition\""));
         assert!(json.contains("\"region_id\""));
@@ -1460,7 +1460,7 @@ mod tests {
             description: "d".to_string(),
             status: ObligationStatus::Pending,
         };
-        let json = serde_json::to_string(&o).unwrap();
+        let json = serde_json::to_string(&o).expect("serde deserialization should succeed");
         assert!(json.contains("\"id\""));
         assert!(json.contains("\"description\""));
         assert!(json.contains("\"status\""));
@@ -1475,7 +1475,7 @@ mod tests {
             obligations_aborted: 0,
             drain_timeout_escalated: false,
         };
-        let json = serde_json::to_string(&f).unwrap();
+        let json = serde_json::to_string(&f).expect("serde deserialization should succeed");
         assert!(json.contains("\"region_id\""));
         assert!(json.contains("\"success\""));
         assert!(json.contains("\"obligations_committed\""));
@@ -1552,8 +1552,8 @@ mod tests {
             RegionState::Finalizing,
             RegionState::Closed,
         ] {
-            let json = serde_json::to_string(&state).unwrap();
-            let back: RegionState = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&state).expect("serde deserialization should succeed");
+            let back: RegionState = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(state, back);
         }
     }
@@ -1568,8 +1568,8 @@ mod tests {
             CancelReason::ParentClosing,
             CancelReason::Custom("my-reason".to_string()),
         ] {
-            let json = serde_json::to_string(&reason).unwrap();
-            let back: CancelReason = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&reason).expect("serde deserialization should succeed");
+            let back: CancelReason = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(reason, back);
         }
     }
@@ -1583,8 +1583,8 @@ mod tests {
             obligations_aborted: 2,
             drain_timeout_escalated: true,
         };
-        let json = serde_json::to_string(&f).unwrap();
-        let back: FinalizeResult = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&f).expect("serde deserialization should succeed");
+        let back: FinalizeResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(f, back);
     }
 
@@ -1701,13 +1701,13 @@ mod tests {
     fn drain_timeout_escalation_aborts_pending() {
         let mut r = test_region();
         r.register_obligation("ob-1", "stuck");
-        r.cancel(CancelReason::OperatorShutdown).unwrap();
-        r.drain(DrainDeadline { max_ticks: 2 }).unwrap();
+        r.cancel(CancelReason::OperatorShutdown).expect("serde deserialization should succeed");
+        r.drain(DrainDeadline { max_ticks: 2 }).expect("serde deserialization should succeed");
         // Tick past deadline
         r.drain_tick();
         r.drain_tick();
         assert!(r.drain_tick()); // timed out
-        let result = r.finalize().unwrap();
+        let result = r.finalize().expect("serde deserialization should succeed");
         // obligation was force-aborted
         assert_eq!(result.obligations_aborted, 1);
         assert!(result.drain_timeout_escalated);
@@ -1729,7 +1729,7 @@ mod tests {
         parent.add_child(child);
         parent
             .close(CancelReason::Quarantine, DrainDeadline::default())
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let events = parent.drain_events();
         // Should have events from both parent and child
         let parent_events: Vec<_> = events.iter().filter(|e| e.region_id == "p").collect();
@@ -1742,7 +1742,7 @@ mod tests {
     fn drain_events_is_idempotent_empty_on_second_call() {
         let mut r = test_region();
         r.close(CancelReason::Revocation, DrainDeadline::default())
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let first = r.drain_events();
         assert!(!first.is_empty());
         let second = r.drain_events();

@@ -1319,7 +1319,7 @@ mod tests {
     fn new_promise_is_pending() {
         let mut store = PromiseStore::new();
         let h = store.create();
-        let p = store.get(h).unwrap();
+        let p = store.get(h).expect("serde deserialization should succeed");
         assert_eq!(p.state, PromiseState::Pending);
         assert!(!p.state.is_settled());
     }
@@ -1331,8 +1331,8 @@ mod tests {
         let h = store.create();
         store
             .fulfill(h, js_int(42), Label::Public, &mut queue)
-            .unwrap();
-        let p = store.get(h).unwrap();
+            .expect("serde deserialization should succeed");
+        let p = store.get(h).expect("serde deserialization should succeed");
         assert_eq!(p.state, PromiseState::Fulfilled(js_int(42)));
         assert!(p.state.is_fulfilled());
     }
@@ -1344,8 +1344,8 @@ mod tests {
         let h = store.create();
         store
             .reject(h, js_str("error"), Label::Public, &mut queue)
-            .unwrap();
-        let p = store.get(h).unwrap();
+            .expect("serde deserialization should succeed");
+        let p = store.get(h).expect("serde deserialization should succeed");
         assert_eq!(p.state, PromiseState::Rejected(js_str("error")));
         assert!(p.state.is_rejected());
     }
@@ -1357,7 +1357,7 @@ mod tests {
         let h = store.create();
         store
             .fulfill(h, js_int(1), Label::Public, &mut queue)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let result = store.fulfill(h, js_int(2), Label::Public, &mut queue);
         assert!(matches!(result, Err(PromiseError::AlreadySettled { .. })));
     }
@@ -1369,7 +1369,7 @@ mod tests {
         let h = store.create();
         store
             .fulfill(h, js_int(1), Label::Public, &mut queue)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let result = store.reject(h, js_str("err"), Label::Public, &mut queue);
         assert!(matches!(result, Err(PromiseError::AlreadySettled { .. })));
     }
@@ -1381,7 +1381,7 @@ mod tests {
         let h = store.create();
         store
             .reject(h, js_str("err"), Label::Public, &mut queue)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let result = store.fulfill(h, js_int(1), Label::Public, &mut queue);
         assert!(matches!(result, Err(PromiseError::AlreadySettled { .. })));
     }
@@ -1403,17 +1403,17 @@ mod tests {
         let handler = ClosureHandle(0);
         let result_h = store
             .then(h, Some(handler), None, Label::Public, &mut queue)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // No microtasks yet (promise still pending).
         assert!(queue.is_empty());
 
         // Reactions registered.
-        let p = store.get(h).unwrap();
+        let p = store.get(h).expect("serde deserialization should succeed");
         assert_eq!(p.reactions.len(), 2);
 
         // Result promise exists.
-        let rp = store.get(result_h).unwrap();
+        let rp = store.get(result_h).expect("serde deserialization should succeed");
         assert_eq!(rp.state, PromiseState::Pending);
     }
 
@@ -1424,12 +1424,12 @@ mod tests {
         let h = store.create();
         store
             .fulfill(h, js_int(10), Label::Public, &mut queue)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let handler = ClosureHandle(1);
         let _result_h = store
             .then(h, Some(handler), None, Label::Public, &mut queue)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Microtask enqueued immediately.
         assert_eq!(queue.pending_count(), 1);
@@ -1442,12 +1442,12 @@ mod tests {
         let h = store.create();
         store
             .reject(h, js_str("fail"), Label::Public, &mut queue)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let handler = ClosureHandle(2);
         let _result_h = store
             .then(h, None, Some(handler), Label::Public, &mut queue)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert_eq!(queue.pending_count(), 1);
     }
@@ -1460,12 +1460,12 @@ mod tests {
         let handler = ClosureHandle(5);
         store
             .then(h, Some(handler), None, Label::Public, &mut queue)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(queue.is_empty());
 
         store
             .fulfill(h, js_int(99), Label::Public, &mut queue)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         // Two reactions registered (fulfill + reject), both become microtasks.
         assert_eq!(queue.pending_count(), 2);
     }
@@ -1477,7 +1477,7 @@ mod tests {
         let mut store = PromiseStore::new();
         let mut queue = MicrotaskQueue::new();
         let h = store.resolve(js_int(7), Label::Public, &mut queue);
-        let p = store.get(h).unwrap();
+        let p = store.get(h).expect("serde deserialization should succeed");
         assert!(p.state.is_fulfilled());
     }
 
@@ -1486,7 +1486,7 @@ mod tests {
         let mut store = PromiseStore::new();
         let mut queue = MicrotaskQueue::new();
         let h = store.reject_with(js_str("boom"), Label::Public, &mut queue);
-        let p = store.get(h).unwrap();
+        let p = store.get(h).expect("serde deserialization should succeed");
         assert!(p.state.is_rejected());
     }
 
@@ -1508,8 +1508,8 @@ mod tests {
             label: Label::Public,
         });
 
-        let first = queue.dequeue().unwrap();
-        let second = queue.dequeue().unwrap();
+        let first = queue.dequeue().expect("serde deserialization should succeed");
+        let second = queue.dequeue().expect("serde deserialization should succeed");
         assert!(queue.dequeue().is_none());
 
         // Verify FIFO: first enqueued, first dequeued.
@@ -1582,11 +1582,11 @@ mod tests {
             Label::Public,
         );
 
-        let first = queue.dequeue_ready(0).unwrap();
+        let first = queue.dequeue_ready(0).expect("serde deserialization should succeed");
         // MessageChannel has higher priority (lower enum discriminant).
         assert_eq!(first.source, MacrotaskSource::MessageChannel);
 
-        let second = queue.dequeue_ready(0).unwrap();
+        let second = queue.dequeue_ready(0).expect("serde deserialization should succeed");
         assert_eq!(second.source, MacrotaskSource::Timer);
     }
 
@@ -1600,11 +1600,11 @@ mod tests {
         // Timer at 50ms (registered third — tie-break by seq).
         queue.schedule(MacrotaskSource::Timer, ClosureHandle(2), 50, Label::Public);
 
-        let first = queue.dequeue_ready(100).unwrap();
+        let first = queue.dequeue_ready(100).expect("serde deserialization should succeed");
         assert_eq!(first.handler, ClosureHandle(1)); // 50ms, seq=1
-        let second = queue.dequeue_ready(100).unwrap();
+        let second = queue.dequeue_ready(100).expect("serde deserialization should succeed");
         assert_eq!(second.handler, ClosureHandle(2)); // 50ms, seq=2
-        let third = queue.dequeue_ready(100).unwrap();
+        let third = queue.dequeue_ready(100).expect("serde deserialization should succeed");
         assert_eq!(third.handler, ClosureHandle(0)); // 100ms, seq=0
     }
 
@@ -1695,18 +1695,18 @@ mod tests {
             // Register .then on both.
             store
                 .then(p1, Some(ClosureHandle(0)), None, Label::Public, &mut queue)
-                .unwrap();
+                .expect("serde deserialization should succeed");
             store
                 .then(p2, Some(ClosureHandle(1)), None, Label::Public, &mut queue)
-                .unwrap();
+                .expect("serde deserialization should succeed");
 
             // Fulfill p1, then p2.
             store
                 .fulfill(p1, js_int(1), Label::Public, &mut queue)
-                .unwrap();
+                .expect("serde deserialization should succeed");
             store
                 .fulfill(p2, js_int(2), Label::Public, &mut queue)
-                .unwrap();
+                .expect("serde deserialization should succeed");
 
             // Drain all microtasks.
             let mut drained = Vec::new();
@@ -1769,8 +1769,8 @@ mod tests {
         assert!(!tracker.record_fulfillment(0, js_int(1)));
         assert!(tracker.record_rejection(1, js_str("err")));
 
-        assert_eq!(tracker.outcomes.get(&0).unwrap().status, "fulfilled");
-        assert_eq!(tracker.outcomes.get(&1).unwrap().status, "rejected");
+        assert_eq!(tracker.outcomes.get(&0).expect("serde deserialization should succeed").status, "fulfilled");
+        assert_eq!(tracker.outcomes.get(&1).expect("serde deserialization should succeed").status, "rejected");
     }
 
     #[test]
@@ -1824,7 +1824,7 @@ mod tests {
         let h = store.create();
         store
             .reject(h, js_str("unhandled"), Label::Public, &mut queue)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let unhandled = store.unhandled_rejections();
         assert_eq!(unhandled.len(), 1);
@@ -1840,10 +1840,10 @@ mod tests {
         // Register a rejection handler BEFORE rejecting.
         store
             .then(h, None, Some(ClosureHandle(0)), Label::Public, &mut queue)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         store
             .reject(h, js_str("handled"), Label::Public, &mut queue)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let unhandled = store.unhandled_rejections();
         assert!(unhandled.is_empty());
@@ -1858,10 +1858,10 @@ mod tests {
         // Register only onFulfilled; this must not mark a future rejection handled.
         store
             .then(h, Some(ClosureHandle(7)), None, Label::Public, &mut queue)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         store
             .reject(h, js_str("still_unhandled"), Label::Public, &mut queue)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert_eq!(store.unhandled_rejections(), vec![h]);
     }
@@ -1873,7 +1873,7 @@ mod tests {
         let h = store.create();
         store
             .reject(h, js_str("err"), Label::Public, &mut queue)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Initially unhandled.
         assert_eq!(store.unhandled_rejections().len(), 1);
@@ -1881,7 +1881,7 @@ mod tests {
         // Calling .then with onRejected marks it handled.
         store
             .then(h, None, Some(ClosureHandle(0)), Label::Public, &mut queue)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(store.unhandled_rejections().is_empty());
     }
 
@@ -1892,12 +1892,12 @@ mod tests {
         let h = store.create();
         store
             .reject(h, js_str("err"), Label::Public, &mut queue)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(store.unhandled_rejections(), vec![h]);
 
         store
             .then(h, Some(ClosureHandle(1)), None, Label::Public, &mut queue)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(store.unhandled_rejections(), vec![h]);
     }
 
@@ -1910,8 +1910,8 @@ mod tests {
         let h = store.create();
         store
             .fulfill(h, js_str("secret_data"), Label::Secret, &mut queue)
-            .unwrap();
-        let p = store.get(h).unwrap();
+            .expect("serde deserialization should succeed");
+        let p = store.get(h).expect("serde deserialization should succeed");
         assert_eq!(p.label, Label::Secret);
     }
 
@@ -1924,7 +1924,7 @@ mod tests {
         let h = store.create();
         store
             .fulfill(h, js_int(1), Label::Public, &mut queue)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let log = store.witness_log();
         assert_eq!(log.len(), 2);
@@ -1965,8 +1965,8 @@ mod tests {
             PromiseState::Rejected(js_str("err")),
         ];
         for state in &states {
-            let json = serde_json::to_string(state).unwrap();
-            let back: PromiseState = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(state).expect("serde deserialization should succeed");
+            let back: PromiseState = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, state);
         }
     }
@@ -1987,8 +1987,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap();
-            let back: PromiseError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let back: PromiseError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, err);
         }
     }
@@ -2001,8 +2001,8 @@ mod tests {
             result_promise: PromiseHandle(1),
             label: Label::Internal,
         };
-        let json = serde_json::to_string(&task).unwrap();
-        let back: Microtask = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&task).expect("serde deserialization should succeed");
+        let back: Microtask = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, task);
     }
 
@@ -2011,8 +2011,8 @@ mod tests {
         let mut clock = VirtualClock::new();
         clock.advance_to(12345);
         clock.register_timer();
-        let json = serde_json::to_string(&clock).unwrap();
-        let back: VirtualClock = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&clock).expect("serde deserialization should succeed");
+        let back: VirtualClock = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, clock);
     }
 
@@ -2102,10 +2102,10 @@ mod tests {
         let p1 = store.create();
         let p2 = store
             .then(p1, Some(ClosureHandle(0)), None, Label::Public, &mut queue)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let p3 = store
             .then(p2, Some(ClosureHandle(1)), None, Label::Public, &mut queue)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         // Three distinct promises: p1, p2 (result of first .then), p3 (result of second .then).
         assert_ne!(p1, p2);
         assert_ne!(p2, p3);
@@ -2119,13 +2119,13 @@ mod tests {
         let p = store.create();
         let r1 = store
             .then(p, Some(ClosureHandle(0)), None, Label::Public, &mut queue)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let r2 = store
             .then(p, Some(ClosureHandle(1)), None, Label::Public, &mut queue)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_ne!(r1, r2);
         // Both register reactions on the same pending promise.
-        let record = store.get(p).unwrap();
+        let record = store.get(p).expect("serde deserialization should succeed");
         assert_eq!(record.reactions.len(), 4); // 2 per .then (fulfill + reject)
     }
 
@@ -2136,13 +2136,13 @@ mod tests {
         let p = store.create();
         store
             .then(p, Some(ClosureHandle(0)), None, Label::Public, &mut queue)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         store
             .then(p, Some(ClosureHandle(1)), None, Label::Public, &mut queue)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         store
             .fulfill(p, js_int(42), Label::Public, &mut queue)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         // 4 reactions (2 fulfill + 2 reject) -> 4 microtasks.
         assert_eq!(queue.pending_count(), 4);
     }
@@ -2158,17 +2158,17 @@ mod tests {
 
         // First turn: clock advances to 100.
         let r1 = el.turn();
-        assert_eq!(r1.macrotask.as_ref().unwrap().handler, ClosureHandle(1));
+        assert_eq!(r1.macrotask.as_ref().expect("serde deserialization should succeed").handler, ClosureHandle(1));
         assert_eq!(el.clock.now_ms(), 100);
 
         // Second turn: clock advances to 200.
         let r2 = el.turn();
-        assert_eq!(r2.macrotask.as_ref().unwrap().handler, ClosureHandle(2));
+        assert_eq!(r2.macrotask.as_ref().expect("serde deserialization should succeed").handler, ClosureHandle(2));
         assert_eq!(el.clock.now_ms(), 200);
 
         // Third turn: clock advances to 300.
         let r3 = el.turn();
-        assert_eq!(r3.macrotask.as_ref().unwrap().handler, ClosureHandle(0));
+        assert_eq!(r3.macrotask.as_ref().expect("serde deserialization should succeed").handler, ClosureHandle(0));
         assert_eq!(el.clock.now_ms(), 300);
 
         // No more work.
@@ -2185,7 +2185,7 @@ mod tests {
         let h = store.resolve(js_int(5), Label::Public, &mut queue);
         let _r = store
             .then(h, Some(ClosureHandle(0)), None, Label::Public, &mut queue)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         // Resolve itself doesn't enqueue (no reactions at creation time),
         // but .then on a fulfilled promise enqueues immediately.
         assert!(queue.pending_count() >= 1);
@@ -2218,9 +2218,9 @@ mod tests {
         );
         queue.schedule(MacrotaskSource::Timer, ClosureHandle(1), 0, Label::Public);
 
-        let first = queue.dequeue_ready(0).unwrap();
+        let first = queue.dequeue_ready(0).expect("serde deserialization should succeed");
         assert_eq!(first.source, MacrotaskSource::Timer);
-        let second = queue.dequeue_ready(0).unwrap();
+        let second = queue.dequeue_ready(0).expect("serde deserialization should succeed");
         assert_eq!(second.source, MacrotaskSource::IoCompletion);
     }
 
@@ -2264,10 +2264,10 @@ mod tests {
             let p2 = store.resolve(js_int(2), Label::Public, &mut queue);
             let _r1 = store
                 .then(p1, Some(ClosureHandle(0)), None, Label::Public, &mut queue)
-                .unwrap();
+                .expect("serde deserialization should succeed");
             let _r2 = store
                 .then(p2, Some(ClosureHandle(1)), None, Label::Public, &mut queue)
-                .unwrap();
+                .expect("serde deserialization should succeed");
 
             while queue.dequeue().is_some() {}
             all_witnesses.push(store.witness_log().to_vec());
@@ -2318,8 +2318,8 @@ mod tests {
             registration_seq: 7,
             label: Label::Internal,
         };
-        let json = serde_json::to_string(&task).unwrap();
-        let back: Macrotask = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&task).expect("serde deserialization should succeed");
+        let back: Macrotask = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, task);
     }
 
@@ -2339,8 +2339,8 @@ mod tests {
             },
         ];
         for event in &events {
-            let json = serde_json::to_string(event).unwrap();
-            let back: WitnessEvent = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(event).expect("serde deserialization should succeed");
+            let back: WitnessEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, event);
         }
     }
@@ -2377,8 +2377,8 @@ mod tests {
     fn reaction_kind_serde_roundtrip() {
         let variants = [ReactionKind::Fulfill, ReactionKind::Reject];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: ReactionKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: ReactionKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, v);
         }
     }
@@ -2391,8 +2391,8 @@ mod tests {
             MacrotaskSource::IoCompletion,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: MacrotaskSource = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: MacrotaskSource = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, v);
         }
     }
@@ -2400,8 +2400,8 @@ mod tests {
     #[test]
     fn virtual_clock_serde_new_roundtrip() {
         let clock = VirtualClock::new();
-        let json = serde_json::to_string(&clock).unwrap();
-        let back: VirtualClock = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&clock).expect("serde deserialization should succeed");
+        let back: VirtualClock = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.now_ms(), 0);
     }
 
@@ -2440,8 +2440,8 @@ mod tests {
     #[test]
     fn promise_handle_serde_roundtrip() {
         let handle = PromiseHandle(99);
-        let json = serde_json::to_string(&handle).unwrap();
-        let back: PromiseHandle = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&handle).expect("serde deserialization should succeed");
+        let back: PromiseHandle = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, handle);
     }
 
@@ -2486,7 +2486,7 @@ mod tests {
         assert_eq!(outcome.affected_module_count, 0);
         assert!(outcome.module_specifier.is_none());
 
-        let p = store.get(promise).unwrap();
+        let p = store.get(promise).expect("serde deserialization should succeed");
         assert!(p.state.is_rejected());
     }
 
@@ -2510,7 +2510,7 @@ mod tests {
         assert_eq!(outcome.rejected_promise, Some(module_promise));
         assert_eq!(outcome.module_specifier.as_deref(), Some("mod.js"));
 
-        let p = store.get(module_promise).unwrap();
+        let p = store.get(module_promise).expect("serde deserialization should succeed");
         assert!(p.state.is_rejected());
     }
 
@@ -2546,7 +2546,7 @@ mod tests {
             .expect("hostcall bridge should succeed");
 
         assert_eq!(outcome.rejected_promise, Some(caller));
-        let p = store.get(caller).unwrap();
+        let p = store.get(caller).expect("serde deserialization should succeed");
         assert!(p.state.is_rejected());
     }
 
@@ -2567,7 +2567,7 @@ mod tests {
             .expect("microtask bridge should succeed");
 
         assert_eq!(outcome.rejected_promise, Some(result));
-        let p = store.get(result).unwrap();
+        let p = store.get(result).expect("serde deserialization should succeed");
         assert!(p.state.is_rejected());
     }
 
@@ -2582,10 +2582,10 @@ mod tests {
 
         bridge
             .bridge_async_exception(js_str("err1"), p1, &mut store, &mut queue)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         bridge
             .bridge_module_exception(js_str("err2"), "m.js", Some(p2), &mut store, &mut queue)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let log = bridge.witness_log();
         assert_eq!(log.len(), 2);
@@ -2606,8 +2606,8 @@ mod tests {
             propagated: true,
             affected_module_count: 3,
         };
-        let json = serde_json::to_string(&outcome).unwrap();
-        let back: ExceptionRejectionOutcome = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&outcome).expect("serde deserialization should succeed");
+        let back: ExceptionRejectionOutcome = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(outcome, back);
     }
 
@@ -2620,8 +2620,8 @@ mod tests {
             module_specifier: None,
             seq: 42,
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let back: ExceptionRejectionWitnessEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let back: ExceptionRejectionWitnessEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
     }
 
@@ -2634,8 +2634,8 @@ mod tests {
             ExceptionBoundaryKind::MicrotaskReaction,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: ExceptionBoundaryKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: ExceptionBoundaryKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(v, &back);
         }
     }
@@ -2668,7 +2668,7 @@ mod tests {
         let result1 = event_loop.turn();
         assert!(result1.clock_advanced);
         assert!(result1.macrotask.is_some());
-        let task = result1.macrotask.unwrap();
+        let task = result1.macrotask.expect("serde deserialization should succeed");
         assert_eq!(task.source, MacrotaskSource::Timer);
         assert_eq!(task.handler, handler);
         assert_eq!(task.registration_seq, registration_seq);
@@ -2716,7 +2716,7 @@ mod tests {
         let result1 = event_loop.turn();
         assert!(result1.clock_advanced);
         assert_eq!(event_loop.clock.now_ms(), 100);
-        let task2 = result1.macrotask.unwrap();
+        let task2 = result1.macrotask.expect("serde deserialization should succeed");
         assert_eq!(task2.handler, ClosureHandle(2));
         assert_eq!(task2.registration_seq, seq2);
 
@@ -2724,7 +2724,7 @@ mod tests {
         let result3 = event_loop.turn();
         assert!(result3.clock_advanced);
         assert_eq!(event_loop.clock.now_ms(), 200);
-        let task1 = result3.macrotask.unwrap();
+        let task1 = result3.macrotask.expect("serde deserialization should succeed");
         assert_eq!(task1.handler, ClosureHandle(1));
         assert_eq!(task1.registration_seq, seq1);
 
@@ -2732,7 +2732,7 @@ mod tests {
         let result5 = event_loop.turn();
         assert!(result5.clock_advanced);
         assert_eq!(event_loop.clock.now_ms(), 300);
-        let task3 = result5.macrotask.unwrap();
+        let task3 = result5.macrotask.expect("serde deserialization should succeed");
         assert_eq!(task3.handler, ClosureHandle(3));
         assert_eq!(task3.registration_seq, seq3);
     }
@@ -2753,7 +2753,7 @@ mod tests {
 
         let result2 = event_loop.turn();
         assert!(result2.macrotask.is_some());
-        assert_eq!(result2.macrotask.unwrap().handler, ClosureHandle(2));
+        assert_eq!(result2.macrotask.expect("serde deserialization should succeed").handler, ClosureHandle(2));
     }
 
     #[test]

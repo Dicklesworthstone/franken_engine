@@ -1805,10 +1805,10 @@ impl<A: StorageAdapter> ReplacementLineageEvidenceIndex<A> {
                     })
                     .cloned();
 
-                let mut joined_evidence = evidence.get(&replacement.receipt_id).cloned().unwrap();
+                let mut joined_evidence = evidence.get(&replacement.receipt_id).cloned().expect("serde deserialization should succeed");
                 if let Some(ref demotion_record) = demotion {
                     joined_evidence
-                        .extend(evidence.get(&demotion_record.receipt_id).cloned().unwrap());
+                        .extend(evidence.get(&demotion_record.receipt_id).cloned().expect("serde deserialization should succeed"));
                 }
                 joined_evidence.sort_by(|a, b| {
                     a.category
@@ -2143,7 +2143,7 @@ mod tests {
         let receipt = test_receipt("slot-a", "old-digest", "new-digest", 1000);
         let seq = log
             .append(receipt, ReplacementKind::DelegateToNative, 1000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(seq, 0);
         assert_eq!(log.len(), 1);
         assert!(!log.is_empty());
@@ -2156,7 +2156,7 @@ mod tests {
             let receipt = test_receipt("slot-a", &format!("old-{i}"), &format!("new-{i}"), i * 100);
             let seq = log
                 .append(receipt, ReplacementKind::DelegateToNative, i * 100)
-                .unwrap();
+                .expect("serde deserialization should succeed");
             assert_eq!(seq, i);
         }
         assert_eq!(log.len(), 5);
@@ -2167,7 +2167,7 @@ mod tests {
         let mut log = ReplacementLineageLog::new(LineageLogConfig::default());
         let receipt = test_receipt("slot-a", "old", "new", 1000);
         log.append(receipt.clone(), ReplacementKind::DelegateToNative, 1000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let result = log.append(receipt, ReplacementKind::DelegateToNative, 2000);
         assert!(matches!(
             result,
@@ -2182,7 +2182,7 @@ mod tests {
         let mut log = ReplacementLineageLog::new(LineageLogConfig::default());
         let receipt = test_receipt("slot-a", "old", "new", 1000);
         log.append(receipt, ReplacementKind::DelegateToNative, 1000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let genesis = ContentHash::compute(b"genesis");
         assert_eq!(log.entries()[0].predecessor_hash, genesis);
     }
@@ -2193,7 +2193,7 @@ mod tests {
         for i in 0..3 {
             let receipt = test_receipt("slot-a", &format!("old-{i}"), &format!("new-{i}"), i * 100);
             log.append(receipt, ReplacementKind::DelegateToNative, i * 100)
-                .unwrap();
+                .expect("serde deserialization should succeed");
         }
         // Entry 1's predecessor should be entry 0's hash.
         assert_eq!(
@@ -2212,9 +2212,9 @@ mod tests {
         let mut log2 = ReplacementLineageLog::new(LineageLogConfig::default());
         let receipt = test_receipt("slot-a", "old", "new", 1000);
         log1.append(receipt.clone(), ReplacementKind::DelegateToNative, 1000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         log2.append(receipt, ReplacementKind::DelegateToNative, 1000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(log1.entries()[0].entry_hash, log2.entries()[0].entry_hash);
     }
 
@@ -2225,7 +2225,7 @@ mod tests {
         let mut log = ReplacementLineageLog::new(LineageLogConfig::default());
         let receipt = test_receipt("slot-a", "old", "new", 1000);
         log.append(receipt, ReplacementKind::DelegateToNative, 1000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let root = log.merkle_root();
         // Should be merkle_leaf(entry_hash).
         let expected = merkle_leaf(&log.entries()[0].entry_hash);
@@ -2239,9 +2239,9 @@ mod tests {
         for i in 0..4 {
             let r = test_receipt("slot-a", &format!("old-{i}"), &format!("new-{i}"), i * 100);
             log1.append(r.clone(), ReplacementKind::DelegateToNative, i * 100)
-                .unwrap();
+                .expect("serde deserialization should succeed");
             log2.append(r, ReplacementKind::DelegateToNative, i * 100)
-                .unwrap();
+                .expect("serde deserialization should succeed");
         }
         assert_eq!(log1.merkle_root(), log2.merkle_root());
     }
@@ -2251,11 +2251,11 @@ mod tests {
         let mut log = ReplacementLineageLog::new(LineageLogConfig::default());
         let r1 = test_receipt("slot-a", "old-0", "new-0", 100);
         log.append(r1, ReplacementKind::DelegateToNative, 100)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let root1 = log.merkle_root();
         let r2 = test_receipt("slot-a", "old-1", "new-1", 200);
         log.append(r2, ReplacementKind::DelegateToNative, 200)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let root2 = log.merkle_root();
         assert_ne!(root1, root2);
     }
@@ -2267,7 +2267,7 @@ mod tests {
         let mut log = ReplacementLineageLog::new(LineageLogConfig::default());
         let receipt = test_receipt("slot-a", "old", "new", 1000);
         log.append(receipt, ReplacementKind::DelegateToNative, 1000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let proof = log.inclusion_proof(0).expect("proof exists");
         assert!(verify_inclusion_proof(&proof));
     }
@@ -2278,7 +2278,7 @@ mod tests {
         for i in 0..8 {
             let r = test_receipt("slot-a", &format!("old-{i}"), &format!("new-{i}"), i * 100);
             log.append(r, ReplacementKind::DelegateToNative, i * 100)
-                .unwrap();
+                .expect("serde deserialization should succeed");
         }
         // Verify inclusion proof for every entry.
         for i in 0..8 {
@@ -2297,7 +2297,7 @@ mod tests {
         for i in 0..7 {
             let r = test_receipt("slot-a", &format!("old-{i}"), &format!("new-{i}"), i * 100);
             log.append(r, ReplacementKind::DelegateToNative, i * 100)
-                .unwrap();
+                .expect("serde deserialization should succeed");
         }
         for i in 0..7 {
             let proof = log.inclusion_proof(i).expect("proof exists");
@@ -2313,7 +2313,7 @@ mod tests {
         let mut log = ReplacementLineageLog::new(LineageLogConfig::default());
         let r = test_receipt("slot-a", "old", "new", 100);
         log.append(r, ReplacementKind::DelegateToNative, 100)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(log.inclusion_proof(5).is_none());
     }
 
@@ -2323,7 +2323,7 @@ mod tests {
         for i in 0..4 {
             let r = test_receipt("slot-a", &format!("old-{i}"), &format!("new-{i}"), i * 100);
             log.append(r, ReplacementKind::DelegateToNative, i * 100)
-                .unwrap();
+                .expect("serde deserialization should succeed");
         }
         let mut proof = log.inclusion_proof(2).expect("proof exists");
         // Tamper with the entry hash.
@@ -2338,10 +2338,10 @@ mod tests {
         let mut log = ReplacementLineageLog::new(LineageLogConfig::default());
         let r = test_receipt("slot-a", "old", "new", 1000);
         log.append(r, ReplacementKind::DelegateToNative, 1000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let cp_seq = log
             .create_checkpoint(1000, SecurityEpoch::from_raw(1))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(cp_seq, 0);
         assert_eq!(log.checkpoints().len(), 1);
         assert_eq!(log.checkpoints()[0].log_length, 1);
@@ -2360,10 +2360,10 @@ mod tests {
         for i in 0..5 {
             let r = test_receipt("slot-a", &format!("old-{i}"), &format!("new-{i}"), i * 100);
             log.append(r, ReplacementKind::DelegateToNative, i * 100)
-                .unwrap();
+                .expect("serde deserialization should succeed");
         }
         log.create_checkpoint(500, SecurityEpoch::from_raw(1))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let root = log.merkle_root();
         assert_eq!(log.checkpoints()[0].merkle_root, root);
     }
@@ -2378,7 +2378,7 @@ mod tests {
         for i in 0..6 {
             let r = test_receipt("slot-a", &format!("old-{i}"), &format!("new-{i}"), i * 100);
             log.append(r, ReplacementKind::DelegateToNative, i * 100)
-                .unwrap();
+                .expect("serde deserialization should succeed");
         }
         // Checkpoints at entries 2 (seq 0..2 = 3 entries) and 5 (seq 0..5 = 6 entries).
         assert_eq!(log.checkpoints().len(), 2);
@@ -2390,13 +2390,13 @@ mod tests {
         let mut log2 = ReplacementLineageLog::new(LineageLogConfig::default());
         let r = test_receipt("slot-a", "old", "new", 1000);
         log1.append(r.clone(), ReplacementKind::DelegateToNative, 1000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         log2.append(r, ReplacementKind::DelegateToNative, 1000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         log1.create_checkpoint(1000, SecurityEpoch::from_raw(1))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         log2.create_checkpoint(1000, SecurityEpoch::from_raw(1))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(
             log1.checkpoints()[0].checkpoint_hash,
             log2.checkpoints()[0].checkpoint_hash
@@ -2409,10 +2409,10 @@ mod tests {
         for i in 0..6 {
             let r = test_receipt("slot-a", &format!("old-{i}"), &format!("new-{i}"), i * 100);
             log.append(r, ReplacementKind::DelegateToNative, i * 100)
-                .unwrap();
+                .expect("serde deserialization should succeed");
             if i == 2 || i == 5 {
                 log.create_checkpoint(i * 100, SecurityEpoch::from_raw(1))
-                    .unwrap();
+                    .expect("serde deserialization should succeed");
             }
         }
 
@@ -2428,10 +2428,10 @@ mod tests {
         for i in 0..4 {
             let r = test_receipt("slot-a", &format!("old-{i}"), &format!("new-{i}"), i * 100);
             log.append(r, ReplacementKind::DelegateToNative, i * 100)
-                .unwrap();
+                .expect("serde deserialization should succeed");
             if i == 1 || i == 3 {
                 log.create_checkpoint(i * 100, SecurityEpoch::from_raw(1))
-                    .unwrap();
+                    .expect("serde deserialization should succeed");
             }
         }
 
@@ -2446,9 +2446,9 @@ mod tests {
         for i in 0..2 {
             let r = test_receipt("slot-a", &format!("old-{i}"), &format!("new-{i}"), i * 100);
             log.append(r, ReplacementKind::DelegateToNative, i * 100)
-                .unwrap();
+                .expect("serde deserialization should succeed");
             log.create_checkpoint(i * 100, SecurityEpoch::from_raw(1))
-                .unwrap();
+                .expect("serde deserialization should succeed");
         }
 
         let err = log.consistency_proof(1, 0).expect_err("invalid order");
@@ -2463,9 +2463,9 @@ mod tests {
         let mut log = ReplacementLineageLog::new(LineageLogConfig::default());
         let r = test_receipt("slot-a", "old", "new", 100);
         log.append(r, ReplacementKind::DelegateToNative, 100)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         log.create_checkpoint(100, SecurityEpoch::from_raw(1))
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let err = log
             .consistency_proof(0, 99)
@@ -2485,10 +2485,10 @@ mod tests {
         let r2 = test_receipt("slot-b", "old-b", "new-b", 200);
         let r3 = test_receipt("slot-a", "new-a", "newer-a", 300);
         log.append(r1, ReplacementKind::DelegateToNative, 100)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         log.append(r2, ReplacementKind::DelegateToNative, 200)
-            .unwrap();
-        log.append(r3, ReplacementKind::RePromotion, 300).unwrap();
+            .expect("serde deserialization should succeed");
+        log.append(r3, ReplacementKind::RePromotion, 300).expect("serde deserialization should succeed");
 
         let results = log.query(&LineageQuery::for_slot(test_slot_id("slot-a")));
         assert_eq!(results.len(), 2);
@@ -2500,8 +2500,8 @@ mod tests {
         let r1 = test_receipt("slot-a", "old", "new", 100);
         let r2 = test_receipt("slot-a", "new", "old", 200);
         log.append(r1, ReplacementKind::DelegateToNative, 100)
-            .unwrap();
-        log.append(r2, ReplacementKind::Rollback, 200).unwrap();
+            .expect("serde deserialization should succeed");
+        log.append(r2, ReplacementKind::Rollback, 200).expect("serde deserialization should succeed");
 
         let mut kinds = BTreeSet::new();
         kinds.insert(ReplacementKind::Rollback);
@@ -2527,7 +2527,7 @@ mod tests {
                 (i + 1) * 100,
             );
             log.append(r, ReplacementKind::DelegateToNative, (i + 1) * 100)
-                .unwrap();
+                .expect("serde deserialization should succeed");
         }
         let query = LineageQuery {
             slot_id: None,
@@ -2545,7 +2545,7 @@ mod tests {
         for i in 0..3 {
             let r = test_receipt("slot-a", &format!("old-{i}"), &format!("new-{i}"), i * 100);
             log.append(r, ReplacementKind::DelegateToNative, i * 100)
-                .unwrap();
+                .expect("serde deserialization should succeed");
         }
         let results = log.query(&LineageQuery::all());
         assert_eq!(results.len(), 3);
@@ -2560,9 +2560,9 @@ mod tests {
         let r2 = test_receipt("slot-a", "native-v1", "delegate-v1", 200);
         let r3 = test_receipt("slot-a", "delegate-v1", "native-v2", 300);
         log.append(r1, ReplacementKind::DelegateToNative, 100)
-            .unwrap();
-        log.append(r2, ReplacementKind::Demotion, 200).unwrap();
-        log.append(r3, ReplacementKind::RePromotion, 300).unwrap();
+            .expect("serde deserialization should succeed");
+        log.append(r2, ReplacementKind::Demotion, 200).expect("serde deserialization should succeed");
+        log.append(r3, ReplacementKind::RePromotion, 300).expect("serde deserialization should succeed");
 
         let lineage = log.slot_lineage(&test_slot_id("slot-a"));
         assert_eq!(lineage.len(), 3);
@@ -2577,9 +2577,9 @@ mod tests {
         let r1 = test_receipt("slot-a", "old-a", "new-a", 100);
         let r2 = test_receipt("slot-b", "old-b", "new-b", 200);
         log.append(r1, ReplacementKind::DelegateToNative, 100)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         log.append(r2, ReplacementKind::DelegateToNative, 200)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let lineage_a = log.slot_lineage(&test_slot_id("slot-a"));
         let lineage_b = log.slot_lineage(&test_slot_id("slot-b"));
@@ -2595,7 +2595,7 @@ mod tests {
         for i in 0..3 {
             let r = test_receipt("slot-a", &format!("old-{i}"), &format!("new-{i}"), i * 100);
             log.append(r, ReplacementKind::DelegateToNative, i * 100)
-                .unwrap();
+                .expect("serde deserialization should succeed");
         }
         let result = log.verify_slot_lineage(&test_slot_id("slot-a"));
         assert!(result.chain_valid);
@@ -2619,10 +2619,10 @@ mod tests {
         for i in 0..5 {
             let r = test_receipt("slot-a", &format!("old-{i}"), &format!("new-{i}"), i * 100);
             log.append(r, ReplacementKind::DelegateToNative, i * 100)
-                .unwrap();
+                .expect("serde deserialization should succeed");
         }
         log.create_checkpoint(500, SecurityEpoch::from_raw(1))
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let audit = log.audit();
         assert!(audit.chain_valid);
@@ -2640,11 +2640,11 @@ mod tests {
         let r2 = test_receipt("slot-b", "old-b", "new-b", 200);
         let r3 = test_receipt("slot-c", "old-c", "new-c", 300);
         log.append(r1, ReplacementKind::DelegateToNative, 100)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         log.append(r2, ReplacementKind::DelegateToNative, 200)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         log.append(r3, ReplacementKind::DelegateToNative, 300)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let audit = log.audit();
         assert!(audit.chain_valid);
@@ -2682,8 +2682,8 @@ mod tests {
             ReplacementKind::RePromotion,
         ];
         for kind in &kinds {
-            let json = serde_json::to_string(kind).unwrap();
-            let decoded: ReplacementKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(kind).expect("serde deserialization should succeed");
+            let decoded: ReplacementKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*kind, decoded);
         }
     }
@@ -2695,10 +2695,10 @@ mod tests {
         let mut log = ReplacementLineageLog::new(LineageLogConfig::default());
         let r = test_receipt("slot-a", "old", "new", 1000);
         log.append(r, ReplacementKind::DelegateToNative, 1000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let entry = &log.entries()[0];
-        let json = serde_json::to_vec(entry).unwrap();
-        let decoded: LineageLogEntry = serde_json::from_slice(&json).unwrap();
+        let json = serde_json::to_vec(entry).expect("serde deserialization should succeed");
+        let decoded: LineageLogEntry = serde_json::from_slice(&json).expect("serde deserialization should succeed");
         assert_eq!(*entry, decoded);
     }
 
@@ -2707,12 +2707,12 @@ mod tests {
         let mut log = ReplacementLineageLog::new(LineageLogConfig::default());
         let r = test_receipt("slot-a", "old", "new", 1000);
         log.append(r, ReplacementKind::DelegateToNative, 1000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         log.create_checkpoint(1000, SecurityEpoch::from_raw(1))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let cp = &log.checkpoints()[0];
-        let json = serde_json::to_vec(cp).unwrap();
-        let decoded: LogCheckpoint = serde_json::from_slice(&json).unwrap();
+        let json = serde_json::to_vec(cp).expect("serde deserialization should succeed");
+        let decoded: LogCheckpoint = serde_json::from_slice(&json).expect("serde deserialization should succeed");
         assert_eq!(*cp, decoded);
     }
 
@@ -2722,11 +2722,11 @@ mod tests {
         for i in 0..4 {
             let r = test_receipt("slot-a", &format!("old-{i}"), &format!("new-{i}"), i * 100);
             log.append(r, ReplacementKind::DelegateToNative, i * 100)
-                .unwrap();
+                .expect("serde deserialization should succeed");
         }
         let proof = log.inclusion_proof(2).expect("proof exists");
-        let json = serde_json::to_vec(&proof).unwrap();
-        let decoded: InclusionProof = serde_json::from_slice(&json).unwrap();
+        let json = serde_json::to_vec(&proof).expect("serde deserialization should succeed");
+        let decoded: InclusionProof = serde_json::from_slice(&json).expect("serde deserialization should succeed");
         assert_eq!(proof, decoded);
         assert!(verify_inclusion_proof(&decoded));
     }
@@ -2737,16 +2737,16 @@ mod tests {
         for i in 0..4 {
             let r = test_receipt("slot-a", &format!("old-{i}"), &format!("new-{i}"), i * 100);
             log.append(r, ReplacementKind::DelegateToNative, i * 100)
-                .unwrap();
+                .expect("serde deserialization should succeed");
             if i == 1 || i == 3 {
                 log.create_checkpoint(i * 100, SecurityEpoch::from_raw(1))
-                    .unwrap();
+                    .expect("serde deserialization should succeed");
             }
         }
 
         let proof = log.consistency_proof(0, 1).expect("proof");
-        let json = serde_json::to_vec(&proof).unwrap();
-        let decoded: ConsistencyProof = serde_json::from_slice(&json).unwrap();
+        let json = serde_json::to_vec(&proof).expect("serde deserialization should succeed");
+        let decoded: ConsistencyProof = serde_json::from_slice(&json).expect("serde deserialization should succeed");
         assert_eq!(proof, decoded);
         assert!(verify_consistency_proof(&decoded));
     }
@@ -2757,12 +2757,12 @@ mod tests {
         for i in 0..3 {
             let r = test_receipt("slot-a", &format!("old-{i}"), &format!("new-{i}"), i * 100);
             log.append(r, ReplacementKind::DelegateToNative, i * 100)
-                .unwrap();
+                .expect("serde deserialization should succeed");
         }
         log.create_checkpoint(300, SecurityEpoch::from_raw(1))
-            .unwrap();
-        let json = serde_json::to_vec(&log).unwrap();
-        let decoded: ReplacementLineageLog = serde_json::from_slice(&json).unwrap();
+            .expect("serde deserialization should succeed");
+        let json = serde_json::to_vec(&log).expect("serde deserialization should succeed");
+        let decoded: ReplacementLineageLog = serde_json::from_slice(&json).expect("serde deserialization should succeed");
         assert_eq!(log.len(), decoded.len());
         assert_eq!(log.merkle_root(), decoded.merkle_root());
     }
@@ -2774,7 +2774,7 @@ mod tests {
         let mut log = ReplacementLineageLog::new(LineageLogConfig::default());
         let r = test_receipt("slot-a", "old", "new", 1000);
         log.append(r, ReplacementKind::DelegateToNative, 1000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(!log.events().is_empty());
         let event = &log.events()[0];
         assert_eq!(event.event, "entry_appended");
@@ -2787,9 +2787,9 @@ mod tests {
         let mut log = ReplacementLineageLog::new(LineageLogConfig::default());
         let r = test_receipt("slot-a", "old", "new", 1000);
         log.append(r, ReplacementKind::DelegateToNative, 1000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         log.create_checkpoint(1000, SecurityEpoch::from_raw(1))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let cp_events: Vec<_> = log
             .events()
             .iter()
@@ -2830,10 +2830,10 @@ mod tests {
         let r2 = test_receipt("slot-a", "old", "new", 200);
         let r3 = test_receipt("slot-c", "old2", "new2", 300);
         log.append(r1, ReplacementKind::DelegateToNative, 100)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         log.append(r2, ReplacementKind::DelegateToNative, 200)
-            .unwrap();
-        log.append(r3, ReplacementKind::RePromotion, 300).unwrap();
+            .expect("serde deserialization should succeed");
+        log.append(r3, ReplacementKind::RePromotion, 300).expect("serde deserialization should succeed");
 
         let ids = log.slot_ids();
         assert_eq!(ids.len(), 2);
@@ -2849,8 +2849,8 @@ mod tests {
             checkpoint_interval: 50,
             max_entries_in_memory: 1000,
         };
-        let json = serde_json::to_vec(&config).unwrap();
-        let decoded: LineageLogConfig = serde_json::from_slice(&json).unwrap();
+        let json = serde_json::to_vec(&config).expect("serde deserialization should succeed");
+        let decoded: LineageLogConfig = serde_json::from_slice(&json).expect("serde deserialization should succeed");
         assert_eq!(config, decoded);
     }
 
@@ -2871,8 +2871,8 @@ mod tests {
             min_timestamp_ns: Some(100),
             max_timestamp_ns: Some(500),
         };
-        let json = serde_json::to_vec(&query).unwrap();
-        let decoded: LineageQuery = serde_json::from_slice(&json).unwrap();
+        let json = serde_json::to_vec(&query).expect("serde deserialization should succeed");
+        let decoded: LineageQuery = serde_json::from_slice(&json).expect("serde deserialization should succeed");
         assert_eq!(query, decoded);
     }
 
@@ -2883,12 +2883,12 @@ mod tests {
         let mut log = ReplacementLineageLog::new(LineageLogConfig::default());
         let r = test_receipt("slot-a", "old", "new", 1000);
         log.append(r, ReplacementKind::DelegateToNative, 1000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         log.create_checkpoint(1000, SecurityEpoch::from_raw(1))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let audit = log.audit();
-        let json = serde_json::to_vec(&audit).unwrap();
-        let decoded: AuditResult = serde_json::from_slice(&json).unwrap();
+        let json = serde_json::to_vec(&audit).expect("serde deserialization should succeed");
+        let decoded: AuditResult = serde_json::from_slice(&json).expect("serde deserialization should succeed");
         assert_eq!(audit, decoded);
     }
 
@@ -2926,8 +2926,8 @@ mod tests {
             EvidenceCategory::DifferentialExecutionLog,
             EvidenceCategory::Additional,
         ] {
-            let json = serde_json::to_string(&variant).unwrap();
-            let back: EvidenceCategory = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&variant).expect("serde deserialization should succeed");
+            let back: EvidenceCategory = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(variant, back);
         }
     }
@@ -3036,8 +3036,8 @@ mod tests {
             passed: Some(true),
             summary: "gate passed".to_string(),
         };
-        let json = serde_json::to_string(&input).unwrap();
-        let back: EvidencePointerInput = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
+        let back: EvidencePointerInput = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(input, back);
     }
 
@@ -3067,8 +3067,8 @@ mod tests {
             passed: None,
             summary: "s".to_string(),
         };
-        let json = serde_json::to_string(&ptr).unwrap();
-        let back: EvidencePointer = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&ptr).expect("serde deserialization should succeed");
+        let back: EvidencePointer = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ptr, back);
     }
 
@@ -3081,8 +3081,8 @@ mod tests {
             max_timestamp_ns: Some(500),
             limit: Some(10),
         };
-        let json = serde_json::to_string(&query).unwrap();
-        let back: SlotLineageQuery = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&query).expect("serde deserialization should succeed");
+        let back: SlotLineageQuery = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(query, back);
     }
 
@@ -3094,8 +3094,8 @@ mod tests {
             max_timestamp_ns: Some(500),
             limit: Some(10),
         };
-        let json = serde_json::to_string(&query).unwrap();
-        let back: ReplayJoinQuery = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&query).expect("serde deserialization should succeed");
+        let back: ReplayJoinQuery = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(query, back);
     }
 
@@ -3112,8 +3112,8 @@ mod tests {
             outcome: "ok".to_string(),
             error_code: None,
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let back: LineageIndexEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let back: LineageIndexEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
     }
 
@@ -3156,7 +3156,7 @@ mod tests {
         }];
         let record = idx
             .index_replacement_receipt(&receipt, ReplacementKind::DelegateToNative, &evidence, &ctx)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(record.slot_id, receipt.slot_id);
         assert_eq!(record.old_cell_digest, "old-cell");
         assert_eq!(record.new_cell_digest, "new-cell");
@@ -3174,12 +3174,12 @@ mod tests {
         let ctx = test_context();
         let record = idx
             .index_replacement_receipt(&receipt, ReplacementKind::DelegateToNative, &[], &ctx)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let found = idx
             .replacement_by_content_hash(&record.receipt_content_hash, &ctx)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(found.is_some());
-        assert_eq!(found.unwrap().receipt_id, record.receipt_id);
+        assert_eq!(found.expect("serde deserialization should succeed").receipt_id, record.receipt_id);
     }
 
     #[test]
@@ -3189,7 +3189,7 @@ mod tests {
         let ctx = test_context();
         let found = idx
             .replacement_by_content_hash("nonexistent", &ctx)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(found.is_none());
     }
 
@@ -3214,7 +3214,7 @@ mod tests {
                 summary: "high risk".to_string(),
             }],
         };
-        let record = idx.index_demotion_receipt(input, &ctx).unwrap();
+        let record = idx.index_demotion_receipt(input, &ctx).expect("serde deserialization should succeed");
         assert_eq!(record.receipt_id, "demotion-1");
         assert_eq!(record.demotion_reason, "regression detected");
         assert!(!record.receipt_content_hash.is_empty());
@@ -3256,12 +3256,12 @@ mod tests {
             linked_replacement_receipt_id: None,
             evidence: Vec::new(),
         };
-        let record = idx.index_demotion_receipt(input, &ctx).unwrap();
+        let record = idx.index_demotion_receipt(input, &ctx).expect("serde deserialization should succeed");
         let found = idx
             .demotion_by_content_hash(&record.receipt_content_hash, &ctx)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(found.is_some());
-        assert_eq!(found.unwrap().receipt_id, "dem-hash-test");
+        assert_eq!(found.expect("serde deserialization should succeed").receipt_id, "dem-hash-test");
     }
 
     #[test]
@@ -3272,12 +3272,12 @@ mod tests {
         let r1 = test_receipt("slot-lin", "old1", "new1", 1000);
         let r2 = test_receipt("slot-lin", "new1", "new2", 2000);
         idx.index_replacement_receipt(&r1, ReplacementKind::DelegateToNative, &[], &ctx)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         idx.index_replacement_receipt(&r2, ReplacementKind::DelegateToNative, &[], &ctx)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let slot_id = test_slot_id("slot-lin");
         let query = SlotLineageQuery::default();
-        let chain = idx.slot_lineage(&slot_id, &query, &ctx).unwrap();
+        let chain = idx.slot_lineage(&slot_id, &query, &ctx).expect("serde deserialization should succeed");
         assert_eq!(chain.len(), 2);
         assert_eq!(chain[0].from_cell_digest, "old1");
         assert_eq!(chain[1].from_cell_digest, "new1");
@@ -3292,18 +3292,18 @@ mod tests {
         let r2 = test_receipt("slot-tf", "new1", "new2", 2000);
         let r3 = test_receipt("slot-tf", "new2", "new3", 3000);
         idx.index_replacement_receipt(&r1, ReplacementKind::DelegateToNative, &[], &ctx)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         idx.index_replacement_receipt(&r2, ReplacementKind::DelegateToNative, &[], &ctx)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         idx.index_replacement_receipt(&r3, ReplacementKind::DelegateToNative, &[], &ctx)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let slot_id = test_slot_id("slot-tf");
         let query = SlotLineageQuery {
             min_timestamp_ns: Some(1500),
             max_timestamp_ns: Some(2500),
             limit: None,
         };
-        let chain = idx.slot_lineage(&slot_id, &query, &ctx).unwrap();
+        let chain = idx.slot_lineage(&slot_id, &query, &ctx).expect("serde deserialization should succeed");
         assert_eq!(chain.len(), 1);
         assert_eq!(chain[0].timestamp_ns, 2000);
     }
@@ -3329,9 +3329,9 @@ mod tests {
             },
         ];
         idx.index_replacement_receipt(&receipt, ReplacementKind::DelegateToNative, &evidence, &ctx)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let query = ReplayJoinQuery::default();
-        let rows = idx.replay_join(&query, &ctx).unwrap();
+        let rows = idx.replay_join(&query, &ctx).expect("serde deserialization should succeed");
         assert_eq!(rows.len(), 1);
         assert!(!rows[0].gate_results.is_empty());
         assert!(!rows[0].performance_benchmarks.is_empty());
@@ -3365,9 +3365,9 @@ mod tests {
         let ctx = test_context();
         let record = idx
             .index_replacement_receipt(&receipt, ReplacementKind::Rollback, &[], &ctx)
-            .unwrap();
-        let json = serde_json::to_string(&record).unwrap();
-        let back: ReplacementReceiptRecord = serde_json::from_str(&json).unwrap();
+            .expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&record).expect("serde deserialization should succeed");
+        let back: ReplacementReceiptRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(record, back);
     }
 
@@ -3387,9 +3387,9 @@ mod tests {
             linked_replacement_receipt_id: Some("linked-r".to_string()),
             evidence: Vec::new(),
         };
-        let record = idx.index_demotion_receipt(input, &ctx).unwrap();
-        let json = serde_json::to_string(&record).unwrap();
-        let back: DemotionReceiptRecord = serde_json::from_str(&json).unwrap();
+        let record = idx.index_demotion_receipt(input, &ctx).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&record).expect("serde deserialization should succeed");
+        let back: DemotionReceiptRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(record, back);
     }
 
@@ -3404,8 +3404,8 @@ mod tests {
             to_cell_digest: "t".to_string(),
             receipt_content_hash: "h".to_string(),
         };
-        let json = serde_json::to_string(&entry).unwrap();
-        let back: LineageChainEntry = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let back: LineageChainEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, back);
     }
 
@@ -3422,8 +3422,8 @@ mod tests {
             linked_replacement_receipt_id: None,
             evidence: Vec::new(),
         };
-        let json = serde_json::to_string(&input).unwrap();
-        let back: DemotionReceiptInput = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
+        let back: DemotionReceiptInput = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(input, back);
     }
 
@@ -3434,8 +3434,8 @@ mod tests {
     #[test]
     fn proof_direction_serde_roundtrip() {
         for dir in [ProofDirection::Left, ProofDirection::Right] {
-            let json = serde_json::to_string(&dir).unwrap();
-            let restored: ProofDirection = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&dir).expect("serde deserialization should succeed");
+            let restored: ProofDirection = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(dir, restored);
         }
     }
@@ -3464,8 +3464,8 @@ mod tests {
             LineageLogError::EmptyLog,
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap();
-            let restored: LineageLogError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let restored: LineageLogError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, restored);
         }
     }
@@ -3498,8 +3498,8 @@ mod tests {
             sibling_hash: ContentHash::compute(b"sibling"),
             direction: ProofDirection::Left,
         };
-        let json = serde_json::to_string(&step).unwrap();
-        let restored: MerkleProofStep = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&step).expect("serde deserialization should succeed");
+        let restored: MerkleProofStep = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(step, restored);
     }
 
@@ -3515,8 +3515,8 @@ mod tests {
             epoch: SecurityEpoch::from_raw(1),
             validation_artifact_count: 3,
         };
-        let json = serde_json::to_string(&step).unwrap();
-        let restored: LineageStep = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&step).expect("serde deserialization should succeed");
+        let restored: LineageStep = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(step, restored);
     }
 
@@ -3529,8 +3529,8 @@ mod tests {
             all_receipts_present: true,
             issues: vec!["minor note".to_string()],
         };
-        let json = serde_json::to_string(&ver).unwrap();
-        let restored: LineageVerification = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&ver).expect("serde deserialization should succeed");
+        let restored: LineageVerification = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ver, restored);
     }
 
@@ -3545,8 +3545,8 @@ mod tests {
             outcome: "ok".to_string(),
             error_code: None,
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let restored: LineageLogEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let restored: LineageLogEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, restored);
     }
 
@@ -3569,8 +3569,8 @@ mod tests {
             differential_execution_logs: Vec::new(),
             additional_evidence: Vec::new(),
         };
-        let json = serde_json::to_string(&row).unwrap();
-        let restored: ReplayJoinRow = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&row).expect("serde deserialization should succeed");
+        let restored: ReplayJoinRow = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(row, restored);
     }
 
@@ -3612,8 +3612,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap();
-            let restored: LineageIndexError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let restored: LineageIndexError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, restored);
         }
     }
@@ -3724,8 +3724,8 @@ mod tests {
         let variants = [ProofDirection::Left, ProofDirection::Right];
         let mut names = std::collections::BTreeSet::new();
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: ProofDirection = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: ProofDirection = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(v, &back);
             names.insert(json);
         }
@@ -3763,8 +3763,8 @@ mod tests {
             predecessor_hash: ContentHash::compute(b"genesis"),
             entry_hash: ContentHash::compute(b"placeholder"),
         };
-        let json1 = serde_json::to_string(&entry1).unwrap();
-        let json2 = serde_json::to_string(&entry2).unwrap();
+        let json1 = serde_json::to_string(&entry1).expect("serde deserialization should succeed");
+        let json2 = serde_json::to_string(&entry2).expect("serde deserialization should succeed");
         assert_ne!(
             json1, json2,
             "different kinds should produce different JSON"
@@ -3778,8 +3778,8 @@ mod tests {
             max_timestamp_ns: Some(999),
             limit: Some(10),
         };
-        let json = serde_json::to_string(&query).unwrap();
-        let back: SlotLineageQuery = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&query).expect("serde deserialization should succeed");
+        let back: SlotLineageQuery = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(query, back);
     }
 
@@ -3791,8 +3791,8 @@ mod tests {
             max_timestamp_ns: Some(u64::MAX),
             limit: Some(50),
         };
-        let json = serde_json::to_string(&query).unwrap();
-        let back: ReplayJoinQuery = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&query).expect("serde deserialization should succeed");
+        let back: ReplayJoinQuery = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(query, back);
     }
 
@@ -3865,7 +3865,7 @@ mod tests {
         let mut log = ReplacementLineageLog::new(config);
         let receipt = test_receipt("slot-ev", "old", "new", 1000);
         log.append(receipt, ReplacementKind::DelegateToNative, 1000)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let events = log.events();
         assert!(!events.is_empty());
         let ev = &events[0];
@@ -3891,12 +3891,12 @@ mod tests {
         let r1 = test_receipt("slot-serde", "old", "new", 100);
         let r2 = test_receipt("slot-serde", "new", "newer", 200);
         log.append(r1, ReplacementKind::DelegateToNative, 100)
-            .unwrap();
-        log.append(r2, ReplacementKind::Demotion, 200).unwrap();
+            .expect("serde deserialization should succeed");
+        log.append(r2, ReplacementKind::Demotion, 200).expect("serde deserialization should succeed");
         log.create_checkpoint(200, SecurityEpoch::from_raw(1))
-            .unwrap();
-        let json = serde_json::to_string(&log).unwrap();
-        let restored: ReplacementLineageLog = serde_json::from_str(&json).unwrap();
+            .expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&log).expect("serde deserialization should succeed");
+        let restored: ReplacementLineageLog = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(restored.len(), 2);
         assert_eq!(restored.checkpoints().len(), 1);
         assert_eq!(
@@ -3912,7 +3912,7 @@ mod tests {
         let mut log = ReplacementLineageLog::new(config);
         let receipt = test_receipt("slot-hex", "old", "new", 100);
         log.append(receipt, ReplacementKind::DelegateToNative, 100)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let slot_id = test_slot_id("slot-hex");
         let steps = log.slot_lineage(&slot_id);
         assert_eq!(steps.len(), 1);
@@ -3987,10 +3987,10 @@ mod tests {
         let r2 = test_receipt("alpha", "old", "new", 200);
         let r3 = test_receipt("bravo", "new", "newer", 300);
         log.append(r1, ReplacementKind::DelegateToNative, 100)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         log.append(r2, ReplacementKind::DelegateToNative, 200)
-            .unwrap();
-        log.append(r3, ReplacementKind::Demotion, 300).unwrap();
+            .expect("serde deserialization should succeed");
+        log.append(r3, ReplacementKind::Demotion, 300).expect("serde deserialization should succeed");
         let ids = log.slot_ids();
         // BTreeSet guarantees sorted order and deduplication.
         assert_eq!(ids.len(), 2);
@@ -4045,7 +4045,7 @@ mod tests {
         assert!(log.is_empty());
         let receipt = test_receipt("slot-len", "old", "new", 100);
         log.append(receipt, ReplacementKind::DelegateToNative, 100)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(log.len(), 1);
         assert!(!log.is_empty());
     }

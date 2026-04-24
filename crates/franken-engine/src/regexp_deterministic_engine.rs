@@ -1251,7 +1251,7 @@ pub fn compile_regexp(
         pattern,
         nfa_state_count,
         tier.as_str(),
-        serde_json::to_string(&flags).unwrap(),
+        serde_json::to_string(&flags).expect("serde deserialization should succeed"),
         epoch.as_u64()
     );
     let automata_hash = hex_encode(ContentHash::compute(automata_hash_input.as_bytes()).as_bytes());
@@ -1797,7 +1797,7 @@ fn run_single_regexp_specimen(specimen: &RegExpSpecimen) -> RegExpSpecimenEviden
         }
         "cache_insert_and_hit" => {
             let ast = make_simple_ast();
-            let compiled = compile_regexp("a", &empty_flags, &ast, &config, epoch).unwrap();
+            let compiled = compile_regexp("a", &empty_flags, &ast, &config, epoch).expect("serde deserialization should succeed");
             let hash = compiled.content_hash.clone();
             let mut cache = AutomataCache::new(10);
             cache.insert(compiled);
@@ -1825,7 +1825,7 @@ fn run_single_regexp_specimen(specimen: &RegExpSpecimen) -> RegExpSpecimenEviden
                 let pattern = format!("p{i}");
                 let ast = RegExpAstNode::Literal((b'a' + i as u8) as char);
                 let compiled =
-                    compile_regexp(&pattern, &empty_flags, &ast, &config, epoch).unwrap();
+                    compile_regexp(&pattern, &empty_flags, &ast, &config, epoch).expect("serde deserialization should succeed");
                 cache.insert(compiled);
             }
             actual = format!("evictions={}", cache.evictions);
@@ -1845,7 +1845,7 @@ fn run_single_regexp_specimen(specimen: &RegExpSpecimen) -> RegExpSpecimenEviden
         }
         "receipt_fields_populated" => {
             let ast = make_simple_ast();
-            let compiled = compile_regexp("a", &empty_flags, &ast, &config, epoch).unwrap();
+            let compiled = compile_regexp("a", &empty_flags, &ast, &config, epoch).expect("serde deserialization should succeed");
             let r = &compiled.receipt;
             actual = format!(
                 "schema={}, tier={}, hash_len={}",
@@ -1860,8 +1860,8 @@ fn run_single_regexp_specimen(specimen: &RegExpSpecimen) -> RegExpSpecimenEviden
         }
         "receipt_hash_deterministic" => {
             let ast = make_simple_ast();
-            let c1 = compile_regexp("a", &empty_flags, &ast, &config, epoch).unwrap();
-            let c2 = compile_regexp("a", &empty_flags, &ast, &config, epoch).unwrap();
+            let c1 = compile_regexp("a", &empty_flags, &ast, &config, epoch).expect("serde deserialization should succeed");
+            let c2 = compile_regexp("a", &empty_flags, &ast, &config, epoch).expect("serde deserialization should succeed");
             actual = format!(
                 "match={}",
                 c1.receipt.receipt_hash == c2.receipt.receipt_hash
@@ -1873,9 +1873,9 @@ fn run_single_regexp_specimen(specimen: &RegExpSpecimen) -> RegExpSpecimenEviden
         }
         "serde_compiled_regexp_roundtrip" => {
             let ast = make_simple_ast();
-            let compiled = compile_regexp("a", &empty_flags, &ast, &config, epoch).unwrap();
-            let json = serde_json::to_string(&compiled).unwrap();
-            let deser: CompiledRegExp = serde_json::from_str(&json).unwrap();
+            let compiled = compile_regexp("a", &empty_flags, &ast, &config, epoch).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&compiled).expect("serde deserialization should succeed");
+            let deser: CompiledRegExp = serde_json::from_str(&json).expect("serde deserialization should succeed");
             actual = format!("match={}", compiled == deser);
             if compiled != deser {
                 verdict = RegExpVerdict::Fail;
@@ -1893,7 +1893,7 @@ fn run_single_regexp_specimen(specimen: &RegExpSpecimen) -> RegExpSpecimenEviden
         "evidence:{}:{}:{}",
         specimen.specimen_id,
         actual,
-        serde_json::to_string(&verdict).unwrap(),
+        serde_json::to_string(&verdict).expect("serde deserialization should succeed"),
     );
 
     RegExpSpecimenEvidence {
@@ -2059,7 +2059,7 @@ mod tests {
         assert_eq!(RegExpFlag::ALL.len(), 8);
         for flag in RegExpFlag::ALL {
             assert!(!flag.as_str().is_empty());
-            let c = flag.as_str().chars().next().unwrap();
+            let c = flag.as_str().chars().next().expect("serde deserialization should succeed");
             assert_eq!(RegExpFlag::from_char(c), Some(*flag));
         }
     }
@@ -2358,7 +2358,7 @@ mod tests {
         let flags = BTreeSet::new();
         let result = compile_regexp("a", &flags, &ast, &config, epoch);
         assert!(result.is_ok());
-        let compiled = result.unwrap();
+        let compiled = result.expect("serde deserialization should succeed");
         assert_eq!(compiled.tier, AutomataTier::Dfa);
         assert!(!compiled.receipt.receipt_hash.is_empty());
     }
@@ -2381,7 +2381,7 @@ mod tests {
         let flags = BTreeSet::new();
         let result = compile_regexp("(a)\\1", &flags, &ast, &config, epoch);
         assert!(result.is_ok());
-        assert_eq!(result.unwrap().tier, AutomataTier::InterpreterFallback);
+        assert_eq!(result.expect("serde deserialization should succeed").tier, AutomataTier::InterpreterFallback);
     }
 
     #[test]
@@ -2390,8 +2390,8 @@ mod tests {
         let epoch = SecurityEpoch::from_raw(1);
         let ast = make_simple_ast();
         let flags = BTreeSet::new();
-        let c1 = compile_regexp("a", &flags, &ast, &config, epoch).unwrap();
-        let c2 = compile_regexp("a", &flags, &ast, &config, epoch).unwrap();
+        let c1 = compile_regexp("a", &flags, &ast, &config, epoch).expect("serde deserialization should succeed");
+        let c2 = compile_regexp("a", &flags, &ast, &config, epoch).expect("serde deserialization should succeed");
         assert_eq!(c1.content_hash, c2.content_hash);
         assert_eq!(c1.receipt.receipt_hash, c2.receipt.receipt_hash);
     }
@@ -2411,7 +2411,7 @@ mod tests {
         let epoch = SecurityEpoch::from_raw(1);
         let ast = make_simple_ast();
         let flags = BTreeSet::new();
-        let compiled = compile_regexp("a", &flags, &ast, &config, epoch).unwrap();
+        let compiled = compile_regexp("a", &flags, &ast, &config, epoch).expect("serde deserialization should succeed");
         let hash = compiled.content_hash.clone();
 
         let mut cache = AutomataCache::new(10);
@@ -2439,7 +2439,7 @@ mod tests {
             let ch = (b'a' + i) as char;
             let ast = RegExpAstNode::Literal(ch);
             let pattern = format!("{ch}");
-            let compiled = compile_regexp(&pattern, &flags, &ast, &config, epoch).unwrap();
+            let compiled = compile_regexp(&pattern, &flags, &ast, &config, epoch).expect("serde deserialization should succeed");
             cache.insert(compiled);
         }
         assert_eq!(cache.len(), 2);
@@ -2482,17 +2482,17 @@ mod tests {
         let epoch = SecurityEpoch::from_raw(1);
         let ast = make_simple_ast();
         let flags = BTreeSet::new();
-        let compiled = compile_regexp("a", &flags, &ast, &config, epoch).unwrap();
-        let json = serde_json::to_string(&compiled).unwrap();
-        let deser: CompiledRegExp = serde_json::from_str(&json).unwrap();
+        let compiled = compile_regexp("a", &flags, &ast, &config, epoch).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&compiled).expect("serde deserialization should succeed");
+        let deser: CompiledRegExp = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(compiled, deser);
     }
 
     #[test]
     fn test_serde_cache() {
         let cache = AutomataCache::new(10);
-        let json = serde_json::to_string(&cache).unwrap();
-        let deser: AutomataCache = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&cache).expect("serde deserialization should succeed");
+        let deser: AutomataCache = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(deser.capacity, 10);
     }
 
@@ -2502,17 +2502,17 @@ mod tests {
         let epoch = SecurityEpoch::from_raw(1);
         let ast = make_simple_ast();
         let flags = BTreeSet::new();
-        let compiled = compile_regexp("a", &flags, &ast, &config, epoch).unwrap();
-        let json = serde_json::to_string(&compiled.receipt).unwrap();
-        let deser: CompilationReceipt = serde_json::from_str(&json).unwrap();
+        let compiled = compile_regexp("a", &flags, &ast, &config, epoch).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&compiled.receipt).expect("serde deserialization should succeed");
+        let deser: CompilationReceipt = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(compiled.receipt, deser);
     }
 
     #[test]
     fn test_serde_tail_risk() {
         let risk = TailRiskAssessment::safe();
-        let json = serde_json::to_string(&risk).unwrap();
-        let deser: TailRiskAssessment = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&risk).expect("serde deserialization should succeed");
+        let deser: TailRiskAssessment = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(risk, deser);
     }
 

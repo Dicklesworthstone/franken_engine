@@ -952,21 +952,21 @@ mod tests {
     #[test]
     fn delta_millionths_positive() {
         // SAFETY: Test with valid positive numbers where baseline != 0; calculation cannot fail
-        let d = delta_millionths(2000, 1000).unwrap();
+        let d = delta_millionths(2000, 1000).expect("serde deserialization should succeed");
         assert_eq!(d, 1_000_000); // 100% improvement
     }
 
     #[test]
     fn delta_millionths_negative() {
         // SAFETY: Test with valid positive numbers where baseline != 0; calculation cannot fail
-        let d = delta_millionths(500, 1000).unwrap();
+        let d = delta_millionths(500, 1000).expect("serde deserialization should succeed");
         assert_eq!(d, -500_000); // -50%
     }
 
     #[test]
     fn delta_millionths_equal() {
         // SAFETY: Test with valid positive numbers where baseline != 0; calculation cannot fail
-        let d = delta_millionths(100, 100).unwrap();
+        let d = delta_millionths(100, 100).expect("serde deserialization should succeed");
         assert_eq!(d, 0);
     }
 
@@ -980,7 +980,7 @@ mod tests {
         // improvement_millionths(baseline=1000, optimized=500) means
         // 500 is better than 1000 for latency → positive improvement
         // SAFETY: Test with valid positive numbers where baseline != 0; calculation cannot fail
-        let i = improvement_millionths(1000, 500).unwrap();
+        let i = improvement_millionths(1000, 500).expect("serde deserialization should succeed");
         assert_eq!(i, 500_000); // 50%
     }
 
@@ -1359,10 +1359,10 @@ mod tests {
         let m = test_workload("w1", 100, 50);
         // SAFETY: LaneWorkloadMetrics derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&m).unwrap();
+        let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid LaneWorkloadMetrics,
         // so from_str back to LaneWorkloadMetrics cannot fail (valid format + matching schema).
-        let back: LaneWorkloadMetrics = serde_json::from_str(&json).unwrap();
+        let back: LaneWorkloadMetrics = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(m, back);
     }
 
@@ -1371,10 +1371,10 @@ mod tests {
         let s = test_attribution("p1", "s1");
         // SAFETY: ProofAttributionSample derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&s).unwrap();
+        let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid ProofAttributionSample,
         // so from_str back to ProofAttributionSample cannot fail (valid format + matching schema).
-        let back: ProofAttributionSample = serde_json::from_str(&json).unwrap();
+        let back: ProofAttributionSample = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(s, back);
     }
 
@@ -1393,10 +1393,10 @@ mod tests {
         };
         // SAFETY: ConstrainedAmbientEvent derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&e).unwrap();
+        let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid ConstrainedAmbientEvent,
         // so from_str back to ConstrainedAmbientEvent cannot fail (valid format + matching schema).
-        let back: ConstrainedAmbientEvent = serde_json::from_str(&json).unwrap();
+        let back: ConstrainedAmbientEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(e, back);
     }
 
@@ -1405,10 +1405,10 @@ mod tests {
         let decision = run_constrained_ambient_benchmark_lane(&valid_request());
         // SAFETY: ConstrainedAmbientBenchmarkDecision derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&decision).unwrap();
+        let json = serde_json::to_string(&decision).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid ConstrainedAmbientBenchmarkDecision,
         // so from_str back to ConstrainedAmbientBenchmarkDecision cannot fail (valid format + matching schema).
-        let back: ConstrainedAmbientBenchmarkDecision = serde_json::from_str(&json).unwrap();
+        let back: ConstrainedAmbientBenchmarkDecision = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(decision, back);
     }
 
@@ -1424,8 +1424,8 @@ mod tests {
             memory_improvement_millionths: 500,
             allocation_improvement_millionths: 600,
         };
-        let json = serde_json::to_string(&r).unwrap();
-        let back: WorkloadDeltaReport = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let back: WorkloadDeltaReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 
@@ -1438,8 +1438,8 @@ mod tests {
             latency_p95_improvement_millionths: 50_000,
             supports_uplift: true,
         };
-        let json = serde_json::to_string(&r).unwrap();
-        let back: ProofAttributionReport = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let back: ProofAttributionReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 
@@ -1452,8 +1452,8 @@ mod tests {
             mean_latency_p95_improvement_millionths: 200_000,
             mean_memory_improvement_millionths: 100_000,
         };
-        let json = serde_json::to_string(&s).unwrap();
-        let back: ConstrainedAmbientSummary = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+        let back: ConstrainedAmbientSummary = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(s, back);
     }
 
@@ -1673,8 +1673,8 @@ mod tests {
     #[test]
     fn decision_serde_roundtrip() {
         let dec = run_constrained_ambient_benchmark_lane(&valid_request());
-        let json = serde_json::to_string(&dec).unwrap();
-        let back: ConstrainedAmbientBenchmarkDecision = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&dec).expect("serde deserialization should succeed");
+        let back: ConstrainedAmbientBenchmarkDecision = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(dec, back);
     }
 
@@ -1691,8 +1691,8 @@ mod tests {
             workload_id: Some("w1".into()),
             proof_id: None,
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let back: ConstrainedAmbientEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let back: ConstrainedAmbientEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
     }
 
@@ -1800,7 +1800,7 @@ mod tests {
     #[test]
     fn json_field_presence_lane_workload_metrics() {
         let m = test_workload("w1", 100, 50);
-        let json = serde_json::to_string(&m).unwrap();
+        let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
         assert!(json.contains("\"output_digest\""));
         assert!(json.contains("\"throughput_ops_per_sec\""));
         assert!(json.contains("\"allocation_count\""));
@@ -1809,7 +1809,7 @@ mod tests {
     #[test]
     fn json_field_presence_proof_attribution_sample() {
         let s = test_attribution("p1", "s1");
-        let json = serde_json::to_string(&s).unwrap();
+        let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
         assert!(json.contains("\"validity_epoch\""));
         assert!(json.contains("\"rollback_token\""));
         assert!(json.contains("\"revoked\""));
@@ -1818,7 +1818,7 @@ mod tests {
     #[test]
     fn json_field_presence_decision() {
         let dec = run_constrained_ambient_benchmark_lane(&valid_request());
-        let json = serde_json::to_string(&dec).unwrap();
+        let json = serde_json::to_string(&dec).expect("serde deserialization should succeed");
         assert!(json.contains("\"schema_version\""));
         assert!(json.contains("\"benchmark_run_id\""));
         assert!(json.contains("\"blockers\""));
@@ -1850,7 +1850,7 @@ mod tests {
         // Near u64::MAX / 2 to avoid overflow in i128 arithmetic
         let large = u64::MAX / 2;
         let half = large / 2;
-        let d = delta_millionths(large, half).unwrap();
+        let d = delta_millionths(large, half).expect("serde deserialization should succeed");
         // large/half ~ 2.0, so delta ~ +1_000_000 (100% improvement)
         assert!(d > 900_000);
         assert!(d < 1_100_000);
@@ -1867,7 +1867,7 @@ mod tests {
             "constrained_latency_p95_ns": 500,
             "without_proof_latency_p95_ns": 1000
         }"#;
-        let sample: ProofAttributionSample = serde_json::from_str(json).unwrap();
+        let sample: ProofAttributionSample = serde_json::from_str(json).expect("serde deserialization should succeed");
         assert_eq!(sample.optimization_class, "unspecified");
         assert_eq!(sample.validated_optimization_class, "unspecified");
         assert_eq!(sample.validity_epoch, None);

@@ -1061,8 +1061,8 @@ mod tests {
             SignalNamespace::AssumptionsLedger,
         ];
         for variant in variants {
-            let json = serde_json::to_string(&variant).unwrap();
-            let back: SignalNamespace = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&variant).expect("serde deserialization should succeed");
+            let back: SignalNamespace = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(back, variant);
         }
     }
@@ -1122,8 +1122,8 @@ mod tests {
             deterministic: false,
             required: false,
         };
-        let json = serde_json::to_string(&tcr).unwrap();
-        let back: TelemetryContractRef = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&tcr).expect("serde deserialization should succeed");
+        let back: TelemetryContractRef = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, tcr);
     }
 
@@ -1431,8 +1431,8 @@ mod tests {
                 required: true,
             },
         };
-        let json = serde_json::to_string(&variable).unwrap();
-        let back: TwinStateVariable = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&variable).expect("serde deserialization should succeed");
+        let back: TwinStateVariable = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, variable);
     }
 
@@ -1447,8 +1447,8 @@ mod tests {
             blocked_confounding_paths: vec![vec!["a".to_string(), "b".to_string()]],
             strategy_note: "test note".to_string(),
         };
-        let json = serde_json::to_string(&strategy).unwrap();
-        let back: CausalAdjustmentStrategy = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&strategy).expect("serde deserialization should succeed");
+        let back: CausalAdjustmentStrategy = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, strategy);
     }
 
@@ -1469,16 +1469,16 @@ mod tests {
             monitor_id: None,
             action: None,
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let back: SemanticTwinLogEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let back: SemanticTwinLogEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, event);
     }
 
     #[test]
     fn semantic_twin_specification_serde_roundtrip() {
         let spec = SemanticTwinSpecification::frx_19_1_default().expect("spec");
-        let json = serde_json::to_string(&spec).unwrap();
-        let back: SemanticTwinSpecification = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&spec).expect("serde deserialization should succeed");
+        let back: SemanticTwinSpecification = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, spec);
     }
 
@@ -1521,8 +1521,8 @@ mod tests {
             op: MonitorOp::Ge,
             threshold_millionths: 500_000,
         };
-        let json = serde_json::to_string(&guard).unwrap();
-        let back: TransitionGuard = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&guard).expect("serde deserialization should succeed");
+        let back: TransitionGuard = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, guard);
     }
 
@@ -1540,8 +1540,8 @@ mod tests {
                 threshold_millionths: 0,
             }),
         };
-        let json = serde_json::to_string(&transition).unwrap();
-        let back: TwinStateTransition = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&transition).expect("serde deserialization should succeed");
+        let back: TwinStateTransition = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, transition);
     }
 
@@ -1555,8 +1555,8 @@ mod tests {
             telemetry_contract: "ns.signal".to_string(),
             guard: None,
         };
-        let json = serde_json::to_string(&transition).unwrap();
-        let back: TwinStateTransition = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&transition).expect("serde deserialization should succeed");
+        let back: TwinStateTransition = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, transition);
         assert!(back.guard.is_none());
     }
@@ -1596,8 +1596,8 @@ mod tests {
             },
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: SemanticTwinError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: SemanticTwinError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, v);
         }
         assert_eq!(variants.len(), 9);
@@ -1655,8 +1655,8 @@ mod tests {
             SignalNamespace::PolicyController,
             SignalNamespace::AssumptionsLedger,
         ] {
-            let json = serde_json::to_string(&v).unwrap();
-            let back: SignalNamespace = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let back: SignalNamespace = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(v, back);
         }
     }
@@ -1681,8 +1681,8 @@ mod tests {
             deterministic: true,
             required: true,
         };
-        let json = serde_json::to_string(&tcr).unwrap();
-        let back: TelemetryContractRef = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&tcr).expect("serde deserialization should succeed");
+        let back: TelemetryContractRef = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(tcr, back);
     }
 
@@ -1728,8 +1728,8 @@ mod tests {
                 required: true,
             },
         };
-        let json = serde_json::to_string(&var).unwrap();
-        let back: TwinStateVariable = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&var).expect("serde deserialization should succeed");
+        let back: TwinStateVariable = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(var, back);
     }
 
@@ -1761,8 +1761,8 @@ mod tests {
             op: MonitorOp::Le,
             threshold_millionths: 500_000,
         };
-        let json = serde_json::to_string(&guard).unwrap();
-        let back: TransitionGuard = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&guard).expect("serde deserialization should succeed");
+        let back: TransitionGuard = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(guard, back);
     }
 
@@ -1779,8 +1779,8 @@ mod tests {
             blocked_confounding_paths: vec![vec!["a".into(), "b".into()]],
             strategy_note: "backdoor adjustment".to_string(),
         };
-        let json = serde_json::to_string(&strategy).unwrap();
-        let back: CausalAdjustmentStrategy = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&strategy).expect("serde deserialization should succeed");
+        let back: CausalAdjustmentStrategy = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(strategy, back);
     }
 
@@ -1795,8 +1795,8 @@ mod tests {
             blocked_confounding_paths: vec![],
             strategy_note: "no confounders".to_string(),
         };
-        let json = serde_json::to_string(&strategy).unwrap();
-        let back: CausalAdjustmentStrategy = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&strategy).expect("serde deserialization should succeed");
+        let back: CausalAdjustmentStrategy = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(strategy, back);
         assert!(back.adjustment_set.is_empty());
     }
@@ -1819,8 +1819,8 @@ mod tests {
             trigger_count: 1,
             violation_severity: ViolationSeverity::Critical,
         };
-        let json = serde_json::to_string(&asm).unwrap();
-        let back: IdentifiabilityAssumption = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&asm).expect("serde deserialization should succeed");
+        let back: IdentifiabilityAssumption = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(asm, back);
     }
 
@@ -1843,8 +1843,8 @@ mod tests {
             monitor_id: None,
             action: None,
         };
-        let json = serde_json::to_string(&ev).unwrap();
-        let back: SemanticTwinLogEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
+        let back: SemanticTwinLogEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ev, back);
     }
 
@@ -1865,8 +1865,8 @@ mod tests {
             monitor_id: Some("mon-1".to_string()),
             action: Some("demote".to_string()),
         };
-        let json = serde_json::to_string(&ev).unwrap();
-        let back: SemanticTwinLogEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
+        let back: SemanticTwinLogEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ev, back);
     }
 
@@ -1892,8 +1892,8 @@ mod tests {
                 action: None,
             }],
         };
-        let json = serde_json::to_string(&result).unwrap();
-        let back: SemanticTwinObservationResult = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let back: SemanticTwinObservationResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, back);
     }
 
@@ -1965,8 +1965,8 @@ mod tests {
                 threshold_millionths: 800_000,
             }),
         };
-        let json = serde_json::to_string(&t).unwrap();
-        let back: TwinStateTransition = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&t).expect("serde deserialization should succeed");
+        let back: TwinStateTransition = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(t, back);
     }
 
@@ -1980,8 +1980,8 @@ mod tests {
             telemetry_contract: "c".to_string(),
             guard: None,
         };
-        let json = serde_json::to_string(&t).unwrap();
-        let back: TwinStateTransition = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&t).expect("serde deserialization should succeed");
+        let back: TwinStateTransition = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(t, back);
         assert!(back.guard.is_none());
     }

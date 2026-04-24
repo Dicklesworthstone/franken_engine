@@ -767,7 +767,7 @@ fn parse_folded_stacks(
             });
         }
 
-        let count_token = tokens.last().copied().unwrap();
+        let count_token = tokens.last().copied().expect("serde deserialization should succeed");
         let stack_token = tokens[..tokens.len() - 1].join(" ");
         let sample_count = count_token.parse::<u64>().map_err(|_| {
             FlamegraphPipelineError::InvalidFoldedStack {
@@ -1048,7 +1048,7 @@ fn build_svg(
         };
 
         let color = if kind.is_diff() {
-            match diff_by_stack.get(&sample.stack).copied().unwrap().cmp(&0) {
+            match diff_by_stack.get(&sample.stack).copied().expect("serde deserialization should succeed").cmp(&0) {
                 std::cmp::Ordering::Greater => "#d9534f",
                 std::cmp::Ordering::Less => "#0275d8",
                 std::cmp::Ordering::Equal => "#7f8c8d",
@@ -1173,7 +1173,7 @@ fn build_artifact_id(
         metadata
             .baseline_benchmark_run_id
             .as_deref()
-            .unwrap()
+            .unwrap_or("")
             .as_bytes(),
     );
     hasher.update(metadata.workload_id.as_bytes());
@@ -1276,8 +1276,8 @@ mod tests {
             FlamegraphKind::DiffCpu,
             FlamegraphKind::DiffAllocation,
         ] {
-            let json = serde_json::to_string(&kind).unwrap();
-            let back: FlamegraphKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
+            let back: FlamegraphKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(kind, back);
         }
     }
@@ -1289,8 +1289,8 @@ mod tests {
             stack: "main;foo;bar".to_string(),
             sample_count: 42,
         };
-        let json = serde_json::to_string(&sample).unwrap();
-        let back: FoldedStackSample = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&sample).expect("serde deserialization should succeed");
+        let back: FoldedStackSample = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(sample, back);
     }
 
@@ -1303,8 +1303,8 @@ mod tests {
             candidate_samples: 120,
             delta_samples: 20,
         };
-        let json = serde_json::to_string(&entry).unwrap();
-        let back: FlamegraphDiffEntry = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let back: FlamegraphDiffEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, back);
     }
 
@@ -1312,8 +1312,8 @@ mod tests {
     #[test]
     fn flamegraph_metadata_serde_round_trip() {
         let meta = test_metadata();
-        let json = serde_json::to_string(&meta).unwrap();
-        let back: FlamegraphMetadata = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&meta).expect("serde deserialization should succeed");
+        let back: FlamegraphMetadata = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(meta, back);
     }
 
@@ -1321,8 +1321,8 @@ mod tests {
     #[test]
     fn flamegraph_evidence_link_serde_round_trip() {
         let link = test_evidence_link();
-        let json = serde_json::to_string(&link).unwrap();
-        let back: FlamegraphEvidenceLink = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&link).expect("serde deserialization should succeed");
+        let back: FlamegraphEvidenceLink = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(link, back);
     }
 
@@ -1340,8 +1340,8 @@ mod tests {
             artifact_id: Some("art1".to_string()),
             flamegraph_kind: Some("cpu".to_string()),
         };
-        let json = serde_json::to_string(&evt).unwrap();
-        let back: FlamegraphPipelineEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&evt).expect("serde deserialization should succeed");
+        let back: FlamegraphPipelineEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(evt, back);
     }
 
@@ -1526,7 +1526,7 @@ mod tests {
     // ── parse_folded_stacks ───────────────────────────────────────
     #[test]
     fn parse_folded_stacks_basic() {
-        let result = parse_folded_stacks("test", "main;foo 100\nmain;bar 200\n").unwrap();
+        let result = parse_folded_stacks("test", "main;foo 100\nmain;bar 200\n").expect("serde deserialization should succeed");
         assert_eq!(result.len(), 2);
         let total: u64 = result.iter().map(|s| s.sample_count).sum();
         assert_eq!(total, 300);
@@ -1534,14 +1534,14 @@ mod tests {
 
     #[test]
     fn parse_folded_stacks_merges_duplicates() {
-        let result = parse_folded_stacks("test", "main;foo 100\nmain;foo 50\n").unwrap();
+        let result = parse_folded_stacks("test", "main;foo 100\nmain;foo 50\n").expect("serde deserialization should succeed");
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].sample_count, 150);
     }
 
     #[test]
     fn parse_folded_stacks_skips_blank_lines() {
-        let result = parse_folded_stacks("test", "\nmain;foo 10\n\nmain;bar 20\n\n").unwrap();
+        let result = parse_folded_stacks("test", "\nmain;foo 10\n\nmain;bar 20\n\n").expect("serde deserialization should succeed");
         assert_eq!(result.len(), 2);
     }
 
@@ -1699,7 +1699,7 @@ mod tests {
             stack: "a;b".to_string(),
             sample_count: 120,
         }];
-        let entries = build_diff_entries(&baseline, &candidate).unwrap();
+        let entries = build_diff_entries(&baseline, &candidate).expect("serde deserialization should succeed");
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].delta_samples, 20);
     }
@@ -1710,7 +1710,7 @@ mod tests {
             stack: "a;b".to_string(),
             sample_count: 100,
         }];
-        let entries = build_diff_entries(&samples, &samples).unwrap();
+        let entries = build_diff_entries(&samples, &samples).expect("serde deserialization should succeed");
         assert!(entries.is_empty());
     }
 
@@ -1721,7 +1721,7 @@ mod tests {
             stack: "new;stack".to_string(),
             sample_count: 50,
         }];
-        let entries = build_diff_entries(&baseline, &candidate).unwrap();
+        let entries = build_diff_entries(&baseline, &candidate).expect("serde deserialization should succeed");
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].baseline_samples, 0);
         assert_eq!(entries[0].candidate_samples, 50);
@@ -1735,7 +1735,7 @@ mod tests {
             sample_count: 30,
         }];
         let candidate = vec![];
-        let entries = build_diff_entries(&baseline, &candidate).unwrap();
+        let entries = build_diff_entries(&baseline, &candidate).expect("serde deserialization should succeed");
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].delta_samples, -30);
     }
@@ -1790,7 +1790,7 @@ mod tests {
 
     #[test]
     fn validate_artifact_valid() {
-        validate_flamegraph_artifact(&test_artifact()).unwrap();
+        validate_flamegraph_artifact(&test_artifact()).expect("serde deserialization should succeed");
     }
 
     #[test]
@@ -2029,8 +2029,8 @@ mod tests {
             FlamegraphKind::DiffAllocation,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: FlamegraphKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: FlamegraphKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, v);
         }
     }
@@ -2064,8 +2064,8 @@ mod tests {
             stack: "main;foo;bar".to_string(),
             sample_count: 42,
         };
-        let json = serde_json::to_string(&sample).unwrap();
-        let back: FoldedStackSample = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&sample).expect("serde deserialization should succeed");
+        let back: FoldedStackSample = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, sample);
     }
 
@@ -2077,16 +2077,16 @@ mod tests {
             candidate_samples: 120,
             delta_samples: 20,
         };
-        let json = serde_json::to_string(&entry).unwrap();
-        let back: FlamegraphDiffEntry = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let back: FlamegraphDiffEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, entry);
     }
 
     #[test]
     fn flamegraph_query_default_serde_roundtrip() {
         let query = FlamegraphQuery::default();
-        let json = serde_json::to_string(&query).unwrap();
-        let back: FlamegraphQuery = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&query).expect("serde deserialization should succeed");
+        let back: FlamegraphQuery = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, query);
         assert!(back.benchmark_run_id.is_none());
         assert!(back.limit.is_none());

@@ -821,8 +821,8 @@ mod tests {
     #[test]
     fn test_class_serde_roundtrip() {
         for class in TestClass::ALL {
-            let json = serde_json::to_string(class).unwrap();
-            let back: TestClass = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(class).expect("serde deserialization should succeed");
+            let back: TestClass = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*class, back);
         }
     }
@@ -859,8 +859,8 @@ mod tests {
     #[test]
     fn test_surface_serde_roundtrip() {
         for surface in TestSurface::ALL {
-            let json = serde_json::to_string(surface).unwrap();
-            let back: TestSurface = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(surface).expect("serde deserialization should succeed");
+            let back: TestSurface = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*surface, back);
         }
     }
@@ -885,8 +885,8 @@ mod tests {
     #[test]
     fn provenance_serde_roundtrip() {
         let p = ProvenanceLevel::Captured;
-        let json = serde_json::to_string(&p).unwrap();
-        let back: ProvenanceLevel = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
+        let back: ProvenanceLevel = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(p, back);
     }
 
@@ -968,8 +968,8 @@ mod tests {
     #[test]
     fn contract_serde_roundtrip() {
         let c = DeterminismContract::strict();
-        let json = serde_json::to_string(&c).unwrap();
-        let back: DeterminismContract = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let back: DeterminismContract = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c, back);
     }
 
@@ -1023,15 +1023,15 @@ mod tests {
     #[test]
     fn fixture_derive_id() {
         let f = make_fixture("core-003", TestClass::Core);
-        let id = f.derive_id().unwrap();
+        let id = f.derive_id().expect("serde deserialization should succeed");
         assert!(!id.to_hex().is_empty());
     }
 
     #[test]
     fn fixture_serde_roundtrip() {
         let f = make_fixture("serde-001", TestClass::Edge);
-        let json = serde_json::to_string(&f).unwrap();
-        let back: FixtureEntry = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&f).expect("serde deserialization should succeed");
+        let back: FixtureEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(f, back);
     }
 
@@ -1054,7 +1054,7 @@ mod tests {
     #[test]
     fn registry_register_and_lookup() {
         let mut r = FixtureRegistry::new();
-        r.register(make_fixture("f1", TestClass::Core)).unwrap();
+        r.register(make_fixture("f1", TestClass::Core)).expect("serde deserialization should succeed");
         assert_eq!(r.len(), 1);
         assert!(r.lookup("f1").is_some());
         assert!(r.lookup("f2").is_none());
@@ -1063,7 +1063,7 @@ mod tests {
     #[test]
     fn registry_rejects_duplicate() {
         let mut r = FixtureRegistry::new();
-        r.register(make_fixture("f1", TestClass::Core)).unwrap();
+        r.register(make_fixture("f1", TestClass::Core)).expect("serde deserialization should succeed");
         let err = r.register(make_fixture("f1", TestClass::Edge)).unwrap_err();
         assert_eq!(err, RegistryError::DuplicateFixtureId("f1".to_string()));
     }
@@ -1071,9 +1071,9 @@ mod tests {
     #[test]
     fn registry_by_class() {
         let mut r = FixtureRegistry::new();
-        r.register(make_fixture("c1", TestClass::Core)).unwrap();
-        r.register(make_fixture("c2", TestClass::Core)).unwrap();
-        r.register(make_fixture("e1", TestClass::Edge)).unwrap();
+        r.register(make_fixture("c1", TestClass::Core)).expect("serde deserialization should succeed");
+        r.register(make_fixture("c2", TestClass::Core)).expect("serde deserialization should succeed");
+        r.register(make_fixture("e1", TestClass::Edge)).expect("serde deserialization should succeed");
         assert_eq!(r.by_class(TestClass::Core).len(), 2);
         assert_eq!(r.by_class(TestClass::Edge).len(), 1);
         assert_eq!(r.by_class(TestClass::Adversarial).len(), 0);
@@ -1084,8 +1084,8 @@ mod tests {
         let mut r = FixtureRegistry::new();
         let mut f = make_fixture("s1", TestClass::Core);
         f.surfaces = BTreeSet::from([TestSurface::Compiler, TestSurface::Runtime]);
-        r.register(f).unwrap();
-        r.register(make_fixture("s2", TestClass::Core)).unwrap(); // Parser only
+        r.register(f).expect("serde deserialization should succeed");
+        r.register(make_fixture("s2", TestClass::Core)).expect("serde deserialization should succeed"); // Parser only
         assert_eq!(r.by_surface(TestSurface::Compiler).len(), 1);
         assert_eq!(r.by_surface(TestSurface::Parser).len(), 1);
         assert_eq!(r.by_surface(TestSurface::Runtime).len(), 1);
@@ -1094,9 +1094,9 @@ mod tests {
     #[test]
     fn registry_validate_all_clean() {
         let mut r = FixtureRegistry::new();
-        r.register(make_fixture("v1", TestClass::Core)).unwrap();
+        r.register(make_fixture("v1", TestClass::Core)).expect("serde deserialization should succeed");
         r.register(make_fixture("v2", TestClass::Adversarial))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(r.validate_all().is_empty());
     }
 
@@ -1105,7 +1105,7 @@ mod tests {
         let mut r = FixtureRegistry::new();
         let mut bad = make_fixture("bad1", TestClass::Adversarial);
         bad.seed = None;
-        r.register(bad).unwrap();
+        r.register(bad).expect("serde deserialization should succeed");
         let results = r.validate_all();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].0, "bad1");
@@ -1114,9 +1114,9 @@ mod tests {
     #[test]
     fn registry_coverage_matrix() {
         let mut r = FixtureRegistry::new();
-        r.register(make_fixture("m1", TestClass::Core)).unwrap();
-        r.register(make_fixture("m2", TestClass::Core)).unwrap();
-        r.register(make_fixture("m3", TestClass::Edge)).unwrap();
+        r.register(make_fixture("m1", TestClass::Core)).expect("serde deserialization should succeed");
+        r.register(make_fixture("m2", TestClass::Core)).expect("serde deserialization should succeed");
+        r.register(make_fixture("m3", TestClass::Edge)).expect("serde deserialization should succeed");
         let matrix = r.coverage_matrix();
         assert_eq!(matrix[&(TestClass::Core, TestSurface::Parser)], 2);
         assert_eq!(matrix[&(TestClass::Edge, TestSurface::Parser)], 1);
@@ -1134,7 +1134,7 @@ mod tests {
     fn registry_coverage_gaps_decrease_with_fixtures() {
         let mut r = FixtureRegistry::new();
         let initial_gaps = r.coverage_gaps().len();
-        r.register(make_fixture("g1", TestClass::Core)).unwrap();
+        r.register(make_fixture("g1", TestClass::Core)).expect("serde deserialization should succeed");
         let after_one = r.coverage_gaps().len();
         assert!(after_one < initial_gaps);
     }
@@ -1142,11 +1142,11 @@ mod tests {
     #[test]
     fn registry_serde_roundtrip() {
         let mut r = FixtureRegistry::new();
-        r.register(make_fixture("sr1", TestClass::Core)).unwrap();
+        r.register(make_fixture("sr1", TestClass::Core)).expect("serde deserialization should succeed");
         r.register(make_fixture("sr2", TestClass::Adversarial))
-            .unwrap();
-        let json = serde_json::to_string(&r).unwrap();
-        let back: FixtureRegistry = serde_json::from_str(&json).unwrap();
+            .expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let back: FixtureRegistry = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 
@@ -1181,8 +1181,8 @@ mod tests {
     #[test]
     fn ownership_map_unowned_fixtures() {
         let mut reg = FixtureRegistry::new();
-        reg.register(make_fixture("f1", TestClass::Core)).unwrap();
-        reg.register(make_fixture("f2", TestClass::Edge)).unwrap();
+        reg.register(make_fixture("f1", TestClass::Core)).expect("serde deserialization should succeed");
+        reg.register(make_fixture("f2", TestClass::Edge)).expect("serde deserialization should succeed");
 
         let mut m = OwnershipMap::new();
         m.add(OwnershipEntry {
@@ -1207,8 +1207,8 @@ mod tests {
             owner_agent: "SilverLake".to_string(),
             fixture_ids: BTreeSet::from(["r1".to_string(), "r2".to_string()]),
         });
-        let json = serde_json::to_string(&m).unwrap();
-        let back: OwnershipMap = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
+        let back: OwnershipMap = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(m, back);
     }
 
@@ -1239,8 +1239,8 @@ mod tests {
             TestOutcome::Timeout,
             TestOutcome::Flake,
         ] {
-            let json = serde_json::to_string(&outcome).unwrap();
-            let back: TestOutcome = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&outcome).expect("serde deserialization should succeed");
+            let back: TestOutcome = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(outcome, back);
         }
     }
@@ -1264,8 +1264,8 @@ mod tests {
     #[test]
     fn execution_record_serde_roundtrip() {
         let r = make_record("f1", TestOutcome::Pass);
-        let json = serde_json::to_string(&r).unwrap();
-        let back: TestExecutionRecord = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let back: TestExecutionRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 
@@ -1365,8 +1365,8 @@ mod tests {
             make_record("b", TestOutcome::Fail),
         ];
         let s = TestSuiteSummary::from_records(&records);
-        let json = serde_json::to_string(&s).unwrap();
-        let back: TestSuiteSummary = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+        let back: TestSuiteSummary = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(s, back);
     }
 
@@ -1385,8 +1385,8 @@ mod tests {
     #[test]
     fn registry_error_serde_roundtrip() {
         let e = RegistryError::DuplicateFixtureId("test".to_string());
-        let json = serde_json::to_string(&e).unwrap();
-        let back: RegistryError = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
+        let back: RegistryError = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(e, back);
     }
 
@@ -1436,7 +1436,7 @@ mod tests {
                 let id = format!("{}-{i}", class.as_str());
                 let mut f = make_fixture(&id, *class);
                 f.surfaces = BTreeSet::from([TestSurface::Parser, TestSurface::Runtime]);
-                reg.register(f).unwrap();
+                reg.register(f).expect("serde deserialization should succeed");
             }
         }
         assert_eq!(reg.len(), 25);
@@ -1471,8 +1471,8 @@ mod tests {
     #[test]
     fn ownership_map_complete_coverage() {
         let mut reg = FixtureRegistry::new();
-        reg.register(make_fixture("f1", TestClass::Core)).unwrap();
-        reg.register(make_fixture("f2", TestClass::Edge)).unwrap();
+        reg.register(make_fixture("f1", TestClass::Core)).expect("serde deserialization should succeed");
+        reg.register(make_fixture("f2", TestClass::Edge)).expect("serde deserialization should succeed");
 
         let mut m = OwnershipMap::new();
         m.add(OwnershipEntry {
@@ -1520,7 +1520,7 @@ mod tests {
             TestSurface::Router,
         ]);
         let mut reg = FixtureRegistry::new();
-        reg.register(f).unwrap();
+        reg.register(f).expect("serde deserialization should succeed");
         let matrix = reg.coverage_matrix();
         assert_eq!(matrix[&(TestClass::Core, TestSurface::Compiler)], 1);
         assert_eq!(matrix[&(TestClass::Core, TestSurface::Runtime)], 1);
@@ -1533,8 +1533,8 @@ mod tests {
             field: "seed".to_string(),
             message: "missing".to_string(),
         };
-        let json = serde_json::to_string(&v).unwrap();
-        let back: ContractViolation = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let back: ContractViolation = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, back);
     }
 
@@ -1636,8 +1636,8 @@ mod tests {
             ProvenanceLevel::Captured,
             ProvenanceLevel::Synthesized,
         ] {
-            let json = serde_json::to_string(&p).unwrap();
-            let back: ProvenanceLevel = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
+            let back: ProvenanceLevel = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(p, back);
         }
     }
@@ -1783,8 +1783,8 @@ mod tests {
     #[test]
     fn fixture_derive_id_deterministic() {
         let f = make_fixture("det-001", TestClass::Core);
-        let id1 = f.derive_id().unwrap();
-        let id2 = f.derive_id().unwrap();
+        let id1 = f.derive_id().expect("serde deserialization should succeed");
+        let id2 = f.derive_id().expect("serde deserialization should succeed");
         assert_eq!(id1, id2, "derive_id must be deterministic");
     }
 
@@ -1792,8 +1792,8 @@ mod tests {
     fn fixture_derive_id_distinct_for_different_ids() {
         let f1 = make_fixture("distinct-a", TestClass::Core);
         let f2 = make_fixture("distinct-b", TestClass::Core);
-        let id1 = f1.derive_id().unwrap();
-        let id2 = f2.derive_id().unwrap();
+        let id1 = f1.derive_id().expect("serde deserialization should succeed");
+        let id2 = f2.derive_id().expect("serde deserialization should succeed");
         assert_ne!(
             id1, id2,
             "different fixture_ids should produce different IDs"
@@ -1804,8 +1804,8 @@ mod tests {
     fn fixture_tags_deterministic_ordering() {
         let mut f = make_fixture("tags-001", TestClass::Core);
         f.tags = BTreeSet::from(["alpha".to_string(), "beta".to_string(), "gamma".to_string()]);
-        let json = serde_json::to_string(&f).unwrap();
-        let back: FixtureEntry = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&f).expect("serde deserialization should succeed");
+        let back: FixtureEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(f.tags, back.tags);
         let tags_vec: Vec<_> = back.tags.iter().collect();
         assert_eq!(tags_vec, vec!["alpha", "beta", "gamma"]);
@@ -1815,8 +1815,8 @@ mod tests {
     fn fixture_empty_surfaces() {
         let mut f = make_fixture("no-surface", TestClass::Core);
         f.surfaces = BTreeSet::new();
-        let json = serde_json::to_string(&f).unwrap();
-        let back: FixtureEntry = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&f).expect("serde deserialization should succeed");
+        let back: FixtureEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert!(back.surfaces.is_empty());
     }
 
@@ -1825,8 +1825,8 @@ mod tests {
         let mut f = make_fixture("all-surfaces", TestClass::Core);
         f.surfaces = TestSurface::ALL.iter().copied().collect();
         assert_eq!(f.surfaces.len(), 8);
-        let json = serde_json::to_string(&f).unwrap();
-        let back: FixtureEntry = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&f).expect("serde deserialization should succeed");
+        let back: FixtureEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(f.surfaces, back.surfaces);
     }
 
@@ -1840,7 +1840,7 @@ mod tests {
                 let id = format!("{}-{}", class.as_str(), surface.as_str());
                 let mut f = make_fixture(&id, *class);
                 f.surfaces = BTreeSet::from([*surface]);
-                r.register(f).unwrap();
+                r.register(f).expect("serde deserialization should succeed");
             }
         }
         assert_eq!(r.len(), 40);
@@ -1859,7 +1859,7 @@ mod tests {
             TestSurface::Runtime,
             TestSurface::Parser,
         ]);
-        r.register(f).unwrap();
+        r.register(f).expect("serde deserialization should succeed");
         let matrix = r.coverage_matrix();
         assert_eq!(matrix[&(TestClass::Core, TestSurface::Compiler)], 1);
         assert_eq!(matrix[&(TestClass::Core, TestSurface::Runtime)], 1);
@@ -1870,10 +1870,10 @@ mod tests {
     #[test]
     fn registry_validate_all_with_mixed_valid_invalid() {
         let mut r = FixtureRegistry::new();
-        r.register(make_fixture("good", TestClass::Core)).unwrap();
+        r.register(make_fixture("good", TestClass::Core)).expect("serde deserialization should succeed");
         let mut bad = make_fixture("bad-adv", TestClass::Adversarial);
         bad.seed = None;
-        r.register(bad).unwrap();
+        r.register(bad).expect("serde deserialization should succeed");
         let results = r.validate_all();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].0, "bad-adv");
@@ -1882,14 +1882,14 @@ mod tests {
     #[test]
     fn registry_by_class_empty_for_missing() {
         let mut r = FixtureRegistry::new();
-        r.register(make_fixture("c", TestClass::Core)).unwrap();
+        r.register(make_fixture("c", TestClass::Core)).expect("serde deserialization should succeed");
         assert!(r.by_class(TestClass::FaultInjection).is_empty());
     }
 
     #[test]
     fn registry_by_surface_empty_for_missing() {
         let mut r = FixtureRegistry::new();
-        r.register(make_fixture("p", TestClass::Core)).unwrap(); // Parser only
+        r.register(make_fixture("p", TestClass::Core)).expect("serde deserialization should succeed"); // Parser only
         assert!(r.by_surface(TestSurface::Governance).is_empty());
     }
 
@@ -1898,7 +1898,7 @@ mod tests {
         let mut r = FixtureRegistry::new();
         for i in 0..200 {
             r.register(make_fixture(&format!("large-{i}"), TestClass::ALL[i % 5]))
-                .unwrap();
+                .expect("serde deserialization should succeed");
         }
         assert_eq!(r.len(), 200);
         assert_eq!(r.by_class(TestClass::Core).len(), 40);
@@ -1911,10 +1911,10 @@ mod tests {
         for i in 0..50 {
             let mut f = make_fixture(&format!("rt-{i}"), TestClass::ALL[i % 5]);
             f.tags = BTreeSet::from([format!("tag-{}", i % 3)]);
-            r.register(f).unwrap();
+            r.register(f).expect("serde deserialization should succeed");
         }
-        let json = serde_json::to_string(&r).unwrap();
-        let back: FixtureRegistry = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let back: FixtureRegistry = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 
@@ -1946,7 +1946,7 @@ mod tests {
         let mut reg = FixtureRegistry::new();
         for i in 0..5 {
             reg.register(make_fixture(&format!("o-{i}"), TestClass::Core))
-                .unwrap();
+                .expect("serde deserialization should succeed");
         }
         let mut m = OwnershipMap::new();
         m.add(OwnershipEntry {
@@ -1964,7 +1964,7 @@ mod tests {
         let mut reg = FixtureRegistry::new();
         for i in 0..4 {
             reg.register(make_fixture(&format!("p-{i}"), TestClass::Core))
-                .unwrap();
+                .expect("serde deserialization should succeed");
         }
         let mut m = OwnershipMap::new();
         m.add(OwnershipEntry {
@@ -2017,8 +2017,8 @@ mod tests {
         let mut r = make_record("seeded", TestOutcome::Pass);
         r.seed = Some(42);
         r.test_class = TestClass::Adversarial;
-        let json = serde_json::to_string(&r).unwrap();
-        let back: TestExecutionRecord = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let back: TestExecutionRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.seed, Some(42));
         assert_eq!(back.test_class, TestClass::Adversarial);
     }
@@ -2027,8 +2027,8 @@ mod tests {
     fn execution_record_with_notes() {
         let mut r = make_record("noted", TestOutcome::Fail);
         r.notes = "Known flaky on CI".to_string();
-        let json = serde_json::to_string(&r).unwrap();
-        let back: TestExecutionRecord = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let back: TestExecutionRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.notes, "Known flaky on CI");
     }
 
@@ -2037,8 +2037,8 @@ mod tests {
         for surface in TestSurface::ALL {
             let mut r = make_record(&format!("surf-{}", surface.as_str()), TestOutcome::Pass);
             r.surface = *surface;
-            let json = serde_json::to_string(&r).unwrap();
-            let back: TestExecutionRecord = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+            let back: TestExecutionRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(back.surface, *surface);
         }
     }
@@ -2165,8 +2165,8 @@ mod tests {
             }
         }
         let s = TestSuiteSummary::from_records(&records);
-        let json = serde_json::to_string(&s).unwrap();
-        let back: TestSuiteSummary = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+        let back: TestSuiteSummary = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(s, back);
     }
 
@@ -2193,8 +2193,8 @@ mod tests {
             RegistryError::InvalidFixture("broken".to_string()),
         ];
         for e in errors {
-            let json = serde_json::to_string(&e).unwrap();
-            let back: RegistryError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
+            let back: RegistryError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(e, back);
         }
     }
@@ -2212,7 +2212,7 @@ mod tests {
                 let mut f = make_fixture(&id, *class);
                 f.surfaces = BTreeSet::from([*surface]);
                 fixture_ids.insert(id.clone());
-                reg.register(f).unwrap();
+                reg.register(f).expect("serde deserialization should succeed");
             }
         }
         assert_eq!(reg.len(), 40);
@@ -2251,7 +2251,7 @@ mod tests {
                 TestExecutionRecord {
                     fixture_id: f.fixture_id.clone(),
                     test_class: f.test_class,
-                    surface: *f.surfaces.iter().next().unwrap(),
+                    surface: *f.surfaces.iter().next().expect("serde deserialization should succeed"),
                     outcome,
                     seed: f.seed,
                     duration_us: 100 + (i as u64) * 10,
@@ -2270,10 +2270,10 @@ mod tests {
     #[test]
     fn fixture_id_derivation_stability_across_serde() {
         let f = make_fixture("stability-check", TestClass::Adversarial);
-        let id_before = f.derive_id().unwrap();
-        let json = serde_json::to_string(&f).unwrap();
-        let back: FixtureEntry = serde_json::from_str(&json).unwrap();
-        let id_after = back.derive_id().unwrap();
+        let id_before = f.derive_id().expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&f).expect("serde deserialization should succeed");
+        let back: FixtureEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let id_after = back.derive_id().expect("serde deserialization should succeed");
         assert_eq!(
             id_before, id_after,
             "ID derivation must survive serde roundtrip"
@@ -2297,7 +2297,7 @@ mod tests {
                 let id = format!("mono-{i}-{j}");
                 let mut f = make_fixture(&id, *class);
                 f.surfaces = BTreeSet::from([*surface]);
-                reg.register(f).unwrap();
+                reg.register(f).expect("serde deserialization should succeed");
                 let new_gaps = reg.coverage_gaps().len();
                 assert!(new_gaps <= prev_gaps, "gaps must be monotone decreasing");
                 prev_gaps = new_gaps;

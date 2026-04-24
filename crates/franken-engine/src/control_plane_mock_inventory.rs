@@ -4328,8 +4328,8 @@ mod tests {
     #[test]
     fn canonical_inventory_serde_roundtrip() {
         let inv = build_canonical_inventory();
-        let json = serde_json::to_string(&inv).unwrap();
-        let inv2: MockInventory = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&inv).expect("serde deserialization should succeed");
+        let inv2: MockInventory = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(inv, inv2);
     }
 
@@ -4425,7 +4425,7 @@ mod tests {
 
         let manifest: ControlPlaneMockInventoryRunManifest =
             serde_json::from_slice(&fs::read(&artifacts.run_manifest_path).expect("read manifest"))
-                .unwrap();
+                .expect("serde deserialization should succeed");
         assert_eq!(
             manifest.outcome,
             ControlPlaneMockInventoryOutcome::InventoryComplete
@@ -4441,12 +4441,12 @@ mod tests {
 
         let trace_ids: ControlPlaneMockInventoryTraceIds =
             serde_json::from_slice(&fs::read(&artifacts.trace_ids_path).expect("read trace ids"))
-                .unwrap();
+                .expect("serde deserialization should succeed");
         assert_eq!(trace_ids.inventory_hash, manifest.inventory_hash);
 
         let repro_lock: serde_json::Value =
             serde_json::from_slice(&fs::read(&artifacts.repro_lock_path).expect("read repro lock"))
-                .unwrap();
+                .expect("serde deserialization should succeed");
         let replay_command = repro_lock["replay_command"]
             .as_str()
             .expect("replay command should be a string");
@@ -4460,8 +4460,8 @@ mod tests {
     #[test]
     fn classification_serde_roundtrip() {
         let c = SeamClassification::MustFixProduction;
-        let json = serde_json::to_string(&c).unwrap();
-        let c2: SeamClassification = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let c2: SeamClassification = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c, c2);
     }
 
@@ -4473,8 +4473,8 @@ mod tests {
             SeamKind::HardcodedBudget,
             SeamKind::UnguardedMockModule,
         ] {
-            let json = serde_json::to_string(&kind).unwrap();
-            let k2: SeamKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
+            let k2: SeamKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(kind, k2);
         }
     }
@@ -4488,8 +4488,8 @@ mod tests {
             SeamSeverity::High,
             SeamSeverity::Critical,
         ] {
-            let json = serde_json::to_string(&sev).unwrap();
-            let s2: SeamSeverity = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&sev).expect("serde deserialization should succeed");
+            let s2: SeamSeverity = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(sev, s2);
         }
     }
@@ -4503,8 +4503,8 @@ mod tests {
             RemediationStrategy::AddCfgTestGuard,
             RemediationStrategy::NoAction,
         ] {
-            let json = serde_json::to_string(&rem).unwrap();
-            let r2: RemediationStrategy = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&rem).expect("serde deserialization should succeed");
+            let r2: RemediationStrategy = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(rem, r2);
         }
     }
@@ -4512,8 +4512,8 @@ mod tests {
     #[test]
     fn occurrence_serde_roundtrip() {
         let occ = sample_occurrence("a.rs", 10, SeamClassification::MustFixProduction);
-        let json = serde_json::to_string(&occ).unwrap();
-        let occ2: SeamOccurrence = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&occ).expect("serde deserialization should succeed");
+        let occ2: SeamOccurrence = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(occ, occ2);
     }
 
@@ -4744,7 +4744,7 @@ mod tests {
 
         let manifest: AmbientMockGuardRunManifest =
             serde_json::from_slice(&fs::read(&artifacts.run_manifest_path).expect("read manifest"))
-                .unwrap();
+                .expect("serde deserialization should succeed");
         assert_eq!(manifest.outcome, AmbientMockGuardOutcome::Pass);
         assert_eq!(
             manifest.artifact_paths.ambient_mock_guard_report,
@@ -4765,7 +4765,7 @@ mod tests {
 
         let repro_lock: serde_json::Value =
             serde_json::from_slice(&fs::read(&artifacts.repro_lock_path).expect("read repro lock"))
-                .unwrap();
+                .expect("serde deserialization should succeed");
         let replay_command = repro_lock["replay_command"]
             .as_str()
             .expect("replay command should be a string");
@@ -4890,7 +4890,7 @@ fn build_cell_close_context(trace_id: &str, budget_ms: u64) -> KernelContext<'st
 
         let manifest: OrchestratorContextRefactorRunManifest =
             serde_json::from_slice(&fs::read(&artifacts.run_manifest_path).expect("read manifest"))
-                .unwrap();
+                .expect("serde deserialization should succeed");
         assert_eq!(manifest.outcome, OrchestratorContextRefactorOutcome::Pass);
         assert_eq!(
             manifest.artifact_paths.production_context_path_contract,
@@ -4899,7 +4899,7 @@ fn build_cell_close_context(trace_id: &str, budget_ms: u64) -> KernelContext<'st
 
         let repro_lock: serde_json::Value =
             serde_json::from_slice(&fs::read(&artifacts.repro_lock_path).expect("read repro lock"))
-                .unwrap();
+                .expect("serde deserialization should succeed");
         let replay_command = repro_lock["replay_command"]
             .as_str()
             .expect("replay command should be a string");
@@ -5193,8 +5193,8 @@ fn prod() { let _ = real_cx(); }
             original_hash: "abc".to_string(),
             rescan_hash: "abc".to_string(),
         };
-        let json = serde_json::to_string(&result).unwrap();
-        let back: InventoryFreshnessResult = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let back: InventoryFreshnessResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, back);
     }
 

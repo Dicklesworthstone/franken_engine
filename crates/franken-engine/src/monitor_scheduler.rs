@@ -486,13 +486,13 @@ mod tests {
     fn test_scheduler() -> MonitorScheduler {
         let mut sched = MonitorScheduler::new(test_config());
         // SAFETY: test helper with valid probe should succeed
-        sched.register_probe(health_probe("health-1")).unwrap();
+        sched.register_probe(health_probe("health-1")).expect("serde deserialization should succeed");
         // SAFETY: test helper with valid probe should succeed
-        sched.register_probe(deep_probe("deep-1")).unwrap();
+        sched.register_probe(deep_probe("deep-1")).expect("serde deserialization should succeed");
         // SAFETY: test helper with valid probe should succeed
         sched
             .register_probe(integrity_probe("integrity-1"))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         sched
     }
 
@@ -547,14 +547,14 @@ mod tests {
     fn register_and_count() {
         let mut sched = MonitorScheduler::new(test_config());
         assert_eq!(sched.probe_count(), 0);
-        sched.register_probe(health_probe("h1")).unwrap();
+        sched.register_probe(health_probe("h1")).expect("serde deserialization should succeed");
         assert_eq!(sched.probe_count(), 1);
     }
 
     #[test]
     fn duplicate_registration_rejected() {
         let mut sched = MonitorScheduler::new(test_config());
-        sched.register_probe(health_probe("h1")).unwrap();
+        sched.register_probe(health_probe("h1")).expect("serde deserialization should succeed");
         let err = sched.register_probe(health_probe("h1")).unwrap_err();
         assert_eq!(
             err,
@@ -567,8 +567,8 @@ mod tests {
     #[test]
     fn unregister_probe() {
         let mut sched = MonitorScheduler::new(test_config());
-        sched.register_probe(health_probe("h1")).unwrap();
-        sched.unregister_probe("h1").unwrap();
+        sched.register_probe(health_probe("h1")).expect("serde deserialization should succeed");
+        sched.unregister_probe("h1").expect("serde deserialization should succeed");
         assert_eq!(sched.probe_count(), 0);
     }
 
@@ -673,25 +673,25 @@ mod tests {
             regime_budgets: BTreeMap::new(),
             relevance_overrides: BTreeMap::new(),
         });
-        sched.register_probe(deep_probe("deep-1")).unwrap(); // costs 2.0, won't fit
+        sched.register_probe(deep_probe("deep-1")).expect("serde deserialization should succeed"); // costs 2.0, won't fit
 
         sched.schedule(Regime::Normal);
         // SAFETY: Test-only unwrap, probe "deep-1" was just registered
-        assert_eq!(sched.probe("deep-1").unwrap().staleness, 1); // not executed
+        assert_eq!(sched.probe("deep-1").expect("serde deserialization should succeed").staleness, 1); // not executed
 
         sched.schedule(Regime::Normal);
         // SAFETY: Test-only unwrap, probe "deep-1" was just registered
-        assert_eq!(sched.probe("deep-1").unwrap().staleness, 2);
+        assert_eq!(sched.probe("deep-1").expect("serde deserialization should succeed").staleness, 2);
     }
 
     #[test]
     fn scheduled_probes_reset_staleness() {
         let mut sched = MonitorScheduler::new(test_config());
-        sched.register_probe(health_probe("h1")).unwrap(); // cheap
+        sched.register_probe(health_probe("h1")).expect("serde deserialization should succeed"); // cheap
 
         sched.schedule(Regime::Normal); // h1 should be scheduled
         // SAFETY: Test-only unwrap, probe "h1" was just registered
-        assert_eq!(sched.probe("h1").unwrap().staleness, 0);
+        assert_eq!(sched.probe("h1").expect("serde deserialization should succeed").staleness, 0);
     }
 
     // -- Determinism --
@@ -731,11 +731,11 @@ mod tests {
     fn record_execution_updates_state() {
         let mut sched = test_scheduler();
         // SAFETY: recording execution for existing probe should succeed
-        sched.record_execution("health-1", false).unwrap();
+        sched.record_execution("health-1", false).expect("serde deserialization should succeed");
         // SAFETY: probe lookup for known probe should succeed
-        assert!(!sched.probe("health-1").unwrap().last_success);
+        assert!(!sched.probe("health-1").expect("serde deserialization should succeed").last_success);
         // SAFETY: probe lookup for known probe should succeed
-        assert_eq!(sched.probe("health-1").unwrap().execution_count, 1);
+        assert_eq!(sched.probe("health-1").expect("serde deserialization should succeed").execution_count, 1);
     }
 
     #[test]
@@ -782,9 +782,9 @@ mod tests {
         ];
         for kind in &kinds {
             // SAFETY: to_string cannot fail on derived Serialize enum
-            let json = serde_json::to_string(kind).unwrap();
+            let json = serde_json::to_string(kind).expect("serde deserialization should succeed");
             // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-            let restored: ProbeKind = serde_json::from_str(&json).unwrap();
+            let restored: ProbeKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*kind, restored);
         }
     }
@@ -793,9 +793,9 @@ mod tests {
     fn probe_config_serialization_round_trip() {
         let config = health_probe("h1");
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&config).unwrap();
+        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let restored: ProbeConfig = serde_json::from_str(&json).unwrap();
+        let restored: ProbeConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, restored);
     }
 
@@ -819,9 +819,9 @@ mod tests {
             }],
         };
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&result).unwrap();
+        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let restored: ScheduleResult = serde_json::from_str(&json).unwrap();
+        let restored: ScheduleResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, restored);
     }
 
@@ -837,9 +837,9 @@ mod tests {
         ];
         for err in &errors {
             // SAFETY: to_string cannot fail on derived Serialize enum
-            let json = serde_json::to_string(err).unwrap();
+            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
             // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-            let restored: SchedulerError = serde_json::from_str(&json).unwrap();
+            let restored: SchedulerError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, restored);
         }
     }
@@ -857,9 +857,9 @@ mod tests {
             last_success: true,
         };
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&state).unwrap();
+        let json = serde_json::to_string(&state).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let restored: ProbeState = serde_json::from_str(&json).unwrap();
+        let restored: ProbeState = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(state, restored);
     }
 
@@ -867,9 +867,9 @@ mod tests {
     fn scheduler_config_serde_roundtrip() {
         let config = test_config();
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&config).unwrap();
+        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let restored: SchedulerConfig = serde_json::from_str(&json).unwrap();
+        let restored: SchedulerConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, restored);
     }
 
@@ -884,9 +884,9 @@ mod tests {
             skip_reason: None,
         };
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&dec).unwrap();
+        let json = serde_json::to_string(&dec).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let restored: ScheduleDecision = serde_json::from_str(&json).unwrap();
+        let restored: ScheduleDecision = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(dec, restored);
     }
 
@@ -1026,7 +1026,7 @@ mod tests {
         };
         let mut sched = MonitorScheduler::new(config);
         // SAFETY: Test-only unwrap with valid probe configuration
-        sched.register_probe(health_probe("h1")).unwrap();
+        sched.register_probe(health_probe("h1")).expect("serde deserialization should succeed");
         let result = sched.schedule(Regime::Normal);
         assert_eq!(result.probes_scheduled, 0);
         assert_eq!(result.probes_deferred, 1);
@@ -1051,7 +1051,7 @@ mod tests {
         };
         let mut sched = MonitorScheduler::new(config);
         // SAFETY: Test scenario with valid health probe; registration should succeed
-        sched.register_probe(health_probe("h1")).unwrap();
+        sched.register_probe(health_probe("h1")).expect("serde deserialization should succeed");
         let result = sched.schedule(Regime::Normal);
         assert_eq!(result.probes_scheduled, 1);
         assert_eq!(result.budget_used, 100_000);
@@ -1075,9 +1075,9 @@ mod tests {
                 information_gain_millionths: 2_000_000,
                 base_relevance_millionths: 1_000_000,
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
         // SAFETY: Test scenario with valid health probe; registration should succeed
-        sched.register_probe(health_probe("h1")).unwrap();
+        sched.register_probe(health_probe("h1")).expect("serde deserialization should succeed");
 
         let result = sched.schedule(Regime::Normal);
         let neg = result
@@ -1134,13 +1134,13 @@ mod tests {
     fn record_execution_multiple_times() {
         let mut sched = test_scheduler();
         // SAFETY: Test scenario with valid probe ID from test_scheduler; recording should succeed
-        sched.record_execution("health-1", true).unwrap();
+        sched.record_execution("health-1", true).expect("serde deserialization should succeed");
         // SAFETY: Test scenario with valid probe ID from test_scheduler; recording should succeed
-        sched.record_execution("health-1", false).unwrap();
+        sched.record_execution("health-1", false).expect("serde deserialization should succeed");
         // SAFETY: Test scenario with valid probe ID from test_scheduler; recording should succeed
-        sched.record_execution("health-1", true).unwrap();
+        sched.record_execution("health-1", true).expect("serde deserialization should succeed");
         // SAFETY: Test scenario with valid probe ID from test_scheduler; probe lookup should succeed
-        let state = sched.probe("health-1").unwrap();
+        let state = sched.probe("health-1").expect("serde deserialization should succeed");
         assert_eq!(state.execution_count, 3);
         assert!(state.last_success);
     }
@@ -1148,13 +1148,13 @@ mod tests {
     #[test]
     fn unregister_then_reregister_works() {
         let mut sched = MonitorScheduler::new(test_config());
-        sched.register_probe(health_probe("h1")).unwrap();
-        sched.unregister_probe("h1").unwrap();
+        sched.register_probe(health_probe("h1")).expect("serde deserialization should succeed");
+        sched.unregister_probe("h1").expect("serde deserialization should succeed");
         assert_eq!(sched.probe_count(), 0);
-        sched.register_probe(deep_probe("h1")).unwrap();
+        sched.register_probe(deep_probe("h1")).expect("serde deserialization should succeed");
         assert_eq!(sched.probe_count(), 1);
         assert_eq!(
-            sched.probe("h1").unwrap().config.kind,
+            sched.probe("h1").expect("serde deserialization should succeed").config.kind,
             ProbeKind::DeepDiagnostic
         );
     }
@@ -1189,7 +1189,7 @@ mod tests {
             relevance_overrides: BTreeMap::new(),
         };
         let mut sched = MonitorScheduler::new(config);
-        sched.register_probe(health_probe("h1")).unwrap();
+        sched.register_probe(health_probe("h1")).expect("serde deserialization should succeed");
         let result = sched.schedule(Regime::Normal);
         let decision = &result.decisions[0];
         assert!(!decision.scheduled);
@@ -1218,8 +1218,8 @@ mod tests {
         );
 
         let mut sched = MonitorScheduler::new(config);
-        sched.register_probe(health_probe("h1")).unwrap();
-        sched.register_probe(integrity_probe("i1")).unwrap();
+        sched.register_probe(health_probe("h1")).expect("serde deserialization should succeed");
+        sched.register_probe(integrity_probe("i1")).expect("serde deserialization should succeed");
 
         let result = sched.schedule(Regime::Attack);
 
@@ -1275,11 +1275,11 @@ mod tests {
             relevance_overrides: BTreeMap::new(),
         };
         let mut sched = MonitorScheduler::new(config);
-        sched.register_probe(deep_probe("d1")).unwrap();
+        sched.register_probe(deep_probe("d1")).expect("serde deserialization should succeed");
 
         for expected in 1..=5 {
             sched.schedule(Regime::Normal);
-            assert_eq!(sched.probe("d1").unwrap().staleness, expected);
+            assert_eq!(sched.probe("d1").expect("serde deserialization should succeed").staleness, expected);
         }
     }
 
@@ -1301,9 +1301,9 @@ mod tests {
         high_info.information_gain_millionths = 900_000; // 0.9
 
         // SAFETY: registering valid probe should succeed
-        sched.register_probe(low_info).unwrap();
+        sched.register_probe(low_info).expect("serde deserialization should succeed");
         // SAFETY: registering valid probe should succeed
-        sched.register_probe(high_info).unwrap();
+        sched.register_probe(high_info).expect("serde deserialization should succeed");
 
         let result = sched.schedule(Regime::Normal);
         // high-info should be scheduled, low-info deferred
@@ -1312,7 +1312,7 @@ mod tests {
             .decisions
             .iter()
             .find(|d| d.probe_id == "high-info")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(high.scheduled);
     }
 
@@ -1323,9 +1323,9 @@ mod tests {
         let mut sched = test_scheduler();
         let result = sched.schedule(Regime::Normal);
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&result).unwrap();
+        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let restored: ScheduleResult = serde_json::from_str(&json).unwrap();
+        let restored: ScheduleResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, restored);
     }
 
@@ -1381,9 +1381,9 @@ mod tests {
         let mut sched = MonitorScheduler::new(config);
         // Same cost, same info gain, same relevance => same VOI
         // SAFETY: Test probes created by health_probe() helper have valid configurations
-        sched.register_probe(health_probe("beta")).unwrap();
+        sched.register_probe(health_probe("beta")).expect("serde deserialization should succeed");
         // SAFETY: Test probes created by health_probe() helper have valid configurations
-        sched.register_probe(health_probe("alpha")).unwrap();
+        sched.register_probe(health_probe("alpha")).expect("serde deserialization should succeed");
 
         let result = sched.schedule(Regime::Normal);
         // Tie-break: alphabetical => "alpha" wins
@@ -1415,7 +1415,7 @@ mod tests {
             base_relevance_millionths: 1_000_000,
         };
         // SAFETY: Manually created ProbeConfig has valid fields for testing purposes
-        sched.register_probe(zero_info).unwrap();
+        sched.register_probe(zero_info).expect("serde deserialization should succeed");
         let result = sched.schedule(Regime::Normal);
         let dec = &result.decisions[0];
         assert!(!dec.scheduled);
@@ -1432,12 +1432,12 @@ mod tests {
         };
         let mut sched = MonitorScheduler::new(config);
         // SAFETY: Test probes created by health_probe() helper have valid configurations
-        sched.register_probe(health_probe("h1")).unwrap(); // cost 100_000
+        sched.register_probe(health_probe("h1")).expect("serde deserialization should succeed"); // cost 100_000
         let result = sched.schedule(Regime::Normal);
         let dec = &result.decisions[0];
         assert!(!dec.scheduled);
         // SAFETY: Test setup ensures probe is not scheduled, so skip_reason is Some
-        let reason = dec.skip_reason.as_ref().unwrap();
+        let reason = dec.skip_reason.as_ref().expect("serde deserialization should succeed");
         assert!(reason.contains("budget exhausted"));
         assert!(reason.contains("remaining:"));
         assert!(reason.contains("cost:"));
@@ -1476,18 +1476,18 @@ mod tests {
             relevance_overrides: BTreeMap::new(),
         };
         let mut sched = MonitorScheduler::new(config);
-        sched.register_probe(health_probe("cheap")).unwrap();
-        sched.register_probe(deep_probe("expensive")).unwrap();
+        sched.register_probe(health_probe("cheap")).expect("serde deserialization should succeed");
+        sched.register_probe(deep_probe("expensive")).expect("serde deserialization should succeed");
 
         sched.schedule(Regime::Normal);
         // cheap scheduled => staleness reset to 0
-        assert_eq!(sched.probe("cheap").unwrap().staleness, 0);
+        assert_eq!(sched.probe("cheap").expect("serde deserialization should succeed").staleness, 0);
         // expensive deferred => staleness = 1 (ticked but not reset)
-        assert_eq!(sched.probe("expensive").unwrap().staleness, 1);
+        assert_eq!(sched.probe("expensive").expect("serde deserialization should succeed").staleness, 1);
 
         sched.schedule(Regime::Normal);
-        assert_eq!(sched.probe("cheap").unwrap().staleness, 0);
-        assert_eq!(sched.probe("expensive").unwrap().staleness, 2);
+        assert_eq!(sched.probe("cheap").expect("serde deserialization should succeed").staleness, 0);
+        assert_eq!(sched.probe("expensive").expect("serde deserialization should succeed").staleness, 2);
     }
 
     // -- Enrichment: record_execution resets staleness --
@@ -1495,7 +1495,7 @@ mod tests {
     #[test]
     fn record_execution_resets_staleness() {
         let mut sched = MonitorScheduler::new(test_config());
-        sched.register_probe(deep_probe("d1")).unwrap();
+        sched.register_probe(deep_probe("d1")).expect("serde deserialization should succeed");
         // Manually tick staleness by scheduling with tiny budget won't help,
         // so directly schedule to accumulate staleness
         let config = SchedulerConfig {
@@ -1505,13 +1505,13 @@ mod tests {
             relevance_overrides: BTreeMap::new(),
         };
         let mut sched2 = MonitorScheduler::new(config);
-        sched2.register_probe(deep_probe("d1")).unwrap();
+        sched2.register_probe(deep_probe("d1")).expect("serde deserialization should succeed");
         sched2.schedule(Regime::Normal); // staleness = 1 (deferred)
         sched2.schedule(Regime::Normal); // staleness = 2
-        assert_eq!(sched2.probe("d1").unwrap().staleness, 2);
+        assert_eq!(sched2.probe("d1").expect("serde deserialization should succeed").staleness, 2);
 
-        sched2.record_execution("d1", true).unwrap();
-        assert_eq!(sched2.probe("d1").unwrap().staleness, 0);
+        sched2.record_execution("d1", true).expect("serde deserialization should succeed");
+        assert_eq!(sched2.probe("d1").expect("serde deserialization should succeed").staleness, 0);
     }
 
     // -- Enrichment: multi-regime sequence --
@@ -1561,7 +1561,7 @@ mod tests {
             base_relevance_millionths: 1_000_000,
         };
         // SAFETY: registering valid probe should succeed
-        sched.register_probe(cal).unwrap();
+        sched.register_probe(cal).expect("serde deserialization should succeed");
         let result = sched.schedule(Regime::Normal);
         assert_eq!(result.decisions.len(), 1);
         assert_eq!(result.decisions[0].kind, ProbeKind::CalibrationProbe);
@@ -1579,9 +1579,9 @@ mod tests {
             .relevance_overrides
             .insert("elevated:health_check".to_string(), 2_000_000);
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&config).unwrap();
+        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let restored: SchedulerConfig = serde_json::from_str(&json).unwrap();
+        let restored: SchedulerConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, restored);
         assert_eq!(restored.relevance_overrides.len(), 2);
     }
@@ -1599,9 +1599,9 @@ mod tests {
             skip_reason: Some("budget exhausted (remaining: 500000, cost: 3000000)".to_string()),
         };
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&dec).unwrap();
+        let json = serde_json::to_string(&dec).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let restored: ScheduleDecision = serde_json::from_str(&json).unwrap();
+        let restored: ScheduleDecision = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(dec, restored);
     }
 
@@ -1631,9 +1631,9 @@ mod tests {
             relevance_overrides: BTreeMap::new(),
         };
         let mut sched = MonitorScheduler::new(config);
-        sched.register_probe(health_probe("h1")).unwrap();
-        sched.register_probe(deep_probe("d1")).unwrap();
-        sched.register_probe(integrity_probe("i1")).unwrap();
+        sched.register_probe(health_probe("h1")).expect("serde deserialization should succeed");
+        sched.register_probe(deep_probe("d1")).expect("serde deserialization should succeed");
+        sched.register_probe(integrity_probe("i1")).expect("serde deserialization should succeed");
 
         let result = sched.schedule(Regime::Normal);
         assert_eq!(result.probes_scheduled + result.probes_deferred, 3);
@@ -1650,16 +1650,16 @@ mod tests {
         for i in 0..5 {
             sched
                 .register_probe(health_probe(&format!("h-{i}")))
-                .unwrap();
+                .expect("serde deserialization should succeed");
         }
         assert_eq!(sched.probe_count(), 5);
 
-        sched.unregister_probe("h-0").unwrap();
-        sched.unregister_probe("h-2").unwrap();
-        sched.unregister_probe("h-4").unwrap();
+        sched.unregister_probe("h-0").expect("serde deserialization should succeed");
+        sched.unregister_probe("h-2").expect("serde deserialization should succeed");
+        sched.unregister_probe("h-4").expect("serde deserialization should succeed");
         assert_eq!(sched.probe_count(), 2);
 
-        sched.register_probe(deep_probe("d-new")).unwrap();
+        sched.register_probe(deep_probe("d-new")).expect("serde deserialization should succeed");
         assert_eq!(sched.probe_count(), 3);
     }
 
@@ -1693,19 +1693,19 @@ mod tests {
     #[test]
     fn execution_count_accumulates_across_mixed_sources() {
         let mut sched = MonitorScheduler::new(test_config());
-        sched.register_probe(health_probe("h1")).unwrap();
+        sched.register_probe(health_probe("h1")).expect("serde deserialization should succeed");
 
         // Schedule (auto-executes)
         sched.schedule(Regime::Normal);
-        assert_eq!(sched.probe("h1").unwrap().execution_count, 1);
+        assert_eq!(sched.probe("h1").expect("serde deserialization should succeed").execution_count, 1);
 
         // External record
-        sched.record_execution("h1", true).unwrap();
-        assert_eq!(sched.probe("h1").unwrap().execution_count, 2);
+        sched.record_execution("h1", true).expect("serde deserialization should succeed");
+        assert_eq!(sched.probe("h1").expect("serde deserialization should succeed").execution_count, 2);
 
         // Schedule again
         sched.schedule(Regime::Normal);
-        assert_eq!(sched.probe("h1").unwrap().execution_count, 3);
+        assert_eq!(sched.probe("h1").expect("serde deserialization should succeed").execution_count, 3);
     }
 
     // -- Enrichment: VOI increases with relevance multiplier --
@@ -1736,21 +1736,21 @@ mod tests {
             .decisions
             .iter()
             .find(|d| d.probe_id == "health-1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(health_dec.kind, ProbeKind::HealthCheck);
 
         let deep_dec = result
             .decisions
             .iter()
             .find(|d| d.probe_id == "deep-1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(deep_dec.kind, ProbeKind::DeepDiagnostic);
 
         let integrity_dec = result
             .decisions
             .iter()
             .find(|d| d.probe_id == "integrity-1")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(integrity_dec.kind, ProbeKind::IntegrityAudit);
     }
 }

@@ -221,7 +221,7 @@ pub struct CanonicalEvidenceEntry {
 impl CanonicalEvidenceEntry {
     /// Verify the artifact hash matches the ledger entry content.
     pub fn verify_artifact_integrity(&self) -> bool {
-        let mut payload = serde_json::to_vec(&self.ledger_entry).unwrap();
+        let mut payload = serde_json::to_vec(&self.ledger_entry).expect("serde deserialization should succeed");
         if let Ok(meta_bytes) = serde_json::to_vec(&self.metadata) {
             payload.extend_from_slice(&meta_bytes);
         }
@@ -393,7 +393,7 @@ impl CanonicalEvidenceEmitter {
 
         // Compute artifact hash covering both ledger entry AND metadata so
         // neither can be tampered with independently.
-        let mut hash_input = serde_json::to_vec(&ledger_entry).unwrap();
+        let mut hash_input = serde_json::to_vec(&ledger_entry).expect("serde deserialization should succeed");
         if let Ok(meta_bytes) = serde_json::to_vec(&request.metadata) {
             hash_input.extend_from_slice(&meta_bytes);
         }
@@ -676,8 +676,8 @@ mod tests {
     #[test]
     fn action_category_serde_roundtrip() {
         for cat in &ActionCategory::ALL {
-            let json = serde_json::to_string(cat).unwrap();
-            let back: ActionCategory = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(cat).expect("serde deserialization should succeed");
+            let back: ActionCategory = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*cat, back);
         }
     }
@@ -720,7 +720,7 @@ mod tests {
         let mut em = emitter();
         let mut cx = mock_cx();
         let req = make_request(ActionCategory::DecisionContract, "extension_quarantine");
-        let id = em.emit(&mut cx, &req).unwrap();
+        let id = em.emit(&mut cx, &req).expect("serde deserialization should succeed");
         assert_eq!(em.len(), 1);
         assert!(!em.is_empty());
         assert!(id.as_str().contains("decision_contract"));
@@ -731,7 +731,7 @@ mod tests {
         let mut em = emitter();
         let mut cx = mock_cx();
         let req = make_request(ActionCategory::DecisionContract, "extension_quarantine");
-        em.emit(&mut cx, &req).unwrap();
+        em.emit(&mut cx, &req).expect("serde deserialization should succeed");
 
         let entry = &em.entries()[0];
         assert_eq!(entry.category, ActionCategory::DecisionContract);
@@ -748,7 +748,7 @@ mod tests {
         let mut em = emitter();
         let mut cx = mock_cx();
         let req = make_request(ActionCategory::DecisionContract, "capability_revocation");
-        em.emit(&mut cx, &req).unwrap();
+        em.emit(&mut cx, &req).expect("serde deserialization should succeed");
 
         let entry = &em.entries()[0];
         assert_eq!(entry.trace_id, req.trace_id.to_string());
@@ -765,7 +765,7 @@ mod tests {
         let mut em = emitter();
         let mut cx = mock_cx();
         let req = make_request(ActionCategory::ExtensionLifecycle, "extension_load");
-        em.emit(&mut cx, &req).unwrap();
+        em.emit(&mut cx, &req).expect("serde deserialization should succeed");
 
         let entry = &em.entries()[0];
         assert!(entry.verify_artifact_integrity());
@@ -776,7 +776,7 @@ mod tests {
         let mut em = emitter();
         let mut cx = mock_cx();
         let req = make_request(ActionCategory::ExtensionLifecycle, "extension_load");
-        em.emit(&mut cx, &req).unwrap();
+        em.emit(&mut cx, &req).expect("serde deserialization should succeed");
 
         let mut entry = em.entries()[0].clone();
         entry.ledger_entry.ts_unix_ms = 999; // tamper
@@ -793,7 +793,7 @@ mod tests {
         let mut cx = mock_cx();
         for i in 0..5 {
             let req = make_request(ActionCategory::DecisionContract, &format!("action_{i}"));
-            em.emit(&mut cx, &req).unwrap();
+            em.emit(&mut cx, &req).expect("serde deserialization should succeed");
         }
         assert!(em.verify_chain_integrity());
     }
@@ -804,7 +804,7 @@ mod tests {
         let mut cx = mock_cx();
         for i in 0..3 {
             let req = make_request(ActionCategory::DecisionContract, &format!("a{i}"));
-            em.emit(&mut cx, &req).unwrap();
+            em.emit(&mut cx, &req).expect("serde deserialization should succeed");
         }
 
         // Tamper with chain hash of middle entry.
@@ -822,8 +822,8 @@ mod tests {
         let mut cx = mock_cx();
         let req = make_request(ActionCategory::Cancellation, "cancel_op");
 
-        em.emit(&mut cx, &req).unwrap();
-        em.emit(&mut cx, &req).unwrap();
+        em.emit(&mut cx, &req).expect("serde deserialization should succeed");
+        em.emit(&mut cx, &req).expect("serde deserialization should succeed");
         let err = em.emit(&mut cx, &req).unwrap_err();
         assert_eq!(err, EvidenceEmissionError::BufferFull { capacity: 2 });
     }
@@ -835,7 +835,7 @@ mod tests {
         let req = make_request(ActionCategory::Cancellation, "cancel_op");
 
         assert_eq!(em.remaining_capacity(), 5);
-        em.emit(&mut cx, &req).unwrap();
+        em.emit(&mut cx, &req).expect("serde deserialization should succeed");
         assert_eq!(em.remaining_capacity(), 4);
     }
 
@@ -852,7 +852,7 @@ mod tests {
         let mut cx = MockCx::new(trace_id_from_seed(1), MockBudget::new(10));
         let req = make_request(ActionCategory::DecisionContract, "allow");
 
-        em.emit(&mut cx, &req).unwrap();
+        em.emit(&mut cx, &req).expect("serde deserialization should succeed");
         assert_eq!(cx.budget().remaining_ms(), 5);
     }
 
@@ -885,17 +885,17 @@ mod tests {
             &mut cx,
             &make_request(ActionCategory::DecisionContract, "quarantine"),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         em.emit(
             &mut cx,
             &make_request(ActionCategory::ExtensionLifecycle, "load"),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         em.emit(
             &mut cx,
             &make_request(ActionCategory::DecisionContract, "revoke"),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         assert_eq!(em.by_category(ActionCategory::DecisionContract).len(), 2);
         assert_eq!(em.by_category(ActionCategory::ExtensionLifecycle).len(), 1);
@@ -911,17 +911,17 @@ mod tests {
             &mut cx,
             &make_request(ActionCategory::DecisionContract, "a"),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         em.emit(
             &mut cx,
             &make_request(ActionCategory::DecisionContract, "b"),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         em.emit(
             &mut cx,
             &make_request(ActionCategory::ContainmentAction, "c"),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let counts = em.category_counts();
         assert_eq!(counts[&ActionCategory::DecisionContract], 2);
@@ -938,7 +938,7 @@ mod tests {
         let mut cx = mock_cx();
 
         let req = make_request(ActionCategory::DecisionContract, "allow");
-        em.emit(&mut cx, &req).unwrap();
+        em.emit(&mut cx, &req).expect("serde deserialization should succeed");
 
         let trace_str = trace_id_from_seed(1).to_string();
         assert_eq!(em.by_trace_id(&trace_str).len(), 1);
@@ -951,7 +951,7 @@ mod tests {
         let mut cx = mock_cx();
 
         let req = make_request(ActionCategory::DecisionContract, "deny");
-        em.emit(&mut cx, &req).unwrap();
+        em.emit(&mut cx, &req).expect("serde deserialization should succeed");
 
         let dec_str = decision_id_from_seed(1).to_string();
         assert_eq!(em.by_decision_id(&dec_str).len(), 1);
@@ -968,7 +968,7 @@ mod tests {
 
         for i in 0..3 {
             let req = make_request(ActionCategory::DecisionContract, &format!("a{i}"));
-            em.emit(&mut cx, &req).unwrap();
+            em.emit(&mut cx, &req).expect("serde deserialization should succeed");
         }
 
         assert_eq!(em.entries()[0].sequence, 0);
@@ -982,7 +982,7 @@ mod tests {
         let mut cx = mock_cx();
 
         let req = make_request(ActionCategory::DecisionContract, "test");
-        em.emit(&mut cx, &req).unwrap();
+        em.emit(&mut cx, &req).expect("serde deserialization should succeed");
 
         assert!(em.get(0).is_some());
         assert!(em.get(1).is_none());
@@ -999,7 +999,7 @@ mod tests {
         let mut cx = mock_cx();
 
         let req = make_request(ActionCategory::DecisionContract, "allow");
-        em.emit(&mut cx, &req).unwrap();
+        em.emit(&mut cx, &req).expect("serde deserialization should succeed");
 
         assert_eq!(em.entries()[0].epoch, SecurityEpoch::from_raw(42));
     }
@@ -1018,13 +1018,13 @@ mod tests {
             &mut cx,
             &make_request(ActionCategory::DecisionContract, "a"),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let h1 = *em.rolling_hash();
         em.emit(
             &mut cx,
             &make_request(ActionCategory::DecisionContract, "b"),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let h2 = *em.rolling_hash();
 
         assert_ne!(h0, h1);
@@ -1045,7 +1045,7 @@ mod tests {
             &mut cx,
             &make_request(ActionCategory::DecisionContract, "allow"),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         assert_eq!(em.events().len(), 1);
         assert_eq!(em.events()[0].event, "evidence_emit");
@@ -1059,7 +1059,7 @@ mod tests {
         let mut cx = mock_cx();
         let req = make_request(ActionCategory::DecisionContract, "a");
 
-        em.emit(&mut cx, &req).unwrap();
+        em.emit(&mut cx, &req).expect("serde deserialization should succeed");
         let _ = em.emit(&mut cx, &req);
 
         assert_eq!(em.events().len(), 2);
@@ -1078,7 +1078,7 @@ mod tests {
 
         for cat in &ActionCategory::ALL {
             let req = make_request(*cat, &format!("{cat}_action"));
-            em.emit(&mut cx, &req).unwrap();
+            em.emit(&mut cx, &req).expect("serde deserialization should succeed");
         }
 
         assert_eq!(em.len(), 6);
@@ -1096,7 +1096,7 @@ mod tests {
 
         let mut req = make_request(ActionCategory::ExtensionLifecycle, "load");
         req.posterior = vec![]; // no Bayesian evaluation
-        em.emit(&mut cx, &req).unwrap();
+        em.emit(&mut cx, &req).expect("serde deserialization should succeed");
 
         assert_eq!(em.entries()[0].ledger_entry.posterior, vec![0.5, 0.5]);
     }
@@ -1113,7 +1113,7 @@ mod tests {
         let mut req = make_request(ActionCategory::DecisionContract, "allow");
         req.metadata
             .insert("extension_id".to_string(), "ext-001".to_string());
-        em.emit(&mut cx, &req).unwrap();
+        em.emit(&mut cx, &req).expect("serde deserialization should succeed");
 
         assert_eq!(
             em.entries()[0].metadata.get("extension_id"),
@@ -1133,19 +1133,19 @@ mod tests {
             &mut cx,
             &make_request(ActionCategory::DecisionContract, "allow"),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let entry = &em.entries()[0];
-        let json = serde_json::to_string(entry).unwrap();
-        let back: CanonicalEvidenceEntry = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(entry).expect("serde deserialization should succeed");
+        let back: CanonicalEvidenceEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(*entry, back);
     }
 
     #[test]
     fn emission_error_serde_roundtrip() {
         let err = EvidenceEmissionError::BufferFull { capacity: 42 };
-        let json = serde_json::to_string(&err).unwrap();
-        let back: EvidenceEmissionError = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let back: EvidenceEmissionError = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, back);
     }
 
@@ -1160,16 +1160,16 @@ mod tests {
             outcome: "ok".to_string(),
             error_code: None,
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let back: EvidenceEmissionEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let back: EvidenceEmissionEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
     }
 
     #[test]
     fn emitter_config_serde_roundtrip() {
         let cfg = EmitterConfig::default();
-        let json = serde_json::to_string(&cfg).unwrap();
-        let back: EmitterConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
+        let back: EmitterConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cfg, back);
     }
 
@@ -1186,7 +1186,7 @@ mod tests {
 
             for i in 0..3 {
                 let req = make_request(ActionCategory::DecisionContract, &format!("a{i}"));
-                em.emit(&mut cx, &req).unwrap();
+                em.emit(&mut cx, &req).expect("serde deserialization should succeed");
             }
             (em.entries().to_vec(), *em.rolling_hash())
         };
@@ -1268,8 +1268,8 @@ mod tests {
     #[test]
     fn evidence_entry_id_serde_roundtrip() {
         let id = EvidenceEntryId::new("ev-test-42");
-        let json = serde_json::to_string(&id).unwrap();
-        let back: EvidenceEntryId = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&id).expect("serde deserialization should succeed");
+        let back: EvidenceEntryId = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(id, back);
     }
 
@@ -1295,7 +1295,7 @@ mod tests {
         let mut em = emitter();
         let mut cx = mock_cx();
         let req = make_request(ActionCategory::DecisionContract, "allow");
-        em.emit(&mut cx, &req).unwrap();
+        em.emit(&mut cx, &req).expect("serde deserialization should succeed");
         assert!(em.verify_chain_integrity());
         let entry = &em.entries()[0];
         assert!(entry.verify_artifact_integrity());
@@ -1310,7 +1310,7 @@ mod tests {
         req.metadata
             .insert("ext".to_string(), "ext-001".to_string());
         req.metadata.insert("region".to_string(), "r-1".to_string());
-        em.emit(&mut cx, &req).unwrap();
+        em.emit(&mut cx, &req).expect("serde deserialization should succeed");
 
         let entry = &em.entries()[0];
         assert_eq!(entry.metadata.get("ext"), Some(&"ext-001".to_string()));
@@ -1326,10 +1326,10 @@ mod tests {
             &mut cx,
             &make_request(ActionCategory::DecisionContract, "allow"),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
-        let json = serde_json::to_string(&em).unwrap();
-        let back: CanonicalEvidenceEmitter = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&em).expect("serde deserialization should succeed");
+        let back: CanonicalEvidenceEmitter = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(em.len(), back.len());
         assert_eq!(em.rolling_hash(), back.rolling_hash());
     }
@@ -1339,8 +1339,8 @@ mod tests {
     #[test]
     fn request_serde_roundtrip() {
         let req = make_request(ActionCategory::DecisionContract, "allow");
-        let json = serde_json::to_string(&req).unwrap();
-        let back: EvidenceEmissionRequest = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&req).expect("serde deserialization should succeed");
+        let back: EvidenceEmissionRequest = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(req, back);
     }
 
@@ -1359,7 +1359,7 @@ mod tests {
             &mut cx,
             &make_request(ActionCategory::DecisionContract, "a"),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let entry = em.entries()[0].clone();
         let cloned = entry.clone();
         assert_eq!(entry, cloned);
@@ -1409,8 +1409,8 @@ mod tests {
             },
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: EvidenceEmissionError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: EvidenceEmissionError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -1421,7 +1421,7 @@ mod tests {
         let mut cx = mock_cx();
         for i in 0..3 {
             let req = make_request(ActionCategory::DecisionContract, &format!("a{i}"));
-            em.emit(&mut cx, &req).unwrap();
+            em.emit(&mut cx, &req).expect("serde deserialization should succeed");
         }
         let trace_str = trace_id_from_seed(1).to_string();
         assert_eq!(em.by_trace_id(&trace_str).len(), 3);
@@ -1433,7 +1433,7 @@ mod tests {
         let mut cx = mock_cx();
         for i in 0..4 {
             let req = make_request(ActionCategory::RegionLifecycle, &format!("r{i}"));
-            em.emit(&mut cx, &req).unwrap();
+            em.emit(&mut cx, &req).expect("serde deserialization should succeed");
         }
         let dec_str = decision_id_from_seed(1).to_string();
         assert_eq!(em.by_decision_id(&dec_str).len(), 4);
@@ -1447,8 +1447,8 @@ mod tests {
             &mut cx,
             &make_request(ActionCategory::DecisionContract, "a"),
         )
-        .unwrap();
-        let json = serde_json::to_string(&em.entries()[0]).unwrap();
+        .expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&em.entries()[0]).expect("serde deserialization should succeed");
         for field in &[
             "entry_id",
             "sequence",
@@ -1473,7 +1473,7 @@ mod tests {
         let mut cx = mock_cx();
         let mut req = make_request(ActionCategory::DecisionContract, "allow");
         req.fallback_active = true;
-        em.emit(&mut cx, &req).unwrap();
+        em.emit(&mut cx, &req).expect("serde deserialization should succeed");
         assert!(em.entries()[0].ledger_entry.fallback_active);
     }
 
@@ -1482,7 +1482,7 @@ mod tests {
         let mut em = emitter();
         let mut cx = mock_cx();
         let req = make_request(ActionCategory::DecisionContract, "allow");
-        em.emit(&mut cx, &req).unwrap();
+        em.emit(&mut cx, &req).expect("serde deserialization should succeed");
         let features = &em.entries()[0].ledger_entry.top_features;
         assert!(!features.is_empty());
     }
@@ -1496,13 +1496,13 @@ mod tests {
             &mut cx,
             &make_request(ActionCategory::DecisionContract, "a"),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         em.set_epoch(SecurityEpoch::from_raw(2));
         em.emit(
             &mut cx,
             &make_request(ActionCategory::DecisionContract, "b"),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(em.entries()[0].epoch, SecurityEpoch::from_raw(1));
         assert_eq!(em.entries()[1].epoch, SecurityEpoch::from_raw(2));
     }
@@ -1515,7 +1515,7 @@ mod tests {
         });
         let mut cx = MockCx::new(trace_id_from_seed(1), MockBudget::new(10));
         let req = make_request(ActionCategory::DecisionContract, "allow");
-        em.emit(&mut cx, &req).unwrap();
+        em.emit(&mut cx, &req).expect("serde deserialization should succeed");
         assert_eq!(em.len(), 1);
         assert_eq!(cx.budget().remaining_ms(), 0);
     }
@@ -1526,7 +1526,7 @@ mod tests {
         let mut cx = mock_cx();
         let mut req = make_request(ActionCategory::ExtensionLifecycle, "load");
         req.expected_losses.clear();
-        em.emit(&mut cx, &req).unwrap();
+        em.emit(&mut cx, &req).expect("serde deserialization should succeed");
         let losses = &em.entries()[0].ledger_entry.expected_loss_by_action;
         assert!(
             losses.iter().any(|(k, _)| k == "load"),
@@ -1597,7 +1597,7 @@ mod tests {
             outcome: "ok".to_string(),
             error_code: Some("buffer_full".to_string()),
         };
-        let json = serde_json::to_string(&event).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
         for field in &[
             "trace_id",
             "decision_id",
@@ -1614,7 +1614,7 @@ mod tests {
     #[test]
     fn enrichment_config_json_fields_present() {
         let cfg = EmitterConfig::default();
-        let json = serde_json::to_string(&cfg).unwrap();
+        let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
         assert!(json.contains("buffer_capacity"));
         assert!(json.contains("budget_cost_ms"));
     }
@@ -1622,7 +1622,7 @@ mod tests {
     #[test]
     fn enrichment_request_json_fields_present() {
         let req = make_request(ActionCategory::DecisionContract, "allow");
-        let json = serde_json::to_string(&req).unwrap();
+        let json = serde_json::to_string(&req).expect("serde deserialization should succeed");
         for field in &[
             "category",
             "action_name",
@@ -1647,7 +1647,7 @@ mod tests {
         let mut em = emitter();
         let mut cx = mock_cx();
         let req = make_request(ActionCategory::ExtensionLifecycle, "load");
-        let id = em.emit(&mut cx, &req).unwrap();
+        let id = em.emit(&mut cx, &req).expect("serde deserialization should succeed");
         let s = id.as_str();
         assert!(s.starts_with("ev-"), "entry ID should start with ev-");
         assert!(
@@ -1672,7 +1672,7 @@ mod tests {
             &mut cx,
             &make_request(ActionCategory::DecisionContract, "a"),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(em.entries()[0].schema_version, "evidence-v1");
     }
 
@@ -1684,7 +1684,7 @@ mod tests {
             &mut cx,
             &make_request(ActionCategory::Cancellation, "cancel"),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let component = &em.entries()[0].ledger_entry.component;
         assert!(
             component.contains("evidence-emission"),
@@ -1722,7 +1722,7 @@ mod tests {
             &mut cx,
             &make_request(ActionCategory::DecisionContract, "a"),
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert!(
             em.by_category(ActionCategory::ObligationLifecycle)
                 .is_empty()
@@ -1781,8 +1781,8 @@ mod tests {
         ];
 
         for policy in policies {
-            let json = serde_json::to_string(&policy).unwrap();
-            let decoded: EvidenceEmissionPolicy = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
+            let decoded: EvidenceEmissionPolicy = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(policy, decoded);
         }
     }

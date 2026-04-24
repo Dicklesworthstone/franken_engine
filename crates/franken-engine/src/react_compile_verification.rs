@@ -1237,8 +1237,8 @@ mod tests {
     #[test]
     fn compile_mode_serde_roundtrip() {
         for m in CompileMode::ALL {
-            let json = serde_json::to_string(m).unwrap();
-            let back: CompileMode = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(m).expect("serde deserialization should succeed");
+            let back: CompileMode = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*m, back);
         }
     }
@@ -1268,8 +1268,8 @@ mod tests {
     #[test]
     fn artifact_kind_serde() {
         for k in ArtifactKind::ALL {
-            let json = serde_json::to_string(k).unwrap();
-            let back: ArtifactKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(k).expect("serde deserialization should succeed");
+            let back: ArtifactKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*k, back);
         }
     }
@@ -1291,8 +1291,8 @@ mod tests {
     #[test]
     fn diagnostic_severity_serde() {
         for s in DiagnosticSeverity::ALL {
-            let json = serde_json::to_string(s).unwrap();
-            let back: DiagnosticSeverity = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(s).expect("serde deserialization should succeed");
+            let back: DiagnosticSeverity = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*s, back);
         }
     }
@@ -1330,8 +1330,8 @@ mod tests {
     #[test]
     fn compile_surface_serde() {
         for s in CompileSurface::ALL {
-            let json = serde_json::to_string(s).unwrap();
-            let back: CompileSurface = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(s).expect("serde deserialization should succeed");
+            let back: CompileSurface = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*s, back);
         }
     }
@@ -1361,8 +1361,8 @@ mod tests {
     #[test]
     fn mismatch_kind_serde() {
         for k in MismatchKind::ALL {
-            let json = serde_json::to_string(k).unwrap();
-            let back: MismatchKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(k).expect("serde deserialization should succeed");
+            let back: MismatchKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*k, back);
         }
     }
@@ -1384,8 +1384,8 @@ mod tests {
     #[test]
     fn verdict_serde() {
         for v in VerificationVerdict::ALL {
-            let json = serde_json::to_string(v).unwrap();
-            let back: VerificationVerdict = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: VerificationVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -1430,8 +1430,8 @@ mod tests {
     #[test]
     fn diagnostic_serde_roundtrip() {
         let d = make_diagnostic("hello", DiagnosticSeverity::Info);
-        let json = serde_json::to_string(&d).unwrap();
-        let back: CompileDiagnostic = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
+        let back: CompileDiagnostic = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(d, back);
     }
 
@@ -1454,8 +1454,8 @@ mod tests {
     #[test]
     fn artifact_serde_roundtrip() {
         let a = make_artifact(ArtifactKind::BundleManifest, b"manifest");
-        let json = serde_json::to_string(&a).unwrap();
-        let back: CompileArtifact = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&a).expect("serde deserialization should succeed");
+        let back: CompileArtifact = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(a, back);
     }
 
@@ -1530,8 +1530,8 @@ mod tests {
             vec![make_artifact(ArtifactKind::CompiledOutput, b"code")],
             vec![make_diagnostic("w", DiagnosticSeverity::Warning)],
         );
-        let json = serde_json::to_string(&r).unwrap();
-        let back: CompileResult = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let back: CompileResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 
@@ -1569,8 +1569,8 @@ mod tests {
     #[test]
     fn config_serde_roundtrip() {
         let c = default_config();
-        let json = serde_json::to_string(&c).unwrap();
-        let back: VerificationConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let back: VerificationConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c, back);
     }
 
@@ -1634,7 +1634,7 @@ mod tests {
         ];
         let a = library_result(arts.clone(), vec![]);
         let b = cli_result(arts, vec![]);
-        let report = verify_compile_parity(&a, &b, &default_config(), &epoch(), 100).unwrap();
+        let report = verify_compile_parity(&a, &b, &default_config(), &epoch(), 100).expect("serde deserialization should succeed");
         assert_eq!(report.verdict, VerificationVerdict::Pass);
         assert!(report.mismatches.is_empty());
     }
@@ -1661,7 +1661,7 @@ mod tests {
         let a = library_result(vec![], vec![]);
         let mut b = cli_result(vec![], vec![]);
         b.success = false;
-        let report = verify_compile_parity(&a, &b, &default_config(), &epoch(), 0).unwrap();
+        let report = verify_compile_parity(&a, &b, &default_config(), &epoch(), 0).expect("serde deserialization should succeed");
         assert_eq!(report.verdict, VerificationVerdict::Inconclusive);
     }
 
@@ -1676,7 +1676,7 @@ mod tests {
             require_source_maps: false,
             ..default_config()
         };
-        let report = verify_compile_parity(&a, &b, &cfg, &epoch(), 0).unwrap();
+        let report = verify_compile_parity(&a, &b, &cfg, &epoch(), 0).expect("serde deserialization should succeed");
         assert_eq!(report.verdict, VerificationVerdict::Fail);
         assert!(
             report
@@ -1698,7 +1698,7 @@ mod tests {
             require_source_maps: false,
             ..default_config()
         };
-        let report = verify_compile_parity(&a, &b, &cfg, &epoch(), 0).unwrap();
+        let report = verify_compile_parity(&a, &b, &cfg, &epoch(), 0).expect("serde deserialization should succeed");
         assert_eq!(report.verdict, VerificationVerdict::Pass);
         assert!(
             report
@@ -1722,7 +1722,7 @@ mod tests {
             require_source_maps: false,
             ..default_config()
         };
-        let report = verify_compile_parity(&a, &b, &cfg, &epoch(), 0).unwrap();
+        let report = verify_compile_parity(&a, &b, &cfg, &epoch(), 0).expect("serde deserialization should succeed");
         assert_eq!(report.verdict, VerificationVerdict::Fail);
         assert!(
             report
@@ -1757,7 +1757,7 @@ mod tests {
             require_source_maps: false,
             ..default_config()
         };
-        let report = verify_compile_parity(&a, &b, &cfg, &epoch(), 0).unwrap();
+        let report = verify_compile_parity(&a, &b, &cfg, &epoch(), 0).expect("serde deserialization should succeed");
         // Size divergence is info-level, doesn't cause fail.
         assert!(
             report
@@ -1782,7 +1782,7 @@ mod tests {
             require_source_maps: false,
             ..default_config()
         };
-        let report = verify_compile_parity(&a, &b, &cfg, &epoch(), 0).unwrap();
+        let report = verify_compile_parity(&a, &b, &cfg, &epoch(), 0).expect("serde deserialization should succeed");
         assert!(
             report
                 .mismatches
@@ -1795,7 +1795,7 @@ mod tests {
     fn parity_source_map_missing_one_side() {
         let a = library_result(vec![make_artifact(ArtifactKind::SourceMap, b"map")], vec![]);
         let b = cli_result(vec![], vec![]);
-        let report = verify_compile_parity(&a, &b, &default_config(), &epoch(), 0).unwrap();
+        let report = verify_compile_parity(&a, &b, &default_config(), &epoch(), 0).expect("serde deserialization should succeed");
         assert!(
             report
                 .mismatches
@@ -1814,7 +1814,7 @@ mod tests {
             vec![make_artifact(ArtifactKind::SourceMap, b"map_b")],
             vec![],
         );
-        let report = verify_compile_parity(&a, &b, &default_config(), &epoch(), 0).unwrap();
+        let report = verify_compile_parity(&a, &b, &default_config(), &epoch(), 0).expect("serde deserialization should succeed");
         assert!(
             report
                 .mismatches
@@ -1831,7 +1831,7 @@ mod tests {
             require_source_maps: false,
             ..default_config()
         };
-        let report = verify_compile_parity(&a, &b, &cfg, &epoch(), 0).unwrap();
+        let report = verify_compile_parity(&a, &b, &cfg, &epoch(), 0).expect("serde deserialization should succeed");
         assert!(
             !report
                 .mismatches
@@ -1883,8 +1883,8 @@ mod tests {
             &epoch(),
             0,
         );
-        let json = serde_json::to_string(&r).unwrap();
-        let back: DecisionReceipt = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let back: DecisionReceipt = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 
@@ -1899,7 +1899,7 @@ mod tests {
             require_source_maps: false,
             ..default_config()
         };
-        let report = verify_compile_parity(&a, &b, &cfg, &epoch(), 0).unwrap();
+        let report = verify_compile_parity(&a, &b, &cfg, &epoch(), 0).expect("serde deserialization should succeed");
         assert!(report.mismatch_count_by_kind(MismatchKind::ArtifactMissing) > 0);
     }
 
@@ -1917,7 +1917,7 @@ mod tests {
             require_source_maps: false,
             ..default_config()
         };
-        let report = verify_compile_parity(&a, &b, &cfg, &epoch(), 0).unwrap();
+        let report = verify_compile_parity(&a, &b, &cfg, &epoch(), 0).expect("serde deserialization should succeed");
         assert!(report.weighted_score() > 0);
     }
 
@@ -1932,7 +1932,7 @@ mod tests {
             require_source_maps: false,
             ..default_config()
         };
-        let report = verify_compile_parity(&a, &b, &cfg, &epoch(), 0).unwrap();
+        let report = verify_compile_parity(&a, &b, &cfg, &epoch(), 0).expect("serde deserialization should succeed");
         assert!(report.has_errors());
     }
 
@@ -1941,8 +1941,8 @@ mod tests {
         let arts = vec![make_artifact(ArtifactKind::CompiledOutput, b"code")];
         let a = library_result(arts.clone(), vec![]);
         let b = cli_result(arts, vec![]);
-        let r1 = verify_compile_parity(&a, &b, &default_config(), &epoch(), 0).unwrap();
-        let r2 = verify_compile_parity(&a, &b, &default_config(), &epoch(), 0).unwrap();
+        let r1 = verify_compile_parity(&a, &b, &default_config(), &epoch(), 0).expect("serde deserialization should succeed");
+        let r2 = verify_compile_parity(&a, &b, &default_config(), &epoch(), 0).expect("serde deserialization should succeed");
         assert_eq!(r1.content_hash(), r2.content_hash());
     }
 
@@ -1984,8 +1984,8 @@ mod tests {
             detail: "size off".into(),
             severity: DiagnosticSeverity::Info,
         };
-        let json = serde_json::to_string(&m).unwrap();
-        let back: Mismatch = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
+        let back: Mismatch = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(m, back);
     }
 
@@ -1993,7 +1993,7 @@ mod tests {
 
     #[test]
     fn batch_empty_pass() {
-        let report = verify_batch(&[], &default_config(), &epoch(), 0).unwrap();
+        let report = verify_batch(&[], &default_config(), &epoch(), 0).expect("serde deserialization should succeed");
         assert_eq!(report.overall_verdict, VerificationVerdict::Pass);
         assert_eq!(report.total_mismatches, 0);
     }
@@ -2010,7 +2010,7 @@ mod tests {
             require_source_maps: false,
             ..default_config()
         };
-        let report = verify_batch(&[scenario], &cfg, &epoch(), 0).unwrap();
+        let report = verify_batch(&[scenario], &cfg, &epoch(), 0).expect("serde deserialization should succeed");
         assert_eq!(report.overall_verdict, VerificationVerdict::Pass);
         assert_eq!(report.pass_count(), 1);
         assert_eq!(report.fail_count(), 0);
@@ -2035,7 +2035,7 @@ mod tests {
             require_source_maps: false,
             ..default_config()
         };
-        let report = verify_batch(&[s_pass, s_fail], &cfg, &epoch(), 0).unwrap();
+        let report = verify_batch(&[s_pass, s_fail], &cfg, &epoch(), 0).expect("serde deserialization should succeed");
         assert_eq!(report.overall_verdict, VerificationVerdict::Fail);
         assert_eq!(report.pass_count(), 1);
         assert_eq!(report.fail_count(), 1);
@@ -2055,7 +2055,7 @@ mod tests {
             require_source_maps: false,
             ..default_config()
         };
-        let report = verify_batch(&scenarios, &cfg, &epoch(), 0).unwrap();
+        let report = verify_batch(&scenarios, &cfg, &epoch(), 0).expect("serde deserialization should succeed");
         assert_eq!(report.pass_rate(), 1_000_000);
     }
 
@@ -2071,8 +2071,8 @@ mod tests {
             require_source_maps: false,
             ..default_config()
         };
-        let r1 = verify_batch(&scenarios, &cfg, &epoch(), 0).unwrap();
-        let r2 = verify_batch(&scenarios, &cfg, &epoch(), 0).unwrap();
+        let r1 = verify_batch(&scenarios, &cfg, &epoch(), 0).expect("serde deserialization should succeed");
+        let r2 = verify_batch(&scenarios, &cfg, &epoch(), 0).expect("serde deserialization should succeed");
         assert_eq!(r1.content_hash, r2.content_hash);
     }
 
@@ -2144,8 +2144,8 @@ mod tests {
             },
         ];
         for e in &errors {
-            let json = serde_json::to_string(e).unwrap();
-            let back: VerificationError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(e).expect("serde deserialization should succeed");
+            let back: VerificationError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*e, back);
         }
     }

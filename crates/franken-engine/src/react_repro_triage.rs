@@ -853,9 +853,9 @@ mod tests {
     fn triage_entry_serde_roundtrip() {
         let entry = sample_entry();
         // SAFETY: TriageEntry derives Serialize and has no non-serializable fields.
-        let json = serde_json::to_string(&entry).unwrap();
+        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid TriageEntry serialization.
-        let parsed: TriageEntry = serde_json::from_str(&json).unwrap();
+        let parsed: TriageEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, parsed);
     }
 
@@ -1105,9 +1105,9 @@ mod tests {
     fn catalog_serde_roundtrip() {
         let catalog = ReproCatalog::build(vec![sample_entry()], SecurityEpoch::from_raw(1));
         // SAFETY: ReproCatalog derives Serialize and has no non-serializable fields.
-        let json = serde_json::to_string_pretty(&catalog).unwrap();
+        let json = serde_json::to_string_pretty(&catalog).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid ReproCatalog serialization.
-        let parsed: ReproCatalog = serde_json::from_str(&json).unwrap();
+        let parsed: ReproCatalog = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(catalog, parsed);
     }
 
@@ -1141,8 +1141,8 @@ mod tests {
     #[test]
     fn failure_class_serde_roundtrip_all_variants() {
         for class in FailureClass::all() {
-            let json = serde_json::to_string(class).unwrap();
-            let decoded: FailureClass = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(class).expect("serde deserialization should succeed");
+            let decoded: FailureClass = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*class, decoded);
         }
     }
@@ -1192,8 +1192,8 @@ mod tests {
             FailureSeverity::Low,
             FailureSeverity::Info,
         ] {
-            let json = serde_json::to_string(&sev).unwrap();
-            let decoded: FailureSeverity = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&sev).expect("serde deserialization should succeed");
+            let decoded: FailureSeverity = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(sev, decoded);
         }
     }
@@ -1255,8 +1255,8 @@ mod tests {
     #[test]
     fn minimized_repro_serde_roundtrip() {
         let repro = sample_repro();
-        let json = serde_json::to_string(&repro).unwrap();
-        let decoded: MinimizedRepro = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&repro).expect("serde deserialization should succeed");
+        let decoded: MinimizedRepro = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(repro, decoded);
     }
 
@@ -1539,8 +1539,8 @@ mod tests {
     #[test]
     fn owner_route_serde_roundtrip() {
         let owner = sample_owner();
-        let json = serde_json::to_string(&owner).unwrap();
-        let decoded: OwnerRoute = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&owner).expect("serde deserialization should succeed");
+        let decoded: OwnerRoute = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(owner, decoded);
     }
 
@@ -1607,8 +1607,8 @@ mod tests {
     #[test]
     fn catalog_summary_serde_roundtrip() {
         let catalog = ReproCatalog::build(vec![sample_entry()], SecurityEpoch::from_raw(1));
-        let json = serde_json::to_string(&catalog.summary).unwrap();
-        let decoded: CatalogSummary = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&catalog.summary).expect("serde deserialization should succeed");
+        let decoded: CatalogSummary = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(catalog.summary, decoded);
     }
 

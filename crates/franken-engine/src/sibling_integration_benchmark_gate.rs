@@ -1057,10 +1057,10 @@ mod tests {
         ] {
             // SAFETY: SiblingIntegration derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json = serde_json::to_string(&integration).unwrap();
+            let json = serde_json::to_string(&integration).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by to_string of a valid SiblingIntegration,
             // so from_str back to SiblingIntegration cannot fail (valid format + matching schema).
-            let back: SiblingIntegration = serde_json::from_str(&json).unwrap();
+            let back: SiblingIntegration = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(back, integration);
         }
     }
@@ -1102,10 +1102,10 @@ mod tests {
         ] {
             // SAFETY: ControlPlaneOperation derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json = serde_json::to_string(&op).unwrap();
+            let json = serde_json::to_string(&op).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by to_string of a valid ControlPlaneOperation,
             // so from_str back to ControlPlaneOperation cannot fail (valid format + matching schema).
-            let back: ControlPlaneOperation = serde_json::from_str(&json).unwrap();
+            let back: ControlPlaneOperation = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(back, op);
         }
     }
@@ -1160,10 +1160,10 @@ mod tests {
         ] {
             // SAFETY: BenchmarkGateFailureCode derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json = serde_json::to_string(&code).unwrap();
+            let json = serde_json::to_string(&code).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by to_string of a valid BenchmarkGateFailureCode,
             // so from_str back to BenchmarkGateFailureCode cannot fail (valid format + matching schema).
-            let back: BenchmarkGateFailureCode = serde_json::from_str(&json).unwrap();
+            let back: BenchmarkGateFailureCode = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(back, code);
         }
     }
@@ -1203,10 +1203,10 @@ mod tests {
         let t = BenchmarkGateThresholds::default();
         // SAFETY: BenchmarkGateThresholds derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&t).unwrap();
+        let json = serde_json::to_string(&t).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid BenchmarkGateThresholds,
         // so from_str back to BenchmarkGateThresholds cannot fail (valid format + matching schema).
-        let back: BenchmarkGateThresholds = serde_json::from_str(&json).unwrap();
+        let back: BenchmarkGateThresholds = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, t);
     }
 
@@ -1311,8 +1311,8 @@ mod tests {
             previous_epoch: 10,
             next_epoch: 5,
         };
-        let json = serde_json::to_string(&err).unwrap();
-        let back: BaselineLedgerError = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let back: BaselineLedgerError = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, err);
     }
 
@@ -1327,10 +1327,10 @@ mod tests {
     #[test]
     fn baseline_ledger_multiple_entries() {
         let mut ledger = BaselineLedger::default();
-        ledger.record(1, base_snapshot()).unwrap();
-        ledger.record(2, candidate_snapshot_pass()).unwrap();
+        ledger.record(1, base_snapshot()).expect("serde deserialization should succeed");
+        ledger.record(2, candidate_snapshot_pass()).expect("serde deserialization should succeed");
         assert_eq!(ledger.entries.len(), 2);
-        assert_eq!(ledger.latest().unwrap().epoch, 2);
+        assert_eq!(ledger.latest().expect("serde deserialization should succeed").epoch, 2);
     }
 
     // ── Snapshot hash ────────────────────────────────────────────────
@@ -1389,7 +1389,7 @@ mod tests {
             candidate: candidate_snapshot_pass(),
         };
         let d = evaluate_sibling_integration_benchmark(&input, &BenchmarkGateThresholds::default());
-        let last = d.logs.last().unwrap();
+        let last = d.logs.last().expect("serde deserialization should succeed");
         assert_eq!(last.event, "benchmark_gate_decision");
         assert_eq!(last.outcome, "pass");
         assert!(last.error_code.is_none());
@@ -1408,7 +1408,7 @@ mod tests {
             candidate,
         };
         let d = evaluate_sibling_integration_benchmark(&input, &BenchmarkGateThresholds::default());
-        let last = d.logs.last().unwrap();
+        let last = d.logs.last().expect("serde deserialization should succeed");
         assert_eq!(last.outcome, "fail");
         assert_eq!(last.error_code.as_deref(), Some("benchmark_gate_failed"));
     }
@@ -1457,10 +1457,10 @@ mod tests {
         let snap = base_snapshot();
         // SAFETY: BenchmarkSnapshot derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&snap).unwrap();
+        let json = serde_json::to_string(&snap).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid BenchmarkSnapshot,
         // so from_str back to BenchmarkSnapshot cannot fail (valid format + matching schema).
-        let back: BenchmarkSnapshot = serde_json::from_str(&json).unwrap();
+        let back: BenchmarkSnapshot = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, snap);
     }
 
@@ -1473,8 +1473,8 @@ mod tests {
             candidate: candidate_snapshot_pass(),
         };
         let d = evaluate_sibling_integration_benchmark(&input, &BenchmarkGateThresholds::default());
-        let json = serde_json::to_string(&d).unwrap();
-        let back: BenchmarkGateDecision = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
+        let back: BenchmarkGateDecision = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.decision_id, d.decision_id);
         assert_eq!(back.pass, d.pass);
         assert_eq!(back.evaluations, d.evaluations);
@@ -1488,8 +1488,8 @@ mod tests {
             operation: Some(ControlPlaneOperation::PolicyQuery),
             detail: "test".into(),
         };
-        let json = serde_json::to_string(&finding).unwrap();
-        let back: BenchmarkGateFinding = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&finding).expect("serde deserialization should succeed");
+        let back: BenchmarkGateFinding = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, finding);
     }
 
@@ -1503,8 +1503,8 @@ mod tests {
         };
         let d = evaluate_sibling_integration_benchmark(&input, &BenchmarkGateThresholds::default());
         for log in &d.logs {
-            let json = serde_json::to_string(log).unwrap();
-            let back: BenchmarkGateLogEvent = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(log).expect("serde deserialization should succeed");
+            let back: BenchmarkGateLogEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, log);
         }
     }
@@ -1519,8 +1519,8 @@ mod tests {
         };
         let d = evaluate_sibling_integration_benchmark(&input, &BenchmarkGateThresholds::default());
         for eval in &d.evaluations {
-            let json = serde_json::to_string(eval).unwrap();
-            let back: OperationBenchmarkEvaluation = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(eval).expect("serde deserialization should succeed");
+            let back: OperationBenchmarkEvaluation = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, eval);
         }
     }
@@ -1617,8 +1617,8 @@ mod tests {
     #[test]
     fn operation_latency_samples_serde_roundtrip() {
         let samples = make_samples(&[100, 200, 300], &[150, 250, 350]);
-        let json = serde_json::to_string(&samples).unwrap();
-        let back: OperationLatencySamples = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&samples).expect("serde deserialization should succeed");
+        let back: OperationLatencySamples = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(samples, back);
     }
 
@@ -1648,8 +1648,8 @@ mod tests {
     #[test]
     fn enrichment_benchmark_snapshot_base_serde() {
         let snap = base_snapshot();
-        let json = serde_json::to_string(&snap).unwrap();
-        let back: BenchmarkSnapshot = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&snap).expect("serde deserialization should succeed");
+        let back: BenchmarkSnapshot = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(snap, back);
     }
 
@@ -1676,8 +1676,8 @@ mod tests {
             max_regression_millionths: 150_000,
             max_integration_overhead_millionths: 200_000,
         };
-        let json = serde_json::to_string(&slo).unwrap();
-        let back: OperationSloThreshold = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&slo).expect("serde deserialization should succeed");
+        let back: OperationSloThreshold = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(slo, back);
     }
 
@@ -1689,8 +1689,8 @@ mod tests {
             baseline: base_snapshot(),
             candidate: candidate_snapshot_pass(),
         };
-        let json = serde_json::to_string(&input).unwrap();
-        let back: BenchmarkGateInput = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
+        let back: BenchmarkGateInput = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(input, back);
     }
 
@@ -1703,18 +1703,18 @@ mod tests {
             snapshot_hash: hash,
             snapshot: snap,
         };
-        let json = serde_json::to_string(&entry).unwrap();
-        let back: BaselineLedgerEntry = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let back: BaselineLedgerEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, back);
     }
 
     #[test]
     fn baseline_ledger_serde_roundtrip() {
         let mut ledger = BaselineLedger::default();
-        ledger.record(1, base_snapshot()).unwrap();
-        ledger.record(2, candidate_snapshot_pass()).unwrap();
-        let json = serde_json::to_string(&ledger).unwrap();
-        let back: BaselineLedger = serde_json::from_str(&json).unwrap();
+        ledger.record(1, base_snapshot()).expect("serde deserialization should succeed");
+        ledger.record(2, candidate_snapshot_pass()).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ledger).expect("serde deserialization should succeed");
+        let back: BaselineLedger = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ledger, back);
     }
 
@@ -1877,8 +1877,8 @@ mod tests {
             operation: None,
             detail: "no specific operation".into(),
         };
-        let json = serde_json::to_string(&finding).unwrap();
-        let back: BenchmarkGateFinding = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&finding).expect("serde deserialization should succeed");
+        let back: BenchmarkGateFinding = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(finding, back);
         assert!(back.operation.is_none());
     }
@@ -1918,8 +1918,8 @@ mod tests {
         let err = BaselineLedgerError::DuplicateSnapshotHash {
             snapshot_hash: [0x42; 32],
         };
-        let json = serde_json::to_string(&err).unwrap();
-        let back: BaselineLedgerError = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let back: BaselineLedgerError = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, back);
     }
 

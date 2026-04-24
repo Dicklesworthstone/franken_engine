@@ -698,7 +698,7 @@ mod tests {
     #[test]
     fn submit_task() {
         let mut sched = LaneScheduler::new(LaneConfig::default());
-        let id = sched.submit(cancel_label("t1"), 0, "payload-1", 0).unwrap();
+        let id = sched.submit(cancel_label("t1"), 0, "payload-1", 0).expect("serde deserialization should succeed");
         assert_eq!(id.0, 1);
         assert_eq!(sched.queue_depth(SchedulerLane::Cancel), 1);
     }
@@ -741,8 +741,8 @@ mod tests {
             ..Default::default()
         };
         let mut sched = LaneScheduler::new(config);
-        sched.submit(cancel_label("t1"), 0, "p1", 0).unwrap();
-        sched.submit(cancel_label("t2"), 0, "p2", 0).unwrap();
+        sched.submit(cancel_label("t1"), 0, "p1", 0).expect("serde deserialization should succeed");
+        sched.submit(cancel_label("t2"), 0, "p2", 0).expect("serde deserialization should succeed");
         assert!(matches!(
             sched.submit(cancel_label("t3"), 0, "p3", 0),
             Err(LaneError::LaneFull { .. })
@@ -754,9 +754,9 @@ mod tests {
     #[test]
     fn cancel_tasks_scheduled_first() {
         let mut sched = LaneScheduler::new(LaneConfig::default());
-        sched.submit(ready_label("t1"), 0, "ready-1", 0).unwrap();
-        sched.submit(cancel_label("t2"), 0, "cancel-1", 0).unwrap();
-        sched.submit(timed_label("t3"), 100, "timed-1", 0).unwrap();
+        sched.submit(ready_label("t1"), 0, "ready-1", 0).expect("serde deserialization should succeed");
+        sched.submit(cancel_label("t2"), 0, "cancel-1", 0).expect("serde deserialization should succeed");
+        sched.submit(timed_label("t3"), 100, "timed-1", 0).expect("serde deserialization should succeed");
 
         let batch = sched.schedule_batch(10, 200);
         // Cancel should be first.
@@ -766,8 +766,8 @@ mod tests {
     #[test]
     fn timed_tasks_scheduled_before_ready_when_due() {
         let mut sched = LaneScheduler::new(LaneConfig::default());
-        sched.submit(ready_label("t1"), 0, "ready-1", 0).unwrap();
-        sched.submit(timed_label("t2"), 50, "timed-1", 0).unwrap();
+        sched.submit(ready_label("t1"), 0, "ready-1", 0).expect("serde deserialization should succeed");
+        sched.submit(timed_label("t2"), 50, "timed-1", 0).expect("serde deserialization should succeed");
 
         let batch = sched.schedule_batch(10, 100);
         // Timed task (deadline 50 <= current 100) should be before ready.
@@ -777,14 +777,14 @@ mod tests {
         let ready_pos = batch
             .iter()
             .position(|t| t.label.lane == SchedulerLane::Ready);
-        assert!(timed_pos.unwrap() < ready_pos.unwrap());
+        assert!(timed_pos.expect("serde deserialization should succeed") < ready_pos.expect("serde deserialization should succeed"));
     }
 
     #[test]
     fn timed_tasks_not_scheduled_if_not_due() {
         let mut sched = LaneScheduler::new(LaneConfig::default());
-        sched.submit(timed_label("t1"), 500, "timed-1", 0).unwrap();
-        sched.submit(ready_label("t2"), 0, "ready-1", 0).unwrap();
+        sched.submit(timed_label("t1"), 500, "timed-1", 0).expect("serde deserialization should succeed");
+        sched.submit(ready_label("t2"), 0, "ready-1", 0).expect("serde deserialization should succeed");
 
         let batch = sched.schedule_batch(10, 100);
         // Timed task has deadline 500 > current 100, so it stays queued.
@@ -808,13 +808,13 @@ mod tests {
         for i in 0..5 {
             sched
                 .submit(cancel_label(&format!("t{i}")), 0, &format!("c{i}"), 0)
-                .unwrap();
+                .expect("serde deserialization should succeed");
         }
         // Add ready tasks.
         for i in 0..3 {
             sched
                 .submit(ready_label(&format!("rt{i}")), 0, &format!("r{i}"), 0)
-                .unwrap();
+                .expect("serde deserialization should succeed");
         }
 
         let batch = sched.schedule_batch(5, 0);
@@ -833,8 +833,8 @@ mod tests {
             ..Default::default()
         };
         let mut sched = LaneScheduler::new(config);
-        sched.submit(cancel_label("cancel-1"), 0, "c1", 0).unwrap();
-        sched.submit(ready_label("ready-1"), 0, "r1", 0).unwrap();
+        sched.submit(cancel_label("cancel-1"), 0, "c1", 0).expect("serde deserialization should succeed");
+        sched.submit(ready_label("ready-1"), 0, "r1", 0).expect("serde deserialization should succeed");
 
         let batch = sched.schedule_batch(0, 0);
         assert!(batch.is_empty());
@@ -847,9 +847,9 @@ mod tests {
     #[test]
     fn ready_lane_fifo_ordering() {
         let mut sched = LaneScheduler::new(LaneConfig::default());
-        sched.submit(ready_label("t1"), 0, "first", 0).unwrap();
-        sched.submit(ready_label("t2"), 0, "second", 10).unwrap();
-        sched.submit(ready_label("t3"), 0, "third", 20).unwrap();
+        sched.submit(ready_label("t1"), 0, "first", 0).expect("serde deserialization should succeed");
+        sched.submit(ready_label("t2"), 0, "second", 10).expect("serde deserialization should succeed");
+        sched.submit(ready_label("t3"), 0, "third", 20).expect("serde deserialization should succeed");
 
         let batch = sched.schedule_batch(10, 30);
         assert_eq!(batch[0].payload_id, "first");
@@ -862,9 +862,9 @@ mod tests {
     #[test]
     fn timed_lane_sorts_by_deadline() {
         let mut sched = LaneScheduler::new(LaneConfig::default());
-        sched.submit(timed_label("t1"), 300, "late", 0).unwrap();
-        sched.submit(timed_label("t2"), 100, "early", 0).unwrap();
-        sched.submit(timed_label("t3"), 200, "mid", 0).unwrap();
+        sched.submit(timed_label("t1"), 300, "late", 0).expect("serde deserialization should succeed");
+        sched.submit(timed_label("t2"), 100, "early", 0).expect("serde deserialization should succeed");
+        sched.submit(timed_label("t3"), 200, "mid", 0).expect("serde deserialization should succeed");
 
         let batch = sched.schedule_batch(10, 500);
         let timed: Vec<_> = batch
@@ -881,9 +881,9 @@ mod tests {
     #[test]
     fn metrics_track_submissions() {
         let mut sched = LaneScheduler::new(LaneConfig::default());
-        sched.submit(cancel_label("t1"), 0, "p1", 0).unwrap();
-        sched.submit(cancel_label("t2"), 0, "p2", 0).unwrap();
-        sched.submit(ready_label("t3"), 0, "p3", 0).unwrap();
+        sched.submit(cancel_label("t1"), 0, "p1", 0).expect("serde deserialization should succeed");
+        sched.submit(cancel_label("t2"), 0, "p2", 0).expect("serde deserialization should succeed");
+        sched.submit(ready_label("t3"), 0, "p3", 0).expect("serde deserialization should succeed");
 
         let m = sched.lane_metrics();
         assert_eq!(m["cancel"].tasks_submitted, 2);
@@ -893,8 +893,8 @@ mod tests {
     #[test]
     fn metrics_track_scheduling() {
         let mut sched = LaneScheduler::new(LaneConfig::default());
-        sched.submit(cancel_label("t1"), 0, "p1", 0).unwrap();
-        sched.submit(ready_label("t2"), 0, "p2", 0).unwrap();
+        sched.submit(cancel_label("t1"), 0, "p1", 0).expect("serde deserialization should succeed");
+        sched.submit(ready_label("t2"), 0, "p2", 0).expect("serde deserialization should succeed");
         sched.schedule_batch(10, 0);
 
         let m = sched.lane_metrics();
@@ -905,7 +905,7 @@ mod tests {
     #[test]
     fn metrics_track_completion() {
         let mut sched = LaneScheduler::new(LaneConfig::default());
-        let id = sched.submit(cancel_label("t1"), 0, "p1", 0).unwrap();
+        let id = sched.submit(cancel_label("t1"), 0, "p1", 0).expect("serde deserialization should succeed");
         sched.schedule_batch(10, 0);
         sched.complete_task(id, SchedulerLane::Cancel);
 
@@ -918,7 +918,7 @@ mod tests {
     #[test]
     fn submit_emits_event() {
         let mut sched = LaneScheduler::new(LaneConfig::default());
-        sched.submit(cancel_label("t1"), 0, "p1", 0).unwrap();
+        sched.submit(cancel_label("t1"), 0, "p1", 0).expect("serde deserialization should succeed");
 
         let events = sched.drain_events();
         assert_eq!(events.len(), 1);
@@ -930,7 +930,7 @@ mod tests {
     #[test]
     fn schedule_emits_events() {
         let mut sched = LaneScheduler::new(LaneConfig::default());
-        sched.submit(cancel_label("t1"), 0, "p1", 0).unwrap();
+        sched.submit(cancel_label("t1"), 0, "p1", 0).expect("serde deserialization should succeed");
         sched.drain_events();
 
         sched.schedule_batch(10, 0);
@@ -942,8 +942,8 @@ mod tests {
     #[test]
     fn event_counts_track() {
         let mut sched = LaneScheduler::new(LaneConfig::default());
-        sched.submit(cancel_label("t1"), 0, "p1", 0).unwrap();
-        sched.submit(ready_label("t2"), 0, "p2", 0).unwrap();
+        sched.submit(cancel_label("t1"), 0, "p1", 0).expect("serde deserialization should succeed");
+        sched.submit(ready_label("t2"), 0, "p2", 0).expect("serde deserialization should succeed");
         sched.schedule_batch(10, 0);
 
         assert_eq!(sched.event_counts().get("submit"), Some(&2));
@@ -955,8 +955,8 @@ mod tests {
     #[test]
     fn task_label_serialization_round_trip() {
         let label = cancel_label("trace-1");
-        let json = serde_json::to_string(&label).unwrap();
-        let restored: TaskLabel = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&label).expect("serde deserialization should succeed");
+        let restored: TaskLabel = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(label, restored);
     }
 
@@ -969,8 +969,8 @@ mod tests {
             submitted_at: 0,
             payload_id: "p1".to_string(),
         };
-        let json = serde_json::to_string(&task).unwrap();
-        let restored: ScheduledTask = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&task).expect("serde deserialization should succeed");
+        let restored: ScheduledTask = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(task, restored);
     }
 
@@ -984,8 +984,8 @@ mod tests {
             tasks_completed: 7,
             tasks_timed_out: 1,
         };
-        let json = serde_json::to_string(&m).unwrap();
-        let restored: LaneMetrics = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
+        let restored: LaneMetrics = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(m, restored);
     }
 
@@ -1006,8 +1006,8 @@ mod tests {
             LaneError::TaskIdExhausted,
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap();
-            let restored: LaneError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let restored: LaneError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, restored);
         }
     }
@@ -1036,8 +1036,8 @@ mod tests {
             queue_position: 0,
             event: "submit".to_string(),
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let restored: SchedulerEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let restored: SchedulerEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, restored);
     }
 
@@ -1071,10 +1071,10 @@ mod tests {
     fn deterministic_scheduling_order() {
         let run = || -> Vec<String> {
             let mut sched = LaneScheduler::new(LaneConfig::default());
-            sched.submit(ready_label("t1"), 0, "r1", 0).unwrap();
-            sched.submit(cancel_label("t2"), 0, "c1", 0).unwrap();
-            sched.submit(timed_label("t3"), 50, "ti1", 0).unwrap();
-            sched.submit(ready_label("t4"), 0, "r2", 10).unwrap();
+            sched.submit(ready_label("t1"), 0, "r1", 0).expect("serde deserialization should succeed");
+            sched.submit(cancel_label("t2"), 0, "c1", 0).expect("serde deserialization should succeed");
+            sched.submit(timed_label("t3"), 50, "ti1", 0).expect("serde deserialization should succeed");
+            sched.submit(ready_label("t4"), 0, "r2", 10).expect("serde deserialization should succeed");
             let batch = sched.schedule_batch(10, 100);
             batch.iter().map(|t| t.payload_id.clone()).collect()
         };
@@ -1089,9 +1089,9 @@ mod tests {
     #[test]
     fn total_queue_depth() {
         let mut sched = LaneScheduler::new(LaneConfig::default());
-        sched.submit(cancel_label("t1"), 0, "p1", 0).unwrap();
-        sched.submit(timed_label("t2"), 100, "p2", 0).unwrap();
-        sched.submit(ready_label("t3"), 0, "p3", 0).unwrap();
+        sched.submit(cancel_label("t1"), 0, "p1", 0).expect("serde deserialization should succeed");
+        sched.submit(timed_label("t2"), 100, "p2", 0).expect("serde deserialization should succeed");
+        sched.submit(ready_label("t3"), 0, "p3", 0).expect("serde deserialization should succeed");
         assert_eq!(sched.total_queue_depth(), 3);
     }
 
@@ -1112,7 +1112,7 @@ mod tests {
                 "cleanup",
                 0,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         sched
             .submit(
                 TaskLabel {
@@ -1125,7 +1125,7 @@ mod tests {
                 "quarantine",
                 0,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         sched
             .submit(
                 TaskLabel {
@@ -1138,7 +1138,7 @@ mod tests {
                 "drain",
                 0,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let batch = sched.schedule_batch(10, 0);
         assert_eq!(batch.len(), 3);
@@ -1231,9 +1231,9 @@ mod tests {
     #[test]
     fn task_ids_monotonically_increase() {
         let mut sched = LaneScheduler::new(LaneConfig::default());
-        let id1 = sched.submit(cancel_label("t1"), 0, "p1", 0).unwrap();
-        let id2 = sched.submit(ready_label("t2"), 0, "p2", 0).unwrap();
-        let id3 = sched.submit(timed_label("t3"), 100, "p3", 0).unwrap();
+        let id1 = sched.submit(cancel_label("t1"), 0, "p1", 0).expect("serde deserialization should succeed");
+        let id2 = sched.submit(ready_label("t2"), 0, "p2", 0).expect("serde deserialization should succeed");
+        let id3 = sched.submit(timed_label("t3"), 100, "p3", 0).expect("serde deserialization should succeed");
         assert!(id1.0 < id2.0);
         assert!(id2.0 < id3.0);
     }
@@ -1256,7 +1256,7 @@ mod tests {
     #[test]
     fn timed_task_at_exact_deadline_is_scheduled() {
         let mut sched = LaneScheduler::new(LaneConfig::default());
-        sched.submit(timed_label("t1"), 100, "p1", 0).unwrap();
+        sched.submit(timed_label("t1"), 100, "p1", 0).expect("serde deserialization should succeed");
 
         // current_ticks == deadline_tick
         let batch = sched.schedule_batch(10, 100);
@@ -1271,8 +1271,8 @@ mod tests {
     #[test]
     fn expired_timed_tasks_are_timed_out() {
         let mut sched = LaneScheduler::new(LaneConfig::default());
-        sched.submit(timed_label("t1"), 50, "early", 0).unwrap();
-        sched.submit(timed_label("t2"), 200, "future", 0).unwrap();
+        sched.submit(timed_label("t1"), 50, "early", 0).expect("serde deserialization should succeed");
+        sched.submit(timed_label("t2"), 200, "future", 0).expect("serde deserialization should succeed");
 
         // Schedule at tick 100 with batch_size=0 → no tasks scheduled, but
         // t1 (deadline 50 < 100) should be timed out.
@@ -1291,7 +1291,7 @@ mod tests {
     #[test]
     fn timed_out_tasks_increment_metrics() {
         let mut sched = LaneScheduler::new(LaneConfig::default());
-        sched.submit(timed_label("t1"), 10, "p1", 0).unwrap();
+        sched.submit(timed_label("t1"), 10, "p1", 0).expect("serde deserialization should succeed");
 
         // The task deadline is 10. Schedule batch at tick 20 with batch_size=1.
         // It should be scheduled (deadline 10 <= 20), not timed out.
@@ -1303,8 +1303,8 @@ mod tests {
         // Need: task1 deadline=10, task2 deadline=5, batch_size=1 at tick=20.
         // task2 (deadline 5) scheduled first, task1 (deadline 10) past deadline → timed out.
         let mut sched2 = LaneScheduler::new(LaneConfig::default());
-        sched2.submit(timed_label("t1"), 10, "p1", 0).unwrap();
-        sched2.submit(timed_label("t2"), 5, "p2", 0).unwrap();
+        sched2.submit(timed_label("t1"), 10, "p1", 0).expect("serde deserialization should succeed");
+        sched2.submit(timed_label("t2"), 5, "p2", 0).expect("serde deserialization should succeed");
 
         // batch_size=1, current=20. Both are due. Sort by deadline: t2(5), t1(10).
         // Take t2 (batch full). t1 stays but deadline 10 < 20 → timed out.
@@ -1335,7 +1335,7 @@ mod tests {
                 "lease",
                 0,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         sched
             .submit(
                 TaskLabel {
@@ -1348,7 +1348,7 @@ mod tests {
                 "probe",
                 0,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         sched
             .submit(
                 TaskLabel {
@@ -1361,7 +1361,7 @@ mod tests {
                 "flush",
                 0,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
         sched
             .submit(
                 TaskLabel {
@@ -1374,7 +1374,7 @@ mod tests {
                 "barrier",
                 0,
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let batch = sched.schedule_batch(10, 100);
         let timed: Vec<_> = batch
@@ -1416,7 +1416,7 @@ mod tests {
                     &format!("p{i}"),
                     i as u64,
                 )
-                .unwrap();
+                .expect("serde deserialization should succeed");
         }
         let batch = sched.schedule_batch(10, 100);
         assert_eq!(batch.len(), 5);
@@ -1437,8 +1437,8 @@ mod tests {
             SchedulerLane::Timed,
             SchedulerLane::Ready,
         ] {
-            let json = serde_json::to_string(&lane).unwrap();
-            let back: SchedulerLane = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&lane).expect("serde deserialization should succeed");
+            let back: SchedulerLane = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(lane, back);
         }
     }
@@ -1464,8 +1464,8 @@ mod tests {
             TaskType::SagaStepExec,
         ];
         for tt in &types {
-            let json = serde_json::to_string(tt).unwrap();
-            let back: TaskType = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(tt).expect("serde deserialization should succeed");
+            let back: TaskType = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*tt, back);
         }
     }
@@ -1477,9 +1477,9 @@ mod tests {
     #[test]
     fn queue_depths_updated_after_schedule() {
         let mut sched = LaneScheduler::new(LaneConfig::default());
-        sched.submit(cancel_label("t1"), 0, "c1", 0).unwrap();
-        sched.submit(cancel_label("t2"), 0, "c2", 0).unwrap();
-        sched.submit(ready_label("t3"), 0, "r1", 0).unwrap();
+        sched.submit(cancel_label("t1"), 0, "c1", 0).expect("serde deserialization should succeed");
+        sched.submit(cancel_label("t2"), 0, "c2", 0).expect("serde deserialization should succeed");
+        sched.submit(ready_label("t3"), 0, "r1", 0).expect("serde deserialization should succeed");
 
         assert_eq!(sched.queue_depth(SchedulerLane::Cancel), 2);
         assert_eq!(sched.queue_depth(SchedulerLane::Ready), 1);
@@ -1497,7 +1497,7 @@ mod tests {
     #[test]
     fn complete_task_emits_complete_event() {
         let mut sched = LaneScheduler::new(LaneConfig::default());
-        let id = sched.submit(ready_label("t1"), 0, "p1", 0).unwrap();
+        let id = sched.submit(ready_label("t1"), 0, "p1", 0).expect("serde deserialization should succeed");
         sched.schedule_batch(10, 0);
         sched.drain_events();
 
@@ -1519,8 +1519,8 @@ mod tests {
             ready_max_depth: 300,
             ready_min_throughput: 5,
         };
-        let json = serde_json::to_string(&cfg).unwrap();
-        let back: LaneConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
+        let back: LaneConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cfg, back);
     }
 
@@ -1610,7 +1610,7 @@ mod tests {
     #[test]
     fn task_label_json_field_presence() {
         let label = cancel_label("field-check");
-        let json = serde_json::to_string(&label).unwrap();
+        let json = serde_json::to_string(&label).expect("serde deserialization should succeed");
         assert!(json.contains("\"lane\""));
         assert!(json.contains("\"task_type\""));
         assert!(json.contains("\"trace_id\""));
@@ -1626,7 +1626,7 @@ mod tests {
             submitted_at: 10,
             payload_id: "p-field".to_string(),
         };
-        let json = serde_json::to_string(&task).unwrap();
+        let json = serde_json::to_string(&task).expect("serde deserialization should succeed");
         assert!(json.contains("\"task_id\""));
         assert!(json.contains("\"label\""));
         assert!(json.contains("\"deadline_tick\""));
@@ -1644,7 +1644,7 @@ mod tests {
             tasks_completed: 4,
             tasks_timed_out: 5,
         };
-        let json = serde_json::to_string(&m).unwrap();
+        let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
         assert!(json.contains("\"lane\""));
         assert!(json.contains("\"queue_depth\""));
         assert!(json.contains("\"tasks_submitted\""));
@@ -1663,8 +1663,8 @@ mod tests {
             lane: "ready".to_string(),
             max_depth: 4096,
         };
-        let json = serde_json::to_string(&err).unwrap();
-        let restored: LaneError = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let restored: LaneError = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, restored);
         assert!(json.contains("4096"));
     }
@@ -1700,9 +1700,9 @@ mod tests {
             ready_min_throughput: 0,
             ..Default::default()
         });
-        sched.submit(ready_label("t1"), 0, "ready-1", 0).unwrap();
-        sched.submit(timed_label("t2"), 10, "timed-1", 0).unwrap();
-        sched.submit(cancel_label("t3"), 0, "cancel-1", 0).unwrap();
+        sched.submit(ready_label("t1"), 0, "ready-1", 0).expect("serde deserialization should succeed");
+        sched.submit(timed_label("t2"), 10, "timed-1", 0).expect("serde deserialization should succeed");
+        sched.submit(cancel_label("t3"), 0, "cancel-1", 0).expect("serde deserialization should succeed");
 
         let batch = sched.schedule_batch(1, 100);
         assert_eq!(batch.len(), 1);
@@ -1792,8 +1792,8 @@ mod tests {
     fn task_id_serde_roundtrip() {
         for val in [0, 1, 42, u64::MAX] {
             let id = TaskId(val);
-            let json = serde_json::to_string(&id).unwrap();
-            let back: TaskId = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&id).expect("serde deserialization should succeed");
+            let back: TaskId = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(id, back);
         }
     }
@@ -1862,8 +1862,8 @@ mod tests {
     #[test]
     fn task_label_serde_timed_lane() {
         let label = timed_label("trace-timed-serde");
-        let json = serde_json::to_string(&label).unwrap();
-        let back: TaskLabel = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&label).expect("serde deserialization should succeed");
+        let back: TaskLabel = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(label, back);
         assert!(json.contains("\"Timed\"") || json.contains("\"timed\""));
     }
@@ -1871,8 +1871,8 @@ mod tests {
     #[test]
     fn task_label_serde_ready_lane() {
         let label = ready_label("trace-ready-serde");
-        let json = serde_json::to_string(&label).unwrap();
-        let back: TaskLabel = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&label).expect("serde deserialization should succeed");
+        let back: TaskLabel = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(label, back);
     }
 
@@ -1884,8 +1884,8 @@ mod tests {
             trace_id: "priority-test".to_string(),
             priority_sub_band: 42,
         };
-        let json = serde_json::to_string(&label).unwrap();
-        let back: TaskLabel = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&label).expect("serde deserialization should succeed");
+        let back: TaskLabel = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(label, back);
         assert!(json.contains("42"));
     }
@@ -1897,9 +1897,9 @@ mod tests {
     #[test]
     fn cancel_lane_fifo_ordering() {
         let mut sched = LaneScheduler::new(LaneConfig::default());
-        sched.submit(cancel_label("t1"), 0, "first", 0).unwrap();
-        sched.submit(cancel_label("t2"), 0, "second", 10).unwrap();
-        sched.submit(cancel_label("t3"), 0, "third", 20).unwrap();
+        sched.submit(cancel_label("t1"), 0, "first", 0).expect("serde deserialization should succeed");
+        sched.submit(cancel_label("t2"), 0, "second", 10).expect("serde deserialization should succeed");
+        sched.submit(cancel_label("t3"), 0, "third", 20).expect("serde deserialization should succeed");
 
         let batch = sched.schedule_batch(10, 30);
         let cancel_tasks: Vec<_> = batch
@@ -1918,9 +1918,9 @@ mod tests {
     #[test]
     fn multiple_schedule_batch_rounds_persist_state() {
         let mut sched = LaneScheduler::new(LaneConfig::default());
-        sched.submit(cancel_label("t1"), 0, "c1", 0).unwrap();
-        sched.submit(ready_label("t2"), 0, "r1", 0).unwrap();
-        sched.submit(ready_label("t3"), 0, "r2", 0).unwrap();
+        sched.submit(cancel_label("t1"), 0, "c1", 0).expect("serde deserialization should succeed");
+        sched.submit(ready_label("t2"), 0, "r1", 0).expect("serde deserialization should succeed");
+        sched.submit(ready_label("t3"), 0, "r2", 0).expect("serde deserialization should succeed");
 
         // Round 1: take batch_size=2 → cancel + ready
         let batch1 = sched.schedule_batch(2, 0);
@@ -1938,9 +1938,9 @@ mod tests {
     #[test]
     fn schedule_batch_metrics_accumulate_across_rounds() {
         let mut sched = LaneScheduler::new(LaneConfig::default());
-        sched.submit(cancel_label("t1"), 0, "c1", 0).unwrap();
-        sched.submit(cancel_label("t2"), 0, "c2", 0).unwrap();
-        sched.submit(ready_label("t3"), 0, "r1", 0).unwrap();
+        sched.submit(cancel_label("t1"), 0, "c1", 0).expect("serde deserialization should succeed");
+        sched.submit(cancel_label("t2"), 0, "c2", 0).expect("serde deserialization should succeed");
+        sched.submit(ready_label("t3"), 0, "r1", 0).expect("serde deserialization should succeed");
 
         sched.schedule_batch(1, 0); // schedules 1 cancel
         sched.schedule_batch(1, 0); // schedules 1 cancel
@@ -1961,9 +1961,9 @@ mod tests {
             ..Default::default()
         };
         let mut sched = LaneScheduler::new(config);
-        sched.submit(cancel_label("t1"), 0, "c1", 0).unwrap();
-        sched.submit(cancel_label("t2"), 0, "c2", 0).unwrap();
-        sched.submit(ready_label("t3"), 0, "r1", 0).unwrap();
+        sched.submit(cancel_label("t1"), 0, "c1", 0).expect("serde deserialization should succeed");
+        sched.submit(cancel_label("t2"), 0, "c2", 0).expect("serde deserialization should succeed");
+        sched.submit(ready_label("t3"), 0, "r1", 0).expect("serde deserialization should succeed");
 
         assert_eq!(sched.event_counts().get("submit"), Some(&3));
 
@@ -1990,7 +1990,7 @@ mod tests {
     #[test]
     fn complete_task_timed_lane() {
         let mut sched = LaneScheduler::new(LaneConfig::default());
-        let id = sched.submit(timed_label("t1"), 50, "p1", 0).unwrap();
+        let id = sched.submit(timed_label("t1"), 50, "p1", 0).expect("serde deserialization should succeed");
         sched.schedule_batch(10, 100);
         sched.drain_events();
 
@@ -2011,7 +2011,7 @@ mod tests {
     #[test]
     fn drain_events_returns_empty_on_second_call() {
         let mut sched = LaneScheduler::new(LaneConfig::default());
-        sched.submit(cancel_label("t1"), 0, "p1", 0).unwrap();
+        sched.submit(cancel_label("t1"), 0, "p1", 0).expect("serde deserialization should succeed");
 
         let first = sched.drain_events();
         assert_eq!(first.len(), 1);
@@ -2031,7 +2031,7 @@ mod tests {
             ..Default::default()
         };
         let mut sched = LaneScheduler::new(config);
-        sched.submit(cancel_label("t1"), 0, "c1", 0).unwrap();
+        sched.submit(cancel_label("t1"), 0, "c1", 0).expect("serde deserialization should succeed");
 
         let batch = sched.schedule_batch(10, 0);
         // Only the cancel task, no ready tasks available.
@@ -2055,7 +2055,7 @@ mod tests {
         for i in 0..3 {
             sched
                 .submit(timed_label(&format!("t{i}")), 100, &format!("p{i}"), 0)
-                .unwrap();
+                .expect("serde deserialization should succeed");
         }
         assert_eq!(sched.queue_depth(SchedulerLane::Timed), 3);
 
@@ -2075,7 +2075,7 @@ mod tests {
         let mut sched = LaneScheduler::new(LaneConfig::default());
         sched
             .submit(timed_label("t1"), 0, "zero-deadline", 0)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // deadline_tick=0, current_ticks=0 → deadline <= current → scheduled.
         let batch = sched.schedule_batch(10, 0);
@@ -2114,8 +2114,8 @@ mod tests {
     #[test]
     fn complete_task_does_not_modify_queues() {
         let mut sched = LaneScheduler::new(LaneConfig::default());
-        sched.submit(cancel_label("t1"), 0, "c1", 0).unwrap();
-        sched.submit(cancel_label("t2"), 0, "c2", 0).unwrap();
+        sched.submit(cancel_label("t1"), 0, "c1", 0).expect("serde deserialization should succeed");
+        sched.submit(cancel_label("t2"), 0, "c2", 0).expect("serde deserialization should succeed");
 
         let batch = sched.schedule_batch(1, 0);
         assert_eq!(sched.queue_depth(SchedulerLane::Cancel), 1);
@@ -2160,8 +2160,8 @@ mod tests {
     #[test]
     fn submitted_at_preserved_through_scheduling() {
         let mut sched = LaneScheduler::new(LaneConfig::default());
-        sched.submit(ready_label("t1"), 0, "p1", 42).unwrap();
-        sched.submit(ready_label("t2"), 0, "p2", 99).unwrap();
+        sched.submit(ready_label("t1"), 0, "p1", 42).expect("serde deserialization should succeed");
+        sched.submit(ready_label("t2"), 0, "p2", 99).expect("serde deserialization should succeed");
 
         let batch = sched.schedule_batch(10, 100);
         assert_eq!(batch[0].submitted_at, 42);
@@ -2234,7 +2234,7 @@ mod tests {
         let mut sched = LaneScheduler::new(LaneConfig::default());
         sched
             .submit(timed_label("t1"), 1000, "future-task", 0)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Round 1: not due at tick 100.
         let batch1 = sched.schedule_batch(10, 100);
@@ -2259,9 +2259,9 @@ mod tests {
     #[test]
     fn submit_event_records_queue_position() {
         let mut sched = LaneScheduler::new(LaneConfig::default());
-        sched.submit(ready_label("t1"), 0, "p1", 0).unwrap();
-        sched.submit(ready_label("t2"), 0, "p2", 0).unwrap();
-        sched.submit(ready_label("t3"), 0, "p3", 0).unwrap();
+        sched.submit(ready_label("t1"), 0, "p1", 0).expect("serde deserialization should succeed");
+        sched.submit(ready_label("t2"), 0, "p2", 0).expect("serde deserialization should succeed");
+        sched.submit(ready_label("t3"), 0, "p3", 0).expect("serde deserialization should succeed");
 
         let events = sched.drain_events();
         assert_eq!(events[0].queue_position, 0);
@@ -2276,8 +2276,8 @@ mod tests {
     #[test]
     fn complete_task_event_counter() {
         let mut sched = LaneScheduler::new(LaneConfig::default());
-        let id1 = sched.submit(cancel_label("t1"), 0, "c1", 0).unwrap();
-        let id2 = sched.submit(cancel_label("t2"), 0, "c2", 0).unwrap();
+        let id1 = sched.submit(cancel_label("t1"), 0, "c1", 0).expect("serde deserialization should succeed");
+        let id2 = sched.submit(cancel_label("t2"), 0, "c2", 0).expect("serde deserialization should succeed");
         sched.schedule_batch(10, 0);
 
         sched.complete_task(id1, SchedulerLane::Cancel);
@@ -2297,7 +2297,7 @@ mod tests {
         for i in 0..3 {
             sched
                 .submit(cancel_label(&format!("c{i}")), 0, &format!("cancel-{i}"), 0)
-                .unwrap();
+                .expect("serde deserialization should succeed");
         }
         for i in 0..3 {
             sched
@@ -2307,12 +2307,12 @@ mod tests {
                     &format!("timed-{i}"),
                     0,
                 )
-                .unwrap();
+                .expect("serde deserialization should succeed");
         }
         for i in 0..3 {
             sched
                 .submit(ready_label(&format!("r{i}")), 0, &format!("ready-{i}"), 0)
-                .unwrap();
+                .expect("serde deserialization should succeed");
         }
 
         assert_eq!(sched.total_queue_depth(), 9);
@@ -2326,19 +2326,19 @@ mod tests {
         let cancel_end = lanes
             .iter()
             .rposition(|l| *l == SchedulerLane::Cancel)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let timed_start = lanes
             .iter()
             .position(|l| *l == SchedulerLane::Timed)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let timed_end = lanes
             .iter()
             .rposition(|l| *l == SchedulerLane::Timed)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let ready_start = lanes
             .iter()
             .position(|l| *l == SchedulerLane::Ready)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(cancel_end < timed_start);
         assert!(timed_end < ready_start);
     }
@@ -2354,24 +2354,24 @@ mod tests {
             declared_lane: "timed".to_string(),
             required_lane: "ready".to_string(),
         };
-        let json = serde_json::to_string(&err).unwrap();
-        let back: LaneError = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let back: LaneError = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, back);
     }
 
     #[test]
     fn lane_error_empty_trace_id_serde_roundtrip() {
         let err = LaneError::EmptyTraceId;
-        let json = serde_json::to_string(&err).unwrap();
-        let back: LaneError = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let back: LaneError = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, back);
     }
 
     #[test]
     fn lane_error_task_not_found_serde_roundtrip() {
         let err = LaneError::TaskNotFound { task_id: u64::MAX };
-        let json = serde_json::to_string(&err).unwrap();
-        let back: LaneError = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let back: LaneError = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, back);
         assert!(json.contains(&u64::MAX.to_string()));
     }
@@ -2388,8 +2388,8 @@ mod tests {
             ready_max_depth: 1,
             ready_min_throughput: 0,
         };
-        let json = serde_json::to_string(&cfg).unwrap();
-        let back: LaneConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
+        let back: LaneConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cfg, back);
     }
 }

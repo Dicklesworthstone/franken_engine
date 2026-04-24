@@ -1377,9 +1377,9 @@ mod tests {
     fn feature_family_serde_roundtrip() {
         let fam = FeatureFamily::ControlFlow;
         // SAFETY: FeatureFamily derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&fam).unwrap();
+        let json = serde_json::to_string(&fam).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid FeatureFamily serialization
-        let back: FeatureFamily = serde_json::from_str(&json).unwrap();
+        let back: FeatureFamily = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(fam, back);
     }
 
@@ -1444,9 +1444,9 @@ mod tests {
     fn embedding_validity_serde() {
         let v = EmbeddingValidity::Valid;
         // SAFETY: EmbeddingValidity derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&v).unwrap();
+        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid EmbeddingValidity serialization
-        let back: EmbeddingValidity = serde_json::from_str(&json).unwrap();
+        let back: EmbeddingValidity = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, back);
     }
 
@@ -1600,9 +1600,9 @@ mod tests {
             ],
         );
         // SAFETY: WorkloadEmbedding derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&emb).unwrap();
+        let json = serde_json::to_string(&emb).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid WorkloadEmbedding serialization
-        let back: WorkloadEmbedding = serde_json::from_str(&json).unwrap();
+        let back: WorkloadEmbedding = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(emb, back);
     }
 
@@ -1617,9 +1617,9 @@ mod tests {
         );
         // After normalization: lo → 0, hi → MILLION
         // SAFETY: Test embedding constructed with "lo" feature should contain that feature name
-        let lo = emb.value_for("lo").unwrap();
+        let lo = emb.value_for("lo").expect("serde deserialization should succeed");
         // SAFETY: Test embedding constructed with "hi" feature should contain that feature name
-        let hi = emb.value_for("hi").unwrap();
+        let hi = emb.value_for("hi").expect("serde deserialization should succeed");
         assert_eq!(lo, 0);
         assert_eq!(hi, MILLION);
     }
@@ -1727,9 +1727,9 @@ mod tests {
     fn distance_metric_serde() {
         let m = DistanceMetric::Cosine;
         // SAFETY: DistanceMetric derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&m).unwrap();
+        let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid DistanceMetric serialization
-        let back: DistanceMetric = serde_json::from_str(&json).unwrap();
+        let back: DistanceMetric = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(m, back);
     }
 
@@ -1905,9 +1905,9 @@ mod tests {
         let cfg = NeighborhoodCertificateConfig::default();
         let cert = issue_neighborhood_certificate(&emb, &emb, &cfg, test_epoch());
         // SAFETY: NeighborhoodCertificate derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&cert).unwrap();
+        let json = serde_json::to_string(&cert).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid NeighborhoodCertificate serialization
-        let back: NeighborhoodCertificate = serde_json::from_str(&json).unwrap();
+        let back: NeighborhoodCertificate = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cert, back);
     }
 
@@ -2114,9 +2114,9 @@ mod tests {
         let cfg = NeighborhoodCertificateConfig::default();
         let assessment = assess_transfer_safety(&emb, &emb, &cfg, test_epoch());
         // SAFETY: TransferSafetyAssessment derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&assessment).unwrap();
+        let json = serde_json::to_string(&assessment).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid TransferSafetyAssessment serialization
-        let back: TransferSafetyAssessment = serde_json::from_str(&json).unwrap();
+        let back: TransferSafetyAssessment = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(assessment, back);
     }
 
@@ -2161,9 +2161,9 @@ mod tests {
         let (specimens, _) = run_embedding_corpus(test_epoch());
         for s in &specimens {
             // SAFETY: EmbeddingSpecimen derives Serialize and has no non-serializable fields
-            let json = serde_json::to_string(s).unwrap();
+            let json = serde_json::to_string(s).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by valid EmbeddingSpecimen serialization
-            let back: EmbeddingSpecimen = serde_json::from_str(&json).unwrap();
+            let back: EmbeddingSpecimen = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*s, back);
         }
     }

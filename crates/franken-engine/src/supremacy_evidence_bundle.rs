@@ -1030,8 +1030,8 @@ mod tests {
     #[test]
     fn cell_status_serde_roundtrip() {
         for s in CellStatus::ALL {
-            let json = serde_json::to_string(s).unwrap();
-            let back: CellStatus = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(s).expect("serde deserialization should succeed");
+            let back: CellStatus = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*s, back);
         }
     }
@@ -1079,8 +1079,8 @@ mod tests {
     #[test]
     fn obs_mode_serde() {
         for m in ObservabilityMode::ALL {
-            let json = serde_json::to_string(m).unwrap();
-            let back: ObservabilityMode = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(m).expect("serde deserialization should succeed");
+            let back: ObservabilityMode = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*m, back);
         }
     }
@@ -1163,8 +1163,8 @@ mod tests {
             coverage_fraction_millionths: 500_000,
             required_millionths: 1_000_000,
         };
-        let json = serde_json::to_string(&r).unwrap();
-        let back: BlockReason = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let back: BlockReason = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 
@@ -1216,8 +1216,8 @@ mod tests {
                 details: "hash mismatch".into(),
             }],
         };
-        let json = serde_json::to_string(&v).unwrap();
-        let back: PublicationGateVerdict = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let back: PublicationGateVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, back);
     }
 
@@ -1240,8 +1240,8 @@ mod tests {
     #[test]
     fn cell_evidence_serde() {
         let c = green_cell("cell-serde");
-        let json = serde_json::to_string(&c).unwrap();
-        let back: CellEvidence = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let back: CellEvidence = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c, back);
     }
 
@@ -1332,8 +1332,8 @@ mod tests {
     #[test]
     fn config_serde() {
         let c = BundleConfig::default();
-        let json = serde_json::to_string(&c).unwrap();
-        let back: BundleConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let back: BundleConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c, back);
     }
 
@@ -1377,8 +1377,8 @@ mod tests {
         let e = BundleError::DuplicateCellIds {
             duplicates: vec!["cell-1".into(), "cell-2".into()],
         };
-        let json = serde_json::to_string(&e).unwrap();
-        let back: BundleError = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
+        let back: BundleError = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(e, back);
     }
 
@@ -1388,7 +1388,7 @@ mod tests {
     fn assemble_all_green_approved() {
         let cells = vec![green_cell("a"), green_cell("b"), green_cell("c")];
         let config = BundleConfig::permissive();
-        let bundle = assemble_bundle("bundle-1", &cells, &config, epoch()).unwrap();
+        let bundle = assemble_bundle("bundle-1", &cells, &config, epoch()).expect("serde deserialization should succeed");
         assert!(bundle.verdict.is_approved());
         assert_eq!(bundle.cells.len(), 3);
         assert_eq!(bundle.coverage_stats.green_count, 3);
@@ -1398,7 +1398,7 @@ mod tests {
     fn assemble_with_red_blocked() {
         let cells = vec![green_cell("a"), red_cell("b")];
         let config = BundleConfig::permissive();
-        let bundle = assemble_bundle("bundle-red", &cells, &config, epoch()).unwrap();
+        let bundle = assemble_bundle("bundle-red", &cells, &config, epoch()).expect("serde deserialization should succeed");
         assert!(bundle.verdict.is_blocked());
     }
 
@@ -1410,7 +1410,7 @@ mod tests {
         let stats = compute_coverage_stats(&cells);
         let direct_verdict = evaluate_publication_gate_inputs(&cells, &stats, epoch(), &config);
 
-        let bundle = assemble_bundle("bundle-direct-gate", &cells, &config, epoch()).unwrap();
+        let bundle = assemble_bundle("bundle-direct-gate", &cells, &config, epoch()).expect("serde deserialization should succeed");
 
         assert_eq!(bundle.verdict, direct_verdict);
         assert!(validate_bundle_integrity(&bundle).is_ok());
@@ -1451,7 +1451,7 @@ mod tests {
         let cells = vec![stale_cell("stale-a")];
         let mut config = BundleConfig::permissive();
         config.max_staleness_epochs = 5;
-        let bundle = assemble_bundle("stale-bundle", &cells, &config, epoch()).unwrap();
+        let bundle = assemble_bundle("stale-bundle", &cells, &config, epoch()).expect("serde deserialization should succeed");
         assert!(bundle.verdict.is_blocked());
         if let PublicationGateVerdict::Blocked { reasons } = &bundle.verdict {
             assert!(reasons.iter().any(|r| r.tag() == "stale_evidence"));
@@ -1464,7 +1464,7 @@ mod tests {
     fn integrity_valid() {
         let cells = vec![green_cell("a")];
         let config = BundleConfig::permissive();
-        let bundle = assemble_bundle("valid", &cells, &config, epoch()).unwrap();
+        let bundle = assemble_bundle("valid", &cells, &config, epoch()).expect("serde deserialization should succeed");
         assert!(validate_bundle_integrity(&bundle).is_ok());
     }
 
@@ -1472,7 +1472,7 @@ mod tests {
     fn integrity_tampered() {
         let cells = vec![green_cell("a")];
         let config = BundleConfig::permissive();
-        let mut bundle = assemble_bundle("tamper", &cells, &config, epoch()).unwrap();
+        let mut bundle = assemble_bundle("tamper", &cells, &config, epoch()).expect("serde deserialization should succeed");
         bundle.bundle_id = "tampered-id".to_string();
         assert!(validate_bundle_integrity(&bundle).is_err());
     }
@@ -1483,7 +1483,7 @@ mod tests {
     fn receipt_creation() {
         let cells = vec![green_cell("a")];
         let config = BundleConfig::permissive();
-        let bundle = assemble_bundle("rcpt", &cells, &config, epoch()).unwrap();
+        let bundle = assemble_bundle("rcpt", &cells, &config, epoch()).expect("serde deserialization should succeed");
         let genesis_hash = ContentHash::compute(b"genesis");
         let receipt = DecisionReceipt::new("rcpt-001", &bundle, genesis_hash);
         assert_eq!(receipt.bundle_id, "rcpt");
@@ -1494,8 +1494,8 @@ mod tests {
     fn receipt_chain() {
         let cells = vec![green_cell("a")];
         let config = BundleConfig::permissive();
-        let bundle1 = assemble_bundle("b1", &cells, &config, epoch()).unwrap();
-        let bundle2 = assemble_bundle("b2", &cells, &config, epoch()).unwrap();
+        let bundle1 = assemble_bundle("b1", &cells, &config, epoch()).expect("serde deserialization should succeed");
+        let bundle2 = assemble_bundle("b2", &cells, &config, epoch()).expect("serde deserialization should succeed");
 
         let genesis = ContentHash::compute(b"genesis");
         let r1 = DecisionReceipt::new("r1", &bundle1, genesis);
@@ -1510,7 +1510,7 @@ mod tests {
     fn receipt_tampered_fails_verify() {
         let cells = vec![green_cell("a")];
         let config = BundleConfig::permissive();
-        let bundle = assemble_bundle("rtamp", &cells, &config, epoch()).unwrap();
+        let bundle = assemble_bundle("rtamp", &cells, &config, epoch()).expect("serde deserialization should succeed");
         let genesis = ContentHash::compute(b"genesis");
         let mut receipt = DecisionReceipt::new("rtamp-001", &bundle, genesis);
         receipt.verdict_tag = "tampered".to_string();
@@ -1521,11 +1521,11 @@ mod tests {
     fn receipt_serde() {
         let cells = vec![green_cell("a")];
         let config = BundleConfig::permissive();
-        let bundle = assemble_bundle("rserde", &cells, &config, epoch()).unwrap();
+        let bundle = assemble_bundle("rserde", &cells, &config, epoch()).expect("serde deserialization should succeed");
         let genesis = ContentHash::compute(b"genesis");
         let receipt = DecisionReceipt::new("rs-001", &bundle, genesis);
-        let json = serde_json::to_string(&receipt).unwrap();
-        let back: DecisionReceipt = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
+        let back: DecisionReceipt = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(receipt, back);
     }
 
@@ -1535,7 +1535,7 @@ mod tests {
     fn gate_blocks_unsupported() {
         let cells = vec![green_cell("a"), unsupported_cell("b")];
         let config = BundleConfig::permissive();
-        let bundle = assemble_bundle("unsup", &cells, &config, epoch()).unwrap();
+        let bundle = assemble_bundle("unsup", &cells, &config, epoch()).expect("serde deserialization should succeed");
         assert!(bundle.verdict.is_blocked());
     }
 
@@ -1543,7 +1543,7 @@ mod tests {
     fn gate_blocks_mode_ambiguous() {
         let cells = vec![green_cell("a"), ambiguous_cell("b")];
         let config = BundleConfig::permissive();
-        let bundle = assemble_bundle("ambig", &cells, &config, epoch()).unwrap();
+        let bundle = assemble_bundle("ambig", &cells, &config, epoch()).expect("serde deserialization should succeed");
         assert!(bundle.verdict.is_blocked());
     }
 
@@ -1551,7 +1551,7 @@ mod tests {
     fn gate_blocks_missing_status() {
         let cells = vec![green_cell("a"), missing_cell("b")];
         let config = BundleConfig::permissive();
-        let bundle = assemble_bundle("miss-status", &cells, &config, epoch()).unwrap();
+        let bundle = assemble_bundle("miss-status", &cells, &config, epoch()).expect("serde deserialization should succeed");
         assert!(bundle.verdict.is_blocked());
     }
 
@@ -1562,7 +1562,7 @@ mod tests {
         let mut config = BundleConfig::permissive();
         config.min_coverage_fraction_millionths = MILLIONTHS;
         config.require_all_green = true;
-        let bundle = assemble_bundle("cov-low", &cells, &config, epoch()).unwrap();
+        let bundle = assemble_bundle("cov-low", &cells, &config, epoch()).expect("serde deserialization should succeed");
         assert!(bundle.verdict.is_blocked());
     }
 
@@ -1570,7 +1570,7 @@ mod tests {
     fn gate_yellow_approved_permissive() {
         let cells = vec![green_cell("a"), yellow_cell("b")];
         let config = BundleConfig::permissive();
-        let bundle = assemble_bundle("yellow-ok", &cells, &config, epoch()).unwrap();
+        let bundle = assemble_bundle("yellow-ok", &cells, &config, epoch()).expect("serde deserialization should succeed");
         // Permissive: yellow is not blocking by itself (no strict check).
         assert!(bundle.verdict.is_approved());
     }
@@ -1581,9 +1581,9 @@ mod tests {
     fn bundle_serde_roundtrip() {
         let cells = vec![green_cell("a"), green_cell("b")];
         let config = BundleConfig::permissive();
-        let bundle = assemble_bundle("serde-test", &cells, &config, epoch()).unwrap();
-        let json = serde_json::to_string(&bundle).unwrap();
-        let back: EvidenceBundle = serde_json::from_str(&json).unwrap();
+        let bundle = assemble_bundle("serde-test", &cells, &config, epoch()).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&bundle).expect("serde deserialization should succeed");
+        let back: EvidenceBundle = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(bundle, back);
     }
 
@@ -1591,8 +1591,8 @@ mod tests {
     fn bundle_hash_deterministic() {
         let cells = vec![green_cell("a"), green_cell("b")];
         let config = BundleConfig::permissive();
-        let b1 = assemble_bundle("det", &cells, &config, epoch()).unwrap();
-        let b2 = assemble_bundle("det", &cells, &config, epoch()).unwrap();
+        let b1 = assemble_bundle("det", &cells, &config, epoch()).expect("serde deserialization should succeed");
+        let b2 = assemble_bundle("det", &cells, &config, epoch()).expect("serde deserialization should succeed");
         assert_eq!(b1.bundle_hash, b2.bundle_hash);
     }
 }

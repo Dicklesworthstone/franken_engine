@@ -1038,30 +1038,30 @@ mod tests {
 
     #[test]
     fn matrix_identity_mul_is_identity() {
-        let id = TropicalMatrix::identity(3).unwrap();
-        let m = TropicalMatrix::identity(3).unwrap();
-        let product = id.tropical_mul(&m).unwrap();
+        let id = TropicalMatrix::identity(3).expect("serde deserialization should succeed");
+        let m = TropicalMatrix::identity(3).expect("serde deserialization should succeed");
+        let product = id.tropical_mul(&m).expect("serde deserialization should succeed");
         assert_eq!(product, m);
     }
 
     #[test]
     fn matrix_infinity_is_additive_identity() {
-        let inf = TropicalMatrix::new_infinity(3).unwrap();
-        let mut m = TropicalMatrix::new_infinity(3).unwrap();
+        let inf = TropicalMatrix::new_infinity(3).expect("serde deserialization should succeed");
+        let mut m = TropicalMatrix::new_infinity(3).expect("serde deserialization should succeed");
         m.set(0, 1, TropicalWeight::finite(5));
         m.set(1, 2, TropicalWeight::finite(3));
-        let sum = m.tropical_add(&inf).unwrap();
+        let sum = m.tropical_add(&inf).expect("serde deserialization should succeed");
         assert_eq!(sum, m);
     }
 
     #[test]
     fn floyd_warshall_simple_chain() {
         // 0 --5--> 1 --3--> 2
-        let mut m = TropicalMatrix::new_infinity(3).unwrap();
+        let mut m = TropicalMatrix::new_infinity(3).expect("serde deserialization should succeed");
         m.set(0, 1, TropicalWeight::finite(5));
         m.set(1, 2, TropicalWeight::finite(3));
 
-        let apsp = m.floyd_warshall().unwrap();
+        let apsp = m.floyd_warshall().expect("serde deserialization should succeed");
         assert_eq!(apsp.get(0, 1), TropicalWeight::finite(5));
         assert_eq!(apsp.get(1, 2), TropicalWeight::finite(3));
         assert_eq!(apsp.get(0, 2), TropicalWeight::finite(8)); // 5 + 3
@@ -1072,19 +1072,19 @@ mod tests {
     fn floyd_warshall_diamond() {
         // 0 --2--> 1 --3--> 3
         // 0 --5--> 2 --1--> 3
-        let mut m = TropicalMatrix::new_infinity(4).unwrap();
+        let mut m = TropicalMatrix::new_infinity(4).expect("serde deserialization should succeed");
         m.set(0, 1, TropicalWeight::finite(2));
         m.set(0, 2, TropicalWeight::finite(5));
         m.set(1, 3, TropicalWeight::finite(3));
         m.set(2, 3, TropicalWeight::finite(1));
 
-        let apsp = m.floyd_warshall().unwrap();
+        let apsp = m.floyd_warshall().expect("serde deserialization should succeed");
         assert_eq!(apsp.get(0, 3), TropicalWeight::finite(5)); // min(2+3, 5+1)
     }
 
     #[test]
     fn floyd_warshall_negative_cycle_detection() {
-        let mut m = TropicalMatrix::new_infinity(2).unwrap();
+        let mut m = TropicalMatrix::new_infinity(2).expect("serde deserialization should succeed");
         m.set(0, 1, TropicalWeight::finite(-3));
         m.set(1, 0, TropicalWeight::finite(-3));
 
@@ -1103,8 +1103,8 @@ mod tests {
 
     #[test]
     fn matrix_dimension_mismatch() {
-        let a = TropicalMatrix::new_infinity(2).unwrap();
-        let b = TropicalMatrix::new_infinity(3).unwrap();
+        let a = TropicalMatrix::new_infinity(2).expect("serde deserialization should succeed");
+        let b = TropicalMatrix::new_infinity(3).expect("serde deserialization should succeed");
         assert!(matches!(
             a.tropical_mul(&b),
             Err(TropicalError::DimensionMismatch { .. })
@@ -1124,13 +1124,13 @@ mod tests {
                 mnemonic: format!("instr_{i}"),
             })
             .collect();
-        InstructionCostGraph::new(nodes).unwrap()
+        InstructionCostGraph::new(nodes).expect("serde deserialization should succeed")
     }
 
     #[test]
     fn chain_critical_path_equals_chain_length() {
         let graph = make_chain_graph(5);
-        let cpr = graph.critical_path_length().unwrap();
+        let cpr = graph.critical_path_length().expect("serde deserialization should succeed");
         assert_eq!(cpr.makespan, TropicalWeight::finite(5)); // 5 nodes × cost 1 each
     }
 
@@ -1163,8 +1163,8 @@ mod tests {
                 mnemonic: "sink".into(),
             },
         ];
-        let graph = InstructionCostGraph::new(nodes).unwrap();
-        let cpr = graph.critical_path_length().unwrap();
+        let graph = InstructionCostGraph::new(nodes).expect("serde deserialization should succeed");
+        let cpr = graph.critical_path_length().expect("serde deserialization should succeed");
         assert_eq!(cpr.critical_source, 0);
         assert_eq!(cpr.critical_sink, 2);
     }
@@ -1230,11 +1230,11 @@ mod tests {
     fn schedule_chain_is_optimal() {
         let graph = make_chain_graph(4);
         let optimizer = ScheduleOptimizer::default();
-        let schedule = optimizer.schedule(&graph).unwrap();
+        let schedule = optimizer.schedule(&graph).expect("serde deserialization should succeed");
 
         assert_eq!(schedule.order, vec![0, 1, 2, 3]);
         assert_eq!(schedule.quality, ScheduleQuality::Optimal);
-        assert!(schedule.certificate.as_ref().unwrap().is_exact);
+        assert!(schedule.certificate.as_ref().expect("serde deserialization should succeed").is_exact);
     }
 
     #[test]
@@ -1274,9 +1274,9 @@ mod tests {
                 mnemonic: "d".into(),
             },
         ];
-        let graph = InstructionCostGraph::new(nodes).unwrap();
+        let graph = InstructionCostGraph::new(nodes).expect("serde deserialization should succeed");
         let optimizer = ScheduleOptimizer::default();
-        let schedule = optimizer.schedule(&graph).unwrap();
+        let schedule = optimizer.schedule(&graph).expect("serde deserialization should succeed");
 
         // Both chains are independent, makespan = max(2+1, 3+1) = 4
         assert_eq!(schedule.total_cost, TropicalWeight::finite(4));
@@ -1321,9 +1321,9 @@ mod tests {
                 mnemonic: "sink".into(),
             },
         ];
-        let graph = InstructionCostGraph::new(nodes).unwrap();
+        let graph = InstructionCostGraph::new(nodes).expect("serde deserialization should succeed");
         let optimizer = ScheduleOptimizer::default();
-        let schedule = optimizer.schedule(&graph).unwrap();
+        let schedule = optimizer.schedule(&graph).expect("serde deserialization should succeed");
 
         // Critical path: 0(1) → 1(5) → 3(1) = 7
         assert_eq!(schedule.total_cost, TropicalWeight::finite(7));
@@ -1360,11 +1360,11 @@ mod tests {
                 mnemonic: "producer_zero_cost".into(),
             },
         ];
-        let graph = InstructionCostGraph::new(nodes).unwrap();
+        let graph = InstructionCostGraph::new(nodes).expect("serde deserialization should succeed");
         let optimizer = ScheduleOptimizer::default();
-        let schedule = optimizer.schedule(&graph).unwrap();
-        let pos_prod = schedule.order.iter().position(|&i| i == 2).unwrap();
-        let pos_cons = schedule.order.iter().position(|&i| i == 1).unwrap();
+        let schedule = optimizer.schedule(&graph).expect("serde deserialization should succeed");
+        let pos_prod = schedule.order.iter().position(|&i| i == 2).expect("serde deserialization should succeed");
+        let pos_cons = schedule.order.iter().position(|&i| i == 1).expect("serde deserialization should succeed");
         assert!(pos_prod < pos_cons);
     }
 
@@ -1373,9 +1373,9 @@ mod tests {
     #[test]
     fn dead_code_elimination_identifies_unreachable() {
         // 0 → 1, 2 is isolated, output = {1}
-        let mut m = TropicalMatrix::new_infinity(3).unwrap();
+        let mut m = TropicalMatrix::new_infinity(3).expect("serde deserialization should succeed");
         m.set(0, 1, TropicalWeight::finite(1));
-        let apsp = m.floyd_warshall().unwrap();
+        let apsp = m.floyd_warshall().expect("serde deserialization should succeed");
 
         let eliminator = DeadCodeEliminator {
             output_nodes: vec![1],
@@ -1391,10 +1391,10 @@ mod tests {
     #[test]
     fn dead_code_all_live() {
         // 0 → 1 → 2, output = {2}
-        let mut m = TropicalMatrix::new_infinity(3).unwrap();
+        let mut m = TropicalMatrix::new_infinity(3).expect("serde deserialization should succeed");
         m.set(0, 1, TropicalWeight::finite(1));
         m.set(1, 2, TropicalWeight::finite(1));
-        let apsp = m.floyd_warshall().unwrap();
+        let apsp = m.floyd_warshall().expect("serde deserialization should succeed");
 
         let eliminator = DeadCodeEliminator {
             output_nodes: vec![2],
@@ -1428,7 +1428,7 @@ mod tests {
             register_pressure: 10,
             mnemonic: "heavy".into(),
         }];
-        let graph = InstructionCostGraph::new(nodes).unwrap();
+        let graph = InstructionCostGraph::new(nodes).expect("serde deserialization should succeed");
         let analyzer = RegisterPressureAnalyzer { pressure_limit: 4 };
         let report = analyzer.analyze(&graph);
 
@@ -1445,19 +1445,19 @@ mod tests {
             TropicalWeight::INFINITY,
             TropicalWeight::finite(42),
         ] {
-            let json = serde_json::to_string(&w).unwrap();
-            let restored: TropicalWeight = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&w).expect("serde deserialization should succeed");
+            let restored: TropicalWeight = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(w, restored);
         }
     }
 
     #[test]
     fn tropical_matrix_serde_roundtrip() {
-        let mut m = TropicalMatrix::new_infinity(3).unwrap();
+        let mut m = TropicalMatrix::new_infinity(3).expect("serde deserialization should succeed");
         m.set(0, 1, TropicalWeight::finite(5));
         m.set(1, 2, TropicalWeight::finite(3));
-        let json = serde_json::to_string(&m).unwrap();
-        let restored: TropicalMatrix = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
+        let restored: TropicalMatrix = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(m, restored);
     }
 
@@ -1465,9 +1465,9 @@ mod tests {
     fn schedule_serde_roundtrip() {
         let graph = make_chain_graph(3);
         let optimizer = ScheduleOptimizer::default();
-        let schedule = optimizer.schedule(&graph).unwrap();
-        let json = serde_json::to_string(&schedule).unwrap();
-        let restored: Schedule = serde_json::from_str(&json).unwrap();
+        let schedule = optimizer.schedule(&graph).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&schedule).expect("serde deserialization should succeed");
+        let restored: Schedule = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(schedule, restored);
     }
 
@@ -1482,8 +1482,8 @@ mod tests {
             apsp_hash: ContentHash::compute(b"apsp"),
             is_exact: true,
         };
-        let json = serde_json::to_string(&cert).unwrap();
-        let restored: OptimalityCertificate = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&cert).expect("serde deserialization should succeed");
+        let restored: OptimalityCertificate = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cert, restored);
     }
 
@@ -1495,8 +1495,8 @@ mod tests {
             total_nodes: 6,
             elimination_ratio_millionths: 333_333,
         };
-        let json = serde_json::to_string(&report).unwrap();
-        let restored: DeadCodeReport = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let restored: DeadCodeReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report, restored);
     }
 
@@ -1504,7 +1504,7 @@ mod tests {
 
     #[test]
     fn matrix_content_hash_deterministic() {
-        let mut m = TropicalMatrix::new_infinity(3).unwrap();
+        let mut m = TropicalMatrix::new_infinity(3).expect("serde deserialization should succeed");
         m.set(0, 1, TropicalWeight::finite(5));
         let h1 = m.content_hash();
         let h2 = m.content_hash();
@@ -1513,9 +1513,9 @@ mod tests {
 
     #[test]
     fn different_matrices_different_hashes() {
-        let mut m1 = TropicalMatrix::new_infinity(2).unwrap();
+        let mut m1 = TropicalMatrix::new_infinity(2).expect("serde deserialization should succeed");
         m1.set(0, 1, TropicalWeight::finite(1));
-        let mut m2 = TropicalMatrix::new_infinity(2).unwrap();
+        let mut m2 = TropicalMatrix::new_infinity(2).expect("serde deserialization should succeed");
         m2.set(0, 1, TropicalWeight::finite(2));
         assert_ne!(m1.content_hash(), m2.content_hash());
     }
@@ -1543,7 +1543,7 @@ mod tests {
                 mnemonic: "b".into(),
             },
         ];
-        let graph = InstructionCostGraph::new(nodes).unwrap();
+        let graph = InstructionCostGraph::new(nodes).expect("serde deserialization should succeed");
         let optimizer = ScheduleOptimizer::default();
         let result = optimizer.schedule(&graph);
         assert!(matches!(result, Err(TropicalError::CycleInDag { .. })));
@@ -1577,11 +1577,11 @@ mod tests {
                 mnemonic: "join".into(),
             },
         ];
-        let graph = InstructionCostGraph::new(nodes).unwrap();
-        let schedule = ScheduleOptimizer::default().schedule(&graph).unwrap();
-        let pos0 = schedule.order.iter().position(|&x| x == 0).unwrap();
-        let pos1 = schedule.order.iter().position(|&x| x == 1).unwrap();
-        let pos2 = schedule.order.iter().position(|&x| x == 2).unwrap();
+        let graph = InstructionCostGraph::new(nodes).expect("serde deserialization should succeed");
+        let schedule = ScheduleOptimizer::default().schedule(&graph).expect("serde deserialization should succeed");
+        let pos0 = schedule.order.iter().position(|&x| x == 0).expect("serde deserialization should succeed");
+        let pos1 = schedule.order.iter().position(|&x| x == 1).expect("serde deserialization should succeed");
+        let pos2 = schedule.order.iter().position(|&x| x == 2).expect("serde deserialization should succeed");
         assert!(pos0 < pos2);
         assert!(pos1 < pos2);
     }
@@ -1589,8 +1589,8 @@ mod tests {
     #[test]
     fn critical_path_apsp_hash_matches_apsp_matrix() {
         let graph = make_chain_graph(6);
-        let cpr = graph.critical_path_length().unwrap();
-        let apsp = graph.all_pairs_shortest_paths().unwrap();
+        let cpr = graph.critical_path_length().expect("serde deserialization should succeed");
+        let apsp = graph.all_pairs_shortest_paths().expect("serde deserialization should succeed");
         assert_eq!(cpr.apsp_hash, apsp.content_hash());
     }
 
@@ -1613,12 +1613,12 @@ mod tests {
     #[test]
     fn floyd_warshall_larger_graph() {
         let n = 50;
-        let mut m = TropicalMatrix::new_infinity(n).unwrap();
+        let mut m = TropicalMatrix::new_infinity(n).expect("serde deserialization should succeed");
         // Build a chain 0→1→...→(n-1)
         for i in 0..n - 1 {
             m.set(i, i + 1, TropicalWeight::finite(1));
         }
-        let apsp = m.floyd_warshall().unwrap();
+        let apsp = m.floyd_warshall().expect("serde deserialization should succeed");
         // Distance 0→(n-1) should be n-1
         assert_eq!(apsp.get(0, n - 1), TropicalWeight::finite((n - 1) as i64));
     }
@@ -1636,9 +1636,9 @@ mod tests {
                 mnemonic: format!("task_{i}"),
             })
             .collect();
-        let graph = InstructionCostGraph::new(nodes).unwrap();
+        let graph = InstructionCostGraph::new(nodes).expect("serde deserialization should succeed");
         let optimizer = ScheduleOptimizer::default();
-        let schedule = optimizer.schedule(&graph).unwrap();
+        let schedule = optimizer.schedule(&graph).expect("serde deserialization should succeed");
 
         // All independent → makespan = max single task = 1
         assert_eq!(schedule.total_cost, TropicalWeight::finite(1));
@@ -1693,8 +1693,8 @@ mod tests {
             register_pressure: None,
             certificate: None,
         };
-        let json = serde_json::to_string(&witness).unwrap();
-        let restored: TropicalPassWitness = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&witness).expect("serde deserialization should succeed");
+        let restored: TropicalPassWitness = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(witness, restored);
     }
 
@@ -1710,9 +1710,9 @@ mod tests {
             register_pressure: 1,
             mnemonic: "only".into(),
         }];
-        let graph = InstructionCostGraph::new(nodes).unwrap();
+        let graph = InstructionCostGraph::new(nodes).expect("serde deserialization should succeed");
         let optimizer = ScheduleOptimizer::default();
-        let schedule = optimizer.schedule(&graph).unwrap();
+        let schedule = optimizer.schedule(&graph).expect("serde deserialization should succeed");
         assert_eq!(schedule.order, vec![0]);
         assert_eq!(schedule.total_cost, TropicalWeight::finite(5));
     }
@@ -1729,9 +1729,9 @@ mod tests {
 
     #[test]
     fn matrix_1x1() {
-        let mut m = TropicalMatrix::new_infinity(1).unwrap();
+        let mut m = TropicalMatrix::new_infinity(1).expect("serde deserialization should succeed");
         m.set(0, 0, TropicalWeight::ZERO);
-        let apsp = m.floyd_warshall().unwrap();
+        let apsp = m.floyd_warshall().expect("serde deserialization should succeed");
         assert_eq!(apsp.get(0, 0), TropicalWeight::ZERO);
     }
 
@@ -1753,8 +1753,8 @@ mod tests {
             TropicalError::NodeOutOfBounds { index: 10, size: 5 },
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: TropicalError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: TropicalError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, v);
         }
         assert_eq!(variants.len(), 6);
@@ -1768,8 +1768,8 @@ mod tests {
             ScheduleQuality::Heuristic,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: ScheduleQuality = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: ScheduleQuality = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, v);
         }
     }
@@ -1777,8 +1777,8 @@ mod tests {
     #[test]
     fn schedule_optimizer_default_serde_roundtrip() {
         let opt = ScheduleOptimizer::default();
-        let json = serde_json::to_string(&opt).unwrap();
-        let back: ScheduleOptimizer = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&opt).expect("serde deserialization should succeed");
+        let back: ScheduleOptimizer = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.max_approximation_ratio_millionths, 1_000_000);
     }
 
@@ -1792,8 +1792,8 @@ mod tests {
             register_pressure: 3,
             mnemonic: "load".into(),
         };
-        let json = serde_json::to_string(&node).unwrap();
-        let back: InstructionNode = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&node).expect("serde deserialization should succeed");
+        let back: InstructionNode = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, node);
     }
 
@@ -1805,8 +1805,8 @@ mod tests {
             critical_sink: 5,
             apsp_hash: ContentHash::compute(b"test-apsp"),
         };
-        let json = serde_json::to_string(&result).unwrap();
-        let back: CriticalPathResult = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let back: CriticalPathResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, result);
     }
 
@@ -1820,8 +1820,8 @@ mod tests {
             estimated_spills: 0,
             node_count: 10,
         };
-        let json = serde_json::to_string(&report).unwrap();
-        let back: RegisterPressureReport = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let back: RegisterPressureReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, report);
     }
 
@@ -1894,7 +1894,7 @@ mod tests {
 
     #[test]
     fn matrix_identity_has_zero_diagonal_infinity_off() {
-        let id = TropicalMatrix::identity(3).unwrap();
+        let id = TropicalMatrix::identity(3).expect("serde deserialization should succeed");
         for i in 0..3 {
             assert_eq!(id.get(i, i), TropicalWeight::ZERO);
             for j in 0..3 {
@@ -1907,8 +1907,8 @@ mod tests {
 
     #[test]
     fn matrix_tropical_add_dimension_mismatch() {
-        let a = TropicalMatrix::new_infinity(2).unwrap();
-        let b = TropicalMatrix::new_infinity(3).unwrap();
+        let a = TropicalMatrix::new_infinity(2).expect("serde deserialization should succeed");
+        let b = TropicalMatrix::new_infinity(3).expect("serde deserialization should succeed");
         assert!(matches!(
             a.tropical_add(&b),
             Err(TropicalError::DimensionMismatch { left: 2, right: 3 })
@@ -1917,16 +1917,16 @@ mod tests {
 
     #[test]
     fn matrix_content_hash_sensitive_to_dimension() {
-        let m2 = TropicalMatrix::new_infinity(2).unwrap();
-        let m3 = TropicalMatrix::new_infinity(3).unwrap();
+        let m2 = TropicalMatrix::new_infinity(2).expect("serde deserialization should succeed");
+        let m3 = TropicalMatrix::new_infinity(3).expect("serde deserialization should succeed");
         assert_ne!(m2.content_hash(), m3.content_hash());
     }
 
     #[test]
     fn floyd_warshall_self_loop_zero_on_diagonal() {
         // No edges at all — FW should set diagonal to 0
-        let m = TropicalMatrix::new_infinity(3).unwrap();
-        let apsp = m.floyd_warshall().unwrap();
+        let m = TropicalMatrix::new_infinity(3).expect("serde deserialization should succeed");
+        let apsp = m.floyd_warshall().expect("serde deserialization should succeed");
         for i in 0..3 {
             assert_eq!(apsp.get(i, i), TropicalWeight::ZERO);
         }
@@ -1959,14 +1959,14 @@ mod tests {
                 mnemonic: "b".into(),
             },
         ];
-        let graph = InstructionCostGraph::new(nodes).unwrap();
+        let graph = InstructionCostGraph::new(nodes).expect("serde deserialization should succeed");
         assert_eq!(graph.peak_register_pressure(), 7);
         assert_eq!(graph.total_register_pressure(), 10);
     }
 
     #[test]
     fn dead_code_zero_total_nodes() {
-        let apsp = TropicalMatrix::new_infinity(1).unwrap();
+        let apsp = TropicalMatrix::new_infinity(1).expect("serde deserialization should succeed");
         let elim = DeadCodeEliminator {
             output_nodes: vec![],
         };
@@ -1986,7 +1986,7 @@ mod tests {
             register_pressure: 8,
             mnemonic: "exact".into(),
         }];
-        let graph = InstructionCostGraph::new(nodes).unwrap();
+        let graph = InstructionCostGraph::new(nodes).expect("serde deserialization should succeed");
         let analyzer = RegisterPressureAnalyzer { pressure_limit: 8 };
         let report = analyzer.analyze(&graph);
         assert!(!report.exceeds_limit);
@@ -2030,8 +2030,8 @@ mod tests {
                 is_exact: true,
             }),
         };
-        let json = serde_json::to_string(&witness).unwrap();
-        let back: TropicalPassWitness = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&witness).expect("serde deserialization should succeed");
+        let back: TropicalPassWitness = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, witness);
         assert!(back.dead_code.is_some());
         assert!(back.register_pressure.is_some());
@@ -2079,12 +2079,12 @@ mod tests {
     #[test]
     fn floyd_warshall_triangle_inequality() {
         // For any APSP result: dist[i][j] <= dist[i][k] + dist[k][j]
-        let mut m = TropicalMatrix::new_infinity(4).unwrap();
+        let mut m = TropicalMatrix::new_infinity(4).expect("serde deserialization should succeed");
         m.set(0, 1, TropicalWeight::finite(3));
         m.set(1, 2, TropicalWeight::finite(4));
         m.set(0, 2, TropicalWeight::finite(10)); // direct but longer
         m.set(2, 3, TropicalWeight::finite(2));
-        let apsp = m.floyd_warshall().unwrap();
+        let apsp = m.floyd_warshall().expect("serde deserialization should succeed");
         // dist[0][2] should be min(10, 3+4) = 7
         assert_eq!(apsp.get(0, 2), TropicalWeight::finite(7));
         // Triangle: dist[0][3] = dist[0][2] + dist[2][3] = 7 + 2 = 9
@@ -2125,18 +2125,18 @@ mod tests {
     #[test]
     fn matrix_mul_associativity() {
         // (A ⊗ B) ⊗ C == A ⊗ (B ⊗ C) — semiring property
-        let mut a = TropicalMatrix::new_infinity(3).unwrap();
-        let mut b = TropicalMatrix::new_infinity(3).unwrap();
-        let mut c = TropicalMatrix::new_infinity(3).unwrap();
+        let mut a = TropicalMatrix::new_infinity(3).expect("serde deserialization should succeed");
+        let mut b = TropicalMatrix::new_infinity(3).expect("serde deserialization should succeed");
+        let mut c = TropicalMatrix::new_infinity(3).expect("serde deserialization should succeed");
         a.set(0, 1, TropicalWeight::finite(2));
         a.set(1, 2, TropicalWeight::finite(3));
         b.set(0, 1, TropicalWeight::finite(1));
         b.set(1, 2, TropicalWeight::finite(4));
         c.set(0, 2, TropicalWeight::finite(5));
-        let ab = a.tropical_mul(&b).unwrap();
-        let ab_c = ab.tropical_mul(&c).unwrap();
-        let bc = b.tropical_mul(&c).unwrap();
-        let a_bc = a.tropical_mul(&bc).unwrap();
+        let ab = a.tropical_mul(&b).expect("serde deserialization should succeed");
+        let ab_c = ab.tropical_mul(&c).expect("serde deserialization should succeed");
+        let bc = b.tropical_mul(&c).expect("serde deserialization should succeed");
+        let a_bc = a.tropical_mul(&bc).expect("serde deserialization should succeed");
         assert_eq!(ab_c, a_bc);
     }
 }

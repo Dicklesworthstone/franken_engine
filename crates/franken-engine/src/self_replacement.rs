@@ -358,7 +358,7 @@ impl SignaturePreimage for DelegateCellManifest {
                 self.capability_envelope
                     .permitted
                     .iter()
-                    .map(|c| CanonicalValue::String(serde_json::to_string(c).unwrap()))
+                    .map(|c| CanonicalValue::String(serde_json::to_string(c).expect("serde deserialization should succeed")))
                     .collect(),
             ),
         );
@@ -368,7 +368,7 @@ impl SignaturePreimage for DelegateCellManifest {
                 self.capability_envelope
                     .required
                     .iter()
-                    .map(|c| CanonicalValue::String(serde_json::to_string(c).unwrap()))
+                    .map(|c| CanonicalValue::String(serde_json::to_string(c).expect("serde deserialization should succeed")))
                     .collect(),
             ),
         );
@@ -1146,7 +1146,7 @@ mod tests {
     // -- Test helpers --
 
     fn test_slot_id() -> SlotId {
-        SlotId::new("parser-slot").unwrap()
+        SlotId::new("parser-slot").expect("serde deserialization should succeed")
     }
 
     fn test_authority_envelope() -> AuthorityEnvelope {
@@ -1173,11 +1173,11 @@ mod tests {
     }
 
     fn test_signing_key() -> SigningKey {
-        SigningKey::from_bytes([42u8; 32]).unwrap()
+        SigningKey::from_bytes([42u8; 32]).expect("serde deserialization should succeed")
     }
 
     fn test_signing_key_2() -> SigningKey {
-        SigningKey::from_bytes([99u8; 32]).unwrap()
+        SigningKey::from_bytes([99u8; 32]).expect("serde deserialization should succeed")
     }
 
     fn test_behavior_hash() -> [u8; 32] {
@@ -1236,7 +1236,7 @@ mod tests {
                 zone: "test-zone",
             },
         )
-        .unwrap()
+        .expect("serde deserialization should succeed")
     }
 
     // -- SchemaVersion --
@@ -1248,8 +1248,8 @@ mod tests {
 
     #[test]
     fn schema_version_serde_roundtrip() {
-        let json = serde_json::to_string(&SchemaVersion::V1).unwrap();
-        let restored: SchemaVersion = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&SchemaVersion::V1).expect("serde deserialization should succeed");
+        let restored: SchemaVersion = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(SchemaVersion::V1, restored);
     }
 
@@ -1272,8 +1272,8 @@ mod tests {
             DelegateType::WasmBacked,
             DelegateType::ExternalProcess,
         ] {
-            let json = serde_json::to_string(&dt).unwrap();
-            let restored: DelegateType = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&dt).expect("serde deserialization should succeed");
+            let restored: DelegateType = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(dt, restored);
         }
     }
@@ -1293,8 +1293,8 @@ mod tests {
     #[test]
     fn sandbox_serde_roundtrip() {
         let sb = SandboxConfiguration::default();
-        let json = serde_json::to_string(&sb).unwrap();
-        let restored: SandboxConfiguration = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&sb).expect("serde deserialization should succeed");
+        let restored: SandboxConfiguration = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(sb, restored);
     }
 
@@ -1336,7 +1336,7 @@ mod tests {
             &test_monitoring_hooks(),
             "zone-a",
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let id2 = DelegateCellManifest::derive_manifest_id(
             &test_slot_id(),
             DelegateType::QuickJsBacked,
@@ -1346,7 +1346,7 @@ mod tests {
             &test_monitoring_hooks(),
             "zone-a",
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(id1, id2);
     }
 
@@ -1367,7 +1367,7 @@ mod tests {
             &hooks,
             "zone-a",
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let id2 = DelegateCellManifest::derive_manifest_id(
             &test_slot_id(),
             DelegateType::QuickJsBacked,
@@ -1377,15 +1377,15 @@ mod tests {
             &hooks,
             "zone-b",
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_ne!(id1, id2);
     }
 
     #[test]
     fn manifest_serde_roundtrip() {
         let manifest = create_test_manifest();
-        let json = serde_json::to_string(&manifest).unwrap();
-        let restored: DelegateCellManifest = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&manifest).expect("serde deserialization should succeed");
+        let restored: DelegateCellManifest = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(manifest, restored);
     }
 
@@ -1422,8 +1422,8 @@ mod tests {
     #[test]
     fn bundle_serde_roundtrip() {
         let bundle = SignatureBundle::new(1);
-        let json = serde_json::to_string(&bundle).unwrap();
-        let restored: SignatureBundle = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&bundle).expect("serde deserialization should succeed");
+        let restored: SignatureBundle = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(bundle, restored);
     }
 
@@ -1464,7 +1464,7 @@ mod tests {
             zone: "test-zone",
             required_signatures: 2,
         })
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         assert_eq!(receipt.slot_id, test_slot_id());
         assert!(receipt.all_validations_passed());
@@ -1472,10 +1472,10 @@ mod tests {
         // Add two signatures.
         receipt
             .add_signature(&test_signing_key(), "gate-runner")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         receipt
             .add_signature(&test_signing_key_2(), "governance-approver")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert!(receipt.verify_signatures().is_ok());
     }
@@ -1495,12 +1495,12 @@ mod tests {
             zone: "test-zone",
             required_signatures: 2,
         })
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         // Only one signature.
         receipt
             .add_signature(&test_signing_key(), "gate-runner")
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert!(matches!(
             receipt.verify_signatures(),
@@ -1515,10 +1515,10 @@ mod tests {
     fn receipt_id_deterministic() {
         let id1 =
             ReplacementReceipt::derive_receipt_id(&test_slot_id(), "old", "new", 1000, "zone-a")
-                .unwrap();
+                .expect("serde deserialization should succeed");
         let id2 =
             ReplacementReceipt::derive_receipt_id(&test_slot_id(), "old", "new", 1000, "zone-a")
-                .unwrap();
+                .expect("serde deserialization should succeed");
         assert_eq!(id1, id2);
     }
 
@@ -1526,10 +1526,10 @@ mod tests {
     fn receipt_id_differs_by_timestamp() {
         let id1 =
             ReplacementReceipt::derive_receipt_id(&test_slot_id(), "old", "new", 1000, "zone-a")
-                .unwrap();
+                .expect("serde deserialization should succeed");
         let id2 =
             ReplacementReceipt::derive_receipt_id(&test_slot_id(), "old", "new", 2000, "zone-a")
-                .unwrap();
+                .expect("serde deserialization should succeed");
         assert_ne!(id1, id2);
     }
 
@@ -1548,10 +1548,10 @@ mod tests {
             zone: "test-zone",
             required_signatures: 1,
         })
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
-        let json = serde_json::to_string(&receipt).unwrap();
-        let restored: ReplacementReceipt = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
+        let restored: ReplacementReceipt = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(receipt, restored);
     }
 
@@ -1570,7 +1570,7 @@ mod tests {
             zone: "test-zone",
             required_signatures: 1,
         })
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let p1 = receipt.preimage_bytes();
         let p2 = receipt.preimage_bytes();
         assert_eq!(p1, p2);
@@ -1594,7 +1594,7 @@ mod tests {
             zone: "test-zone",
             required_signatures: 1,
         })
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         assert!(decision.is_approved());
         assert_eq!(decision.verdict, GateVerdict::Approved);
@@ -1629,7 +1629,7 @@ mod tests {
             zone: "test-zone",
             required_signatures: 2,
         })
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         assert!(!decision.is_approved());
         assert_eq!(decision.verdict, GateVerdict::Denied);
@@ -1651,11 +1651,11 @@ mod tests {
             zone: "test-zone",
             required_signatures: 1,
         })
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         decision
             .add_signature(&test_signing_key(), "gate-runner")
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(decision.verify_signatures().is_ok());
     }
 
@@ -1663,10 +1663,10 @@ mod tests {
     fn decision_id_deterministic() {
         let id1 =
             PromotionDecision::derive_decision_id(&test_slot_id(), "candidate", 1000, "zone-a")
-                .unwrap();
+                .expect("serde deserialization should succeed");
         let id2 =
             PromotionDecision::derive_decision_id(&test_slot_id(), "candidate", 1000, "zone-a")
-                .unwrap();
+                .expect("serde deserialization should succeed");
         assert_eq!(id1, id2);
     }
 
@@ -1686,10 +1686,10 @@ mod tests {
             zone: "test-zone",
             required_signatures: 1,
         })
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
-        let json = serde_json::to_string(&decision).unwrap();
-        let restored: PromotionDecision = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&decision).expect("serde deserialization should succeed");
+        let restored: PromotionDecision = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(decision, restored);
     }
 
@@ -1709,7 +1709,7 @@ mod tests {
             zone: "test",
             required_signatures: 1,
         })
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let p1 = d.preimage_bytes();
         let p2 = d.preimage_bytes();
         assert_eq!(p1, p2);
@@ -1731,8 +1731,8 @@ mod tests {
             GateVerdict::Denied,
             GateVerdict::Inconclusive,
         ] {
-            let json = serde_json::to_string(&v).unwrap();
-            let restored: GateVerdict = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let restored: GateVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(v, restored);
         }
     }
@@ -1753,8 +1753,8 @@ mod tests {
             RiskLevel::High,
             RiskLevel::Critical,
         ] {
-            let json = serde_json::to_string(&rl).unwrap();
-            let restored: RiskLevel = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&rl).expect("serde deserialization should succeed");
+            let restored: RiskLevel = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(rl, restored);
         }
     }
@@ -1777,8 +1777,8 @@ mod tests {
             ReplacementStage::Canary,
             ReplacementStage::Production,
         ] {
-            let json = serde_json::to_string(&s).unwrap();
-            let restored: ReplacementStage = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+            let restored: ReplacementStage = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(s, restored);
         }
     }
@@ -1813,10 +1813,10 @@ mod tests {
             zone: "test-zone",
             required_signatures: 1,
         })
-        .unwrap();
+        .expect("serde deserialization should succeed");
         r1.add_signature(&test_signing_key(), "gate-runner")
-            .unwrap();
-        lifecycle.record_receipt(r1).unwrap();
+            .expect("serde deserialization should succeed");
+        lifecycle.record_receipt(r1).expect("serde deserialization should succeed");
         assert_eq!(lifecycle.current_stage, ReplacementStage::Shadow);
         assert_eq!(lifecycle.completed_stages(), 1);
 
@@ -1833,10 +1833,10 @@ mod tests {
             zone: "test-zone",
             required_signatures: 1,
         })
-        .unwrap();
+        .expect("serde deserialization should succeed");
         r2.add_signature(&test_signing_key(), "gate-runner")
-            .unwrap();
-        lifecycle.record_receipt(r2).unwrap();
+            .expect("serde deserialization should succeed");
+        lifecycle.record_receipt(r2).expect("serde deserialization should succeed");
         assert_eq!(lifecycle.current_stage, ReplacementStage::Canary);
 
         // Stage 3: Canary -> Production.
@@ -1852,10 +1852,10 @@ mod tests {
             zone: "test-zone",
             required_signatures: 1,
         })
-        .unwrap();
+        .expect("serde deserialization should succeed");
         r3.add_signature(&test_signing_key(), "gate-runner")
-            .unwrap();
-        lifecycle.record_receipt(r3).unwrap();
+            .expect("serde deserialization should succeed");
+        lifecycle.record_receipt(r3).expect("serde deserialization should succeed");
         assert!(lifecycle.is_production());
         assert_eq!(lifecycle.completed_stages(), 3);
     }
@@ -1883,7 +1883,7 @@ mod tests {
             zone: "test-zone",
             required_signatures: 1,
         })
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         assert!(matches!(
             lifecycle.record_receipt(receipt),
@@ -1898,7 +1898,7 @@ mod tests {
         let manifest = create_test_manifest();
         let mut lifecycle = ReplacementLifecycle::new(test_slot_id(), manifest);
 
-        let wrong_slot = SlotId::new("wrong-slot").unwrap();
+        let wrong_slot = SlotId::new("wrong-slot").expect("serde deserialization should succeed");
         let artifacts = test_validation_artifacts();
         let receipt = ReplacementReceipt::create_unsigned(CreateReceiptInput {
             slot_id: &wrong_slot,
@@ -1912,7 +1912,7 @@ mod tests {
             zone: "test-zone",
             required_signatures: 1,
         })
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         assert!(matches!(
             lifecycle.record_receipt(receipt),
@@ -1939,9 +1939,9 @@ mod tests {
             zone: "test-zone",
             required_signatures: 1,
         })
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
-        lifecycle.record_decision(decision).unwrap();
+        lifecycle.record_decision(decision).expect("serde deserialization should succeed");
         assert_eq!(lifecycle.decisions.len(), 1);
     }
 
@@ -1976,8 +1976,8 @@ mod tests {
             },
         ];
         for k in &kinds {
-            let json = serde_json::to_string(k).unwrap();
-            let restored: ApproverKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(k).expect("serde deserialization should succeed");
+            let restored: ApproverKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*k, restored);
         }
     }
@@ -2012,8 +2012,8 @@ mod tests {
             passed: true,
             summary: "ok".to_string(),
         };
-        let json = serde_json::to_string(&v).unwrap();
-        let restored: ValidationArtifactRef = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let restored: ValidationArtifactRef = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, restored);
     }
 
@@ -2058,8 +2058,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap();
-            let restored: SelfReplacementError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let restored: SelfReplacementError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, restored);
         }
     }
@@ -2078,7 +2078,7 @@ mod tests {
             &test_monitoring_hooks(),
             "zone",
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let id_b = DelegateCellManifest::derive_manifest_id(
             &test_slot_id(),
             DelegateType::QuickJsBacked,
@@ -2088,21 +2088,21 @@ mod tests {
             &test_monitoring_hooks(),
             "zone",
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_ne!(id_a, id_b, "different content must yield different IDs");
 
         let id_c =
             ReplacementReceipt::derive_receipt_id(&test_slot_id(), "old-a", "new-a", 1000, "zone")
-                .unwrap();
+                .expect("serde deserialization should succeed");
         let id_d =
             ReplacementReceipt::derive_receipt_id(&test_slot_id(), "old-b", "new-a", 1000, "zone")
-                .unwrap();
+                .expect("serde deserialization should succeed");
         assert_ne!(id_c, id_d);
 
         let id_e =
-            PromotionDecision::derive_decision_id(&test_slot_id(), "cand-a", 1000, "zone").unwrap();
+            PromotionDecision::derive_decision_id(&test_slot_id(), "cand-a", 1000, "zone").expect("serde deserialization should succeed");
         let id_f =
-            PromotionDecision::derive_decision_id(&test_slot_id(), "cand-b", 1000, "zone").unwrap();
+            PromotionDecision::derive_decision_id(&test_slot_id(), "cand-b", 1000, "zone").expect("serde deserialization should succeed");
         assert_ne!(id_e, id_f);
     }
 
@@ -2123,13 +2123,13 @@ mod tests {
             zone: "zone",
             required_signatures: 2,
         })
-        .unwrap();
+        .expect("serde deserialization should succeed");
 
         let sk1 = test_signing_key();
         let sk2 = test_signing_key_2();
 
-        receipt.add_signature(&sk1, "gate-runner").unwrap();
-        receipt.add_signature(&sk2, "governance-approver").unwrap();
+        receipt.add_signature(&sk1, "gate-runner").expect("serde deserialization should succeed");
+        receipt.add_signature(&sk2, "governance-approver").expect("serde deserialization should succeed");
 
         // Both signatures should verify.
         assert!(receipt.verify_signatures().is_ok());
@@ -2148,8 +2148,8 @@ mod tests {
     fn lifecycle_serde_roundtrip() {
         let manifest = create_test_manifest();
         let lifecycle = ReplacementLifecycle::new(test_slot_id(), manifest);
-        let json = serde_json::to_string(&lifecycle).unwrap();
-        let restored: ReplacementLifecycle = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&lifecycle).expect("serde deserialization should succeed");
+        let restored: ReplacementLifecycle = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(lifecycle, restored);
     }
 
@@ -2162,8 +2162,8 @@ mod tests {
             trigger_event: "hostcall".to_string(),
             blocking: true,
         };
-        let json = serde_json::to_string(&hook).unwrap();
-        let restored: MonitoringHook = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&hook).expect("serde deserialization should succeed");
+        let restored: MonitoringHook = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(hook, restored);
     }
 
@@ -2239,21 +2239,21 @@ mod tests {
             evidence_refs: vec!["ev-1".to_string()],
             summary: "all equivalent".to_string(),
         };
-        let json = serde_json::to_string(&gr).unwrap();
-        let restored: GateResult = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&gr).expect("serde deserialization should succeed");
+        let restored: GateResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(gr, restored);
     }
 
     #[test]
     fn signer_entry_serde_roundtrip() {
-        let sk = SigningKey::from_bytes([42u8; 32]).unwrap();
+        let sk = SigningKey::from_bytes([42u8; 32]).expect("serde deserialization should succeed");
         let entry = SignerEntry {
             role: "admin".to_string(),
             verification_key: sk.verification_key(),
             signature: Signature::from_bytes([0u8; 64]),
         };
-        let json = serde_json::to_string(&entry).unwrap();
-        let restored: SignerEntry = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let restored: SignerEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, restored);
     }
 
@@ -2380,7 +2380,7 @@ mod tests {
             &test_monitoring_hooks(),
             "zone",
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let id_wasm = DelegateCellManifest::derive_manifest_id(
             &test_slot_id(),
             DelegateType::WasmBacked,
@@ -2390,7 +2390,7 @@ mod tests {
             &test_monitoring_hooks(),
             "zone",
         )
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_ne!(id_quickjs, id_wasm);
     }
 
@@ -2422,7 +2422,7 @@ mod tests {
             zone: "zone",
             required_signatures: 1,
         })
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert!(!receipt.all_validations_passed());
     }
 
@@ -2441,7 +2441,7 @@ mod tests {
             zone: "zone",
             required_signatures: 1,
         })
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(decision.verdict, GateVerdict::Inconclusive);
         assert!(!decision.is_approved());
     }
@@ -2467,7 +2467,7 @@ mod tests {
             zone: "zone",
             required_signatures: 1,
         })
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(decision.verdict, GateVerdict::Denied);
         assert!(!decision.is_approved());
     }
@@ -2476,19 +2476,19 @@ mod tests {
     fn receipt_id_differs_by_zone() {
         let id_a =
             ReplacementReceipt::derive_receipt_id(&test_slot_id(), "old", "new", 1000, "zone-a")
-                .unwrap();
+                .expect("serde deserialization should succeed");
         let id_b =
             ReplacementReceipt::derive_receipt_id(&test_slot_id(), "old", "new", 1000, "zone-b")
-                .unwrap();
+                .expect("serde deserialization should succeed");
         assert_ne!(id_a, id_b);
     }
 
     #[test]
     fn decision_id_differs_by_zone() {
         let id_a =
-            PromotionDecision::derive_decision_id(&test_slot_id(), "cand", 1000, "zone-a").unwrap();
+            PromotionDecision::derive_decision_id(&test_slot_id(), "cand", 1000, "zone-a").expect("serde deserialization should succeed");
         let id_b =
-            PromotionDecision::derive_decision_id(&test_slot_id(), "cand", 1000, "zone-b").unwrap();
+            PromotionDecision::derive_decision_id(&test_slot_id(), "cand", 1000, "zone-b").expect("serde deserialization should succeed");
         assert_ne!(id_a, id_b);
     }
 
@@ -2511,11 +2511,11 @@ mod tests {
                 zone: "zone",
                 required_signatures: 1,
             })
-            .unwrap();
+            .expect("serde deserialization should succeed");
             receipt
                 .add_signature(&test_signing_key(), "gate-runner")
-                .unwrap();
-            lifecycle.record_receipt(receipt).unwrap();
+                .expect("serde deserialization should succeed");
+            lifecycle.record_receipt(receipt).expect("serde deserialization should succeed");
         }
         assert!(lifecycle.is_production());
         assert_eq!(lifecycle.completed_stages(), 3);
@@ -2533,11 +2533,11 @@ mod tests {
             zone: "zone",
             required_signatures: 1,
         })
-        .unwrap();
+        .expect("serde deserialization should succeed");
         receipt
             .add_signature(&test_signing_key(), "gate-runner")
-            .unwrap();
-        lifecycle.record_receipt(receipt).unwrap();
+            .expect("serde deserialization should succeed");
+        lifecycle.record_receipt(receipt).expect("serde deserialization should succeed");
         assert!(lifecycle.is_production());
         assert_eq!(lifecycle.completed_stages(), 4);
     }
@@ -2603,8 +2603,8 @@ mod tests {
             trigger_event: "invocation_start".to_string(),
             blocking: false,
         };
-        let json = serde_json::to_string(&hook).unwrap();
-        let restored: MonitoringHook = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&hook).expect("serde deserialization should succeed");
+        let restored: MonitoringHook = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(hook, restored);
         assert!(!restored.blocking);
     }

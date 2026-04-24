@@ -630,7 +630,7 @@ impl CharterBuilder {
                 &SchemaId::from_definition(b"runtime_kernel_lane_charter:0.1.0"),
                 content_hash.as_bytes(),
             )
-            .unwrap()
+            .expect("serde deserialization should succeed")
         };
 
         RuntimeKernelCharter {
@@ -1459,32 +1459,32 @@ mod tests {
     #[test]
     fn serde_runtime_lane() {
         let lane = RuntimeLane::Wasm;
-        let json = serde_json::to_string(&lane).unwrap();
-        let lane2: RuntimeLane = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&lane).expect("serde deserialization should succeed");
+        let lane2: RuntimeLane = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(lane, lane2);
     }
 
     #[test]
     fn serde_footprint_budget() {
         let b = FootprintBudget::js_default();
-        let json = serde_json::to_string(&b).unwrap();
-        let b2: FootprintBudget = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&b).expect("serde deserialization should succeed");
+        let b2: FootprintBudget = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(b, b2);
     }
 
     #[test]
     fn serde_failure_policy() {
         let p = FailurePolicy::strict();
-        let json = serde_json::to_string(&p).unwrap();
-        let p2: FailurePolicy = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
+        let p2: FailurePolicy = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(p, p2);
     }
 
     #[test]
     fn serde_charter() {
         let charter = canonical_charter(test_epoch());
-        let json = serde_json::to_string(&charter).unwrap();
-        let c2: RuntimeKernelCharter = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&charter).expect("serde deserialization should succeed");
+        let c2: RuntimeKernelCharter = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(charter, c2);
     }
 
@@ -1506,8 +1506,8 @@ mod tests {
             dom_patches: 50,
         };
         let report = check_compliance(&charter, &RuntimeLane::Js, &inputs, &outputs, &usage, &[]);
-        let json = serde_json::to_string(&report).unwrap();
-        let r2: ComplianceReport = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let r2: ComplianceReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report, r2);
     }
 
@@ -1628,8 +1628,8 @@ mod tests {
             RuntimeLane::Wasm,
             RuntimeLane::HybridRouter,
         ] {
-            let json = serde_json::to_string(&lane).unwrap();
-            let back: RuntimeLane = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&lane).expect("serde deserialization should succeed");
+            let back: RuntimeLane = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(lane, back);
         }
     }
@@ -1637,8 +1637,8 @@ mod tests {
     #[test]
     fn footprint_budget_serde_roundtrip() {
         let budget = FootprintBudget::js_default();
-        let json = serde_json::to_string(&budget).unwrap();
-        let back: FootprintBudget = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&budget).expect("serde deserialization should succeed");
+        let back: FootprintBudget = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(budget, back);
     }
 
@@ -1662,8 +1662,8 @@ mod tests {
             OwnershipDomain::TraceEmission,
             OwnershipDomain::IncidentResponse,
         ] {
-            let json = serde_json::to_string(&d).unwrap();
-            let back: OwnershipDomain = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
+            let back: OwnershipDomain = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(d, back);
         }
     }
@@ -1699,8 +1699,8 @@ mod tests {
     #[test]
     fn failure_action_fallback_to_lane_serde_roundtrip() {
         let action = FailureAction::FallbackToLane(RuntimeLane::Wasm);
-        let json = serde_json::to_string(&action).unwrap();
-        let back: FailureAction = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&action).expect("serde deserialization should succeed");
+        let back: FailureAction = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(action, back);
     }
 
@@ -1714,8 +1714,8 @@ mod tests {
             FailureAction::ForceTerminate,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: FailureAction = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: FailureAction = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -1749,8 +1749,8 @@ mod tests {
             InvariantKind::RoutingInconsistency,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: InvariantKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: InvariantKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -1864,8 +1864,8 @@ mod tests {
     #[test]
     fn input_contract_serde_roundtrip() {
         let contract = LaneInputContract::hybrid_router_default();
-        let json = serde_json::to_string(&contract).unwrap();
-        let back: LaneInputContract = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&contract).expect("serde deserialization should succeed");
+        let back: LaneInputContract = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(contract, back);
     }
 
@@ -1880,8 +1880,8 @@ mod tests {
     #[test]
     fn output_contract_serde_roundtrip() {
         let contract = LaneOutputContract::wasm_default();
-        let json = serde_json::to_string(&contract).unwrap();
-        let back: LaneOutputContract = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&contract).expect("serde deserialization should succeed");
+        let back: LaneOutputContract = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(contract, back);
     }
 
@@ -1894,8 +1894,8 @@ mod tests {
             limit: 1024,
             observed: 2048,
         };
-        let json = serde_json::to_string(&v).unwrap();
-        let back: BudgetViolation = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let back: BudgetViolation = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, back);
     }
 
@@ -1910,8 +1910,8 @@ mod tests {
                 observed: 300,
             }],
         };
-        let json = serde_json::to_string(&r).unwrap();
-        let back: BudgetCheckResult = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let back: BudgetCheckResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 
@@ -1924,8 +1924,8 @@ mod tests {
             satisfied: false,
             missing_inputs: BTreeSet::from(["wasm_module".to_string()]),
         };
-        let json = serde_json::to_string(&iv).unwrap();
-        let back: InputValidation = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&iv).expect("serde deserialization should succeed");
+        let back: InputValidation = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(iv, back);
     }
 
@@ -1936,8 +1936,8 @@ mod tests {
             satisfied: true,
             missing_outputs: BTreeSet::new(),
         };
-        let json = serde_json::to_string(&ov).unwrap();
-        let back: OutputValidation = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&ov).expect("serde deserialization should succeed");
+        let back: OutputValidation = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ov, back);
     }
 
@@ -1950,8 +1950,8 @@ mod tests {
             RuntimeLane::Wasm,
             RuntimeLane::HybridRouter,
         ] {
-            let json = serde_json::to_string(&lane).unwrap();
-            let back: RuntimeLane = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&lane).expect("serde deserialization should succeed");
+            let back: RuntimeLane = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(lane, back);
         }
     }

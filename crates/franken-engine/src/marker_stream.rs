@@ -1469,7 +1469,7 @@ mod tests {
         append_security_marker(&mut stream, "1");
         append_security_marker(&mut stream, "2");
 
-        let m = stream.get(2).unwrap();
+        let m = stream.get(2).expect("serde deserialization should succeed");
         assert_eq!(m.marker_id, 2);
     }
 
@@ -1487,8 +1487,8 @@ mod tests {
         append_security_marker(&mut stream, "1");
 
         let marker = &stream.markers()[0];
-        let json = serde_json::to_string(marker).unwrap();
-        let restored: DecisionMarker = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(marker).expect("serde deserialization should succeed");
+        let restored: DecisionMarker = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(*marker, restored);
     }
 
@@ -1500,8 +1500,8 @@ mod tests {
             chain_length: 10,
             signed_hash: AuthenticityHash::compute_keyed(b"key", b"data"),
         };
-        let json = serde_json::to_string(&cp).unwrap();
-        let restored: IntegrityCheckpoint = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&cp).expect("serde deserialization should succeed");
+        let restored: IntegrityCheckpoint = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cp, restored);
     }
 
@@ -1515,8 +1515,8 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap();
-            let restored: ChainIntegrityError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let restored: ChainIntegrityError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, restored);
         }
     }
@@ -1537,8 +1537,8 @@ mod tests {
             outcome: "ok".to_string(),
             error_code: None,
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let restored: MarkerEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let restored: MarkerEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, restored);
     }
 
@@ -1569,8 +1569,8 @@ mod tests {
             SecurityActionKind::Suspend,
             SecurityActionKind::Terminate,
         ] {
-            let json = serde_json::to_string(&v).unwrap();
-            let restored: SecurityActionKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let restored: SecurityActionKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(v, restored);
         }
     }
@@ -1582,8 +1582,8 @@ mod tests {
             PolicyTransitionKind::Deactivation,
             PolicyTransitionKind::EpochAdvancement,
         ] {
-            let json = serde_json::to_string(&v).unwrap();
-            let restored: PolicyTransitionKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let restored: PolicyTransitionKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(v, restored);
         }
     }
@@ -1594,8 +1594,8 @@ mod tests {
             RevocationKind::Issuance,
             RevocationKind::PropagationConfirmation,
         ] {
-            let json = serde_json::to_string(&v).unwrap();
-            let restored: RevocationKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let restored: RevocationKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(v, restored);
         }
     }
@@ -1606,9 +1606,9 @@ mod tests {
 
     #[test]
     fn correlation_id_serde_roundtrip() {
-        let cid = CorrelationId::new("corr-123").unwrap();
-        let json = serde_json::to_string(&cid).unwrap();
-        let restored: CorrelationId = serde_json::from_str(&json).unwrap();
+        let cid = CorrelationId::new("corr-123").expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cid).expect("serde deserialization should succeed");
+        let restored: CorrelationId = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cid, restored);
     }
 
@@ -1619,8 +1619,8 @@ mod tests {
             tracestate: Some("vendor=val".to_string()),
             baggage: None,
         };
-        let json = serde_json::to_string(&tc).unwrap();
-        let restored: TraceContext = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&tc).expect("serde deserialization should succeed");
+        let restored: TraceContext = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(tc, restored);
     }
 
@@ -1631,8 +1631,8 @@ mod tests {
             payload_hash: ContentHash::compute(b"payload"),
             redaction_applied: true,
         };
-        let json = serde_json::to_string(&rp).unwrap();
-        let restored: RedactedPayload = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&rp).expect("serde deserialization should succeed");
+        let restored: RedactedPayload = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(rp, restored);
     }
 
@@ -1644,8 +1644,8 @@ mod tests {
             rolling_chain_hash: ContentHash::compute(b"rolling"),
             signed_head_hash: AuthenticityHash::compute_keyed(b"head", b"key"),
         };
-        let json = serde_json::to_string(&head).unwrap();
-        let restored: AuditChainHead = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&head).expect("serde deserialization should succeed");
+        let restored: AuditChainHead = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(head, restored);
     }
 
@@ -1707,7 +1707,7 @@ mod tests {
 
     #[test]
     fn correlation_id_as_str_matches_display() {
-        let cid = CorrelationId::new("corr-x").unwrap();
+        let cid = CorrelationId::new("corr-x").expect("serde deserialization should succeed");
         assert_eq!(cid.as_str(), "corr-x");
         assert_eq!(cid.to_string(), "corr-x");
     }
@@ -1766,7 +1766,7 @@ mod tests {
     fn marker_json_field_presence() {
         let mut stream = make_stream();
         append_security_marker(&mut stream, "1");
-        let json = serde_json::to_string(&stream.markers()[0]).unwrap();
+        let json = serde_json::to_string(&stream.markers()[0]).expect("serde deserialization should succeed");
         for field in &[
             "marker_id",
             "timestamp_ticks",
@@ -1858,8 +1858,8 @@ mod tests {
             },
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).unwrap();
-            let back: DecisionType = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: DecisionType = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -1919,8 +1919,8 @@ mod tests {
     #[test]
     fn correlation_id_hash_consistent() {
         use std::hash::{Hash, Hasher};
-        let a = CorrelationId::new("trace-1").unwrap();
-        let b = CorrelationId::new("trace-1").unwrap();
+        let a = CorrelationId::new("trace-1").expect("serde deserialization should succeed");
+        let b = CorrelationId::new("trace-1").expect("serde deserialization should succeed");
         let mut ha = std::collections::hash_map::DefaultHasher::new();
         let mut hb = std::collections::hash_map::DefaultHasher::new();
         a.hash(&mut ha);
@@ -1931,8 +1931,8 @@ mod tests {
     #[test]
     fn correlation_id_hash_distinct() {
         use std::hash::{Hash, Hasher};
-        let a = CorrelationId::new("trace-1").unwrap();
-        let b = CorrelationId::new("trace-2").unwrap();
+        let a = CorrelationId::new("trace-1").expect("serde deserialization should succeed");
+        let b = CorrelationId::new("trace-2").expect("serde deserialization should succeed");
         let mut ha = std::collections::hash_map::DefaultHasher::new();
         let mut hb = std::collections::hash_map::DefaultHasher::new();
         a.hash(&mut ha);
@@ -1942,8 +1942,8 @@ mod tests {
 
     #[test]
     fn correlation_id_ord_consistent() {
-        let a = CorrelationId::new("aaa").unwrap();
-        let b = CorrelationId::new("bbb").unwrap();
+        let a = CorrelationId::new("aaa").expect("serde deserialization should succeed");
+        let b = CorrelationId::new("bbb").expect("serde deserialization should succeed");
         assert!(a < b);
     }
 
@@ -2013,7 +2013,7 @@ mod tests {
         ];
         let jsons: Vec<String> = variants
             .iter()
-            .map(|v| serde_json::to_string(v).unwrap())
+            .map(|v| serde_json::to_string(v).expect("serde deserialization should succeed"))
             .collect();
         for (i, a) in jsons.iter().enumerate() {
             for (j, b) in jsons.iter().enumerate() {
@@ -2034,8 +2034,8 @@ mod tests {
         let cloned = e.clone();
         assert_eq!(e, cloned);
         // Both are independent allocations
-        let j1 = serde_json::to_string(&e).unwrap();
-        let j2 = serde_json::to_string(&cloned).unwrap();
+        let j1 = serde_json::to_string(&e).expect("serde deserialization should succeed");
+        let j2 = serde_json::to_string(&cloned).expect("serde deserialization should succeed");
         assert_eq!(j1, j2);
     }
 
@@ -2058,7 +2058,7 @@ mod tests {
             tracestate: Some("ts".to_string()),
             baggage: Some("bg".to_string()),
         };
-        let j = serde_json::to_string(&t).unwrap();
+        let j = serde_json::to_string(&t).expect("serde deserialization should succeed");
         assert!(j.contains("\"traceparent\""));
         assert!(j.contains("\"tracestate\""));
         assert!(j.contains("\"baggage\""));
@@ -2071,7 +2071,7 @@ mod tests {
             payload_hash: ContentHash([0u8; 32]),
             redaction_applied: true,
         };
-        let j = serde_json::to_string(&r).unwrap();
+        let j = serde_json::to_string(&r).expect("serde deserialization should succeed");
         assert!(j.contains("\"redacted_summary\""));
         assert!(j.contains("\"payload_hash\""));
         assert!(j.contains("\"redaction_applied\""));
@@ -2097,7 +2097,7 @@ mod tests {
             chain_length: 5,
             signed_hash: AuthenticityHash([0u8; 32]),
         };
-        let j = serde_json::to_string(&c).unwrap();
+        let j = serde_json::to_string(&c).expect("serde deserialization should succeed");
         for field in &["at_marker_id", "marker_hash", "chain_length", "signed_hash"] {
             assert!(j.contains(field), "missing: {field}");
         }
@@ -2111,7 +2111,7 @@ mod tests {
             rolling_chain_hash: ContentHash([0u8; 32]),
             signed_head_hash: AuthenticityHash([0u8; 32]),
         };
-        let j = serde_json::to_string(&h).unwrap();
+        let j = serde_json::to_string(&h).expect("serde deserialization should succeed");
         for field in &[
             "head_marker_id",
             "latest_marker_hash",
@@ -2150,7 +2150,7 @@ mod tests {
             outcome: "ok".to_string(),
             error_code: None,
         };
-        let j = serde_json::to_string(&e).unwrap();
+        let j = serde_json::to_string(&e).expect("serde deserialization should succeed");
         for field in &[
             "marker_id",
             "marker_type",
@@ -2370,12 +2370,12 @@ mod tests {
             action: SecurityActionKind::Quarantine,
         });
         stream.append(input1);
-        let head1 = stream.chain_head().unwrap().head_marker_id;
+        let head1 = stream.chain_head().expect("serde deserialization should succeed").head_marker_id;
         let input2 = make_input(DecisionType::SecurityAction {
             action: SecurityActionKind::Suspend,
         });
         stream.append(input2);
-        let head2 = stream.chain_head().unwrap().head_marker_id;
+        let head2 = stream.chain_head().expect("serde deserialization should succeed").head_marker_id;
         assert!(head2 > head1);
     }
 
@@ -2408,7 +2408,7 @@ mod tests {
             action: SecurityActionKind::Quarantine,
         });
         stream.append(input);
-        let marker = stream.get(1).unwrap();
+        let marker = stream.get(1).expect("serde deserialization should succeed");
         let dbg = format!("{marker:?}");
         assert!(!dbg.is_empty());
         assert!(dbg.contains("DecisionMarker"));

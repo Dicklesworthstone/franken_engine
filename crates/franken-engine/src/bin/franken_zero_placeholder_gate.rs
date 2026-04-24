@@ -390,7 +390,7 @@ fn prepare_gate_inputs(
     ]
     .into_iter()
     .map(|subsystem| {
-        let entries = grouped_entries.remove(&subsystem).unwrap();
+        let entries = grouped_entries.remove(&subsystem).expect("serde deserialization should succeed");
         ScanResult::new(subsystem, entries, epoch)
     })
     .collect();
@@ -767,7 +767,7 @@ mod tests {
             status: WaiverStatus::Active,
             created_epoch: 40,
         }];
-        fs::write(&waivers_path, serde_json::to_vec_pretty(&waivers).unwrap())
+        fs::write(&waivers_path, serde_json::to_vec_pretty(&waivers).expect("serde deserialization should succeed"))
             .expect("write waivers");
 
         write_zero_placeholder_gate_bundle(
@@ -827,7 +827,7 @@ mod tests {
         });
         fs::write(
             &waivers_path,
-            serde_json::to_vec_pretty(&legacy_manifest).unwrap(),
+            serde_json::to_vec_pretty(&legacy_manifest).expect("serde deserialization should succeed"),
         )
         .expect("write legacy manifest");
 

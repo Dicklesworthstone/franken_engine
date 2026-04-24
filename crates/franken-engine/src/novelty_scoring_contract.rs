@@ -1454,8 +1454,8 @@ mod tests {
     #[test]
     fn dimension_serde_roundtrip() {
         for d in NoveltyDimension::ALL {
-            let json = serde_json::to_string(d).unwrap();
-            let back: NoveltyDimension = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(d).expect("serde deserialization should succeed");
+            let back: NoveltyDimension = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*d, back);
         }
     }
@@ -1480,8 +1480,8 @@ mod tests {
     #[test]
     fn candidate_kind_serde_roundtrip() {
         for kind in CandidateKind::ALL {
-            let json = serde_json::to_string(kind).unwrap();
-            let back: CandidateKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(kind).expect("serde deserialization should succeed");
+            let back: CandidateKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*kind, back);
         }
     }
@@ -1497,8 +1497,8 @@ mod tests {
     #[test]
     fn verdict_serde_roundtrip() {
         for v in NoveltyVerdict::ALL {
-            let json = serde_json::to_string(v).unwrap();
-            let back: NoveltyVerdict = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: NoveltyVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -1531,8 +1531,8 @@ mod tests {
             NoveltyError::MdlBaselineZero,
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).unwrap();
-            let back: NoveltyError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let back: NoveltyError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, back);
         }
     }
@@ -1734,12 +1734,12 @@ mod tests {
             .certificates
             .iter()
             .find(|c| c.score.rank == 0)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         let rank1 = batch
             .certificates
             .iter()
             .find(|c| c.score.rank == 1)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert!(rank0.score.total_score_millionths >= rank1.score.total_score_millionths);
     }
 
@@ -1788,8 +1788,8 @@ mod tests {
         );
         let score = score_candidate(&candidate, &config, &[]);
         let cert = certify_candidate(&candidate, &score, &config);
-        let json = serde_json::to_string(&cert).unwrap();
-        let back: NoveltyCertificate = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&cert).expect("serde deserialization should succeed");
+        let back: NoveltyCertificate = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cert, back);
     }
 
@@ -1873,8 +1873,8 @@ mod tests {
     #[test]
     fn evidence_manifest_serde_roundtrip() {
         let manifest = run_novelty_evidence();
-        let json = serde_json::to_string(&manifest).unwrap();
-        let back: NoveltyEvidenceManifest = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&manifest).expect("serde deserialization should succeed");
+        let back: NoveltyEvidenceManifest = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(manifest, back);
     }
 
@@ -1904,8 +1904,8 @@ mod tests {
             available: 3,
             required: 10,
         };
-        let json = serde_json::to_string(&r).unwrap();
-        let back: AbstentionReason = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let back: AbstentionReason = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 
@@ -1945,13 +1945,13 @@ mod tests {
     #[test]
     fn dimension_score_serde_roundtrip() {
         let scored = DimensionScore::scored(500_000, 800_000, 100);
-        let json = serde_json::to_string(&scored).unwrap();
-        let back: DimensionScore = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&scored).expect("serde deserialization should succeed");
+        let back: DimensionScore = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(scored, back);
 
         let abstained = DimensionScore::abstained(AbstentionReason::DisabledByPolicy);
-        let json2 = serde_json::to_string(&abstained).unwrap();
-        let back2: DimensionScore = serde_json::from_str(&json2).unwrap();
+        let json2 = serde_json::to_string(&abstained).expect("serde deserialization should succeed");
+        let back2: DimensionScore = serde_json::from_str(&json2).expect("serde deserialization should succeed");
         assert_eq!(abstained, back2);
     }
 
@@ -2044,8 +2044,8 @@ mod tests {
     #[test]
     fn profile_serde_roundtrip() {
         let p = full_scored_profile(700_000);
-        let json = serde_json::to_string(&p).unwrap();
-        let back: NoveltyProfile = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
+        let back: NoveltyProfile = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(p, back);
     }
 
@@ -2083,8 +2083,8 @@ mod tests {
     #[test]
     fn composite_verdict_serde_roundtrip() {
         for v in CompositeVerdict::ALL {
-            let json = serde_json::to_string(v).unwrap();
-            let back: CompositeVerdict = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let back: CompositeVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -2189,8 +2189,8 @@ mod tests {
             DEFAULT_ABSTENTION_THRESHOLD,
             test_epoch(),
         );
-        let json = serde_json::to_string(&score).unwrap();
-        let back: CompositeNoveltyScore = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&score).expect("serde deserialization should succeed");
+        let back: CompositeNoveltyScore = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(score, back);
     }
 
@@ -2290,8 +2290,8 @@ mod tests {
             test_epoch(),
         );
         let batch = NoveltyBatch::new(test_epoch(), vec![score]);
-        let json = serde_json::to_string(&batch).unwrap();
-        let back: NoveltyBatch = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&batch).expect("serde deserialization should succeed");
+        let back: NoveltyBatch = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(batch, back);
     }
 
@@ -2337,8 +2337,8 @@ mod tests {
         assert_eq!(c.description_length_bits, 8_000);
         assert_eq!(c.feature_vector.len(), 3);
 
-        let json = serde_json::to_string(&c).unwrap();
-        let back: NoveltyCandidate = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let back: NoveltyCandidate = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c, back);
     }
 
@@ -2370,8 +2370,8 @@ mod tests {
             is_novel: true,
             rank: 0,
         };
-        let json = serde_json::to_string(&score).unwrap();
-        let back: NoveltyScore = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&score).expect("serde deserialization should succeed");
+        let back: NoveltyScore = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(score, back);
     }
 

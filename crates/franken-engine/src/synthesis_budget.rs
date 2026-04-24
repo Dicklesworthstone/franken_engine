@@ -801,9 +801,9 @@ mod tests {
     fn phase_serde_roundtrip() {
         for phase in SynthesisPhase::ALL {
             // SAFETY: to_string cannot fail on derived Serialize enum
-            let json = serde_json::to_string(&phase).unwrap();
+            let json = serde_json::to_string(&phase).expect("serde deserialization should succeed");
             // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-            let restored: SynthesisPhase = serde_json::from_str(&json).unwrap();
+            let restored: SynthesisPhase = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(phase, restored);
         }
     }
@@ -825,9 +825,9 @@ mod tests {
             BudgetDimension::Depth,
         ] {
             // SAFETY: to_string cannot fail on derived Serialize enum
-            let json = serde_json::to_string(&dim).unwrap();
+            let json = serde_json::to_string(&dim).expect("serde deserialization should succeed");
             // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-            let restored: BudgetDimension = serde_json::from_str(&json).unwrap();
+            let restored: BudgetDimension = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(dim, restored);
         }
     }
@@ -895,9 +895,9 @@ mod tests {
             depth_cap: 10,
         };
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&budget).unwrap();
+        let json = serde_json::to_string(&budget).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let restored: PhaseBudget = serde_json::from_str(&json).unwrap();
+        let restored: PhaseBudget = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(budget, restored);
     }
 
@@ -933,9 +933,9 @@ mod tests {
     fn contract_serde_roundtrip() {
         let c = contract_with_phase_budgets();
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&c).unwrap();
+        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let restored: SynthesisBudgetContract = serde_json::from_str(&json).unwrap();
+        let restored: SynthesisBudgetContract = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c, restored);
     }
 
@@ -988,9 +988,9 @@ mod tests {
             justification: "test".to_string(),
         });
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&reg).unwrap();
+        let json = serde_json::to_string(&reg).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let restored: BudgetRegistry = serde_json::from_str(&json).unwrap();
+        let restored: BudgetRegistry = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(restored.override_count(), 1);
     }
 
@@ -1000,15 +1000,15 @@ mod tests {
     fn monitor_tracks_consumption() {
         let mut monitor = BudgetMonitor::new(default_contract());
         // SAFETY: beginning phase with valid phase should succeed
-        monitor.begin_phase(SynthesisPhase::StaticAnalysis).unwrap();
+        monitor.begin_phase(SynthesisPhase::StaticAnalysis).expect("serde deserialization should succeed");
         // SAFETY: recording consumption with valid values should succeed
-        monitor.record_consumption(100, 10, 1).unwrap();
+        monitor.record_consumption(100, 10, 1).expect("serde deserialization should succeed");
         // SAFETY: recording consumption with valid values should succeed
-        monitor.record_consumption(200, 20, 2).unwrap();
+        monitor.record_consumption(200, 20, 2).expect("serde deserialization should succeed");
 
         let pc = monitor
             .phase_consumption(SynthesisPhase::StaticAnalysis)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(pc.time_ns, 300);
         assert_eq!(pc.compute, 30);
         assert_eq!(pc.depth, 3);
@@ -1021,7 +1021,7 @@ mod tests {
     fn monitor_halts_on_phase_budget_exceeded() {
         let c = contract_with_phase_budgets();
         let mut monitor = BudgetMonitor::new(c);
-        monitor.begin_phase(SynthesisPhase::StaticAnalysis).unwrap();
+        monitor.begin_phase(SynthesisPhase::StaticAnalysis).expect("serde deserialization should succeed");
         // Static analysis has time_cap_ns: 500.
         assert!(monitor.record_consumption(400, 10, 1).is_ok());
         let result = monitor.record_consumption(200, 10, 1); // 600 > 500
@@ -1029,7 +1029,7 @@ mod tests {
         assert!(monitor.is_exhausted());
 
         // SAFETY: Test just verified monitor.is_exhausted() is true; exhaustion_reason() returns Some
-        let reason = monitor.exhaustion_reason().unwrap();
+        let reason = monitor.exhaustion_reason().expect("serde deserialization should succeed");
         assert!(!reason.global_limit_hit);
         assert_eq!(reason.phase, SynthesisPhase::StaticAnalysis);
         assert!(reason.exceeded_dimensions.contains(&BudgetDimension::Time));
@@ -1039,14 +1039,14 @@ mod tests {
     fn monitor_halts_on_global_budget_exceeded() {
         let c = tight_contract(); // global_time_cap_ns: 1000
         let mut monitor = BudgetMonitor::new(c);
-        monitor.begin_phase(SynthesisPhase::StaticAnalysis).unwrap();
+        monitor.begin_phase(SynthesisPhase::StaticAnalysis).expect("serde deserialization should succeed");
         assert!(monitor.record_consumption(500, 10, 1).is_ok());
 
-        monitor.begin_phase(SynthesisPhase::Ablation).unwrap();
+        monitor.begin_phase(SynthesisPhase::Ablation).expect("serde deserialization should succeed");
         let result = monitor.record_consumption(600, 10, 1); // total 1100 > 1000
         assert!(matches!(result, Err(BudgetError::Exhausted(_))));
 
-        let reason = monitor.exhaustion_reason().unwrap();
+        let reason = monitor.exhaustion_reason().expect("serde deserialization should succeed");
         assert!(reason.global_limit_hit);
     }
 
@@ -1054,7 +1054,7 @@ mod tests {
     fn monitor_rejects_after_exhaustion() {
         let c = tight_contract();
         let mut monitor = BudgetMonitor::new(c);
-        monitor.begin_phase(SynthesisPhase::StaticAnalysis).unwrap();
+        monitor.begin_phase(SynthesisPhase::StaticAnalysis).expect("serde deserialization should succeed");
         let _ = monitor.record_consumption(2000, 0, 0); // exhaust
 
         assert!(matches!(
@@ -1080,10 +1080,10 @@ mod tests {
     fn monitor_remaining_budget() {
         let c = tight_contract(); // 1000 / 100 / 10
         let mut monitor = BudgetMonitor::new(c);
-        monitor.begin_phase(SynthesisPhase::StaticAnalysis).unwrap();
-        monitor.record_consumption(300, 40, 3).unwrap();
+        monitor.begin_phase(SynthesisPhase::StaticAnalysis).expect("serde deserialization should succeed");
+        monitor.record_consumption(300, 40, 3).expect("serde deserialization should succeed");
 
-        let remaining = monitor.remaining_for_current_phase().unwrap();
+        let remaining = monitor.remaining_for_current_phase().expect("serde deserialization should succeed");
         assert_eq!(remaining.time_ns, 700);
         assert_eq!(remaining.compute, 60);
         assert_eq!(remaining.depth, 7);
@@ -1096,8 +1096,8 @@ mod tests {
     fn monitor_utilization() {
         let c = tight_contract(); // 1000 / 100 / 10
         let mut monitor = BudgetMonitor::new(c);
-        monitor.begin_phase(SynthesisPhase::StaticAnalysis).unwrap();
-        monitor.record_consumption(500, 50, 5).unwrap();
+        monitor.begin_phase(SynthesisPhase::StaticAnalysis).expect("serde deserialization should succeed");
+        monitor.record_consumption(500, 50, 5).expect("serde deserialization should succeed");
 
         let util = monitor.utilization();
         assert_eq!(util[&BudgetDimension::Time], 500_000); // 50%
@@ -1109,14 +1109,14 @@ mod tests {
     fn monitor_serde_roundtrip() {
         let mut monitor = BudgetMonitor::new(default_contract());
         // SAFETY: beginning phase with valid phase should succeed
-        monitor.begin_phase(SynthesisPhase::StaticAnalysis).unwrap();
+        monitor.begin_phase(SynthesisPhase::StaticAnalysis).expect("serde deserialization should succeed");
         // SAFETY: recording consumption with valid values should succeed
-        monitor.record_consumption(100, 10, 1).unwrap();
+        monitor.record_consumption(100, 10, 1).expect("serde deserialization should succeed");
 
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&monitor).unwrap();
+        let json = serde_json::to_string(&monitor).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let restored: BudgetMonitor = serde_json::from_str(&json).unwrap();
+        let restored: BudgetMonitor = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(
             restored.total_consumption().time_ns,
             monitor.total_consumption().time_ns
@@ -1266,9 +1266,9 @@ mod tests {
             epoch: SecurityEpoch::from_raw(1),
         });
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&history).unwrap();
+        let json = serde_json::to_string(&history).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let restored: BudgetHistory = serde_json::from_str(&json).unwrap();
+        let restored: BudgetHistory = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(restored.len(), 1);
     }
 
@@ -1295,9 +1295,9 @@ mod tests {
             FallbackQuality::UnverifiedFull,
         ] {
             // SAFETY: to_string cannot fail on derived Serialize enum
-            let json = serde_json::to_string(&q).unwrap();
+            let json = serde_json::to_string(&q).expect("serde deserialization should succeed");
             // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-            let restored: FallbackQuality = serde_json::from_str(&json).unwrap();
+            let restored: FallbackQuality = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(q, restored);
         }
     }
@@ -1322,9 +1322,9 @@ mod tests {
             recommended_multiplier: Some(2_000_000),
         };
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&fb).unwrap();
+        let json = serde_json::to_string(&fb).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let restored: FallbackResult = serde_json::from_str(&json).unwrap();
+        let restored: FallbackResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(fb, restored);
     }
 
@@ -1365,9 +1365,9 @@ mod tests {
         let errors = vec![BudgetError::AlreadyExhausted, BudgetError::NoActivePhase];
         for err in &errors {
             // SAFETY: to_string cannot fail on derived Serialize enum
-            let json = serde_json::to_string(err).unwrap();
+            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
             // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-            let restored: BudgetError = serde_json::from_str(&json).unwrap();
+            let restored: BudgetError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, restored);
         }
     }
@@ -1381,25 +1381,25 @@ mod tests {
 
         // Phase 1: Static Analysis.
         // SAFETY: Test-only unwrap with valid synthesis phase transition
-        monitor.begin_phase(SynthesisPhase::StaticAnalysis).unwrap();
+        monitor.begin_phase(SynthesisPhase::StaticAnalysis).expect("serde deserialization should succeed");
         // SAFETY: Test-only unwrap with valid consumption values
-        monitor.record_consumption(200, 20, 2).unwrap();
+        monitor.record_consumption(200, 20, 2).expect("serde deserialization should succeed");
 
         // Phase 2: Ablation.
         // SAFETY: Test-only unwrap with valid synthesis phase transition
-        monitor.begin_phase(SynthesisPhase::Ablation).unwrap();
+        monitor.begin_phase(SynthesisPhase::Ablation).expect("serde deserialization should succeed");
         // SAFETY: Test-only unwrap with valid consumption values
-        monitor.record_consumption(300, 30, 3).unwrap();
+        monitor.record_consumption(300, 30, 3).expect("serde deserialization should succeed");
 
         // Phase 3: Theorem Checking.
         monitor
             .begin_phase(SynthesisPhase::TheoremChecking)
-            .unwrap();
-        monitor.record_consumption(200, 20, 2).unwrap();
+            .expect("serde deserialization should succeed");
+        monitor.record_consumption(200, 20, 2).expect("serde deserialization should succeed");
 
         // Phase 4: Result Assembly.
-        monitor.begin_phase(SynthesisPhase::ResultAssembly).unwrap();
-        monitor.record_consumption(100, 10, 1).unwrap();
+        monitor.begin_phase(SynthesisPhase::ResultAssembly).expect("serde deserialization should succeed");
+        monitor.record_consumption(100, 10, 1).expect("serde deserialization should succeed");
 
         assert!(!monitor.is_exhausted());
         let total = monitor.total_consumption();
@@ -1413,19 +1413,19 @@ mod tests {
         let contract = tight_contract(); // depth_cap: 10
         let mut monitor = BudgetMonitor::new(contract);
 
-        monitor.begin_phase(SynthesisPhase::StaticAnalysis).unwrap();
-        monitor.record_consumption(100, 10, 3).unwrap();
+        monitor.begin_phase(SynthesisPhase::StaticAnalysis).expect("serde deserialization should succeed");
+        monitor.record_consumption(100, 10, 3).expect("serde deserialization should succeed");
 
-        monitor.begin_phase(SynthesisPhase::Ablation).unwrap();
+        monitor.begin_phase(SynthesisPhase::Ablation).expect("serde deserialization should succeed");
         // Each iteration adds depth.
         for _ in 0..7 {
-            monitor.record_consumption(10, 1, 1).unwrap();
+            monitor.record_consumption(10, 1, 1).expect("serde deserialization should succeed");
         }
         // Next iteration exceeds depth cap (3 + 7 + 1 = 11 > 10).
         let result = monitor.record_consumption(10, 1, 1);
         assert!(matches!(result, Err(BudgetError::Exhausted(_))));
 
-        let reason = monitor.exhaustion_reason().unwrap();
+        let reason = monitor.exhaustion_reason().expect("serde deserialization should succeed");
         assert!(reason.exceeded_dimensions.contains(&BudgetDimension::Depth));
     }
 
@@ -1445,8 +1445,8 @@ mod tests {
             );
             c
         };
-        let json1 = serde_json::to_string(&build()).unwrap();
-        let json2 = serde_json::to_string(&build()).unwrap();
+        let json1 = serde_json::to_string(&build()).expect("serde deserialization should succeed");
+        let json2 = serde_json::to_string(&build()).expect("serde deserialization should succeed");
         assert_eq!(json1, json2);
     }
 
@@ -1507,9 +1507,9 @@ mod tests {
             justification: "needs more compute".to_string(),
         };
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&ovr).unwrap();
+        let json = serde_json::to_string(&ovr).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let restored: BudgetOverride = serde_json::from_str(&json).unwrap();
+        let restored: BudgetOverride = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ovr, restored);
     }
 
@@ -1595,10 +1595,10 @@ mod tests {
     fn monitor_remaining_global_after_multi_phase() {
         let c = tight_contract(); // 1000 / 100 / 10
         let mut monitor = BudgetMonitor::new(c);
-        monitor.begin_phase(SynthesisPhase::StaticAnalysis).unwrap();
-        monitor.record_consumption(300, 20, 3).unwrap();
-        monitor.begin_phase(SynthesisPhase::Ablation).unwrap();
-        monitor.record_consumption(200, 30, 2).unwrap();
+        monitor.begin_phase(SynthesisPhase::StaticAnalysis).expect("serde deserialization should succeed");
+        monitor.record_consumption(300, 20, 3).expect("serde deserialization should succeed");
+        monitor.begin_phase(SynthesisPhase::Ablation).expect("serde deserialization should succeed");
+        monitor.record_consumption(200, 30, 2).expect("serde deserialization should succeed");
 
         let remaining = monitor.remaining_global();
         assert_eq!(remaining.time_ns, 500); // 1000 - 300 - 200
@@ -1625,8 +1625,8 @@ mod tests {
             },
             limit_value: 3000,
         });
-        let json = serde_json::to_string(&err).unwrap();
-        let restored: BudgetError = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let restored: BudgetError = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, restored);
     }
 
@@ -1687,9 +1687,9 @@ mod tests {
     #[test]
     fn monitor_phase_switching() {
         let mut m = BudgetMonitor::new(SynthesisBudgetContract::default());
-        m.begin_phase(SynthesisPhase::StaticAnalysis).unwrap();
+        m.begin_phase(SynthesisPhase::StaticAnalysis).expect("serde deserialization should succeed");
         assert_eq!(m.current_phase(), Some(SynthesisPhase::StaticAnalysis));
-        m.begin_phase(SynthesisPhase::Ablation).unwrap();
+        m.begin_phase(SynthesisPhase::Ablation).expect("serde deserialization should succeed");
         assert_eq!(m.current_phase(), Some(SynthesisPhase::Ablation));
     }
 
@@ -1703,7 +1703,7 @@ mod tests {
             phase_budget.time_cap_ns = 10;
         }
         let mut m = BudgetMonitor::new(contract);
-        m.begin_phase(SynthesisPhase::StaticAnalysis).unwrap();
+        m.begin_phase(SynthesisPhase::StaticAnalysis).expect("serde deserialization should succeed");
         let _ = m.record_consumption(100, 0, 0); // exceed
         assert!(m.is_exhausted());
         let err = m.begin_phase(SynthesisPhase::Ablation).unwrap_err();
@@ -1724,16 +1724,16 @@ mod tests {
             phase_budget.depth_cap = 10;
         }
         let mut m = BudgetMonitor::new(contract);
-        m.begin_phase(SynthesisPhase::StaticAnalysis).unwrap();
-        m.record_consumption(500, 50, 5).unwrap();
+        m.begin_phase(SynthesisPhase::StaticAnalysis).expect("serde deserialization should succeed");
+        m.record_consumption(500, 50, 5).expect("serde deserialization should succeed");
 
         let util = m.utilization();
         // SAFETY: Test-only unwrap, Time dimension always exists in utilization map
-        assert_eq!(*util.get(&BudgetDimension::Time).unwrap(), 500_000); // 50%
+        assert_eq!(*util.get(&BudgetDimension::Time).expect("serde deserialization should succeed"), 500_000); // 50%
         // SAFETY: Test-only unwrap, Compute dimension always exists in utilization map
-        assert_eq!(*util.get(&BudgetDimension::Compute).unwrap(), 500_000);
+        assert_eq!(*util.get(&BudgetDimension::Compute).expect("serde deserialization should succeed"), 500_000);
         // SAFETY: Test-only unwrap, Depth dimension always exists in utilization map
-        assert_eq!(*util.get(&BudgetDimension::Depth).unwrap(), 500_000);
+        assert_eq!(*util.get(&BudgetDimension::Depth).expect("serde deserialization should succeed"), 500_000);
     }
 
     #[test]
@@ -1820,8 +1820,8 @@ mod tests {
             increase_likely_helpful: true,
             recommended_multiplier: Some(2_000_000),
         };
-        let json = serde_json::to_string(&fr).unwrap();
-        let back: FallbackResult = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&fr).expect("serde deserialization should succeed");
+        let back: FallbackResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(fr, back);
     }
 
@@ -1842,10 +1842,10 @@ mod tests {
             },
         );
         let mut m = BudgetMonitor::new(contract);
-        m.begin_phase(SynthesisPhase::StaticAnalysis).unwrap();
-        m.record_consumption(1_000, 100, 10).unwrap();
+        m.begin_phase(SynthesisPhase::StaticAnalysis).expect("serde deserialization should succeed");
+        m.record_consumption(1_000, 100, 10).expect("serde deserialization should succeed");
 
-        let rem = m.remaining_for_current_phase().unwrap();
+        let rem = m.remaining_for_current_phase().expect("serde deserialization should succeed");
         assert_eq!(rem.time_ns, 4_000);
         assert_eq!(rem.compute, 400);
         assert_eq!(rem.depth, 40);
@@ -1859,9 +1859,9 @@ mod tests {
             justification: "testing".into(),
         };
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&ovr).unwrap();
+        let json = serde_json::to_string(&ovr).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let back: BudgetOverride = serde_json::from_str(&json).unwrap();
+        let back: BudgetOverride = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ovr, back);
     }
 
@@ -1976,7 +1976,7 @@ mod tests {
     #[test]
     fn synthesis_budget_contract_json_field_presence() {
         let c = tight_contract();
-        let json = serde_json::to_string(&c).unwrap();
+        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
         assert!(json.contains("\"version\""));
         assert!(json.contains("\"global_time_cap_ns\""));
         assert!(json.contains("\"global_compute_cap\""));
@@ -2000,7 +2000,7 @@ mod tests {
             increase_likely_helpful: true,
             recommended_multiplier: Some(3_000_000),
         };
-        let json = serde_json::to_string(&fb).unwrap();
+        let json = serde_json::to_string(&fb).expect("serde deserialization should succeed");
         assert!(json.contains("\"quality\""));
         assert!(json.contains("\"result_digest\""));
         assert!(json.contains("\"increase_likely_helpful\""));
@@ -2018,7 +2018,7 @@ mod tests {
             timestamp_ns: 9999,
             epoch: SecurityEpoch::from_raw(0),
         };
-        let json = serde_json::to_string(&entry).unwrap();
+        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
         assert!(json.contains("\"extension_id\""));
         assert!(json.contains("\"contract_version\""));
         assert!(json.contains("\"exhausted\""));
@@ -2054,12 +2054,12 @@ mod tests {
         };
         let mut m = BudgetMonitor::new(contract);
         // SAFETY: Test-only unwrap with valid synthesis phase
-        m.begin_phase(SynthesisPhase::StaticAnalysis).unwrap();
+        m.begin_phase(SynthesisPhase::StaticAnalysis).expect("serde deserialization should succeed");
         // SAFETY: Test-only unwrap with valid consumption values
-        m.record_consumption(u64::MAX - 1, 0, 0).unwrap();
+        m.record_consumption(u64::MAX - 1, 0, 0).expect("serde deserialization should succeed");
         // Adding more should saturate at u64::MAX, not panic.
         // SAFETY: Test-only unwrap with valid consumption values
-        m.record_consumption(10, 0, 0).unwrap();
+        m.record_consumption(10, 0, 0).expect("serde deserialization should succeed");
         assert_eq!(m.total_consumption().time_ns, u64::MAX);
     }
 

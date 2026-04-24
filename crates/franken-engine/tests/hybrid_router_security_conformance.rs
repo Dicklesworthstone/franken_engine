@@ -194,7 +194,10 @@ fn malicious_route_manipulation_attempts_fail() {
     for source in should_route_to_v8 {
         let route_reason = HybridRouter::classify_source_route(source);
         assert!(
-            matches!(route_reason, RouteReason::ContainsImportKeyword | RouteReason::ContainsAwaitKeyword),
+            matches!(
+                route_reason,
+                RouteReason::ContainsImportKeyword | RouteReason::ContainsAwaitKeyword
+            ),
             "Malicious route manipulation succeeded: {source:?} -> {route_reason:?}"
         );
     }

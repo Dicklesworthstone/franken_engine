@@ -1134,8 +1134,8 @@ mod tests {
     #[test]
     fn domain_serde_roundtrip() {
         for d in HardwareAxisDomain::ALL {
-            let json = serde_json::to_string(d).unwrap();
-            let back: HardwareAxisDomain = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(d).expect("serde deserialization should succeed");
+            let back: HardwareAxisDomain = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*d, back);
         }
     }
@@ -1163,7 +1163,7 @@ mod tests {
     #[test]
     fn axis_normalize_mid() {
         let a = sample_axis();
-        let mid = a.normalize(64_500_000).unwrap();
+        let mid = a.normalize(64_500_000).expect("serde deserialization should succeed");
         assert!(mid > 0 && mid < MILLION);
     }
 
@@ -1195,8 +1195,8 @@ mod tests {
     #[test]
     fn axis_serde_roundtrip() {
         let a = sample_axis();
-        let json = serde_json::to_string(&a).unwrap();
-        let back: HardwareAxis = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&a).expect("serde deserialization should succeed");
+        let back: HardwareAxis = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(a, back);
     }
 
@@ -1233,8 +1233,8 @@ mod tests {
     #[test]
     fn fingerprint_serde_roundtrip() {
         let fp = sample_fingerprint("fp1", 8_000_000, 50_000_000);
-        let json = serde_json::to_string(&fp).unwrap();
-        let back: HardwareFingerprint = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&fp).expect("serde deserialization should succeed");
+        let back: HardwareFingerprint = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(fp, back);
     }
 
@@ -1274,8 +1274,8 @@ mod tests {
         let r = SymmetryReason::ExpertAnnotation {
             note: "same gen".into(),
         };
-        let json = serde_json::to_string(&r).unwrap();
-        let back: SymmetryReason = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let back: SymmetryReason = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 
@@ -1319,8 +1319,8 @@ mod tests {
             left_level: "avx2".into(),
             right_level: "neon".into(),
         };
-        let json = serde_json::to_string(&r).unwrap();
-        let back: SymmetryRefusal = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let back: SymmetryRefusal = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 
@@ -1401,8 +1401,8 @@ mod tests {
                 note: "test".into(),
             },
         );
-        let json = serde_json::to_string(&class).unwrap();
-        let back: SymmetryClass = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&class).expect("serde deserialization should succeed");
+        let back: SymmetryClass = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(class, back);
     }
 
@@ -1449,8 +1449,8 @@ mod tests {
     #[test]
     fn obligation_status_serde() {
         for s in ObligationStatus::ALL {
-            let json = serde_json::to_string(s).unwrap();
-            let back: ObligationStatus = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(s).expect("serde deserialization should succeed");
+            let back: ObligationStatus = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*s, back);
         }
     }
@@ -1519,7 +1519,7 @@ mod tests {
         let mut g = sample_graph();
         g.generate_obligations();
         g.find_obligation_mut("fp1", "q-tiering")
-            .unwrap()
+            .expect("serde deserialization should succeed")
             .discharge_direct();
         assert_eq!(g.pending_count(), 5);
         assert_eq!(g.discharged_count(), 1);
@@ -1530,10 +1530,10 @@ mod tests {
         let mut g = sample_graph();
         g.generate_obligations();
         g.find_obligation_mut("fp1", "q-tiering")
-            .unwrap()
+            .expect("serde deserialization should succeed")
             .discharge_direct();
         g.find_obligation_mut("fp1", "q-gc")
-            .unwrap()
+            .expect("serde deserialization should succeed")
             .discharge_direct();
         // 2 of 6 resolved = 333_333 (one-third)
         let cov = g.coverage_millionths();
@@ -1567,22 +1567,22 @@ mod tests {
         g.generate_obligations();
         // Discharge fp1's obligations directly
         g.find_obligation_mut("fp1", "q-tiering")
-            .unwrap()
+            .expect("serde deserialization should succeed")
             .discharge_direct();
         g.find_obligation_mut("fp1", "q-gc")
-            .unwrap()
+            .expect("serde deserialization should succeed")
             .discharge_direct();
         // Now reduce by symmetry
         g.reduce_by_symmetry();
         // fp2's obligations should be discharged by transport
-        let o_fp2_tier = g.find_obligation("fp2", "q-tiering").unwrap();
+        let o_fp2_tier = g.find_obligation("fp2", "q-tiering").expect("serde deserialization should succeed");
         assert_eq!(o_fp2_tier.status, ObligationStatus::DischargedByTransport);
         assert_eq!(o_fp2_tier.transport_source.as_deref(), Some("fp1"));
-        let o_fp2_gc = g.find_obligation("fp2", "q-gc").unwrap();
+        let o_fp2_gc = g.find_obligation("fp2", "q-gc").expect("serde deserialization should succeed");
         assert_eq!(o_fp2_gc.status, ObligationStatus::DischargedByTransport);
         // fp3 should still be pending (not in the class)
         assert_eq!(
-            g.find_obligation("fp3", "q-tiering").unwrap().status,
+            g.find_obligation("fp3", "q-tiering").expect("serde deserialization should succeed").status,
             ObligationStatus::Pending
         );
     }
@@ -1602,10 +1602,10 @@ mod tests {
         ));
         g.generate_obligations();
         g.find_obligation_mut("fp1", "q-tiering")
-            .unwrap()
+            .expect("serde deserialization should succeed")
             .discharge_direct();
         g.find_obligation_mut("fp1", "q-gc")
-            .unwrap()
+            .expect("serde deserialization should succeed")
             .discharge_direct();
         g.reduce_by_symmetry();
         // 4 discharged total: 2 direct + 2 transport → ratio = 500_000
@@ -1615,7 +1615,7 @@ mod tests {
     #[test]
     fn graph_chebyshev_similar() {
         let g = sample_graph();
-        let dist = g.chebyshev_distance("fp1", "fp2").unwrap();
+        let dist = g.chebyshev_distance("fp1", "fp2").expect("serde deserialization should succeed");
         // fp1 and fp2 have similar values
         assert!(dist < 50_000);
     }
@@ -1623,7 +1623,7 @@ mod tests {
     #[test]
     fn graph_chebyshev_different() {
         let g = sample_graph();
-        let dist = g.chebyshev_distance("fp1", "fp3").unwrap();
+        let dist = g.chebyshev_distance("fp1", "fp3").expect("serde deserialization should succeed");
         // fp1 and fp3 have very different values
         assert!(dist > 100_000);
     }
@@ -1659,8 +1659,8 @@ mod tests {
     fn graph_serde_roundtrip() {
         let mut g = sample_graph();
         g.generate_obligations();
-        let json = serde_json::to_string(&g).unwrap();
-        let back: ObligationGraph = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&g).expect("serde deserialization should succeed");
+        let back: ObligationGraph = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(g, back);
     }
 
@@ -1680,7 +1680,7 @@ mod tests {
         let mut g = sample_graph();
         g.generate_obligations();
         g.find_obligation_mut("fp1", "q-tiering")
-            .unwrap()
+            .expect("serde deserialization should succeed")
             .discharge_direct();
         let r = ObligationReport::from_graph(&g, epoch());
         assert_eq!(r.total_obligations, 6);
@@ -1704,10 +1704,10 @@ mod tests {
         ));
         g.generate_obligations();
         g.find_obligation_mut("fp1", "q-tiering")
-            .unwrap()
+            .expect("serde deserialization should succeed")
             .discharge_direct();
         g.find_obligation_mut("fp1", "q-gc")
-            .unwrap()
+            .expect("serde deserialization should succeed")
             .discharge_direct();
         g.reduce_by_symmetry();
         let r = ObligationReport::from_graph(&g, epoch());
@@ -1729,8 +1729,8 @@ mod tests {
         let mut g = sample_graph();
         g.generate_obligations();
         let r = ObligationReport::from_graph(&g, epoch());
-        let json = serde_json::to_string(&r).unwrap();
-        let back: ObligationReport = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let back: ObligationReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 

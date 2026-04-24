@@ -1222,10 +1222,10 @@ mod tests {
         ];
         // SAFETY: Vec<RecoveryMode> derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&modes).unwrap();
+        let json = serde_json::to_string(&modes).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid Vec<RecoveryMode>,
         // so from_str back to Vec<RecoveryMode> cannot fail (valid format + matching schema).
-        let back: Vec<RecoveryMode> = serde_json::from_str(&json).unwrap();
+        let back: Vec<RecoveryMode> = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(modes, back);
     }
 
@@ -1315,10 +1315,10 @@ mod tests {
         let p = Posterior::default_prior();
         // SAFETY: Posterior derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&p).unwrap();
+        let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid Posterior,
         // so from_str back to Posterior cannot fail (valid format + matching schema).
-        let back: Posterior = serde_json::from_str(&json).unwrap();
+        let back: Posterior = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(p, back);
     }
 
@@ -1353,10 +1353,10 @@ mod tests {
         };
         // SAFETY: EvidenceFeatures derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&e).unwrap();
+        let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid EvidenceFeatures,
         // so from_str back to EvidenceFeatures cannot fail (valid format + matching schema).
-        let back: EvidenceFeatures = serde_json::from_str(&json).unwrap();
+        let back: EvidenceFeatures = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(e, back);
     }
 
@@ -1533,10 +1533,10 @@ mod tests {
         let lm = LossMatrix::default();
         // SAFETY: LossMatrix derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&lm).unwrap();
+        let json = serde_json::to_string(&lm).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid LossMatrix,
         // so from_str back to LossMatrix cannot fail (valid format + matching schema).
-        let back: LossMatrix = serde_json::from_str(&json).unwrap();
+        let back: LossMatrix = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(lm, back);
     }
 
@@ -1553,10 +1553,10 @@ mod tests {
         let cfg = RecoveryConfig::default();
         // SAFETY: RecoveryConfig derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&cfg).unwrap();
+        let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid RecoveryConfig,
         // so from_str back to RecoveryConfig cannot fail (valid format + matching schema).
-        let back: RecoveryConfig = serde_json::from_str(&json).unwrap();
+        let back: RecoveryConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cfg, back);
     }
 
@@ -1607,10 +1607,10 @@ mod tests {
         );
         // SAFETY: RepairDiff derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&diff).unwrap();
+        let json = serde_json::to_string(&diff).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid RepairDiff,
         // so from_str back to RepairDiff cannot fail (valid format + matching schema).
-        let back: RepairDiff = serde_json::from_str(&json).unwrap();
+        let back: RepairDiff = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(diff, back);
     }
 
@@ -1631,10 +1631,10 @@ mod tests {
         let e = RecoveryError::NoCandidates { error_position: 42 };
         // SAFETY: RecoveryError derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&e).unwrap();
+        let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid RecoveryError,
         // so from_str back to RecoveryError cannot fail (valid format + matching schema).
-        let back: RecoveryError = serde_json::from_str(&json).unwrap();
+        let back: RecoveryError = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(e, back);
     }
 
@@ -1644,7 +1644,7 @@ mod tests {
     fn strict_mode_always_fails() {
         let cfg = RecoveryConfig::default(); // strict by default
         let sites = vec![simple_error_site()];
-        let result = evaluate(test_hash(), &sites, &cfg, 42, "trace-1").unwrap();
+        let result = evaluate(test_hash(), &sites, &cfg, 42, "trace-1").expect("serde deserialization should succeed");
         assert!(!result.recovered);
         assert_eq!(result.final_action, RecoveryAction::FailStrict);
         assert_eq!(result.mode, RecoveryMode::StrictDefault);
@@ -1654,7 +1654,7 @@ mod tests {
     fn strict_mode_emits_events() {
         let cfg = RecoveryConfig::default();
         let sites = vec![simple_error_site()];
-        let result = evaluate(test_hash(), &sites, &cfg, 42, "trace-1").unwrap();
+        let result = evaluate(test_hash(), &sites, &cfg, 42, "trace-1").expect("serde deserialization should succeed");
         assert!(!result.events.is_empty());
     }
 
@@ -1664,7 +1664,7 @@ mod tests {
     fn diagnostic_mode_does_not_report_recovered() {
         let cfg = diagnostic_config();
         let sites = vec![simple_error_site()];
-        let result = evaluate(test_hash(), &sites, &cfg, 42, "trace-1").unwrap();
+        let result = evaluate(test_hash(), &sites, &cfg, 42, "trace-1").expect("serde deserialization should succeed");
         // Diagnostic mode: never reports recovered=true.
         assert!(!result.recovered);
     }
@@ -1673,7 +1673,7 @@ mod tests {
     fn diagnostic_mode_still_evaluates() {
         let cfg = diagnostic_config();
         let sites = vec![simple_error_site()];
-        let result = evaluate(test_hash(), &sites, &cfg, 42, "trace-1").unwrap();
+        let result = evaluate(test_hash(), &sites, &cfg, 42, "trace-1").expect("serde deserialization should succeed");
         assert!(!result.decisions.is_empty());
         assert!(!result.attempts.is_empty());
     }
@@ -1684,7 +1684,7 @@ mod tests {
     fn execution_mode_recovers_simple_typo() {
         let cfg = execution_config();
         let sites = vec![simple_error_site()];
-        let result = evaluate(test_hash(), &sites, &cfg, 42, "trace-1").unwrap();
+        let result = evaluate(test_hash(), &sites, &cfg, 42, "trace-1").expect("serde deserialization should succeed");
         // Simple typo with single candidate should recover.
         assert!(result.recovered);
         assert_ne!(result.final_action, RecoveryAction::FailStrict);
@@ -1694,7 +1694,7 @@ mod tests {
     fn execution_mode_generates_repair_diff() {
         let cfg = execution_config();
         let sites = vec![simple_error_site()];
-        let result = evaluate(test_hash(), &sites, &cfg, 42, "trace-1").unwrap();
+        let result = evaluate(test_hash(), &sites, &cfg, 42, "trace-1").expect("serde deserialization should succeed");
         assert!(result.repair_diff.is_some());
     }
 
@@ -1702,7 +1702,7 @@ mod tests {
     fn execution_mode_fails_on_no_candidates() {
         let cfg = execution_config();
         let sites = vec![no_candidate_site()];
-        let result = evaluate(test_hash(), &sites, &cfg, 42, "trace-1").unwrap();
+        let result = evaluate(test_hash(), &sites, &cfg, 42, "trace-1").expect("serde deserialization should succeed");
         assert!(!result.recovered);
         assert_eq!(result.final_action, RecoveryAction::FailStrict);
     }
@@ -1737,7 +1737,7 @@ mod tests {
     fn multiple_sites_all_recovered() {
         let cfg = execution_config();
         let sites = vec![simple_error_site(), simple_error_site()];
-        let result = evaluate(test_hash(), &sites, &cfg, 42, "trace-1").unwrap();
+        let result = evaluate(test_hash(), &sites, &cfg, 42, "trace-1").expect("serde deserialization should succeed");
         assert!(result.recovered);
         assert_eq!(result.decisions.len(), 2);
     }
@@ -1746,7 +1746,7 @@ mod tests {
     fn mixed_sites_any_fail_means_not_recovered() {
         let cfg = execution_config();
         let sites = vec![simple_error_site(), no_candidate_site()];
-        let result = evaluate(test_hash(), &sites, &cfg, 42, "trace-1").unwrap();
+        let result = evaluate(test_hash(), &sites, &cfg, 42, "trace-1").expect("serde deserialization should succeed");
         assert!(!result.recovered);
     }
 
@@ -1756,8 +1756,8 @@ mod tests {
     fn controller_deterministic() {
         let cfg = execution_config();
         let sites = vec![simple_error_site()];
-        let r1 = evaluate(test_hash(), &sites, &cfg, 42, "trace-1").unwrap();
-        let r2 = evaluate(test_hash(), &sites, &cfg, 42, "trace-1").unwrap();
+        let r1 = evaluate(test_hash(), &sites, &cfg, 42, "trace-1").expect("serde deserialization should succeed");
+        let r2 = evaluate(test_hash(), &sites, &cfg, 42, "trace-1").expect("serde deserialization should succeed");
         assert_eq!(r1.result_digest, r2.result_digest);
         assert_eq!(r1.recovered, r2.recovered);
     }
@@ -1768,7 +1768,7 @@ mod tests {
     fn result_summary_recovered() {
         let cfg = execution_config();
         let sites = vec![simple_error_site()];
-        let result = evaluate(test_hash(), &sites, &cfg, 42, "t").unwrap();
+        let result = evaluate(test_hash(), &sites, &cfg, 42, "t").expect("serde deserialization should succeed");
         let summary = result.summary();
         assert!(summary.starts_with("RECOVERED:"));
     }
@@ -1777,7 +1777,7 @@ mod tests {
     fn result_summary_strict_fail() {
         let cfg = RecoveryConfig::default();
         let sites = vec![simple_error_site()];
-        let result = evaluate(test_hash(), &sites, &cfg, 42, "t").unwrap();
+        let result = evaluate(test_hash(), &sites, &cfg, 42, "t").expect("serde deserialization should succeed");
         let summary = result.summary();
         assert!(summary.starts_with("STRICT_FAIL:"));
     }
@@ -1788,13 +1788,13 @@ mod tests {
     fn recovery_result_serde_roundtrip() {
         let cfg = execution_config();
         let sites = vec![simple_error_site()];
-        let result = evaluate(test_hash(), &sites, &cfg, 42, "t").unwrap();
+        let result = evaluate(test_hash(), &sites, &cfg, 42, "t").expect("serde deserialization should succeed");
         // SAFETY: RecoveryResult derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&result).unwrap();
+        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid RecoveryResult,
         // so from_str back to RecoveryResult cannot fail (valid format + matching schema).
-        let back: RecoveryResult = serde_json::from_str(&json).unwrap();
+        let back: RecoveryResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result.result_digest, back.result_digest);
         assert_eq!(result.recovered, back.recovered);
     }
@@ -1805,7 +1805,7 @@ mod tests {
     fn schema_version_in_result() {
         let cfg = RecoveryConfig::default();
         let sites = vec![simple_error_site()];
-        let result = evaluate(test_hash(), &sites, &cfg, 0, "t").unwrap();
+        let result = evaluate(test_hash(), &sites, &cfg, 0, "t").expect("serde deserialization should succeed");
         assert_eq!(result.schema_version, SCHEMA_VERSION);
     }
 
@@ -1828,10 +1828,10 @@ mod tests {
         };
         // SAFETY: RecoveryEvent derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&evt).unwrap();
+        let json = serde_json::to_string(&evt).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid RecoveryEvent,
         // so from_str back to RecoveryEvent cannot fail (valid format + matching schema).
-        let back: RecoveryEvent = serde_json::from_str(&json).unwrap();
+        let back: RecoveryEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(evt, back);
     }
 
@@ -1868,10 +1868,10 @@ mod tests {
         };
         // SAFETY: RepairCandidate derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&rc).unwrap();
+        let json = serde_json::to_string(&rc).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid RepairCandidate,
         // so from_str back to RepairCandidate cannot fail (valid format + matching schema).
-        let back: RepairCandidate = serde_json::from_str(&json).unwrap();
+        let back: RepairCandidate = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(rc, back);
     }
 
@@ -1893,10 +1893,10 @@ mod tests {
         };
         // SAFETY: RecoveryDecision derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&d).unwrap();
+        let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid RecoveryDecision,
         // so from_str back to RecoveryDecision cannot fail (valid format + matching schema).
-        let back: RecoveryDecision = serde_json::from_str(&json).unwrap();
+        let back: RecoveryDecision = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(d, back);
     }
 
@@ -1926,10 +1926,10 @@ mod tests {
         };
         // SAFETY: RecoveryAttempt derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&a).unwrap();
+        let json = serde_json::to_string(&a).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid RecoveryAttempt,
         // so from_str back to RecoveryAttempt cannot fail (valid format + matching schema).
-        let back: RecoveryAttempt = serde_json::from_str(&json).unwrap();
+        let back: RecoveryAttempt = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(a, back);
     }
 
@@ -1951,7 +1951,7 @@ mod tests {
     fn ambiguous_site_produces_decision() {
         let cfg = execution_config();
         let sites = vec![ambiguous_error_site()];
-        let result = evaluate(test_hash(), &sites, &cfg, 42, "t").unwrap();
+        let result = evaluate(test_hash(), &sites, &cfg, 42, "t").expect("serde deserialization should succeed");
         assert!(!result.decisions.is_empty());
         // Ambiguous evidence: the action should reflect uncertainty.
         let decision = &result.decisions[0];
@@ -2002,7 +2002,7 @@ mod tests {
             }],
             context_hash: test_hash(),
         };
-        let result = evaluate(test_hash(), &[site], &cfg, 42, "t").unwrap();
+        let result = evaluate(test_hash(), &[site], &cfg, 42, "t").expect("serde deserialization should succeed");
         assert!(!result.recovered);
         assert_eq!(result.final_action, RecoveryAction::FailStrict);
     }
@@ -2033,7 +2033,7 @@ mod tests {
             context_hash: test_hash(),
         };
         let controller = RecoveryController::new(cfg, 42);
-        let repair = controller.select_repair(&site).unwrap();
+        let repair = controller.select_repair(&site).expect("serde deserialization should succeed");
         assert_eq!(repair.description, "cheap");
     }
 
@@ -2043,7 +2043,7 @@ mod tests {
     fn events_have_component_field() {
         let cfg = execution_config();
         let sites = vec![simple_error_site()];
-        let result = evaluate(test_hash(), &sites, &cfg, 42, "t").unwrap();
+        let result = evaluate(test_hash(), &sites, &cfg, 42, "t").expect("serde deserialization should succeed");
         for evt in &result.events {
             assert_eq!(evt.component, COMPONENT);
         }
@@ -2054,14 +2054,14 @@ mod tests {
     #[test]
     fn empty_sites_strict_mode() {
         let cfg = RecoveryConfig::default();
-        let result = evaluate(test_hash(), &[], &cfg, 42, "t").unwrap();
+        let result = evaluate(test_hash(), &[], &cfg, 42, "t").expect("serde deserialization should succeed");
         assert!(!result.recovered);
     }
 
     #[test]
     fn empty_sites_execution_mode() {
         let cfg = execution_config();
-        let result = evaluate(test_hash(), &[], &cfg, 42, "t").unwrap();
+        let result = evaluate(test_hash(), &[], &cfg, 42, "t").expect("serde deserialization should succeed");
         // No error sites = no decisions, not recovered.
         assert!(!result.recovered);
     }
@@ -2096,10 +2096,10 @@ mod tests {
         for v in &variants {
             // SAFETY: RecoveryMode derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json = serde_json::to_string(v).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by to_string of a valid RecoveryMode,
             // so from_str back to RecoveryMode cannot fail (valid format + matching schema).
-            let back: RecoveryMode = serde_json::from_str(&json).unwrap();
+            let back: RecoveryMode = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -2114,10 +2114,10 @@ mod tests {
         for v in &variants {
             // SAFETY: ErrorState derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json = serde_json::to_string(v).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by to_string of a valid ErrorState,
             // so from_str back to ErrorState cannot fail (valid format + matching schema).
-            let back: ErrorState = serde_json::from_str(&json).unwrap();
+            let back: ErrorState = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -2132,10 +2132,10 @@ mod tests {
         for v in &variants {
             // SAFETY: RecoveryAction derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json = serde_json::to_string(v).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by to_string of a valid RecoveryAction,
             // so from_str back to RecoveryAction cannot fail (valid format + matching schema).
-            let back: RecoveryAction = serde_json::from_str(&json).unwrap();
+            let back: RecoveryAction = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -2188,10 +2188,10 @@ mod tests {
         for v in &variants {
             // SAFETY: RepairEdit derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json = serde_json::to_string(v).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by to_string of a valid RepairEdit,
             // so from_str back to RepairEdit cannot fail (valid format + matching schema).
-            let back: RepairEdit = serde_json::from_str(&json).unwrap();
+            let back: RepairEdit = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -2211,10 +2211,10 @@ mod tests {
         for v in &variants {
             // SAFETY: RecoveryError derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json = serde_json::to_string(v).unwrap();
+            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by to_string of a valid RecoveryError,
             // so from_str back to RecoveryError cannot fail (valid format + matching schema).
-            let back: RecoveryError = serde_json::from_str(&json).unwrap();
+            let back: RecoveryError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }

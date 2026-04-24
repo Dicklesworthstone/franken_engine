@@ -689,7 +689,7 @@ impl RuntimeSecurityObservability {
 pub fn render_security_logs_jsonl(events: &[StructuredSecurityLogEvent]) -> String {
     let mut lines = Vec::with_capacity(events.len());
     for event in events {
-        lines.push(serde_json::to_string(event).unwrap());
+        lines.push(serde_json::to_string(event).expect("serde deserialization should succeed"));
     }
     lines.join("\n")
 }
@@ -865,8 +865,8 @@ mod tests {
     #[test]
     fn auth_failure_type_serde_round_trip() {
         for t in AuthFailureType::ALL {
-            let json = serde_json::to_string(&t).unwrap();
-            let back: AuthFailureType = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&t).expect("serde deserialization should succeed");
+            let back: AuthFailureType = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(back, t);
         }
     }
@@ -906,8 +906,8 @@ mod tests {
     #[test]
     fn capability_denial_reason_serde_round_trip() {
         for r in CapabilityDenialReason::ALL {
-            let json = serde_json::to_string(&r).unwrap();
-            let back: CapabilityDenialReason = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+            let back: CapabilityDenialReason = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(back, r);
         }
     }
@@ -929,8 +929,8 @@ mod tests {
     #[test]
     fn replay_drop_reason_serde_round_trip() {
         for r in ReplayDropReason::ALL {
-            let json = serde_json::to_string(&r).unwrap();
-            let back: ReplayDropReason = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+            let back: ReplayDropReason = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(back, r);
         }
     }
@@ -961,8 +961,8 @@ mod tests {
     #[test]
     fn checkpoint_violation_serde_round_trip() {
         for v in CheckpointViolationType::ALL {
-            let json = serde_json::to_string(&v).unwrap();
-            let back: CheckpointViolationType = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let back: CheckpointViolationType = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(back, v);
         }
     }
@@ -984,8 +984,8 @@ mod tests {
     #[test]
     fn revocation_check_outcome_serde_round_trip() {
         for o in RevocationCheckOutcome::ALL {
-            let json = serde_json::to_string(&o).unwrap();
-            let back: RevocationCheckOutcome = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&o).expect("serde deserialization should succeed");
+            let back: RevocationCheckOutcome = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(back, o);
         }
     }
@@ -1012,8 +1012,8 @@ mod tests {
     #[test]
     fn cross_zone_reference_type_serde_round_trip() {
         for t in CrossZoneReferenceType::ALL {
-            let json = serde_json::to_string(&t).unwrap();
-            let back: CrossZoneReferenceType = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&t).expect("serde deserialization should succeed");
+            let back: CrossZoneReferenceType = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(back, t);
         }
     }
@@ -1195,7 +1195,7 @@ mod tests {
             *obs.metrics()
                 .auth_failure_total
                 .get(&AuthFailureType::SignatureInvalid)
-                .unwrap(),
+                .expect("serde deserialization should succeed"),
             1
         );
         assert_eq!(obs.logs().len(), 1);
@@ -1210,8 +1210,8 @@ mod tests {
             Some("my_secret"),
             Some("my_token"),
         );
-        let key_hash = event.metadata.get("key_material_hash").unwrap();
-        let token_hash = event.metadata.get("token_content_hash").unwrap();
+        let key_hash = event.metadata.get("key_material_hash").expect("serde deserialization should succeed");
+        let token_hash = event.metadata.get("token_content_hash").expect("serde deserialization should succeed");
         assert!(key_hash.starts_with("sha256:"));
         assert!(token_hash.starts_with("sha256:"));
         assert!(!key_hash.contains("my_secret"));
@@ -1229,14 +1229,14 @@ mod tests {
         assert_eq!(event.event_type, "capability_denial");
         assert_eq!(event.outcome, "denied");
         assert_eq!(
-            event.metadata.get("requested_capability").unwrap(),
+            event.metadata.get("requested_capability").expect("serde deserialization should succeed"),
             "fs_read"
         );
         assert_eq!(
             *obs.metrics()
                 .capability_denial_total
                 .get(&CapabilityDenialReason::InsufficientAuthority)
-                .unwrap(),
+                .expect("serde deserialization should succeed"),
             1
         );
     }
@@ -1253,10 +1253,10 @@ mod tests {
         );
         assert_eq!(event.event_type, "replay_drop");
         assert_eq!(event.outcome, "dropped");
-        assert_eq!(event.metadata.get("received_seq").unwrap(), "5");
-        assert_eq!(event.metadata.get("expected_seq").unwrap(), "6");
+        assert_eq!(event.metadata.get("received_seq").expect("serde deserialization should succeed"), "5");
+        assert_eq!(event.metadata.get("expected_seq").expect("serde deserialization should succeed"), "6");
         // session_id is redacted
-        let sid = event.metadata.get("session_id_hash").unwrap();
+        let sid = event.metadata.get("session_id_hash").expect("serde deserialization should succeed");
         assert!(sid.starts_with("sha256:"));
     }
 
@@ -1275,7 +1275,7 @@ mod tests {
             *obs.metrics()
                 .checkpoint_violation_total
                 .get(&CheckpointViolationType::ForkDetected)
-                .unwrap(),
+                .expect("serde deserialization should succeed"),
             1
         );
     }
@@ -1351,7 +1351,7 @@ mod tests {
         obs.record_capability_denial(test_context(), CapabilityDenialReason::Expired, "net");
 
         let jsonl = render_security_logs_jsonl(obs.logs());
-        let parsed = parse_security_logs_jsonl(&jsonl).unwrap();
+        let parsed = parse_security_logs_jsonl(&jsonl).expect("serde deserialization should succeed");
         assert_eq!(parsed.len(), 2);
         assert_eq!(parsed[0].event_type, "auth_failure");
         assert_eq!(parsed[1].event_type, "capability_denial");
@@ -1359,13 +1359,13 @@ mod tests {
 
     #[test]
     fn parse_jsonl_empty_input() {
-        let parsed = parse_security_logs_jsonl("").unwrap();
+        let parsed = parse_security_logs_jsonl("").expect("serde deserialization should succeed");
         assert!(parsed.is_empty());
     }
 
     #[test]
     fn parse_jsonl_blank_lines_skipped() {
-        let parsed = parse_security_logs_jsonl("\n  \n").unwrap();
+        let parsed = parse_security_logs_jsonl("\n  \n").expect("serde deserialization should succeed");
         assert!(parsed.is_empty());
     }
 
@@ -1445,14 +1445,14 @@ mod tests {
             *obs.metrics()
                 .auth_failure_total
                 .get(&AuthFailureType::SignatureInvalid)
-                .unwrap(),
+                .expect("serde deserialization should succeed"),
             2
         );
         assert_eq!(
             *obs.metrics()
                 .auth_failure_total
                 .get(&AuthFailureType::KeyRevoked)
-                .unwrap(),
+                .expect("serde deserialization should succeed"),
             1
         );
         assert_eq!(obs.logs().len(), 3);
@@ -1463,8 +1463,8 @@ mod tests {
     #[test]
     fn metrics_serde_round_trip() {
         let m = RuntimeSecurityMetrics::default();
-        let json = serde_json::to_string(&m).unwrap();
-        let back: RuntimeSecurityMetrics = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
+        let back: RuntimeSecurityMetrics = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, m);
     }
 
@@ -1472,8 +1472,8 @@ mod tests {
     fn observability_serde_round_trip() {
         let mut obs = RuntimeSecurityObservability::new();
         obs.record_auth_failure(test_context(), AuthFailureType::KeyExpired, None, None);
-        let json = serde_json::to_string(&obs).unwrap();
-        let back: RuntimeSecurityObservability = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&obs).expect("serde deserialization should succeed");
+        let back: RuntimeSecurityObservability = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, obs);
     }
 
@@ -1487,8 +1487,8 @@ mod tests {
             SecurityEventType::RevocationCheck,
             SecurityEventType::CrossZoneReference,
         ] {
-            let json = serde_json::to_string(&t).unwrap();
-            let back: SecurityEventType = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&t).expect("serde deserialization should succeed");
+            let back: SecurityEventType = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(back, t);
         }
     }
@@ -1503,8 +1503,8 @@ mod tests {
             SecurityOutcome::Rejected,
             SecurityOutcome::Degraded,
         ] {
-            let json = serde_json::to_string(&o).unwrap();
-            let back: SecurityOutcome = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&o).expect("serde deserialization should succeed");
+            let back: SecurityOutcome = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(back, o);
         }
     }
@@ -1642,16 +1642,16 @@ mod tests {
     #[test]
     fn enrichment_security_event_context_serde_roundtrip() {
         let ctx = test_context();
-        let json = serde_json::to_string(&ctx).unwrap();
-        let back: SecurityEventContext = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&ctx).expect("serde deserialization should succeed");
+        let back: SecurityEventContext = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, ctx);
     }
 
     #[test]
     fn enrichment_security_event_context_json_field_names() {
         let ctx = test_context();
-        let val: serde_json::Value = serde_json::to_value(&ctx).unwrap();
-        let obj = val.as_object().unwrap();
+        let val: serde_json::Value = serde_json::to_value(&ctx).expect("serde deserialization should succeed");
+        let obj = val.as_object().expect("serde deserialization should succeed");
         assert!(obj.contains_key("timestamp_ns"));
         assert!(obj.contains_key("trace_id"));
         assert!(obj.contains_key("principal_id"));
@@ -1680,11 +1680,11 @@ mod tests {
             zone_id: "z".to_string(),
             metadata,
         };
-        let json = serde_json::to_string(&event).unwrap();
-        let back: StructuredSecurityLogEvent = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let back: StructuredSecurityLogEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, event);
         assert_eq!(back.metadata.len(), 2);
-        assert_eq!(back.metadata.get("key1").unwrap(), "val1");
+        assert_eq!(back.metadata.get("key1").expect("serde deserialization should succeed"), "val1");
     }
 
     #[test]
@@ -1761,21 +1761,21 @@ mod tests {
             *obs.metrics()
                 .auth_failure_total
                 .get(&AuthFailureType::AttestationInvalid)
-                .unwrap(),
+                .expect("serde deserialization should succeed"),
             1
         );
         assert_eq!(
             *obs.metrics()
                 .capability_denial_total
                 .get(&CapabilityDenialReason::CeilingExceeded)
-                .unwrap(),
+                .expect("serde deserialization should succeed"),
             1
         );
         assert_eq!(
             *obs.metrics()
                 .checkpoint_violation_total
                 .get(&CheckpointViolationType::QuorumInsufficient)
-                .unwrap(),
+                .expect("serde deserialization should succeed"),
             1
         );
     }
@@ -1789,7 +1789,7 @@ mod tests {
             "",
         );
         assert_eq!(
-            event.metadata.get("requested_capability").unwrap(),
+            event.metadata.get("requested_capability").expect("serde deserialization should succeed"),
             "unspecified"
         );
     }
@@ -1804,11 +1804,11 @@ mod tests {
             "  ",
         );
         assert_eq!(
-            event.metadata.get("source_zone").unwrap(),
+            event.metadata.get("source_zone").expect("serde deserialization should succeed"),
             "source-zone-missing"
         );
         assert_eq!(
-            event.metadata.get("target_zone").unwrap(),
+            event.metadata.get("target_zone").expect("serde deserialization should succeed"),
             "target-zone-missing"
         );
     }
@@ -1826,12 +1826,12 @@ mod tests {
         );
         assert_eq!(event.outcome, "denied");
         assert!(event.error_code.is_some());
-        assert_eq!(event.metadata.get("staleness_gap").unwrap(), "50");
+        assert_eq!(event.metadata.get("staleness_gap").expect("serde deserialization should succeed"), "50");
         assert_eq!(
             *obs.metrics()
                 .revocation_check_total
                 .get(&RevocationCheckOutcome::Revoked)
-                .unwrap(),
+                .expect("serde deserialization should succeed"),
             1
         );
     }
@@ -1848,7 +1848,7 @@ mod tests {
             50,
             None,
         );
-        assert_eq!(event.metadata.get("staleness_gap").unwrap(), "0");
+        assert_eq!(event.metadata.get("staleness_gap").expect("serde deserialization should succeed"), "0");
     }
 
     #[test]
@@ -1858,7 +1858,7 @@ mod tests {
             obs.record_replay_drop(test_context(), reason, 1, 2, "s");
         }
         for reason in ReplayDropReason::ALL {
-            assert_eq!(*obs.metrics().replay_drop_total.get(&reason).unwrap(), 1);
+            assert_eq!(*obs.metrics().replay_drop_total.get(&reason).expect("serde deserialization should succeed"), 1);
         }
         assert_eq!(obs.logs().len(), 3);
     }
@@ -1871,7 +1871,7 @@ mod tests {
         }
         for viol in CheckpointViolationType::ALL {
             assert_eq!(
-                *obs.metrics().checkpoint_violation_total.get(&viol).unwrap(),
+                *obs.metrics().checkpoint_violation_total.get(&viol).expect("serde deserialization should succeed"),
                 1
             );
         }
@@ -1895,13 +1895,13 @@ mod tests {
             50,
             Some(42),
         );
-        let json = serde_json::to_string(&obs.metrics).unwrap();
-        let back: RuntimeSecurityMetrics = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&obs.metrics).expect("serde deserialization should succeed");
+        let back: RuntimeSecurityMetrics = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(
             *back
                 .auth_failure_total
                 .get(&AuthFailureType::SignatureInvalid)
-                .unwrap(),
+                .expect("serde deserialization should succeed"),
             1
         );
         assert_eq!(back.revocation_freshness_degraded_seconds, 42);
@@ -1948,11 +1948,11 @@ mod tests {
         assert_eq!(lines.len(), 3);
         // Each line is valid JSON
         for line in &lines {
-            let val: serde_json::Value = serde_json::from_str(line).unwrap();
+            let val: serde_json::Value = serde_json::from_str(line).expect("serde deserialization should succeed");
             assert!(val.is_object());
         }
         // Roundtrip through parse
-        let parsed = parse_security_logs_jsonl(&jsonl).unwrap();
+        let parsed = parse_security_logs_jsonl(&jsonl).expect("serde deserialization should succeed");
         assert_eq!(parsed.len(), 3);
         assert_eq!(parsed[0].event_type, "auth_failure");
         assert_eq!(parsed[1].event_type, "replay_drop");

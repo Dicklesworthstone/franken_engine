@@ -995,8 +995,8 @@ mod tests {
     #[test]
     fn trigger_kind_serde_roundtrip() {
         for kind in EscalationTriggerKind::ALL {
-            let json = serde_json::to_string(kind).unwrap();
-            let back: EscalationTriggerKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(kind).expect("serde deserialization should succeed");
+            let back: EscalationTriggerKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*kind, back);
         }
     }
@@ -1059,8 +1059,8 @@ mod tests {
     #[test]
     fn severity_serde_roundtrip() {
         for sev in TriggerSeverity::ALL {
-            let json = serde_json::to_string(sev).unwrap();
-            let back: TriggerSeverity = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(sev).expect("serde deserialization should succeed");
+            let back: TriggerSeverity = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*sev, back);
         }
     }
@@ -1095,8 +1095,8 @@ mod tests {
     #[test]
     fn content_kind_serde_roundtrip() {
         for kind in BundleContentKind::ALL {
-            let json = serde_json::to_string(kind).unwrap();
-            let back: BundleContentKind = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(kind).expect("serde deserialization should succeed");
+            let back: BundleContentKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*kind, back);
         }
     }
@@ -1136,8 +1136,8 @@ mod tests {
             TriggerSeverity::Critical,
         );
         t.recompute_hash();
-        let json = serde_json::to_string(&t).unwrap();
-        let back: EscalationTrigger = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&t).expect("serde deserialization should succeed");
+        let back: EscalationTrigger = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(t, back);
     }
 
@@ -1230,8 +1230,8 @@ mod tests {
             bundle_hash: ContentHash::compute(b"placeholder"),
         };
         b.recompute_hash();
-        let json = serde_json::to_string(&b).unwrap();
-        let back: EscalationBundle = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&b).expect("serde deserialization should succeed");
+        let back: EscalationBundle = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(b, back);
     }
 
@@ -1252,8 +1252,8 @@ mod tests {
     #[test]
     fn decision_serde_roundtrip() {
         for d in EscalationDecision::ALL {
-            let json = serde_json::to_string(d).unwrap();
-            let back: EscalationDecision = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(d).expect("serde deserialization should succeed");
+            let back: EscalationDecision = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*d, back);
         }
     }
@@ -1315,8 +1315,8 @@ mod tests {
             receipt_hash: ContentHash::compute(b"placeholder"),
         };
         r.recompute_hash();
-        let json = serde_json::to_string(&r).unwrap();
-        let back: EscalationReceipt = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let back: EscalationReceipt = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 
@@ -1507,7 +1507,7 @@ mod tests {
         ));
         let bundle = pipeline.bundle_for_trigger("t-bf");
         assert!(bundle.is_some());
-        assert_eq!(bundle.unwrap().trigger_id, "t-bf");
+        assert_eq!(bundle.expect("serde deserialization should succeed").trigger_id, "t-bf");
     }
 
     #[test]
@@ -1518,7 +1518,7 @@ mod tests {
             EscalationTriggerKind::PolicyViolation,
             TriggerSeverity::Critical,
         ));
-        let bundle = pipeline.bundle_for_trigger("t-ent").unwrap();
+        let bundle = pipeline.bundle_for_trigger("t-ent").expect("serde deserialization should succeed");
         assert!(!bundle.entries.is_empty());
         assert!(bundle.total_cost_millionths > 0);
     }
@@ -1531,7 +1531,7 @@ mod tests {
             EscalationTriggerKind::UserVisibleFailure,
             TriggerSeverity::Emergency,
         ));
-        let bundle = pipeline.bundle_for_trigger("t-emg").unwrap();
+        let bundle = pipeline.bundle_for_trigger("t-emg").expect("serde deserialization should succeed");
         assert_eq!(bundle.entries.len(), BundleContentKind::ALL.len());
     }
 
@@ -1573,8 +1573,8 @@ mod tests {
             EscalationTriggerKind::ReplayDivergence,
             TriggerSeverity::Critical,
         ));
-        let json = serde_json::to_string(&pipeline).unwrap();
-        let back: EscalationPipeline = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&pipeline).expect("serde deserialization should succeed");
+        let back: EscalationPipeline = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(pipeline, back);
     }
 
@@ -1621,8 +1621,8 @@ mod tests {
                 detail: "x".to_string(),
             },
         ] {
-            let json = serde_json::to_string(&err).unwrap();
-            let back: EscalationError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+            let back: EscalationError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(err, back);
         }
     }
@@ -1668,7 +1668,7 @@ mod tests {
             EscalationTriggerKind::UserVisibleFailure,
             TriggerSeverity::Emergency,
         ));
-        let bundle = pipeline.bundle_for_trigger("t-red").unwrap();
+        let bundle = pipeline.bundle_for_trigger("t-red").expect("serde deserialization should succeed");
         // In emergency, boundary capture and state snapshot should be plaintext
         for entry in &bundle.entries {
             if matches!(
@@ -1690,7 +1690,7 @@ mod tests {
             EscalationTriggerKind::UserVisibleFailure,
             TriggerSeverity::Critical,
         ));
-        let bundle = pipeline.bundle_for_trigger("t-nered").unwrap();
+        let bundle = pipeline.bundle_for_trigger("t-nered").expect("serde deserialization should succeed");
         for entry in &bundle.entries {
             if entry.kind == BundleContentKind::FullBoundaryCapture {
                 assert_eq!(entry.redaction, RedactionTreatment::DigestOnly);

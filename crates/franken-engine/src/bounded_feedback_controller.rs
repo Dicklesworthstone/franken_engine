@@ -1314,7 +1314,7 @@ mod tests {
         let h1 = p1.content_hash();
 
         let mut p2 = p1.clone();
-        p2.controllers.get_mut("test").unwrap().kp_millionths = 900_000;
+        p2.controllers.get_mut("test").expect("serde deserialization should succeed").kp_millionths = 900_000;
         let h2 = p2.content_hash();
 
         assert_ne!(h1, h2);
@@ -1453,7 +1453,7 @@ mod tests {
         new_policy
             .controllers
             .get_mut("test")
-            .unwrap()
+            .expect("serde deserialization should succeed")
             .kp_millionths = 900_000;
         coordinator.apply_policy(new_policy);
         assert_eq!(coordinator.controllers["test"].state.epoch_count, 0);
@@ -1493,7 +1493,7 @@ mod tests {
         policy_a.targets.push(test_target());
 
         let mut policy_b = policy_a.clone();
-        policy_b.controllers.get_mut("test").unwrap().kp_millionths = 900_000;
+        policy_b.controllers.get_mut("test").expect("serde deserialization should succeed").kp_millionths = 900_000;
 
         let coordinator_a = FeedbackCoordinator::new(policy_a, test_epoch());
         let coordinator_b = FeedbackCoordinator::new(policy_b, test_epoch());
@@ -1530,13 +1530,13 @@ mod tests {
         coordinator
             .controllers
             .get_mut("a")
-            .unwrap()
+            .expect("serde deserialization should succeed")
             .state
             .emergency_count = u64::MAX;
         coordinator
             .controllers
             .get_mut("b")
-            .unwrap()
+            .expect("serde deserialization should succeed")
             .state
             .emergency_count = 1;
 
@@ -1601,8 +1601,8 @@ mod tests {
     #[test]
     fn controller_config_serde_roundtrip() {
         let config = ControllerConfig::default();
-        let json = serde_json::to_string(&config).unwrap();
-        let back: ControllerConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let back: ControllerConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, back);
     }
 
@@ -1616,8 +1616,8 @@ mod tests {
             emergency_active: false,
             emergency_count: 1,
         };
-        let json = serde_json::to_string(&state).unwrap();
-        let back: ControllerState = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&state).expect("serde deserialization should succeed");
+        let back: ControllerState = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(state, back);
     }
 
@@ -1629,8 +1629,8 @@ mod tests {
         };
         let mut ctrl = PiController::new(config, test_target());
         let d = ctrl.tick(&test_observation(8_000_000));
-        let json = serde_json::to_string(&d).unwrap();
-        let back: ControllerDecision = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
+        let back: ControllerDecision = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(d, back);
     }
 
@@ -1641,8 +1641,8 @@ mod tests {
             .controllers
             .insert("test".into(), ControllerConfig::default());
         policy.targets.push(test_target());
-        let json = serde_json::to_string(&policy).unwrap();
-        let back: FeedbackPolicy = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
+        let back: FeedbackPolicy = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(policy, back);
     }
 
@@ -1720,8 +1720,8 @@ mod tests {
     fn pi_controller_serde_roundtrip() {
         let config = ControllerConfig::default();
         let ctrl = PiController::new(config, test_target());
-        let json = serde_json::to_string(&ctrl).unwrap();
-        let back: PiController = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&ctrl).expect("serde deserialization should succeed");
+        let back: PiController = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ctrl, back);
     }
 
@@ -1747,8 +1747,8 @@ mod tests {
             policy_hash: "abc".into(),
             epoch: test_epoch(),
         };
-        let json = serde_json::to_string(&summary).unwrap();
-        let back: CoordinatorHealthSummary = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
+        let back: CoordinatorHealthSummary = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(summary, back);
     }
 
@@ -1763,8 +1763,8 @@ mod tests {
             policy_hash: "hash123".into(),
             manifest_hash: "mhash456".into(),
         };
-        let json = serde_json::to_string(&manifest).unwrap();
-        let back: FeedbackEvidenceManifest = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&manifest).expect("serde deserialization should succeed");
+        let back: FeedbackEvidenceManifest = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(manifest, back);
     }
 

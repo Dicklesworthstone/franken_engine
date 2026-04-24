@@ -1140,7 +1140,7 @@ mod tests {
         let mut cat = MismatchCatalog::new(test_epoch(1));
         let e1 = test_entry("m1", MismatchDomain::CompileOutput, MismatchSeverity::Error);
         let e2 = test_entry("m1", MismatchDomain::Diagnostics, MismatchSeverity::Warning);
-        cat.add_entry(e1).unwrap();
+        cat.add_entry(e1).expect("serde deserialization should succeed");
         let err = cat.add_entry(e2).unwrap_err();
         assert!(matches!(err, CatalogError::DuplicateEntry { .. }));
     }
@@ -1168,9 +1168,9 @@ mod tests {
     fn test_remove_entry() {
         let mut cat = MismatchCatalog::new(test_epoch(1));
         let e = test_entry("m1", MismatchDomain::CompileOutput, MismatchSeverity::Error);
-        cat.add_entry(e).unwrap();
+        cat.add_entry(e).expect("serde deserialization should succeed");
         assert_eq!(cat.len(), 1);
-        let removed = cat.remove_entry("m1").unwrap();
+        let removed = cat.remove_entry("m1").expect("serde deserialization should succeed");
         assert_eq!(removed.entry_id, "m1");
         assert!(cat.is_empty());
     }
@@ -1186,10 +1186,10 @@ mod tests {
     fn test_update_remediation() {
         let mut cat = MismatchCatalog::new(test_epoch(1));
         let e = test_entry("m1", MismatchDomain::CompileOutput, MismatchSeverity::Error);
-        cat.add_entry(e).unwrap();
+        cat.add_entry(e).expect("serde deserialization should succeed");
         assert_eq!(cat.open_count(), 1);
         cat.update_remediation("m1", RemediationStatus::Resolved)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(cat.open_count(), 0);
     }
 
@@ -1210,7 +1210,7 @@ mod tests {
             MismatchDomain::CompileOutput,
             MismatchSeverity::Error,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert!(cat.get_entry("m1").is_some());
         assert!(cat.get_entry("m2").is_none());
     }
@@ -1223,19 +1223,19 @@ mod tests {
             MismatchDomain::CompileOutput,
             MismatchSeverity::Error,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         cat.add_entry(test_entry(
             "m2",
             MismatchDomain::Diagnostics,
             MismatchSeverity::Error,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         cat.add_entry(test_entry(
             "m3",
             MismatchDomain::SourceMap,
             MismatchSeverity::Warning,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(cat.count_by_severity(MismatchSeverity::Error), 2);
         assert_eq!(cat.count_by_severity(MismatchSeverity::Warning), 1);
         assert_eq!(cat.count_by_severity(MismatchSeverity::Critical), 0);
@@ -1249,13 +1249,13 @@ mod tests {
             MismatchDomain::CompileOutput,
             MismatchSeverity::Error,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         cat.add_entry(test_entry(
             "m2",
             MismatchDomain::Diagnostics,
             MismatchSeverity::Warning,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         // Error(700_000) + Warning(300_000) = 1_000_000
         assert_eq!(cat.aggregate_open_score(), 1_000_000);
     }
@@ -1270,13 +1270,13 @@ mod tests {
             ComparisonTarget::NodeJs,
             RemediationStatus::Resolved,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         cat.add_entry(test_entry(
             "m2",
             MismatchDomain::Diagnostics,
             MismatchSeverity::Warning,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(cat.aggregate_open_score(), 300_000);
     }
 
@@ -1288,13 +1288,13 @@ mod tests {
             MismatchDomain::CompileOutput,
             MismatchSeverity::Error,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         cat.add_entry(test_entry(
             "m2",
             MismatchDomain::SourceMap,
             MismatchSeverity::Info,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let covered = cat.covered_domains();
         assert_eq!(covered.len(), 2);
         assert!(covered.contains(&MismatchDomain::CompileOutput));
@@ -1311,7 +1311,7 @@ mod tests {
             ComparisonTarget::NodeJs,
             RemediationStatus::None,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         cat.add_entry(test_entry_full(
             "m2",
             MismatchDomain::Diagnostics,
@@ -1319,7 +1319,7 @@ mod tests {
             ComparisonTarget::Bun,
             RemediationStatus::None,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let targets = cat.covered_targets();
         assert_eq!(targets.len(), 2);
     }
@@ -1332,19 +1332,19 @@ mod tests {
             MismatchDomain::CompileOutput,
             MismatchSeverity::Error,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         cat.add_entry(test_entry(
             "m2",
             MismatchDomain::CompileOutput,
             MismatchSeverity::Warning,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         cat.add_entry(test_entry(
             "m3",
             MismatchDomain::SourceMap,
             MismatchSeverity::Info,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(
             cat.entries_by_domain(MismatchDomain::CompileOutput).len(),
             2
@@ -1362,7 +1362,7 @@ mod tests {
             ComparisonTarget::NodeJs,
             RemediationStatus::None,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         cat.add_entry(test_entry_full(
             "m2",
             MismatchDomain::Diagnostics,
@@ -1370,7 +1370,7 @@ mod tests {
             ComparisonTarget::Bun,
             RemediationStatus::None,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(cat.entries_by_target(ComparisonTarget::NodeJs).len(), 1);
         assert_eq!(cat.entries_by_target(ComparisonTarget::Bun).len(), 1);
     }
@@ -1383,19 +1383,19 @@ mod tests {
             MismatchDomain::CompileOutput,
             MismatchSeverity::Error,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         cat.add_entry(test_entry(
             "m2",
             MismatchDomain::Diagnostics,
             MismatchSeverity::Error,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         cat.add_entry(test_entry(
             "m3",
             MismatchDomain::SourceMap,
             MismatchSeverity::Warning,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(cat.entries_by_severity(MismatchSeverity::Error).len(), 2);
     }
 
@@ -1407,7 +1407,7 @@ mod tests {
             MismatchDomain::CompileOutput,
             MismatchSeverity::Error,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(cat.entries_by_tag("react").len(), 1);
         assert_eq!(cat.entries_by_tag("nonexistent").len(), 0);
     }
@@ -1420,7 +1420,7 @@ mod tests {
             MismatchDomain::CompileOutput,
             MismatchSeverity::Error,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         cat.add_entry(test_entry_full(
             "m2",
             MismatchDomain::CompileOutput,
@@ -1428,12 +1428,12 @@ mod tests {
             ComparisonTarget::NodeJs,
             RemediationStatus::Resolved,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let summaries = cat.domain_summary();
         let co_summary = summaries
             .iter()
             .find(|s| s.domain == MismatchDomain::CompileOutput)
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(co_summary.total_entries, 2);
         assert_eq!(co_summary.open_entries, 1);
         assert_eq!(co_summary.resolved_entries, 1);
@@ -1450,7 +1450,7 @@ mod tests {
             ComparisonTarget::NodeJs,
             RemediationStatus::None,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         cat.add_entry(test_entry_full(
             "m2",
             MismatchDomain::Diagnostics,
@@ -1458,7 +1458,7 @@ mod tests {
             ComparisonTarget::NodeJs,
             RemediationStatus::None,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let summaries = cat.target_summary();
         assert_eq!(summaries.len(), 1);
         assert_eq!(summaries[0].total_entries, 2);
@@ -1482,7 +1482,7 @@ mod tests {
                 target,
                 RemediationStatus::Resolved,
             ))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         }
         let config = CatalogConfig::default();
         let verdict = cat.evaluate(&config);
@@ -1497,7 +1497,7 @@ mod tests {
             MismatchDomain::CompileOutput,
             MismatchSeverity::Info,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let config = CatalogConfig::default();
         let verdict = cat.evaluate(&config);
         assert!(matches!(verdict, GateVerdict::Incomplete { .. }));
@@ -1524,7 +1524,7 @@ mod tests {
                 target,
                 RemediationStatus::None,
             ))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         }
         let config = CatalogConfig::default();
         let verdict = cat.evaluate(&config);
@@ -1547,7 +1547,7 @@ mod tests {
                 target,
                 RemediationStatus::None,
             ))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         }
         let config = CatalogConfig {
             max_open_errors: 100, // relax error count
@@ -1582,13 +1582,13 @@ mod tests {
             MismatchDomain::CompileOutput,
             MismatchSeverity::Error,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         cat.add_entry(test_entry(
             "m2",
             MismatchDomain::Diagnostics,
             MismatchSeverity::Warning,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let report = cat.report();
         assert_eq!(report.total_entries, 2);
         assert_eq!(report.open_entries, 2);
@@ -1605,25 +1605,25 @@ mod tests {
             MismatchDomain::CompileOutput,
             MismatchSeverity::Error,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         cat.add_entry(test_entry(
             "m2",
             MismatchDomain::CompileOutput,
             MismatchSeverity::Warning,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         cat.add_entry(test_entry(
             "m3",
             MismatchDomain::SourceMap,
             MismatchSeverity::Info,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let advisories = generate_advisories(&cat);
         assert_eq!(advisories.len(), 2); // compile_output + source_map
         let co_adv = advisories
             .iter()
             .find(|a| a.domains.contains(&MismatchDomain::CompileOutput))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         assert_eq!(co_adv.entry_count, 2);
         assert_eq!(co_adv.max_severity, MismatchSeverity::Error);
     }
@@ -1638,7 +1638,7 @@ mod tests {
             ComparisonTarget::NodeJs,
             RemediationStatus::Resolved,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let advisories = generate_advisories(&cat);
         assert!(advisories.is_empty());
     }
@@ -1651,7 +1651,7 @@ mod tests {
             MismatchDomain::CompileOutput,
             MismatchSeverity::Error,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let coverage = domain_coverage(&cat);
         // 1/10 = 100_000
         assert_eq!(coverage, 100_000);
@@ -1662,7 +1662,7 @@ mod tests {
         let mut cat = MismatchCatalog::new(test_epoch(1));
         for (i, &domain) in ALL_DOMAINS.iter().enumerate() {
             cat.add_entry(test_entry(&format!("m{i}"), domain, MismatchSeverity::Info))
-                .unwrap();
+                .expect("serde deserialization should succeed");
         }
         assert_eq!(domain_coverage(&cat), MILLIONTHS);
     }
@@ -1683,13 +1683,13 @@ mod tests {
             ComparisonTarget::NodeJs,
             RemediationStatus::Resolved,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         cat.add_entry(test_entry(
             "m2",
             MismatchDomain::Diagnostics,
             MismatchSeverity::Warning,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         // 1/2 = 500_000
         assert_eq!(resolution_ratio(&cat), 500_000);
     }
@@ -1702,7 +1702,7 @@ mod tests {
             MismatchDomain::CompileOutput,
             MismatchSeverity::Error,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let tags = all_tags(&cat);
         assert!(tags.contains("react"));
         assert!(tags.contains("test"));
@@ -1716,13 +1716,13 @@ mod tests {
             MismatchDomain::CompileOutput,
             MismatchSeverity::Error,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         cat.add_entry(test_entry(
             "m2",
             MismatchDomain::Diagnostics,
             MismatchSeverity::Warning,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let errors = filter_entry_ids(&cat, |e| e.severity == MismatchSeverity::Error);
         assert_eq!(errors, vec!["m1"]);
     }
@@ -1769,7 +1769,7 @@ mod tests {
             MismatchDomain::CompileOutput,
             MismatchSeverity::Error,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_ne!(cat.catalog_hash, h1);
     }
 
@@ -1781,17 +1781,17 @@ mod tests {
             MismatchDomain::CompileOutput,
             MismatchSeverity::Error,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let h1 = cat.catalog_hash;
-        cat.remove_entry("m1").unwrap();
+        cat.remove_entry("m1").expect("serde deserialization should succeed");
         assert_ne!(cat.catalog_hash, h1);
     }
 
     #[test]
     fn test_serde_roundtrip_entry() {
         let e = test_entry("m1", MismatchDomain::CompileOutput, MismatchSeverity::Error);
-        let json = serde_json::to_string(&e).unwrap();
-        let parsed: MismatchEntry = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
+        let parsed: MismatchEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(e, parsed);
     }
 
@@ -1803,17 +1803,17 @@ mod tests {
             MismatchDomain::CompileOutput,
             MismatchSeverity::Error,
         ))
-        .unwrap();
-        let json = serde_json::to_string(&cat).unwrap();
-        let parsed: MismatchCatalog = serde_json::from_str(&json).unwrap();
+        .expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cat).expect("serde deserialization should succeed");
+        let parsed: MismatchCatalog = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cat, parsed);
     }
 
     #[test]
     fn test_serde_roundtrip_config() {
         let config = CatalogConfig::default();
-        let json = serde_json::to_string(&config).unwrap();
-        let parsed: CatalogConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let parsed: CatalogConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, parsed);
     }
 
@@ -1822,8 +1822,8 @@ mod tests {
         let v = GateVerdict::Fail {
             reasons: vec!["test".to_string()],
         };
-        let json = serde_json::to_string(&v).unwrap();
-        let parsed: GateVerdict = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let parsed: GateVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, parsed);
     }
 
@@ -1835,10 +1835,10 @@ mod tests {
             MismatchDomain::CompileOutput,
             MismatchSeverity::Error,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let report = cat.report();
-        let json = serde_json::to_string(&report).unwrap();
-        let parsed: CatalogReport = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let parsed: CatalogReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report, parsed);
     }
 
@@ -1850,10 +1850,10 @@ mod tests {
             MismatchDomain::CompileOutput,
             MismatchSeverity::Error,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let advisories = generate_advisories(&cat);
-        let json = serde_json::to_string(&advisories[0]).unwrap();
-        let parsed: MismatchAdvisory = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&advisories[0]).expect("serde deserialization should succeed");
+        let parsed: MismatchAdvisory = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(advisories[0], parsed);
     }
 
@@ -1889,7 +1889,7 @@ mod tests {
             );
             e.verified_epoch = test_epoch(3);
             e.detected_epoch = test_epoch(1);
-            cat.add_entry(e).unwrap();
+            cat.add_entry(e).expect("serde deserialization should succeed");
         }
         let config = CatalogConfig {
             min_verification_epoch: test_epoch(5),
@@ -1912,7 +1912,7 @@ mod tests {
             ComparisonTarget::NodeJs,
             RemediationStatus::None,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         cat.add_entry(test_entry_full(
             "m2",
             MismatchDomain::Diagnostics,
@@ -1920,7 +1920,7 @@ mod tests {
             ComparisonTarget::NodeJs,
             RemediationStatus::Resolved,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         assert_eq!(cat.open_count_by_severity(MismatchSeverity::Critical), 1);
     }
 
@@ -1953,7 +1953,7 @@ mod tests {
                 *target,
                 RemediationStatus::None,
             ))
-            .unwrap();
+            .expect("serde deserialization should succeed");
         }
         assert_eq!(cat.covered_targets().len(), 4);
     }
@@ -1974,7 +1974,7 @@ mod tests {
             MismatchDomain::CompileOutput,
             MismatchSeverity::Error,
         ))
-        .unwrap();
+        .expect("serde deserialization should succeed");
         let advisories = generate_advisories(&cat);
         assert!(advisories[0].advisory_id.starts_with("ADV-"));
     }

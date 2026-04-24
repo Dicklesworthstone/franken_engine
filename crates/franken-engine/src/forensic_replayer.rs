@@ -1128,7 +1128,7 @@ mod tests {
         let evidence = vec![benign_evidence(); 5];
         let trace = build_trace(evidence);
         let mut replayer = ForensicReplayer::new();
-        let result = replayer.replay(&trace, &ReplayConfig::default()).unwrap();
+        let result = replayer.replay(&trace, &ReplayConfig::default()).expect("serde deserialization should succeed");
 
         assert!(result.deterministic);
         assert_eq!(result.steps.len(), 5);
@@ -1145,7 +1145,7 @@ mod tests {
         ];
         let trace = build_trace(evidence);
         let mut replayer = ForensicReplayer::new();
-        let result = replayer.replay(&trace, &ReplayConfig::default()).unwrap();
+        let result = replayer.replay(&trace, &ReplayConfig::default()).expect("serde deserialization should succeed");
 
         assert!(result.deterministic);
         for (i, step) in result.steps.iter().enumerate() {
@@ -1166,10 +1166,10 @@ mod tests {
         let trace = build_trace(evidence);
         let mut replayer = ForensicReplayer::new();
 
-        let baseline = replayer.replay(&trace, &ReplayConfig::default()).unwrap();
+        let baseline = replayer.replay(&trace, &ReplayConfig::default()).expect("serde deserialization should succeed");
 
         for run in 1..100 {
-            let result = replayer.replay(&trace, &ReplayConfig::default()).unwrap();
+            let result = replayer.replay(&trace, &ReplayConfig::default()).expect("serde deserialization should succeed");
             assert!(result.deterministic, "non-deterministic on run {run}");
             assert_eq!(
                 result.content_hash, baseline.content_hash,
@@ -1191,9 +1191,9 @@ mod tests {
         let trace = build_trace(vec![benign_evidence()]);
         let mut replayer = ForensicReplayer::new();
         assert_eq!(replayer.replay_count(), 0);
-        replayer.replay(&trace, &ReplayConfig::default()).unwrap();
+        replayer.replay(&trace, &ReplayConfig::default()).expect("serde deserialization should succeed");
         assert_eq!(replayer.replay_count(), 1);
-        replayer.replay(&trace, &ReplayConfig::default()).unwrap();
+        replayer.replay(&trace, &ReplayConfig::default()).expect("serde deserialization should succeed");
         assert_eq!(replayer.replay_count(), 2);
     }
 
@@ -1202,8 +1202,8 @@ mod tests {
         let evidence = vec![benign_evidence(), suspicious_evidence()];
         let trace = build_trace(evidence);
         let mut replayer = ForensicReplayer::new();
-        let result = replayer.replay(&trace, &ReplayConfig::default()).unwrap();
-        let last_step = result.steps.last().unwrap();
+        let result = replayer.replay(&trace, &ReplayConfig::default()).expect("serde deserialization should succeed");
+        let last_step = result.steps.last().expect("serde deserialization should succeed");
         assert_eq!(result.final_posterior, last_step.update_result.posterior);
     }
 
@@ -1211,8 +1211,8 @@ mod tests {
     fn replay_content_hash_stable() {
         let trace = build_trace(vec![benign_evidence()]);
         let mut replayer = ForensicReplayer::new();
-        let r1 = replayer.replay(&trace, &ReplayConfig::default()).unwrap();
-        let r2 = replayer.replay(&trace, &ReplayConfig::default()).unwrap();
+        let r1 = replayer.replay(&trace, &ReplayConfig::default()).expect("serde deserialization should succeed");
+        let r2 = replayer.replay(&trace, &ReplayConfig::default()).expect("serde deserialization should succeed");
         assert_eq!(r1.content_hash, r2.content_hash);
     }
 
@@ -1226,14 +1226,14 @@ mod tests {
         let trace = build_trace(evidence);
         let mut replayer = ForensicReplayer::new();
 
-        let original = replayer.replay(&trace, &ReplayConfig::default()).unwrap();
+        let original = replayer.replay(&trace, &ReplayConfig::default()).expect("serde deserialization should succeed");
         let cf = replayer
             .counterfactual(
                 &trace,
                 &ReplayConfig::default(),
                 &CounterfactualSpec::identity(),
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert_eq!(original.steps.len(), cf.steps.len());
         for (i, (o, c)) in original.steps.iter().zip(cf.steps.iter()).enumerate() {
@@ -1252,7 +1252,7 @@ mod tests {
         let trace = build_trace(evidence);
         let mut replayer = ForensicReplayer::new();
 
-        let original = replayer.replay(&trace, &ReplayConfig::default()).unwrap();
+        let original = replayer.replay(&trace, &ReplayConfig::default()).expect("serde deserialization should succeed");
         let cf = replayer
             .counterfactual(
                 &trace,
@@ -1262,7 +1262,7 @@ mod tests {
                     "conservative matrix",
                 ),
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Conservative matrix should be at least as aggressive.
         let orig_max_severity = original
@@ -1301,7 +1301,7 @@ mod tests {
 
         let cf = replayer
             .counterfactual(&trace, &ReplayConfig::default(), &spec)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert_eq!(cf.steps.len(), 2); // Only benign + malicious.
     }
@@ -1320,7 +1320,7 @@ mod tests {
 
         let cf = replayer
             .counterfactual(&trace, &ReplayConfig::default(), &spec)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert_eq!(cf.steps.len(), 2);
     }
@@ -1331,7 +1331,7 @@ mod tests {
         let trace = build_trace(evidence);
         let mut replayer = ForensicReplayer::new();
 
-        let original = replayer.replay(&trace, &ReplayConfig::default()).unwrap();
+        let original = replayer.replay(&trace, &ReplayConfig::default()).expect("serde deserialization should succeed");
 
         // Start with a suspicious prior.
         let suspicious_prior = Posterior::from_millionths(100_000, 400_000, 400_000, 100_000);
@@ -1341,11 +1341,11 @@ mod tests {
                 &ReplayConfig::default(),
                 &CounterfactualSpec::with_prior(suspicious_prior, "suspicious prior"),
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // With a suspicious prior, the same evidence should lead to more severe actions.
-        let orig_final = original.final_decision.as_ref().unwrap().action.severity();
-        let cf_final = cf.final_decision.as_ref().unwrap().action.severity();
+        let orig_final = original.final_decision.as_ref().expect("serde deserialization should succeed").action.severity();
+        let cf_final = cf.final_decision.as_ref().expect("serde deserialization should succeed").action.severity();
         assert!(
             cf_final >= orig_final,
             "suspicious prior should escalate: cf={cf_final} vs orig={orig_final}"
@@ -1362,8 +1362,8 @@ mod tests {
         let trace = build_trace(evidence);
         let mut replayer = ForensicReplayer::new();
 
-        let r1 = replayer.replay(&trace, &ReplayConfig::default()).unwrap();
-        let r2 = replayer.replay(&trace, &ReplayConfig::default()).unwrap();
+        let r1 = replayer.replay(&trace, &ReplayConfig::default()).expect("serde deserialization should succeed");
+        let r2 = replayer.replay(&trace, &ReplayConfig::default()).expect("serde deserialization should succeed");
 
         let diff = replayer.diff(&r1, &r2, "identical");
         assert!(diff.first_divergence_step.is_none());
@@ -1381,14 +1381,14 @@ mod tests {
         let trace = build_trace(evidence);
         let mut replayer = ForensicReplayer::new();
 
-        let original = replayer.replay(&trace, &ReplayConfig::default()).unwrap();
+        let original = replayer.replay(&trace, &ReplayConfig::default()).expect("serde deserialization should succeed");
         let cf = replayer
             .counterfactual(
                 &trace,
                 &ReplayConfig::default(),
                 &CounterfactualSpec::with_loss_matrix(LossMatrix::conservative(), "conservative"),
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let diff = replayer.diff(&original, &cf, "conservative vs balanced");
         assert_eq!(
@@ -1404,14 +1404,14 @@ mod tests {
         let trace = build_trace(evidence);
         let mut replayer = ForensicReplayer::new();
 
-        let original = replayer.replay(&trace, &ReplayConfig::default()).unwrap();
+        let original = replayer.replay(&trace, &ReplayConfig::default()).expect("serde deserialization should succeed");
         let cf = replayer
             .counterfactual(
                 &trace,
                 &ReplayConfig::default(),
                 &CounterfactualSpec::with_loss_matrix(LossMatrix::permissive(), "permissive"),
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let diff = replayer.diff(&original, &cf, "permissive");
         // action_change_count should be >= 0 (may or may not differ).
@@ -1424,7 +1424,7 @@ mod tests {
         let trace = build_trace(evidence);
         let mut replayer = ForensicReplayer::new();
 
-        let original = replayer.replay(&trace, &ReplayConfig::default()).unwrap();
+        let original = replayer.replay(&trace, &ReplayConfig::default()).expect("serde deserialization should succeed");
 
         // Counterfactual with injected evidence (more steps).
         let spec = CounterfactualSpec {
@@ -1434,7 +1434,7 @@ mod tests {
         };
         let cf = replayer
             .counterfactual(&trace, &ReplayConfig::default(), &spec)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         let diff = replayer.diff(&original, &cf, "extra step");
         assert_eq!(
@@ -1497,7 +1497,7 @@ mod tests {
         let evidence = vec![benign_evidence()];
         let trace = build_trace(evidence);
         let mut replayer = ForensicReplayer::new();
-        let result = replayer.replay(&trace, &ReplayConfig::default()).unwrap();
+        let result = replayer.replay(&trace, &ReplayConfig::default()).expect("serde deserialization should succeed");
         // With benign evidence, should stay Running (Allow action).
         assert_eq!(result.final_containment_state, ContainmentState::Running);
     }
@@ -1607,8 +1607,8 @@ mod tests {
             loss_matrix_id: "balanced".to_string(),
             annotations: BTreeMap::new(),
         };
-        let json = serde_json::to_string(&meta).unwrap();
-        let decoded: IncidentMetadata = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&meta).expect("serde deserialization should succeed");
+        let decoded: IncidentMetadata = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(meta, decoded);
     }
 
@@ -1637,8 +1637,8 @@ mod tests {
                 epoch: SecurityEpoch::GENESIS,
             },
         };
-        let json = serde_json::to_string(&step).unwrap();
-        let decoded: ReplayStep = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&step).expect("serde deserialization should succeed");
+        let decoded: ReplayStep = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(step, decoded);
     }
 
@@ -1646,9 +1646,9 @@ mod tests {
     fn replay_result_serde_roundtrip() {
         let trace = build_trace(vec![benign_evidence()]);
         let mut replayer = ForensicReplayer::new();
-        let result = replayer.replay(&trace, &ReplayConfig::default()).unwrap();
-        let json = serde_json::to_string(&result).unwrap();
-        let decoded: ReplayResult = serde_json::from_str(&json).unwrap();
+        let result = replayer.replay(&trace, &ReplayConfig::default()).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let decoded: ReplayResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, decoded);
     }
 
@@ -1662,8 +1662,8 @@ mod tests {
             inject_evidence: Vec::new(),
             description: "test spec".to_string(),
         };
-        let json = serde_json::to_string(&spec).unwrap();
-        let decoded: CounterfactualSpec = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&spec).expect("serde deserialization should succeed");
+        let decoded: CounterfactualSpec = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(spec, decoded);
     }
 
@@ -1696,8 +1696,8 @@ mod tests {
             counterfactual_final_action: Some(ContainmentAction::Challenge),
             final_outcome_differs: true,
         };
-        let json = serde_json::to_string(&diff).unwrap();
-        let decoded: ReplayDiff = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&diff).expect("serde deserialization should succeed");
+        let decoded: ReplayDiff = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(diff, decoded);
     }
 
@@ -1785,7 +1785,7 @@ mod tests {
         let mut replayer = ForensicReplayer::new();
 
         // Replay.
-        let result = replayer.replay(&trace, &ReplayConfig::default()).unwrap();
+        let result = replayer.replay(&trace, &ReplayConfig::default()).expect("serde deserialization should succeed");
         assert!(result.deterministic);
         assert_eq!(result.steps.len(), 6);
 
@@ -1799,7 +1799,7 @@ mod tests {
                     "conservative escalation",
                 ),
             )
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         // Diff.
         let diff = replayer.diff(&result, &cf, "conservative escalation");
@@ -1807,8 +1807,8 @@ mod tests {
 
         // The conservative matrix should not be less severe.
         if diff.final_outcome_differs {
-            let orig = diff.original_final_action.unwrap().severity();
-            let cf_sev = diff.counterfactual_final_action.unwrap().severity();
+            let orig = diff.original_final_action.expect("serde deserialization should succeed").severity();
+            let cf_sev = diff.counterfactual_final_action.expect("serde deserialization should succeed").severity();
             assert!(cf_sev >= orig);
         }
     }
@@ -1819,7 +1819,7 @@ mod tests {
         let trace = build_trace(evidence);
         let mut replayer = ForensicReplayer::new();
 
-        let original = replayer.replay(&trace, &ReplayConfig::default()).unwrap();
+        let original = replayer.replay(&trace, &ReplayConfig::default()).expect("serde deserialization should succeed");
 
         // Inject malicious evidence between the two benign ones.
         let spec = CounterfactualSpec {
@@ -1830,7 +1830,7 @@ mod tests {
 
         let cf = replayer
             .counterfactual(&trace, &ReplayConfig::default(), &spec)
-            .unwrap();
+            .expect("serde deserialization should succeed");
 
         assert_eq!(cf.steps.len(), 4); // 2 original + 2 injected.
 
@@ -1844,7 +1844,7 @@ mod tests {
         let mut replayer = ForensicReplayer::new();
         replayer.set_epoch(SecurityEpoch::from_raw(5));
         let trace = build_trace(vec![benign_evidence()]);
-        let result = replayer.replay(&trace, &ReplayConfig::default()).unwrap();
+        let result = replayer.replay(&trace, &ReplayConfig::default()).expect("serde deserialization should succeed");
         // Steps should have epoch from the replayer.
         assert_eq!(result.steps[0].decision.epoch, SecurityEpoch::from_raw(5));
     }
@@ -1859,8 +1859,8 @@ mod tests {
     fn replayer_serde_roundtrip() {
         let mut replayer = ForensicReplayer::new();
         replayer.set_epoch(SecurityEpoch::from_raw(3));
-        let json = serde_json::to_string(&replayer).unwrap();
-        let decoded: ForensicReplayer = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&replayer).expect("serde deserialization should succeed");
+        let decoded: ForensicReplayer = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(decoded.replay_count(), 0);
         assert_eq!(decoded.epoch, SecurityEpoch::from_raw(3));
     }
@@ -1981,8 +1981,8 @@ mod tests {
             },
         ];
         for e in &errors {
-            let json = serde_json::to_string(e).unwrap();
-            let restored: TraceValidationError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(e).expect("serde deserialization should succeed");
+            let restored: TraceValidationError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*e, restored);
         }
         assert_eq!(errors.len(), 7);
@@ -2004,8 +2004,8 @@ mod tests {
             },
         ];
         for c in &changes {
-            let json = serde_json::to_string(c).unwrap();
-            let restored: DecisionChange = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(c).expect("serde deserialization should succeed");
+            let restored: DecisionChange = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*c, restored);
         }
         assert_eq!(changes.len(), 3);
@@ -2023,8 +2023,8 @@ mod tests {
             },
         ];
         for e in &errors {
-            let json = serde_json::to_string(e).unwrap();
-            let restored: ReplayError = serde_json::from_str(&json).unwrap();
+            let json = serde_json::to_string(e).expect("serde deserialization should succeed");
+            let restored: ReplayError = serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*e, restored);
         }
         assert_eq!(errors.len(), 3);
@@ -2073,8 +2073,8 @@ mod tests {
     #[test]
     fn replay_config_serde_roundtrip() {
         let config = ReplayConfig::default();
-        let json = serde_json::to_string(&config).unwrap();
-        let back: ReplayConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let back: ReplayConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, back);
     }
 
@@ -2099,8 +2099,8 @@ mod tests {
     #[test]
     fn enrichment_counterfactual_spec_identity_serde() {
         let spec = CounterfactualSpec::identity();
-        let json = serde_json::to_string(&spec).unwrap();
-        let back: CounterfactualSpec = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&spec).expect("serde deserialization should succeed");
+        let back: CounterfactualSpec = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(spec, back);
     }
 
@@ -2194,7 +2194,7 @@ mod tests {
         let matrix = LossMatrix::conservative();
         let spec = CounterfactualSpec::with_loss_matrix(matrix.clone(), "test matrix");
         assert!(spec.override_loss_matrix.is_some());
-        assert_eq!(spec.override_loss_matrix.unwrap(), matrix);
+        assert_eq!(spec.override_loss_matrix.expect("serde deserialization should succeed"), matrix);
         assert!(spec.override_prior.is_none());
         assert!(spec.override_likelihood_model.is_none());
         assert!(spec.skip_evidence_indices.is_empty());
@@ -2207,7 +2207,7 @@ mod tests {
         let prior = Posterior::uniform();
         let spec = CounterfactualSpec::with_prior(prior.clone(), "test prior");
         assert!(spec.override_prior.is_some());
-        assert_eq!(spec.override_prior.unwrap(), prior);
+        assert_eq!(spec.override_prior.expect("serde deserialization should succeed"), prior);
         assert!(spec.override_loss_matrix.is_none());
         assert!(spec.override_likelihood_model.is_none());
         assert_eq!(spec.description, "test prior");
@@ -2220,8 +2220,8 @@ mod tests {
             verify_receipt_integrity: false,
             max_steps: 42,
         };
-        let json = serde_json::to_string(&config).unwrap();
-        let decoded: ReplayConfig = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let decoded: ReplayConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, decoded);
         assert!(!decoded.verify_telemetry_integrity);
         assert!(!decoded.verify_receipt_integrity);
@@ -2232,12 +2232,12 @@ mod tests {
     fn replayer_serde_preserves_replay_count_after_replays() {
         let trace = build_trace(vec![benign_evidence()]);
         let mut replayer = ForensicReplayer::new();
-        replayer.replay(&trace, &ReplayConfig::default()).unwrap();
-        replayer.replay(&trace, &ReplayConfig::default()).unwrap();
+        replayer.replay(&trace, &ReplayConfig::default()).expect("serde deserialization should succeed");
+        replayer.replay(&trace, &ReplayConfig::default()).expect("serde deserialization should succeed");
         assert_eq!(replayer.replay_count(), 2);
 
-        let json = serde_json::to_string(&replayer).unwrap();
-        let decoded: ForensicReplayer = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&replayer).expect("serde deserialization should succeed");
+        let decoded: ForensicReplayer = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(decoded.replay_count(), 2);
     }
 
@@ -2378,8 +2378,8 @@ mod tests {
             loss_matrix_id: "balanced".to_string(),
             annotations,
         };
-        let json = serde_json::to_string(&meta).unwrap();
-        let decoded: IncidentMetadata = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&meta).expect("serde deserialization should succeed");
+        let decoded: IncidentMetadata = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(meta, decoded);
         assert_eq!(decoded.annotations.len(), 2);
         assert_eq!(decoded.annotations["severity"], "high");
@@ -2388,8 +2388,8 @@ mod tests {
     #[test]
     fn incident_trace_full_serde_roundtrip() {
         let trace = build_trace(vec![benign_evidence(), suspicious_evidence()]);
-        let json = serde_json::to_string(&trace).unwrap();
-        let decoded: IncidentTrace = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&trace).expect("serde deserialization should succeed");
+        let decoded: IncidentTrace = serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(trace, decoded);
         assert_eq!(decoded.evidence_log.len(), 2);
         assert_eq!(decoded.decision_log.len(), 2);
@@ -2402,8 +2402,8 @@ mod tests {
         trace1.metadata.trace_id = "trace-aaa".to_string();
         trace2.metadata.trace_id = "trace-bbb".to_string();
         let mut replayer = ForensicReplayer::new();
-        let r1 = replayer.replay(&trace1, &ReplayConfig::default()).unwrap();
-        let r2 = replayer.replay(&trace2, &ReplayConfig::default()).unwrap();
+        let r1 = replayer.replay(&trace1, &ReplayConfig::default()).expect("serde deserialization should succeed");
+        let r2 = replayer.replay(&trace2, &ReplayConfig::default()).expect("serde deserialization should succeed");
         assert_ne!(
             r1.content_hash, r2.content_hash,
             "different trace_ids should produce different replay result hashes"

@@ -56,13 +56,13 @@ pub struct TemplateLiteralConformanceReport {
     pub coverage_by_category: BTreeMap<TemplateLiteralTestCategory, CategoryCoverage>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ConformanceStatistics {
     pub total_tests: u32,
     pub passed: u32,
     pub failed: u32,
     pub parse_errors: u32,
-    pub pass_rate_millionths: u32, // Fixed-point representation of pass rate
+    pub pass_rate_millionths: u32,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

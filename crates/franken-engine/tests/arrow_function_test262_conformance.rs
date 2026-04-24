@@ -14,6 +14,9 @@ use frankenengine_engine::security_epoch::SecurityEpoch;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+mod _support;
+use _support::test262_common::{RequirementLevel, ExpectedResult, execute_test262_case};
+
 // ---------------------------------------------------------------------------
 // Test262 Arrow Function Conformance Suite
 // ---------------------------------------------------------------------------
@@ -34,13 +37,7 @@ pub enum ArrowFunctionResult {
     Skip { reason: String },
 }
 
-/// ES2020 specification requirement level.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-pub enum RequirementLevel {
-    Must,
-    Should,
-    May,
-}
+// RequirementLevel now imported from shared module
 
 /// Arrow function test category for gap analysis.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -75,14 +72,7 @@ pub struct ArrowFunctionTest {
     pub expected_result: ExpectedResult,
 }
 
-/// Expected execution result.
-#[derive(Debug, Clone)]
-pub enum ExpectedResult {
-    Success { output: String },
-    SyntaxError { error_type: String },
-    RuntimeError { error_type: String },
-    ParseSuccess,
-}
+// ExpectedResult now imported from shared module
 
 /// Arrow function conformance test harness.
 pub struct ArrowFunctionHarness {

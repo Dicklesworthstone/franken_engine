@@ -13,6 +13,9 @@ use frankenengine_engine::HybridRouter;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+mod _support;
+use _support::test262_common::{RequirementLevel, ExpectedResult, execute_test262_case};
+
 const SCHEMA_VERSION: &str = "franken-engine.iteration-statements-test262-conformance.v1";
 const BEAD_ID: &str = "bd-ai64f";
 

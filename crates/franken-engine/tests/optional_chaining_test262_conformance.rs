@@ -15,6 +15,9 @@ use frankenengine_engine::security_epoch::SecurityEpoch;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+mod _support;
+use _support::test262_common::{RequirementLevel, ExpectedResult, execute_test262_case};
+
 // ---------------------------------------------------------------------------
 // Optional Chaining Test262 Conformance Suite
 // ---------------------------------------------------------------------------
@@ -32,13 +35,7 @@ pub enum OptionalChainingResult {
     Skip { reason: String },
 }
 
-/// ES2020 requirement level.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-pub enum RequirementLevel {
-    Must,
-    Should,
-    May,
-}
+// RequirementLevel now imported from shared module
 
 /// Optional chaining test categories.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -69,14 +66,7 @@ pub struct OptionalChainingTest {
     pub expected_result: ExpectedResult,
 }
 
-/// Expected test execution result.
-#[derive(Debug, Clone)]
-pub enum ExpectedResult {
-    Success { output: String },
-    SyntaxError { error_type: String },
-    RuntimeError { error_type: String },
-    ParseSuccess,
-}
+// ExpectedResult now imported from shared module
 
 /// Optional chaining conformance harness.
 pub struct OptionalChainingHarness {

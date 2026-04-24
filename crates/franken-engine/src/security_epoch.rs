@@ -51,27 +51,13 @@ impl SecurityEpoch {
 
 impl fmt::Debug for SecurityEpoch {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // Use opaque labels in debug output to prevent information disclosure
-        let opaque_label = match self.0 {
-            1 => "generation-legacy",
-            2 => "generation-standard",
-            3 => "generation-current",
-            _ => "generation-unknown",
-        };
-        f.debug_tuple("SecurityEpoch").field(&opaque_label).finish()
+        f.debug_tuple("SecurityEpoch").field(&self.0).finish()
     }
 }
 
 impl fmt::Display for SecurityEpoch {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // Use opaque labels instead of raw epoch numbers to prevent information disclosure
-        let opaque_label = match self.0 {
-            1 => "generation-legacy",
-            2 => "generation-standard",
-            3 => "generation-current",
-            _ => "generation-unknown",
-        };
-        write!(f, "epoch:{}", opaque_label)
+        write!(f, "epoch:{}", self.0)
     }
 }
 

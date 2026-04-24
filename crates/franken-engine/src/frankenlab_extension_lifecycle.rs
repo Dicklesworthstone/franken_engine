@@ -548,11 +548,14 @@ fn scenario_multi_extension<C: ContextAdapter>(seed: u64, cx: &mut C) -> Scenari
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::control_plane::mocks::{MockBudget, MockCx, trace_id_from_seed};
+    use crate::control_plane::{Budget, Cx, KernelContext, NoCaps, TraceId};
 
-    fn real_cx(budget_ms: u64) -> MockCx {
-        let trace_id = trace_id_from_seed(42);
-        MockCx::new(trace_id, MockBudget::new(budget_ms))
+    fn real_cx(budget_ms: u64) -> KernelContext<'static, NoCaps> {
+        KernelContext::new(Cx::new(
+            TraceId::from_raw(42),
+            Budget::new(budget_ms),
+            NoCaps,
+        ))
     }
 
     // -----------------------------------------------------------------------

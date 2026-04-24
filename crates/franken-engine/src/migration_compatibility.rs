@@ -1650,9 +1650,8 @@ impl Default for CutoverMigrationRunner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::control_plane::mocks::{
-        MockBudget, MockCx, decision_id_from_seed, policy_id_from_seed, trace_id_from_seed,
-    };
+    use crate::control_plane::mocks::{decision_id_from_seed, policy_id_from_seed, trace_id_from_seed};
+    use crate::control_plane::{Budget, Cx, KernelContext, NoCaps, TraceId};
     use crate::evidence_emission::{
         ActionCategory, CanonicalEvidenceEmitter, EmitterConfig, EvidenceEmissionRequest,
     };
@@ -1662,9 +1661,12 @@ mod tests {
     // Helpers
     // -------------------------------------------------------------------
 
-    fn real_cx() -> MockCx {
-        let trace_id = trace_id_from_seed(1);
-        MockCx::new(trace_id, MockBudget::new(100_000))
+    fn real_cx() -> KernelContext<'static, NoCaps> {
+        KernelContext::new(Cx::new(
+            TraceId::from_raw(1),
+            Budget::new(100_000),
+            NoCaps,
+        ))
     }
 
     fn make_emitter() -> CanonicalEvidenceEmitter {

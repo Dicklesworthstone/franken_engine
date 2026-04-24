@@ -1651,8 +1651,10 @@ impl Default for CutoverMigrationRunner {
 mod tests {
     use super::*;
     use crate::control_plane::mocks::{
-        MockBudget, MockCx, decision_id_from_seed, policy_id_from_seed, trace_id_from_seed,
+        decision_id_from_seed, policy_id_from_seed, trace_id_from_seed,
     };
+    use crate::control_plane::{ControlPlaneCx, BudgetController, BudgetConfig};
+    use crate::security_epoch::SecurityEpoch;
     use crate::evidence_emission::{
         ActionCategory, CanonicalEvidenceEmitter, EmitterConfig, EvidenceEmissionRequest,
     };
@@ -1662,8 +1664,17 @@ mod tests {
     // Helpers
     // -------------------------------------------------------------------
 
-    fn mock_cx() -> MockCx {
-        MockCx::new(trace_id_from_seed(1), MockBudget::new(100_000))
+    fn real_cx() -> ControlPlaneCx {
+        let budget_config = BudgetConfig {
+            compute_budget_us: 100_000_000, // 100ms in microseconds
+            memory_budget_bytes: 10_000_000, // 10MB
+            warning_threshold_millionths: 800_000, // 80%
+            deterministic_fallback_on_exhaust: true,
+        };
+        let budget_controller = BudgetController::new(budget_config, SecurityEpoch::from_raw(1));
+        let trace_id = trace_id_from_seed(1);
+
+        ControlPlaneCx::new(trace_id, budget_controller)
     }
 
     fn make_emitter() -> CanonicalEvidenceEmitter {
@@ -1696,7 +1707,7 @@ mod tests {
 
     fn build_golden_ledger(name: &str, schema_version: &str, n: usize) -> GoldenLedger {
         let mut emitter = make_emitter();
-        let mut cx = mock_cx();
+        let mut cx = real_cx();
         for i in 0..n {
             let ts = 1_700_000_000_000 + (i as u64) * 1000;
             let req = make_request(&format!("action_{i}"), ts);
@@ -1708,7 +1719,7 @@ mod tests {
 
     fn build_golden_ledger_with_versions(name: &str, versions: &[&str]) -> GoldenLedger {
         let mut emitter = make_emitter();
-        let mut cx = mock_cx();
+        let mut cx = real_cx();
         for (i, _) in versions.iter().enumerate() {
             let ts = 1_700_000_000_000 + (i as u64) * 1000;
             let req = make_request(&format!("action_{i}"), ts);

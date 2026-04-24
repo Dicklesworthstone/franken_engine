@@ -1130,6 +1130,15 @@ pub struct WorkloadGovernanceScorecard {
     pub forensic_coverage_millionths: u64,
     /// Current risk score in millionths (0 = no risk, 1_000_000 = maximum risk).
     pub risk_score_millionths: u64,
+    /// Exact success counter used to keep published rates stable across updates.
+    #[serde(default)]
+    successful_optimizations: u64,
+    /// Exact latency accumulator used to compute the published average precisely.
+    #[serde(default)]
+    rollback_latency_total_ticks: u64,
+    /// Whether the exact internal counters were initialized from this schema.
+    #[serde(default)]
+    internal_counters_initialized: bool,
 }
 
 impl WorkloadGovernanceScorecard {
@@ -1141,31 +1150,53 @@ impl WorkloadGovernanceScorecard {
             avg_rollback_latency_ticks: 0,
             forensic_coverage_millionths: MILLIONTHS, // 100% coverage by default
             risk_score_millionths: 0,                 // No risk by default
+            successful_optimizations: 0,
+            rollback_latency_total_ticks: 0,
+            internal_counters_initialized: true,
         }
+    }
+
+    fn ensure_internal_counters(&mut self) {
+        if self.internal_counters_initialized {
+            return;
+        }
+
+        self.successful_optimizations = if self.optimization_attempts == 0 {
+            0
+        } else {
+            ((self.success_rate_millionths * self.optimization_attempts) + (MILLIONTHS / 2))
+                / MILLIONTHS
+        };
+        self.rollback_latency_total_ticks = self
+            .avg_rollback_latency_ticks
+            .saturating_mul(self.optimization_attempts);
+        self.internal_counters_initialized = true;
     }
 
     /// Update the scorecard with new optimization outcome.
     pub fn record_optimization(&mut self, success: bool, rollback_latency_ticks: u64) {
+        self.ensure_internal_counters();
         self.optimization_attempts += 1;
-        let prior_attempts = self.optimization_attempts - 1;
-
-        // Track success and risk as direct running averages over millionth-scaled
-        // outcomes to avoid re-deriving exact counts from previously rounded rates.
-        let success_outcome = if success { MILLIONTHS } else { 0 };
-        self.success_rate_millionths = ((self.success_rate_millionths * prior_attempts)
-            + success_outcome)
-            / self.optimization_attempts;
-
-        let risk_outcome = if success { 0 } else { MILLIONTHS };
-        self.risk_score_millionths = ((self.risk_score_millionths * prior_attempts) + risk_outcome)
-            / self.optimization_attempts;
-
-        // Update rollback latency using incremental average
-        if rollback_latency_ticks > 0 {
-            self.avg_rollback_latency_ticks = (self.avg_rollback_latency_ticks * prior_attempts
-                + rollback_latency_ticks)
-                / self.optimization_attempts;
+        if success {
+            self.successful_optimizations += 1;
         }
+        self.rollback_latency_total_ticks = self
+            .rollback_latency_total_ticks
+            .saturating_add(rollback_latency_ticks);
+
+        self.success_rate_millionths = (self.successful_optimizations * MILLIONTHS)
+            .checked_div(self.optimization_attempts)
+            .unwrap_or(0);
+        let failed_optimizations = self
+            .optimization_attempts
+            .saturating_sub(self.successful_optimizations);
+        self.risk_score_millionths = (failed_optimizations * MILLIONTHS)
+            .checked_div(self.optimization_attempts)
+            .unwrap_or(0);
+        self.avg_rollback_latency_ticks = self
+            .rollback_latency_total_ticks
+            .checked_div(self.optimization_attempts)
+            .unwrap_or(0);
     }
 }
 
@@ -1344,7 +1375,17 @@ impl GovernanceState {
             success_rate_millionths,
             avg_rollback_latency_ticks,
             forensic_coverage_millionths,
-            risk_score_millionths: MILLIONTHS - success_rate_millionths,
+            risk_score_millionths: total_attempts
+                .saturating_sub(valid_certificates)
+                .saturating_mul(MILLIONTHS)
+                .checked_div(total_attempts)
+                .unwrap_or(0),
+            successful_optimizations: valid_certificates,
+            rollback_latency_total_ticks: function_rollbacks
+                .iter()
+                .map(|rollback| rollback.elapsed_steps)
+                .sum(),
+            internal_counters_initialized: true,
         };
 
         Ok(ObligationCheck::new(

@@ -56,4 +56,11 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "parallel_parser"
+path = "fuzz_targets/parallel_parser.rs"
+test = false
+doc = false
+bench = false
+
 [workspace]

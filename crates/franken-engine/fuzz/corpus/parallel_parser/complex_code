@@ -1,0 +1,7 @@
+const obj = {
+  async method(x) {
+    const result = await Promise.resolve(x * 2);
+    return result + 1;
+  }
+};
+export default obj;

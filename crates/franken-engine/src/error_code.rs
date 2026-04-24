@@ -765,10 +765,10 @@ impl HasErrorCode for BarrierError {
             | BarrierError::TransitionAlreadyInProgress { .. }
             | BarrierError::DrainTimeout { .. }
             | BarrierError::NoTransitionInProgress
-            | BarrierError::NonMonotonicTransition { .. }
-            | BarrierError::GuardIdExhausted { .. } => {
+            | BarrierError::NonMonotonicTransition { .. } => {
                 FrankenErrorCode::EpochBarrierTransitionError
             }
+            BarrierError::GuardIdExhausted { .. } => FrankenErrorCode::EpochBarrierTransitionError,
         }
     }
 }
@@ -839,8 +839,8 @@ impl HasErrorCode for LaneError {
             LaneError::LaneMismatch { .. }
             | LaneError::LaneFull { .. }
             | LaneError::TaskNotFound { .. }
-            | LaneError::EmptyTraceId
-            | LaneError::TaskIdExhausted => FrankenErrorCode::SchedulerLaneAdmissionError,
+            | LaneError::EmptyTraceId => FrankenErrorCode::SchedulerLaneAdmissionError,
+            LaneError::TaskIdExhausted => FrankenErrorCode::SchedulerLaneAdmissionError,
         }
     }
 }

@@ -707,21 +707,65 @@ impl ExtensionHostLifecycleManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::control_plane::mocks::{MockBudget, MockCx};
+    use crate::control_plane::{Budget, ControlPlaneAdapterError, TraceId};
+    use crate::runtime_decision_theory::{BudgetConfig, BudgetController};
+    use crate::security_epoch::SecurityEpoch;
 
-    fn mock_cx(budget_ms: u64) -> MockCx {
-        MockCx::new(
-            crate::control_plane::mocks::trace_id_from_seed(1),
-            MockBudget::new(budget_ms),
-        )
+    #[derive(Debug, Clone)]
+    struct TestControlPlaneCx {
+        trace_id: TraceId,
+        remaining_ms: u64,
+        budget_controller: BudgetController,
     }
 
-    #[allow(dead_code)]
-    fn mock_cx_seed(seed: u64, budget_ms: u64) -> MockCx {
-        MockCx::new(
-            crate::control_plane::mocks::trace_id_from_seed(seed),
-            MockBudget::new(budget_ms),
-        )
+    impl TestControlPlaneCx {
+        fn new(seed: u64, budget_ms: u64) -> Self {
+            let budget_config = BudgetConfig {
+                compute_budget_us: budget_ms.saturating_mul(1_000),
+                memory_budget_bytes: 10 * 1024 * 1024,
+                warning_threshold_millionths: 800_000,
+                deterministic_fallback_on_exhaust: true,
+            };
+
+            Self {
+                trace_id: TraceId::from_raw(u128::from(seed)),
+                remaining_ms: budget_ms,
+                budget_controller: BudgetController::new(
+                    budget_config,
+                    SecurityEpoch::from_raw(seed.max(1)),
+                ),
+            }
+        }
+    }
+
+    impl ContextAdapter for TestControlPlaneCx {
+        fn trace_id(&self) -> TraceId {
+            self.trace_id
+        }
+
+        fn budget(&self) -> Budget {
+            Budget::new(self.remaining_ms)
+        }
+
+        fn consume_budget(&mut self, requested_ms: u64) -> Result<(), ControlPlaneAdapterError> {
+            self.budget_controller
+                .record_compute(requested_ms.saturating_mul(1_000));
+
+            if requested_ms > self.remaining_ms {
+                return Err(ControlPlaneAdapterError::BudgetExhausted { requested_ms });
+            }
+
+            self.remaining_ms -= requested_ms;
+            Ok(())
+        }
+    }
+
+    fn real_cx(budget_ms: u64) -> TestControlPlaneCx {
+        real_cx_seed(1, budget_ms)
+    }
+
+    fn real_cx_seed(seed: u64, budget_ms: u64) -> TestControlPlaneCx {
+        TestControlPlaneCx::new(seed, budget_ms)
     }
 
     // -----------------------------------------------------------------------
@@ -731,7 +775,7 @@ mod tests {
     #[test]
     fn load_extension_creates_cell() {
         let mut mgr = ExtensionHostLifecycleManager::new();
-        let mut cx = mock_cx(1000);
+        let mut cx = real_cx(1000);
 
         // SAFETY: Test setup ensures load_extension succeeds with valid extension name and context
         mgr.load_extension("ext-a", &mut cx).unwrap();
@@ -743,7 +787,7 @@ mod tests {
     #[test]
     fn load_duplicate_extension_rejected() {
         let mut mgr = ExtensionHostLifecycleManager::new();
-        let mut cx = mock_cx(1000);
+        let mut cx = real_cx(1000);
 
         // SAFETY: Test setup ensures first load_extension succeeds with valid extension name and context
         mgr.load_extension("ext-a", &mut cx).unwrap();
@@ -754,7 +798,7 @@ mod tests {
     #[test]
     fn unload_extension_follows_quiescent_close() {
         let mut mgr = ExtensionHostLifecycleManager::new();
-        let mut cx = mock_cx(1000);
+        let mut cx = real_cx(1000);
 
         // SAFETY: Test setup ensures load_extension succeeds with valid extension name and context
         mgr.load_extension("ext-a", &mut cx).unwrap();
@@ -768,7 +812,7 @@ mod tests {
     #[test]
     fn unload_missing_extension_returns_error() {
         let mut mgr = ExtensionHostLifecycleManager::new();
-        let mut cx = mock_cx(1000);
+        let mut cx = real_cx(1000);
 
         let err = mgr.unload_extension("ext-missing", &mut cx).unwrap_err();
         assert_eq!(err.error_code(), "host_extension_not_found");
@@ -777,7 +821,7 @@ mod tests {
     #[test]
     fn unload_already_unloaded_returns_error() {
         let mut mgr = ExtensionHostLifecycleManager::new();
-        let mut cx = mock_cx(1000);
+        let mut cx = real_cx(1000);
 
         // SAFETY: Test setup ensures load_extension succeeds with valid extension name and context
         mgr.load_extension("ext-a", &mut cx).unwrap();
@@ -794,7 +838,7 @@ mod tests {
     #[test]
     fn multiple_extensions_isolated() {
         let mut mgr = ExtensionHostLifecycleManager::new();
-        let mut cx = mock_cx(5000);
+        let mut cx = real_cx(5000);
 
         // SAFETY: Test setup ensures load_extension succeeds with valid extension names and context
         mgr.load_extension("ext-a", &mut cx).unwrap();
@@ -814,7 +858,7 @@ mod tests {
     #[test]
     fn cancel_one_extension_others_survive() {
         let mut mgr = ExtensionHostLifecycleManager::new();
-        let mut cx = mock_cx(5000);
+        let mut cx = real_cx(5000);
 
         mgr.load_extension("ext-a", &mut cx).unwrap();
         mgr.load_extension("ext-b", &mut cx).unwrap();
@@ -833,7 +877,7 @@ mod tests {
     #[test]
     fn create_session_within_extension() {
         let mut mgr = ExtensionHostLifecycleManager::new();
-        let mut cx = mock_cx(5000);
+        let mut cx = real_cx(5000);
 
         mgr.load_extension("ext-a", &mut cx).unwrap();
         mgr.create_session("ext-a", "sess-1", &mut cx).unwrap();
@@ -843,7 +887,7 @@ mod tests {
     #[test]
     fn create_duplicate_session_rejected() {
         let mut mgr = ExtensionHostLifecycleManager::new();
-        let mut cx = mock_cx(5000);
+        let mut cx = real_cx(5000);
 
         mgr.load_extension("ext-a", &mut cx).unwrap();
         mgr.create_session("ext-a", "sess-1", &mut cx).unwrap();
@@ -854,7 +898,7 @@ mod tests {
     #[test]
     fn create_session_on_unloaded_extension_fails() {
         let mut mgr = ExtensionHostLifecycleManager::new();
-        let mut cx = mock_cx(5000);
+        let mut cx = real_cx(5000);
 
         mgr.load_extension("ext-a", &mut cx).unwrap();
         mgr.unload_extension("ext-a", &mut cx).unwrap();
@@ -865,7 +909,7 @@ mod tests {
     #[test]
     fn create_session_on_missing_extension_fails() {
         let mut mgr = ExtensionHostLifecycleManager::new();
-        let mut cx = mock_cx(5000);
+        let mut cx = real_cx(5000);
 
         let err = mgr
             .create_session("ext-missing", "sess-1", &mut cx)
@@ -876,7 +920,7 @@ mod tests {
     #[test]
     fn close_session_removes_it() {
         let mut mgr = ExtensionHostLifecycleManager::new();
-        let mut cx = mock_cx(5000);
+        let mut cx = real_cx(5000);
 
         // SAFETY: Test scenario with valid extension ID and sufficient budget; load operation should succeed
         mgr.load_extension("ext-a", &mut cx).unwrap();
@@ -893,7 +937,7 @@ mod tests {
     #[test]
     fn close_missing_session_returns_error() {
         let mut mgr = ExtensionHostLifecycleManager::new();
-        let mut cx = mock_cx(5000);
+        let mut cx = real_cx(5000);
 
         mgr.load_extension("ext-a", &mut cx).unwrap();
         let err = mgr
@@ -905,7 +949,7 @@ mod tests {
     #[test]
     fn multiple_sessions_under_one_extension() {
         let mut mgr = ExtensionHostLifecycleManager::new();
-        let mut cx = mock_cx(5000);
+        let mut cx = real_cx(5000);
 
         mgr.load_extension("ext-a", &mut cx).unwrap();
         mgr.create_session("ext-a", "s1", &mut cx).unwrap();
@@ -924,7 +968,7 @@ mod tests {
     #[test]
     fn unload_extension_closes_sessions_first() {
         let mut mgr = ExtensionHostLifecycleManager::new();
-        let mut cx = mock_cx(10000);
+        let mut cx = real_cx(10000);
 
         mgr.load_extension("ext-a", &mut cx).unwrap();
         mgr.create_session("ext-a", "s1", &mut cx).unwrap();
@@ -939,7 +983,7 @@ mod tests {
     #[test]
     fn unload_extension_preserves_state_when_session_cell_missing() {
         let mut mgr = ExtensionHostLifecycleManager::new();
-        let mut cx = mock_cx(10000);
+        let mut cx = real_cx(10000);
 
         mgr.load_extension("ext-a", &mut cx).unwrap();
         mgr.create_session("ext-a", "s1", &mut cx).unwrap();
@@ -976,7 +1020,7 @@ mod tests {
     #[test]
     fn quarantine_extension() {
         let mut mgr = ExtensionHostLifecycleManager::new();
-        let mut cx = mock_cx(5000);
+        let mut cx = real_cx(5000);
 
         mgr.load_extension("ext-a", &mut cx).unwrap();
         let outcome = mgr
@@ -989,7 +1033,7 @@ mod tests {
     #[test]
     fn terminate_extension_with_sessions() {
         let mut mgr = ExtensionHostLifecycleManager::new();
-        let mut cx = mock_cx(10000);
+        let mut cx = real_cx(10000);
 
         mgr.load_extension("ext-a", &mut cx).unwrap();
         mgr.create_session("ext-a", "s1", &mut cx).unwrap();
@@ -1004,13 +1048,13 @@ mod tests {
     #[test]
     fn cancel_extension_preserves_state_when_session_cancel_fails() {
         let mut mgr = ExtensionHostLifecycleManager::new();
-        let mut setup_cx = mock_cx(10000);
+        let mut setup_cx = real_cx(10000);
 
         mgr.load_extension("ext-a", &mut setup_cx).unwrap();
         mgr.create_session("ext-a", "s1", &mut setup_cx).unwrap();
 
         let session_cell_id = mgr.session_cell_id("ext-a", "s1");
-        let mut cancel_cx = mock_cx(0);
+        let mut cancel_cx = real_cx(0);
         let err = mgr
             .cancel_extension("ext-a", &mut cancel_cx, LifecycleEvent::Terminate)
             .unwrap_err();
@@ -1026,7 +1070,7 @@ mod tests {
     #[test]
     fn cancel_missing_extension_returns_error() {
         let mut mgr = ExtensionHostLifecycleManager::new();
-        let mut cx = mock_cx(5000);
+        let mut cx = real_cx(5000);
 
         let err = mgr
             .cancel_extension("ext-missing", &mut cx, LifecycleEvent::Terminate)
@@ -1041,7 +1085,7 @@ mod tests {
     #[test]
     fn shutdown_cancels_all_extensions() {
         let mut mgr = ExtensionHostLifecycleManager::new();
-        let mut cx = mock_cx(20000);
+        let mut cx = real_cx(20000);
 
         // SAFETY: Test scenario with valid extension ID and sufficient budget; load operation should succeed
         mgr.load_extension("ext-a", &mut cx).unwrap();
@@ -1062,7 +1106,7 @@ mod tests {
     #[test]
     fn no_operations_after_shutdown() {
         let mut mgr = ExtensionHostLifecycleManager::new();
-        let mut cx = mock_cx(5000);
+        let mut cx = real_cx(5000);
 
         // SAFETY: Test scenario with valid extension ID and sufficient budget; load operation should succeed
         mgr.load_extension("ext-a", &mut cx).unwrap();
@@ -1082,7 +1126,7 @@ mod tests {
     #[test]
     fn lifecycle_events_emitted() {
         let mut mgr = ExtensionHostLifecycleManager::new();
-        let mut cx = mock_cx(10000);
+        let mut cx = real_cx(10000);
 
         // SAFETY: Test scenario with valid extension ID and sufficient budget; load operation should succeed
         mgr.load_extension("ext-a", &mut cx).unwrap();
@@ -1106,7 +1150,7 @@ mod tests {
     #[test]
     fn lifecycle_events_have_trace_id() {
         let mut mgr = ExtensionHostLifecycleManager::new();
-        let mut cx = mock_cx(5000);
+        let mut cx = real_cx(5000);
 
         // SAFETY: Test scenario with valid extension ID and sufficient budget; load operation should succeed
         mgr.load_extension("ext-a", &mut cx).unwrap();
@@ -1119,7 +1163,7 @@ mod tests {
     #[test]
     fn drain_events_clears_buffer() {
         let mut mgr = ExtensionHostLifecycleManager::new();
-        let mut cx = mock_cx(5000);
+        let mut cx = real_cx(5000);
 
         // SAFETY: Test scenario with valid extension ID and sufficient budget; load operation should succeed
         mgr.load_extension("ext-a", &mut cx).unwrap();
@@ -1133,7 +1177,7 @@ mod tests {
     #[test]
     fn cancellation_events_accessible() {
         let mut mgr = ExtensionHostLifecycleManager::new();
-        let mut cx = mock_cx(5000);
+        let mut cx = real_cx(5000);
 
         mgr.load_extension("ext-a", &mut cx).unwrap();
         mgr.unload_extension("ext-a", &mut cx).unwrap();
@@ -1150,7 +1194,7 @@ mod tests {
     #[test]
     fn extension_ids_includes_unloaded() {
         let mut mgr = ExtensionHostLifecycleManager::new();
-        let mut cx = mock_cx(5000);
+        let mut cx = real_cx(5000);
 
         mgr.load_extension("ext-a", &mut cx).unwrap();
         mgr.load_extension("ext-b", &mut cx).unwrap();
@@ -1166,7 +1210,7 @@ mod tests {
     #[test]
     fn extension_record_accessible() {
         let mut mgr = ExtensionHostLifecycleManager::new();
-        let mut cx = mock_cx(5000);
+        let mut cx = real_cx(5000);
 
         mgr.load_extension("ext-a", &mut cx).unwrap();
         let record = mgr.extension_record("ext-a").unwrap();
@@ -1289,7 +1333,7 @@ mod tests {
     #[test]
     fn full_lifecycle_load_session_close_unload() {
         let mut mgr = ExtensionHostLifecycleManager::new();
-        let mut cx = mock_cx(20000);
+        let mut cx = real_cx(20000);
 
         // Load two extensions.
         mgr.load_extension("ext-a", &mut cx).unwrap();
@@ -1327,7 +1371,7 @@ mod tests {
     #[test]
     fn concurrent_extensions_no_cross_contamination() {
         let mut mgr = ExtensionHostLifecycleManager::new();
-        let mut cx = mock_cx(20000);
+        let mut cx = real_cx(20000);
 
         // Load multiple extensions.
         for i in 0..5 {
@@ -1464,7 +1508,7 @@ mod tests {
     #[test]
     fn shutdown_tears_down_extensions() {
         let mut mgr = ExtensionHostLifecycleManager::new();
-        let mut cx = mock_cx(5000);
+        let mut cx = real_cx(5000);
 
         mgr.load_extension("ext-a", &mut cx).unwrap();
         mgr.shutdown(&mut cx);
@@ -1484,7 +1528,7 @@ mod tests {
     #[test]
     fn shutdown_blocks_new_load_confirmed() {
         let mut mgr = ExtensionHostLifecycleManager::new();
-        let mut cx = mock_cx(5000);
+        let mut cx = real_cx(5000);
 
         mgr.shutdown(&mut cx);
         let err = mgr.load_extension("ext-new", &mut cx).unwrap_err();
@@ -1498,7 +1542,7 @@ mod tests {
     #[test]
     fn shutdown_blocks_new_session_confirmed() {
         let mut mgr = ExtensionHostLifecycleManager::new();
-        let mut cx = mock_cx(5000);
+        let mut cx = real_cx(5000);
 
         mgr.shutdown(&mut cx);
         let err = mgr.create_session("ext-a", "s1", &mut cx).unwrap_err();
@@ -1512,7 +1556,7 @@ mod tests {
     #[test]
     fn active_extension_ids_sorted() {
         let mut mgr = ExtensionHostLifecycleManager::new();
-        let mut cx = mock_cx(10000);
+        let mut cx = real_cx(10000);
 
         mgr.load_extension("ext-c", &mut cx).unwrap();
         mgr.load_extension("ext-a", &mut cx).unwrap();
@@ -1531,7 +1575,7 @@ mod tests {
     #[test]
     fn event_has_error_code_on_failure() {
         let mut mgr = ExtensionHostLifecycleManager::new();
-        let mut cx = mock_cx(5000);
+        let mut cx = real_cx(5000);
 
         // Trigger an error: load duplicate
         mgr.load_extension("ext-a", &mut cx).unwrap();
@@ -1561,7 +1605,7 @@ mod tests {
     #[test]
     fn extension_record_shows_unloaded_flag() {
         let mut mgr = ExtensionHostLifecycleManager::new();
-        let mut cx = mock_cx(5000);
+        let mut cx = real_cx(5000);
 
         mgr.load_extension("ext-a", &mut cx).unwrap();
         mgr.unload_extension("ext-a", &mut cx).unwrap();
@@ -1575,7 +1619,7 @@ mod tests {
     #[test]
     fn is_extension_running_true_when_loaded() {
         let mut mgr = ExtensionHostLifecycleManager::new();
-        let mut cx = mock_cx(5000);
+        let mut cx = real_cx(5000);
         mgr.load_extension("ext-a", &mut cx).unwrap();
         assert!(mgr.is_extension_running("ext-a"));
     }
@@ -1583,7 +1627,7 @@ mod tests {
     #[test]
     fn is_extension_running_false_when_unloaded() {
         let mut mgr = ExtensionHostLifecycleManager::new();
-        let mut cx = mock_cx(5000);
+        let mut cx = real_cx(5000);
         mgr.load_extension("ext-a", &mut cx).unwrap();
         mgr.unload_extension("ext-a", &mut cx).unwrap();
         assert!(!mgr.is_extension_running("ext-a"));
@@ -1598,7 +1642,7 @@ mod tests {
     #[test]
     fn loaded_extension_count_tracks_load_unload() {
         let mut mgr = ExtensionHostLifecycleManager::new();
-        let mut cx = mock_cx(5000);
+        let mut cx = real_cx(5000);
         assert_eq!(mgr.loaded_extension_count(), 0);
 
         mgr.load_extension("ext-a", &mut cx).unwrap();
@@ -1614,7 +1658,7 @@ mod tests {
     #[test]
     fn session_count_tracks_create_close() {
         let mut mgr = ExtensionHostLifecycleManager::new();
-        let mut cx = mock_cx(5000);
+        let mut cx = real_cx(5000);
         mgr.load_extension("ext-a", &mut cx).unwrap();
 
         assert_eq!(mgr.session_count("ext-a"), 0);
@@ -1629,7 +1673,7 @@ mod tests {
     #[test]
     fn unload_extension_clears_session_record() {
         let mut mgr = ExtensionHostLifecycleManager::new();
-        let mut cx = mock_cx(5000);
+        let mut cx = real_cx(5000);
         mgr.load_extension("ext-a", &mut cx).unwrap();
         mgr.create_session("ext-a", "s1", &mut cx).unwrap();
         mgr.create_session("ext-a", "s2", &mut cx).unwrap();
@@ -1652,7 +1696,7 @@ mod tests {
     #[test]
     fn is_shutting_down_true_after_shutdown() {
         let mut mgr = ExtensionHostLifecycleManager::new();
-        let mut cx = mock_cx(5000);
+        let mut cx = real_cx(5000);
         mgr.shutdown(&mut cx);
         assert!(mgr.is_shutting_down());
     }
@@ -1660,7 +1704,7 @@ mod tests {
     #[test]
     fn events_accessor_returns_without_drain() {
         let mut mgr = ExtensionHostLifecycleManager::new();
-        let mut cx = mock_cx(5000);
+        let mut cx = real_cx(5000);
         mgr.load_extension("ext-a", &mut cx).unwrap();
         // events() should return without clearing
         assert!(!mgr.events().is_empty());
@@ -1670,7 +1714,7 @@ mod tests {
     #[test]
     fn cell_manager_accessible() {
         let mut mgr = ExtensionHostLifecycleManager::new();
-        let mut cx = mock_cx(5000);
+        let mut cx = real_cx(5000);
         mgr.load_extension("ext-a", &mut cx).unwrap();
         // cell_manager() should expose the inner manager
         assert!(mgr.cell_manager().get("ext-a").is_some());
@@ -1679,7 +1723,7 @@ mod tests {
     #[test]
     fn extension_record_cell_id_matches_extension_id() {
         let mut mgr = ExtensionHostLifecycleManager::new();
-        let mut cx = mock_cx(5000);
+        let mut cx = real_cx(5000);
         mgr.load_extension("ext-abc", &mut cx).unwrap();
         let record = mgr.extension_record("ext-abc").unwrap();
         assert_eq!(record.cell_id, "ext-abc");
@@ -1690,7 +1734,7 @@ mod tests {
     #[test]
     fn extension_record_has_load_trace_id() {
         let mut mgr = ExtensionHostLifecycleManager::new();
-        let mut cx = mock_cx(5000);
+        let mut cx = real_cx(5000);
         mgr.load_extension("ext-a", &mut cx).unwrap();
         let record = mgr.extension_record("ext-a").unwrap();
         assert!(!record.load_trace_id.is_empty());
@@ -1837,7 +1881,7 @@ mod tests {
     #[test]
     fn active_extension_ids_excludes_unloaded() {
         let mut mgr = ExtensionHostLifecycleManager::new();
-        let mut cx = mock_cx(5000);
+        let mut cx = real_cx(5000);
         mgr.load_extension("ext-a", &mut cx).unwrap();
         mgr.load_extension("ext-b", &mut cx).unwrap();
         mgr.unload_extension("ext-a", &mut cx).unwrap();
@@ -1852,7 +1896,7 @@ mod tests {
     #[test]
     fn drain_cancellation_events_returns_events() {
         let mut mgr = ExtensionHostLifecycleManager::new();
-        let mut cx = mock_cx(5000);
+        let mut cx = real_cx(5000);
         mgr.load_extension("ext-a", &mut cx).unwrap();
         mgr.unload_extension("ext-a", &mut cx).unwrap();
         // cancellation events should be produced
@@ -1863,7 +1907,7 @@ mod tests {
     #[test]
     fn close_session_on_missing_extension_fails() {
         let mut mgr = ExtensionHostLifecycleManager::new();
-        let mut cx = mock_cx(5000);
+        let mut cx = real_cx(5000);
         let err = mgr.close_session("no-ext", "s1", &mut cx).unwrap_err();
         assert!(matches!(err, HostLifecycleError::ExtensionNotFound { .. }));
     }
@@ -1871,7 +1915,7 @@ mod tests {
     #[test]
     fn load_after_unload_reloads_fresh() {
         let mut mgr = ExtensionHostLifecycleManager::new();
-        let mut cx = mock_cx(5000);
+        let mut cx = real_cx(5000);
         mgr.load_extension("ext-a", &mut cx).unwrap();
         mgr.unload_extension("ext-a", &mut cx).unwrap();
         // Cannot reload because the ID is still in extensions map

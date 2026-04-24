@@ -10,9 +10,8 @@ use std::path::Path;
 
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::resource_certificate_governance::{
-    BEAD_ID as RCG_BEAD_ID, COMPONENT as RCG_COMPONENT, CertificateEvidence, FIXED_ONE,
-    GovernanceReceipt, GovernanceVerdict, RegressionEntry, ResourceDimension,
-    SCHEMA_VERSION as RCG_SCHEMA_VERSION, TailRiskEntry,
+    CertificateEvidence, GovernanceEvaluator, GovernanceVerdict, PublicationPolicy,
+    ResourceDimension,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
 use frankenengine_engine::timescale_separation_certificate::{
@@ -23,7 +22,7 @@ use frankenengine_engine::timescale_separation_certificate::{
     TimescaleSeparationCertificate,
 };
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 /// Test helper: assert golden file matches actual serialization.
 fn assert_golden(test_name: &str, actual: &str) {
@@ -65,6 +64,82 @@ fn assert_golden(test_name: &str, actual: &str) {
 /// Create deterministic JSON from serde-serializable type.
 fn to_deterministic_json<T: serde::Serialize>(value: &T) -> String {
     serde_json::to_string_pretty(value).expect("serialization should succeed")
+}
+
+fn controller_pair(fast_controller: &str, slow_controller: &str) -> ControllerPairId {
+    ControllerPairId {
+        fast_controller: fast_controller.to_string(),
+        slow_controller: slow_controller.to_string(),
+    }
+}
+
+fn controller_profile(
+    controller_id: &str,
+    interval_millionths: i64,
+    sample_count: u64,
+    measured_epoch: u64,
+) -> ControllerTimescaleProfile {
+    ControllerTimescaleProfile {
+        controller_id: controller_id.to_string(),
+        observation_interval_millionths: interval_millionths,
+        write_interval_millionths: interval_millionths,
+        sample_count,
+        measured_epoch,
+    }
+}
+
+fn timescale_certificate(
+    certificate_id: &str,
+    fast_controller: &str,
+    slow_controller: &str,
+    fast_interval_millionths: i64,
+    slow_interval_millionths: i64,
+    ratio_millionths: u64,
+    verdict: SeparationVerdict,
+    issued_epoch: u64,
+) -> TimescaleSeparationCertificate {
+    let pair = controller_pair(fast_controller, slow_controller);
+    TimescaleSeparationCertificate {
+        schema_version: TIMESCALE_CERTIFICATE_SCHEMA_VERSION.to_string(),
+        bead_id: TIMESCALE_CERTIFICATE_BEAD_ID.to_string(),
+        certificate_id: certificate_id.to_string(),
+        pair: pair.clone(),
+        ratio: TimescaleRatio {
+            pair,
+            ratio_millionths,
+            ratio_basis: RatioBasis::Observation,
+        },
+        verdict,
+        sufficient_threshold_millionths: DEFAULT_SUFFICIENT_RATIO_MILLIONTHS,
+        marginal_threshold_millionths: DEFAULT_MARGINAL_RATIO_MILLIONTHS,
+        fast_profile: controller_profile(
+            fast_controller,
+            fast_interval_millionths,
+            1_000,
+            issued_epoch,
+        ),
+        slow_profile: controller_profile(
+            slow_controller,
+            slow_interval_millionths,
+            200,
+            issued_epoch,
+        ),
+        issued_epoch,
+        evidence_ids: vec![format!("evidence_{certificate_id}")],
+    }
+}
+
+fn relaxed_policy_with_required_dimensions(
+    required_dimensions: BTreeSet<ResourceDimension>,
+) -> PublicationPolicy {
+    PublicationPolicy {
+        max_regression_millionths: 100_000,
+        max_tail_risk_millionths: 500_000,
+        max_utilisation_millionths: 900_000,
+        min_samples: 30,
+        min_observability_coverage: 800_000,
+        required_dimensions,
+    }
 }
 
 #[test]
@@ -120,42 +195,16 @@ fn certificate_evidence_network_io() {
 
 #[test]
 fn timescale_separation_certificate_sufficient() {
-    let cert = TimescaleSeparationCertificate {
-        schema_version: TIMESCALE_CERTIFICATE_SCHEMA_VERSION.to_string(),
-        bead_id: TIMESCALE_CERTIFICATE_BEAD_ID.to_string(),
-        certificate_id: "cert_sufficient_001".to_string(),
-        pair: ControllerPairId {
-            fast_controller: "gc_controller".to_string(),
-            slow_controller: "batch_processor".to_string(),
-        },
-        ratio: TimescaleRatio {
-            pair: ControllerPairId {
-                fast_controller: "gc_controller".to_string(),
-                slow_controller: "batch_processor".to_string(),
-            },
-            ratio_millionths: 50_000_000, // 50x ratio
-            ratio_basis: RatioBasis::Observation,
-        },
-        verdict: SeparationVerdict::Sufficient,
-        sufficient_threshold_millionths: DEFAULT_SUFFICIENT_RATIO_MILLIONTHS,
-        marginal_threshold_millionths: DEFAULT_MARGINAL_RATIO_MILLIONTHS,
-        fast_profile: ControllerTimescaleProfile {
-            controller_id: "gc_controller".to_string(),
-            observation_interval_millionths: 100_000_000, // 100ms in millionths of second
-            write_interval_millionths: 100_000_000,
-            sample_count: 1000,
-            measured_epoch: 1640995200,
-        },
-        slow_profile: ControllerTimescaleProfile {
-            controller_id: "batch_processor".to_string(),
-            observation_interval_millionths: 5_000_000_000, // 5 seconds in millionths of second
-            write_interval_millionths: 5_000_000_000,
-            sample_count: 200,
-            measured_epoch: 1640995200,
-        },
-        issued_epoch: 1640995200, // Fixed timestamp for determinism
-        evidence_ids: vec!["evidence_001".to_string(), "evidence_002".to_string()],
-    };
+    let cert = timescale_certificate(
+        "cert_sufficient_001",
+        "gc_controller",
+        "batch_processor",
+        100_000,
+        5_000_000,
+        50_000_000,
+        SeparationVerdict::Sufficient,
+        1_640_995_200,
+    );
 
     let json = to_deterministic_json(&cert);
     assert_golden("timescale_certificate_sufficient", &json);
@@ -163,24 +212,16 @@ fn timescale_separation_certificate_sufficient() {
 
 #[test]
 fn timescale_separation_certificate_marginal() {
-    let cert = TimescaleSeparationCertificate {
-        schema_version: TIMESCALE_CERTIFICATE_SCHEMA_VERSION.to_string(),
-        bead_id: TIMESCALE_CERTIFICATE_BEAD_ID.to_string(),
-        certificate_id: "cert_marginal_002".to_string(),
-        pair: ControllerPairId {
-            fast_controller: "realtime_monitor".to_string(),
-            slow_controller: "periodic_cleanup".to_string(),
-        },
-        ratio: TimescaleRatio {
-            fast_interval_micros: 50_000,  // 50ms
-            slow_interval_micros: 200_000, // 200ms
-            ratio_millionths: 4_000_000,   // 4x ratio (between marginal and sufficient)
-        },
-        verdict: SeparationVerdict::Marginal,
-        sufficient_threshold_millionths: DEFAULT_SUFFICIENT_RATIO_MILLIONTHS,
-        marginal_threshold_millionths: DEFAULT_MARGINAL_RATIO_MILLIONTHS,
-        computed_epoch: 1640995300,
-    };
+    let cert = timescale_certificate(
+        "cert_marginal_002",
+        "realtime_monitor",
+        "periodic_cleanup",
+        50_000,
+        200_000,
+        4_000_000,
+        SeparationVerdict::Marginal,
+        1_640_995_300,
+    );
 
     let json = to_deterministic_json(&cert);
     assert_golden("timescale_certificate_marginal", &json);
@@ -188,24 +229,16 @@ fn timescale_separation_certificate_marginal() {
 
 #[test]
 fn timescale_separation_certificate_insufficient() {
-    let cert = TimescaleSeparationCertificate {
-        schema_version: TIMESCALE_CERTIFICATE_SCHEMA_VERSION.to_string(),
-        bead_id: TIMESCALE_CERTIFICATE_BEAD_ID.to_string(),
-        certificate_id: "cert_insufficient_003".to_string(),
-        pair: ControllerPairId {
-            fast_controller: "high_freq_trader".to_string(),
-            slow_controller: "low_freq_trader".to_string(),
-        },
-        ratio: TimescaleRatio {
-            fast_interval_micros: 1_000, // 1ms
-            slow_interval_micros: 2_000, // 2ms
-            ratio_millionths: 2_000_000, // 2x ratio (below marginal threshold)
-        },
-        verdict: SeparationVerdict::Insufficient,
-        sufficient_threshold_millionths: DEFAULT_SUFFICIENT_RATIO_MILLIONTHS,
-        marginal_threshold_millionths: DEFAULT_MARGINAL_RATIO_MILLIONTHS,
-        computed_epoch: 1640995400,
-    };
+    let cert = timescale_certificate(
+        "cert_insufficient_003",
+        "high_freq_trader",
+        "low_freq_trader",
+        1_000,
+        2_000,
+        2_000_000,
+        SeparationVerdict::Insufficient,
+        1_640_995_400,
+    );
 
     let json = to_deterministic_json(&cert);
     assert_golden("timescale_certificate_insufficient", &json);
@@ -214,42 +247,26 @@ fn timescale_separation_certificate_insufficient() {
 #[test]
 fn certificate_bundle_mixed_verdicts() {
     let certificates = vec![
-        TimescaleSeparationCertificate {
-            schema_version: TIMESCALE_CERTIFICATE_SCHEMA_VERSION.to_string(),
-            bead_id: TIMESCALE_CERTIFICATE_BEAD_ID.to_string(),
-            certificate_id: "bundle_cert_1".to_string(),
-            pair: ControllerPairId {
-                fast_controller: "controller_a".to_string(),
-                slow_controller: "controller_b".to_string(),
-            },
-            ratio: TimescaleRatio {
-                fast_interval_micros: 10_000,
-                slow_interval_micros: 100_000,
-                ratio_millionths: 10_000_000, // 10x - sufficient
-            },
-            verdict: SeparationVerdict::Sufficient,
-            sufficient_threshold_millionths: DEFAULT_SUFFICIENT_RATIO_MILLIONTHS,
-            marginal_threshold_millionths: DEFAULT_MARGINAL_RATIO_MILLIONTHS,
-            computed_epoch: 1640995500,
-        },
-        TimescaleSeparationCertificate {
-            schema_version: TIMESCALE_CERTIFICATE_SCHEMA_VERSION.to_string(),
-            bead_id: TIMESCALE_CERTIFICATE_BEAD_ID.to_string(),
-            certificate_id: "bundle_cert_2".to_string(),
-            pair: ControllerPairId {
-                fast_controller: "controller_a".to_string(),
-                slow_controller: "controller_c".to_string(),
-            },
-            ratio: TimescaleRatio {
-                fast_interval_micros: 10_000,
-                slow_interval_micros: 30_000,
-                ratio_millionths: 3_000_000, // 3x - marginal
-            },
-            verdict: SeparationVerdict::Marginal,
-            sufficient_threshold_millionths: DEFAULT_SUFFICIENT_RATIO_MILLIONTHS,
-            marginal_threshold_millionths: DEFAULT_MARGINAL_RATIO_MILLIONTHS,
-            computed_epoch: 1640995500,
-        },
+        timescale_certificate(
+            "bundle_cert_1",
+            "controller_a",
+            "controller_b",
+            10_000,
+            100_000,
+            10_000_000,
+            SeparationVerdict::Sufficient,
+            1_640_995_500,
+        ),
+        timescale_certificate(
+            "bundle_cert_2",
+            "controller_a",
+            "controller_c",
+            10_000,
+            30_000,
+            3_000_000,
+            SeparationVerdict::Marginal,
+            1_640_995_500,
+        ),
     ];
 
     let bundle = CertificateBundle {
@@ -270,72 +287,41 @@ fn certificate_bundle_mixed_verdicts() {
 
 #[test]
 fn governance_receipt_comprehensive() {
-    let mut dimensions_evaluated = BTreeSet::new();
-    dimensions_evaluated.insert(ResourceDimension::CpuTime);
-    dimensions_evaluated.insert(ResourceDimension::Memory);
-    dimensions_evaluated.insert(ResourceDimension::NetworkIo);
+    let mut required_dimensions = BTreeSet::new();
+    required_dimensions.insert(ResourceDimension::CpuTime);
+    required_dimensions.insert(ResourceDimension::HeapMemory);
 
-    let mut dimensions_missing = BTreeSet::new();
-    dimensions_missing.insert(ResourceDimension::DiskIo);
+    let mut evaluator =
+        GovernanceEvaluator::new(relaxed_policy_with_required_dimensions(required_dimensions));
+    evaluator.add_certificate(
+        ResourceDimension::CpuTime,
+        "web_server".to_string(),
+        2_000_000,
+        1_500_000,
+        1_000,
+    );
+    evaluator.add_certificate(
+        ResourceDimension::HeapMemory,
+        "web_server".to_string(),
+        500_000_000,
+        320_000_000,
+        1_000,
+    );
+    evaluator.add_regression(
+        ResourceDimension::CpuTime,
+        "web_server".to_string(),
+        1_400_000,
+        1_500_000,
+    );
+    evaluator.add_tail_risk(
+        ResourceDimension::HeapMemory,
+        "web_server".to_string(),
+        2_500_000,
+        2_000_000,
+    );
 
-    let certificates = vec![
-        CertificateEvidence {
-            dimension: ResourceDimension::CpuTime,
-            workload_id: "web_server".to_string(),
-            certified_budget: 2_000_000,
-            measured_usage: 1_500_000,
-            utilisation_millionths: 750_000, // 75%
-            content_hash: ContentHash::compute(b"cpu_evidence"),
-        },
-        CertificateEvidence {
-            dimension: ResourceDimension::Memory,
-            workload_id: "web_server".to_string(),
-            certified_budget: 500_000_000,   // 500MB
-            measured_usage: 320_000_000,     // 320MB
-            utilisation_millionths: 640_000, // 64%
-            content_hash: ContentHash::compute(b"memory_evidence"),
-        },
-    ];
-
-    let regressions = vec![RegressionEntry {
-        dimension: ResourceDimension::CpuTime,
-        workload_id: "web_server".to_string(),
-        previous_usage: 1_400_000,
-        current_usage: 1_500_000,
-        regression_millionths: 71_429, // ~7.14% regression
-        baseline_hash: ContentHash::compute(b"cpu_baseline"),
-        current_hash: ContentHash::compute(b"cpu_current"),
-    }];
-
-    let tail_risks = vec![TailRiskEntry {
-        dimension: ResourceDimension::Memory,
-        workload_id: "web_server".to_string(),
-        tail_ratio_millionths: 2_500_000,     // p99/p50 = 2.5x
-        baseline_ratio_millionths: 2_000_000, // baseline = 2.0x
-        drift_millionths: 250_000,            // 25% worse tail behavior
-        baseline_hash: ContentHash::compute(b"tail_baseline"),
-        current_hash: ContentHash::compute(b"tail_current"),
-    }];
-
-    let receipt = GovernanceReceipt {
-        verdict: GovernanceVerdict::Approved,
-        epoch: SecurityEpoch::from_raw(42),
-        dimensions_evaluated,
-        dimensions_missing,
-        certificates,
-        regressions,
-        tail_risks,
-        publication_gate: true,
-        regression_gate: true,
-        tail_risk_gate: true,
-        policy_snapshot: PublicationPolicy {
-            max_regression_millionths: 100_000, // 10% max regression
-            max_tail_drift_millionths: 500_000, // 50% max tail drift
-            require_all_dimensions: false,
-            budget_threshold_millionths: 900_000, // 90% utilization threshold
-        },
-        receipt_hash: ContentHash::compute(b"governance_receipt_hash"),
-    };
+    let receipt = evaluator.evaluate(SecurityEpoch::from_raw(42));
+    assert_eq!(receipt.verdict, GovernanceVerdict::Approved);
 
     let json = to_deterministic_json(&receipt);
     assert_golden("governance_receipt_comprehensive", &json);
@@ -343,47 +329,25 @@ fn governance_receipt_comprehensive() {
 
 #[test]
 fn governance_receipt_denial() {
-    let mut dimensions_evaluated = BTreeSet::new();
-    dimensions_evaluated.insert(ResourceDimension::CpuTime);
+    let mut policy = relaxed_policy_with_required_dimensions(BTreeSet::new());
+    policy.max_utilisation_millionths = 1_000_000;
+    let mut evaluator = GovernanceEvaluator::new(policy);
+    evaluator.add_certificate(
+        ResourceDimension::CpuTime,
+        "overloaded_service".to_string(),
+        1_000_000,
+        1_200_000,
+        1_000,
+    );
+    evaluator.add_regression(
+        ResourceDimension::CpuTime,
+        "overloaded_service".to_string(),
+        800_000,
+        1_200_000,
+    );
 
-    let certificates = vec![CertificateEvidence {
-        dimension: ResourceDimension::CpuTime,
-        workload_id: "overloaded_service".to_string(),
-        certified_budget: 1_000_000,
-        measured_usage: 1_200_000,         // Over budget!
-        utilisation_millionths: 1_200_000, // 120% utilization
-        content_hash: ContentHash::compute(b"overloaded_evidence"),
-    }];
-
-    let regressions = vec![RegressionEntry {
-        dimension: ResourceDimension::CpuTime,
-        workload_id: "overloaded_service".to_string(),
-        previous_usage: 800_000,
-        current_usage: 1_200_000,
-        regression_millionths: 500_000, // 50% regression - way over limit!
-        baseline_hash: ContentHash::compute(b"regression_baseline"),
-        current_hash: ContentHash::compute(b"regression_current"),
-    }];
-
-    let receipt = GovernanceReceipt {
-        verdict: GovernanceVerdict::Denied,
-        epoch: SecurityEpoch::from_raw(43),
-        dimensions_evaluated,
-        dimensions_missing: BTreeSet::new(),
-        certificates,
-        regressions,
-        tail_risks: Vec::new(),
-        publication_gate: false, // Failed due to over-budget
-        regression_gate: false,  // Failed due to high regression
-        tail_risk_gate: true,    // No tail risk data
-        policy_snapshot: PublicationPolicy {
-            max_regression_millionths: 100_000, // 10% max regression
-            max_tail_drift_millionths: 500_000,
-            require_all_dimensions: false,
-            budget_threshold_millionths: 1_000_000, // 100% utilization threshold
-        },
-        receipt_hash: ContentHash::compute(b"denial_receipt_hash"),
-    };
+    let receipt = evaluator.evaluate(SecurityEpoch::from_raw(43));
+    assert_eq!(receipt.verdict, GovernanceVerdict::MultipleViolations);
 
     let json = to_deterministic_json(&receipt);
     assert_golden("governance_receipt_denial", &json);

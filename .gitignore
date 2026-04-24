@@ -5,6 +5,19 @@
 /fuzz/coverage
 /fuzz/crashes
 
+# Nested cargo build targets — `/fuzz/target` above only matches the
+# top-level `fuzz/target`, not nested ones like
+# `crates/franken-engine/fuzz/target/`. The whole directory was filter-
+# repo'd out of history twice (d8efc6b5 and 5294ed2d) after agents
+# accidentally staged ~1 GB of cargo incremental build artifacts (the
+# biggest single blob was a 576 MB dep-graph.part.bin, well over
+# GitHub's 100 MB per-file limit, which makes the push fail closed).
+# This pattern blocks any `**/fuzz/target/` or `**/target/` tree under
+# a sub-crate so it cannot recur.
+**/fuzz/target/
+crates/*/fuzz/target/
+**/target/
+
 # Local reference corpora (kept outside tracked source for this repo)
 /legacy_quickjs
 /legacy_v8

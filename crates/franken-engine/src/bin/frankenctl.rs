@@ -1286,8 +1286,16 @@ fn parse_help_command(args: &[String]) -> Result<CommandSpec, String> {
         "benchmark" => parse_benchmark_help_command(&args[1..]),
         "replay" => parse_replay_help_command(&args[1..]),
         "react" => parse_react_help_command(&args[1..]),
+        "gates" => parse_leaf_help_topic("gates", HelpTopic::Gates, &args[1..]),
+        "reports" => parse_leaf_help_topic("reports", HelpTopic::Reports, &args[1..]),
+        "test" => parse_leaf_help_topic("test", HelpTopic::Test, &args[1..]),
+        "synth" => parse_leaf_help_topic("synth", HelpTopic::Synth, &args[1..]),
+        "orchestrate" => {
+            parse_leaf_help_topic("orchestrate", HelpTopic::Orchestrate, &args[1..])
+        }
+        "runtime" => parse_leaf_help_topic("runtime", HelpTopic::Runtime, &args[1..]),
         other => Err(format!(
-            "unknown help topic `{other}` (expected compile|run|doctor|verify|benchmark|replay|react)"
+            "unknown help topic `{other}` (expected compile|run|doctor|verify|benchmark|replay|react|gates|reports|test|synth|orchestrate|runtime)"
         )),
     }
 }
@@ -6254,6 +6262,19 @@ mod tests {
         ];
         let parsed = parse_command(&benchmark_score).expect("help benchmark score should parse");
         assert_eq!(parsed, CommandSpec::HelpTopic(HelpTopic::BenchmarkScore));
+
+        for (command, topic) in [
+            ("gates", HelpTopic::Gates),
+            ("reports", HelpTopic::Reports),
+            ("test", HelpTopic::Test),
+            ("synth", HelpTopic::Synth),
+            ("orchestrate", HelpTopic::Orchestrate),
+            ("runtime", HelpTopic::Runtime),
+        ] {
+            let args = vec!["help".to_string(), command.to_string()];
+            let parsed = parse_command(&args).expect("operator help topic should parse");
+            assert_eq!(parsed, CommandSpec::HelpTopic(topic));
+        }
     }
 
     #[test]

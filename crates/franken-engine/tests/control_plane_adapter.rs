@@ -369,8 +369,12 @@ fn real_decision_contract_evaluates_deterministic_verdicts() {
     };
 
     // Test real decision evaluation using actual contract logic
-    let verdict1 = adapter.evaluate(&allow_request).expect("decision should succeed");
-    let verdict2 = adapter.evaluate(&deny_request).expect("decision should succeed");
+    let verdict1 = adapter
+        .evaluate(&allow_request)
+        .expect("decision should succeed");
+    let verdict2 = adapter
+        .evaluate(&deny_request)
+        .expect("decision should succeed");
 
     // Both should be valid decisions (Allow, Deny, or Timeout)
     assert!(matches!(
@@ -387,14 +391,14 @@ fn real_decision_contract_evaluates_deterministic_verdicts() {
 }
 
 #[test]
-fn mock_evidence_emitter_collects_entries() {
-    let mut emitter = control_plane_mocks::MockEvidenceEmitter::new();
+fn real_evidence_emitter_collects_entries() {
+    let mut emitter = InMemoryEvidenceEmitter::new();
     assert!(emitter.entries().is_empty());
     assert!(emitter.events().is_empty());
 
     let request = DecisionRequest {
         decision_id: control_plane::DecisionId::from_parts(1_000, 1_u128),
-        policy_id: control_plane::PolicyId::new("test.mock", 1),
+        policy_id: control_plane::PolicyId::new("test.real", 1),
         trace_id: control_plane::TraceId::from_parts(1_000, 1_u128),
         ts_unix_ms: 1_000,
         calibration_score_bps: 5_000,
@@ -418,6 +422,9 @@ fn mock_evidence_emitter_collects_entries() {
     emitter.emit(&request, entry).expect("emit evidence");
     assert_eq!(emitter.entries().len(), 1);
     assert_eq!(emitter.events().len(), 1);
+
+    // Test real InMemoryEvidenceEmitter behavior - events have correct component name
+    assert_eq!(emitter.events()[0].component, "control_plane_adapter");
 }
 
 // ---------- ContractDecisionAdapter ----------

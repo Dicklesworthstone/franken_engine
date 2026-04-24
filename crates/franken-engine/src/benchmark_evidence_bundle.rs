@@ -1935,11 +1935,12 @@ mod tests {
         bundle.provenances.push(WorkloadProvenance {
             workload_id: "workload-fibonacci".to_string(),
             name: "Fibonacci Recursive".to_string(),
-            category: WorkloadCategory::Compute,
+            category: WorkloadCategory::Micro,
             source: "https://github.com/example/benchmarks".to_string(),
             pinned_version: "v1.2.3".to_string(),
-            corpus_hash: ContentHash::compute(b"fibonacci-workload"),
-            corpus_size_bytes: 1024,
+            content_hash: ContentHash::compute(b"fibonacci-workload"),
+            provenance_epoch: epoch,
+            tags: BTreeSet::from(["golden".to_string(), "fibonacci".to_string()]),
         });
 
         bundle.provenances.push(WorkloadProvenance {
@@ -1948,8 +1949,9 @@ mod tests {
             category: WorkloadCategory::Memory,
             source: "https://github.com/example/benchmarks".to_string(),
             pinned_version: "v1.2.3".to_string(),
-            corpus_hash: ContentHash::compute(b"sorting-workload"),
-            corpus_size_bytes: 2048,
+            content_hash: ContentHash::compute(b"sorting-workload"),
+            provenance_epoch: epoch,
+            tags: BTreeSet::from(["golden".to_string(), "sorting".to_string()]),
         });
 
         // Add benchmark runs
@@ -1959,17 +1961,18 @@ mod tests {
             duration_us: 15_000,          // 15ms
             peak_memory_bytes: 1_048_576, // 1MB
             gc_pause_us: 200,
-            environment: BenchmarkEnvironment {
-                cpu_model: "Intel i7-10700K".to_string(),
-                core_count: 8,
-                memory_gb: 16,
-                os_version: "Ubuntu 22.04.3 LTS".to_string(),
-                runtime_version: "Node.js v18.17.1".to_string(),
-                compiler_version: "V8 11.3.244.8".to_string(),
-                optimization_level: "O2".to_string(),
-                environment_hash: ContentHash::compute(b"env-intel-ubuntu"),
-            },
             is_warmup: false,
+            iteration: 0,
+            environment: EnvironmentSnapshot::new(
+                "Ubuntu 22.04.3 LTS".to_string(),
+                "Intel i7-10700K".to_string(),
+                8,
+                16 * 1024 * 1024 * 1024,
+                "Node.js v18.17.1".to_string(),
+                "V8 11.3.244.8".to_string(),
+                BTreeMap::from([("optimization_level".to_string(), "O2".to_string())]),
+            ),
+            run_epoch: epoch,
         });
 
         bundle.runs.push(BenchmarkRun {
@@ -1978,17 +1981,18 @@ mod tests {
             duration_us: 14_800,          // 14.8ms
             peak_memory_bytes: 1_048_576, // 1MB
             gc_pause_us: 180,
-            environment: BenchmarkEnvironment {
-                cpu_model: "Intel i7-10700K".to_string(),
-                core_count: 8,
-                memory_gb: 16,
-                os_version: "Ubuntu 22.04.3 LTS".to_string(),
-                runtime_version: "Node.js v18.17.1".to_string(),
-                compiler_version: "V8 11.3.244.8".to_string(),
-                optimization_level: "O2".to_string(),
-                environment_hash: ContentHash::compute(b"env-intel-ubuntu"),
-            },
             is_warmup: false,
+            iteration: 1,
+            environment: EnvironmentSnapshot::new(
+                "Ubuntu 22.04.3 LTS".to_string(),
+                "Intel i7-10700K".to_string(),
+                8,
+                16 * 1024 * 1024 * 1024,
+                "Node.js v18.17.1".to_string(),
+                "V8 11.3.244.8".to_string(),
+                BTreeMap::from([("optimization_level".to_string(), "O2".to_string())]),
+            ),
+            run_epoch: epoch,
         });
 
         bundle.runs.push(BenchmarkRun {
@@ -1997,41 +2001,46 @@ mod tests {
             duration_us: 8_500,           // 8.5ms
             peak_memory_bytes: 2_097_152, // 2MB
             gc_pause_us: 350,
-            environment: BenchmarkEnvironment {
-                cpu_model: "Intel i7-10700K".to_string(),
-                core_count: 8,
-                memory_gb: 16,
-                os_version: "Ubuntu 22.04.3 LTS".to_string(),
-                runtime_version: "Node.js v18.17.1".to_string(),
-                compiler_version: "V8 11.3.244.8".to_string(),
-                optimization_level: "O2".to_string(),
-                environment_hash: ContentHash::compute(b"env-intel-ubuntu"),
-            },
             is_warmup: false,
+            iteration: 0,
+            environment: EnvironmentSnapshot::new(
+                "Ubuntu 22.04.3 LTS".to_string(),
+                "Intel i7-10700K".to_string(),
+                8,
+                16 * 1024 * 1024 * 1024,
+                "Node.js v18.17.1".to_string(),
+                "V8 11.3.244.8".to_string(),
+                BTreeMap::from([("optimization_level".to_string(), "O2".to_string())]),
+            ),
+            run_epoch: epoch,
         });
 
         // Add parity verdicts
         bundle.parity_verdicts.push(ParityVerdict {
             workload_id: "workload-fibonacci".to_string(),
-            target: ParityTarget::Baseline,
+            target: ParityTarget::NodeJs,
             output_equivalent: true,
             performance_ratio_millionths: 1_050_000, // 5% faster
             behavioral_differences: 0,
+            difference_details: Vec::new(),
+            evidence_hash: ContentHash::compute(b"parity-fibonacci"),
         });
 
         bundle.parity_verdicts.push(ParityVerdict {
             workload_id: "workload-sorting".to_string(),
-            target: ParityTarget::Baseline,
+            target: ParityTarget::NodeJs,
             output_equivalent: true,
             performance_ratio_millionths: 980_000, // 2% slower
             behavioral_differences: 0,
+            difference_details: Vec::new(),
+            evidence_hash: ContentHash::compute(b"parity-sorting"),
         });
 
         // Set reference environment from first run
         bundle.reference_environment = Some(bundle.runs[0].environment.clone());
 
-        // Update status to Complete
-        bundle.status = BundleStatus::Complete;
+        // Update status to sealed.
+        bundle.status = BundleStatus::Sealed;
 
         bundle
     }
@@ -2045,11 +2054,12 @@ mod tests {
         bundle.provenances.push(WorkloadProvenance {
             workload_id: "workload-regression".to_string(),
             name: "Regression Test Case".to_string(),
-            category: WorkloadCategory::Regression,
+            category: WorkloadCategory::Application,
             source: "https://github.com/example/regression-tests".to_string(),
             pinned_version: "v2.0.1".to_string(),
-            corpus_hash: ContentHash::compute(b"regression-workload"),
-            corpus_size_bytes: 512,
+            content_hash: ContentHash::compute(b"regression-workload"),
+            provenance_epoch: epoch,
+            tags: BTreeSet::from(["golden".to_string(), "regression".to_string()]),
         });
 
         // Add benchmark runs showing performance regression
@@ -2059,41 +2069,41 @@ mod tests {
             duration_us: 45_000,          // 45ms (slow)
             peak_memory_bytes: 4_194_304, // 4MB (high memory usage)
             gc_pause_us: 2_000,           // 2ms GC pause (high)
-            environment: BenchmarkEnvironment {
-                cpu_model: "Intel i7-10700K".to_string(),
-                core_count: 8,
-                memory_gb: 16,
-                os_version: "Ubuntu 22.04.3 LTS".to_string(),
-                runtime_version: "Node.js v18.17.1".to_string(),
-                compiler_version: "V8 11.3.244.8".to_string(),
-                optimization_level: "O2".to_string(),
-                environment_hash: ContentHash::compute(b"env-intel-ubuntu"),
-            },
             is_warmup: false,
+            iteration: 0,
+            environment: EnvironmentSnapshot::new(
+                "Ubuntu 22.04.3 LTS".to_string(),
+                "Intel i7-10700K".to_string(),
+                8,
+                16 * 1024 * 1024 * 1024,
+                "Node.js v18.17.1".to_string(),
+                "V8 11.3.244.8".to_string(),
+                BTreeMap::from([("optimization_level".to_string(), "O2".to_string())]),
+            ),
+            run_epoch: epoch,
         });
 
         // Add failing parity verdict
         bundle.parity_verdicts.push(ParityVerdict {
             workload_id: "workload-regression".to_string(),
-            target: ParityTarget::Baseline,
+            target: ParityTarget::NodeJs,
             output_equivalent: false, // Output differs from baseline
             performance_ratio_millionths: 300_000, // 70% slower
             behavioral_differences: 5, // Multiple behavioral differences
+            difference_details: vec!["golden regression fixture behavior mismatch".to_string()],
+            evidence_hash: ContentHash::compute(b"parity-regression"),
         });
 
         // Add environment drift
-        bundle.environment_drifts.push(EnvironmentDrift {
-            field_name: "runtime_version".to_string(),
-            expected_value: "Node.js v18.17.0".to_string(),
-            actual_value: "Node.js v18.17.1".to_string(),
-            severity: DriftSeverity::Minor,
-        });
+        bundle
+            .environment_drifts
+            .push("runtime: Node.js v18.17.0 vs Node.js v18.17.1".to_string());
 
         // Set reference environment from first run
         bundle.reference_environment = Some(bundle.runs[0].environment.clone());
 
-        // Status remains Complete even with failures
-        bundle.status = BundleStatus::Complete;
+        // Status remains sealed even with negative parity verdicts.
+        bundle.status = BundleStatus::Sealed;
 
         bundle
     }
@@ -2125,11 +2135,12 @@ mod tests {
         bundle.provenances.push(WorkloadProvenance {
             workload_id: "workload-mixed".to_string(),
             name: "Mixed Results Workload".to_string(),
-            category: WorkloadCategory::Stress,
+            category: WorkloadCategory::Framework,
             source: "https://github.com/example/stress-tests".to_string(),
             pinned_version: "v3.1.4".to_string(),
-            corpus_hash: ContentHash::compute(b"mixed-workload"),
-            corpus_size_bytes: 8192,
+            content_hash: ContentHash::compute(b"mixed-workload"),
+            provenance_epoch: epoch,
+            tags: BTreeSet::from(["golden".to_string(), "mixed".to_string()]),
         });
 
         // Add run
@@ -2139,30 +2150,33 @@ mod tests {
             duration_us: 25_500,          // 25.5ms
             peak_memory_bytes: 3_145_728, // 3MB
             gc_pause_us: 500,
-            environment: BenchmarkEnvironment {
-                cpu_model: "AMD Ryzen 9 5900X".to_string(),
-                core_count: 12,
-                memory_gb: 32,
-                os_version: "Ubuntu 22.04.4 LTS".to_string(),
-                runtime_version: "Node.js v20.10.0".to_string(),
-                compiler_version: "V8 11.8.172.17".to_string(),
-                optimization_level: "O3".to_string(),
-                environment_hash: ContentHash::compute(b"env-amd-ubuntu"),
-            },
             is_warmup: false,
+            iteration: 0,
+            environment: EnvironmentSnapshot::new(
+                "Ubuntu 22.04.4 LTS".to_string(),
+                "AMD Ryzen 9 5900X".to_string(),
+                12,
+                32 * 1024 * 1024 * 1024,
+                "Node.js v20.10.0".to_string(),
+                "V8 11.8.172.17".to_string(),
+                BTreeMap::from([("optimization_level".to_string(), "O3".to_string())]),
+            ),
+            run_epoch: epoch,
         });
 
         // Add parity verdict with edge case values
         bundle.parity_verdicts.push(ParityVerdict {
             workload_id: "workload-mixed".to_string(),
-            target: ParityTarget::Reference,
+            target: ParityTarget::V8Isolate,
             output_equivalent: true,
             performance_ratio_millionths: 1_000_000, // Exactly the same performance
             behavioral_differences: 1, // Minor behavioral difference but equivalent output
+            difference_details: vec!["minor diagnostic-order difference".to_string()],
+            evidence_hash: ContentHash::compute(b"parity-mixed"),
         });
 
         bundle.reference_environment = Some(bundle.runs[0].environment.clone());
-        bundle.status = BundleStatus::Complete;
+        bundle.status = BundleStatus::Sealed;
 
         assert_evidence_bundle_golden(&bundle, "complex_parity_edge_cases");
     }

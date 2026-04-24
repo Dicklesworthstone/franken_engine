@@ -90,6 +90,8 @@ pub enum BreachReason {
     Latency,
     /// Determinism was required but not observed at 100%.
     Determinism,
+    /// Rollout phase had no configured guardrails and must fail closed.
+    MissingGuardrails,
 }
 
 /// Deterministic rollout state machine.
@@ -143,7 +145,10 @@ impl RolloutController {
             return Err(BreachReason::Determinism);
         }
 
-        let guardrails = self.guardrails_for_current_phase();
+        let Some(guardrails) = self.guardrails_for_current_phase() else {
+            self.rollback();
+            return Err(BreachReason::MissingGuardrails);
+        };
         let error_rate = observed.get(OBS_ERROR_RATE).copied().unwrap_or(u32::MAX);
         if error_rate > guardrails.max_error_rate {
             self.rollback();
@@ -172,11 +177,8 @@ impl RolloutController {
         Ok(())
     }
 
-    fn guardrails_for_current_phase(&self) -> PhaseGuardrails {
-        self.guardrails
-            .get(self.phase.as_key())
-            .cloned()
-            .unwrap_or_else(|| PhaseGuardrails::new(0, 0, true))
+    fn guardrails_for_current_phase(&self) -> Option<&PhaseGuardrails> {
+        self.guardrails.get(self.phase.as_key())
     }
 
     fn rollback(&mut self) {
@@ -327,6 +329,17 @@ mod tests {
     }
 
     #[test]
+    fn determinism_above_full_score_rolls_back() {
+        let mut controller = RolloutController::shadow(relaxed_guardrails());
+        let observed = observations(100, 100, MILLIONTHS + 1);
+        assert_eq!(
+            controller.try_advance(&observed),
+            Err(BreachReason::Determinism)
+        );
+        assert_eq!(controller.phase, RolloutPhase::RolledBack);
+    }
+
+    #[test]
     fn rolled_back_controller_does_not_advance() {
         let mut controller = RolloutController::new(RolloutPhase::RolledBack, relaxed_guardrails());
         assert_eq!(
@@ -388,7 +401,18 @@ mod tests {
         let mut controller = RolloutController::shadow(BTreeMap::new());
         assert_eq!(
             controller.try_advance(&good_observations()),
-            Err(BreachReason::ErrorRate)
+            Err(BreachReason::MissingGuardrails)
+        );
+        assert_eq!(controller.phase, RolloutPhase::RolledBack);
+    }
+
+    #[test]
+    fn missing_guardrails_reject_even_zero_observations() {
+        let mut controller = RolloutController::shadow(BTreeMap::new());
+        let observed = observations(0, 0, MILLIONTHS);
+        assert_eq!(
+            controller.try_advance(&observed),
+            Err(BreachReason::MissingGuardrails)
         );
         assert_eq!(controller.phase, RolloutPhase::RolledBack);
     }
@@ -434,9 +458,19 @@ mod tests {
     fn controller_serializes_with_stable_map_order() {
         let controller = RolloutController::shadow(relaxed_guardrails());
         let json = serde_json::to_string(&controller).expect("controller should serialize");
-        let active_pos = json.find("\"active\"").expect("active key should exist");
-        let canary_pos = json.find("\"canary\"").expect("canary key should exist");
-        let shadow_pos = json.find("\"shadow\"").expect("shadow key should exist");
+        let guardrails_pos = json
+            .find("\"guardrails\":{")
+            .expect("guardrails object should exist");
+        let guardrails_json = &json[guardrails_pos..];
+        let active_pos = guardrails_json
+            .find("\"active\":")
+            .expect("active key should exist");
+        let canary_pos = guardrails_json
+            .find("\"canary\":")
+            .expect("canary key should exist");
+        let shadow_pos = guardrails_json
+            .find("\"shadow\":")
+            .expect("shadow key should exist");
         assert!(active_pos < canary_pos);
         assert!(canary_pos < shadow_pos);
     }

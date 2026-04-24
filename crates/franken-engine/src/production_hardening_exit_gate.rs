@@ -938,18 +938,21 @@ impl ProductionHardeningGateExecution {
         };
 
         // Calculate performance assessment
-        let fuzz_passed = self
-            .fuzz_campaigns
-            .iter()
-            .all(|c| matches!(c.completion_status, ValidationStatus::Passed));
-        let property_tests_passed = self
-            .property_tests
-            .iter()
-            .all(|t| matches!(t.validation_status, ValidationStatus::Passed));
-        let metamorphic_tests_passed = self
-            .metamorphic_tests
-            .iter()
-            .all(|t| matches!(t.validation_status, ValidationStatus::Passed));
+        let fuzz_passed = !self.fuzz_campaigns.is_empty()
+            && self
+                .fuzz_campaigns
+                .iter()
+                .all(|c| matches!(c.completion_status, ValidationStatus::Passed));
+        let property_tests_passed = !self.property_tests.is_empty()
+            && self
+                .property_tests
+                .iter()
+                .all(|t| matches!(t.validation_status, ValidationStatus::Passed));
+        let metamorphic_tests_passed = !self.metamorphic_tests.is_empty()
+            && self
+                .metamorphic_tests
+                .iter()
+                .all(|t| matches!(t.validation_status, ValidationStatus::Passed));
         let performance_regression_risk =
             if fuzz_passed && property_tests_passed && metamorphic_tests_passed {
                 "LOW"
@@ -968,18 +971,21 @@ impl ProductionHardeningGateExecution {
         };
 
         // Calculate reliability assessment
-        let fault_drills_passed = self
-            .fault_injection_drills
-            .iter()
-            .all(|d| matches!(d.validation_status, ValidationStatus::Passed));
-        let rollout_passed = self
-            .rollout_validation
-            .iter()
-            .all(|r| matches!(r.validation_status, ValidationStatus::Passed));
-        let replay_passed = self
-            .replay_audits
-            .iter()
-            .all(|a| matches!(a.validation_status, ValidationStatus::Passed));
+        let fault_drills_passed = !self.fault_injection_drills.is_empty()
+            && self
+                .fault_injection_drills
+                .iter()
+                .all(|d| matches!(d.validation_status, ValidationStatus::Passed));
+        let rollout_passed = !self.rollout_validation.is_empty()
+            && self
+                .rollout_validation
+                .iter()
+                .all(|r| matches!(r.validation_status, ValidationStatus::Passed));
+        let replay_passed = !self.replay_audits.is_empty()
+            && self
+                .replay_audits
+                .iter()
+                .all(|a| matches!(a.validation_status, ValidationStatus::Passed));
         let reliability_risk = if fault_drills_passed && rollout_passed && replay_passed {
             "LOW"
         } else if fault_drills_passed || rollout_passed {
@@ -1282,6 +1288,10 @@ impl ProductionHardeningGateExecution {
     // Helper calculation methods
 
     fn calculate_containment_compliance(&self) -> f64 {
+        if self.security_matrix.is_empty() {
+            return 0.0;
+        }
+
         let passed = self
             .security_matrix
             .iter()
@@ -1315,7 +1325,16 @@ impl ProductionHardeningGateExecution {
     }
 
     pub fn all_validations_passed(&self) -> bool {
-        self.security_matrix
+        !self.security_matrix.is_empty()
+            && !self.fuzz_campaigns.is_empty()
+            && !self.property_tests.is_empty()
+            && !self.metamorphic_tests.is_empty()
+            && !self.rollout_validation.is_empty()
+            && !self.fault_injection_drills.is_empty()
+            && !self.quarantine_drills.is_empty()
+            && !self.replay_audits.is_empty()
+            && self
+                .security_matrix
             .iter()
             .all(|e| matches!(e.validation_status, ValidationStatus::Passed))
             && self
@@ -1351,6 +1370,35 @@ impl ProductionHardeningGateExecution {
 
     fn get_failed_validations(&self) -> Vec<String> {
         let mut failures = Vec::new();
+
+        if self.security_matrix.is_empty() {
+            failures.push("Security matrix (MISSING): no attack vectors configured".to_string());
+        }
+        if self.fuzz_campaigns.is_empty() {
+            failures.push("Fuzz campaign (MISSING): no fuzz targets configured".to_string());
+        }
+        if self.property_tests.is_empty() {
+            failures.push("Property test (MISSING): no properties configured".to_string());
+        }
+        if self.metamorphic_tests.is_empty() {
+            failures.push("Metamorphic test (MISSING): no transformations configured".to_string());
+        }
+        if self.rollout_validation.is_empty() {
+            failures.push("Rollout validation (MISSING): no rollout stages configured".to_string());
+        }
+        if self.fault_injection_drills.is_empty() {
+            failures.push(
+                "Fault injection drill (MISSING): no fault scenarios configured".to_string(),
+            );
+        }
+        if self.quarantine_drills.is_empty() {
+            failures.push(
+                "Quarantine drill (MISSING): no quarantine scenarios configured".to_string(),
+            );
+        }
+        if self.replay_audits.is_empty() {
+            failures.push("Replay audit (MISSING): no replay audits configured".to_string());
+        }
 
         // Include both Failed and Pending validations as blockers
         for entry in &self.security_matrix {

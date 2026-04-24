@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 pub const MILLIONTHS: u32 = 1_000_000;
 
 /// A single release acceptance gate.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct AcceptanceGate {
     /// Required score in fixed-point millionths.
     pub required_score_millionths: u32,
@@ -38,7 +38,7 @@ impl AcceptanceGate {
 }
 
 /// Deterministic ledger of program acceptance gates.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct AcceptanceLedger {
     /// Program identifier for the acceptance ledger.
     pub program_id: String,
@@ -57,7 +57,7 @@ impl AcceptanceLedger {
 
     /// Return true iff every gate's current score meets or exceeds its required score.
     pub fn ready_for_release(&self) -> bool {
-        self.gates.values().all(AcceptanceGate::ready)
+        !self.gates.is_empty() && self.gates.values().all(AcceptanceGate::ready)
     }
 
     /// Count gates that currently meet or exceed their required score.
@@ -137,9 +137,9 @@ mod tests {
     }
 
     #[test]
-    fn empty_ledger_is_vacuously_ready() {
+    fn empty_ledger_is_not_ready_for_release() {
         let ledger = AcceptanceLedger::new("program-a");
-        assert!(ledger.ready_for_release());
+        assert!(!ledger.ready_for_release());
     }
 
     #[test]

@@ -85,8 +85,7 @@ fn comment_ranges(source: &str) -> Vec<CommentRange> {
             b'/' if bytes.get(index + 1) == Some(&b'*') => {
                 let start = index;
                 index += 2;
-                while index + 1 < bytes.len()
-                    && !(bytes[index] == b'*' && bytes[index + 1] == b'/')
+                while index + 1 < bytes.len() && !(bytes[index] == b'*' && bytes[index + 1] == b'/')
                 {
                     index += 1;
                 }
@@ -151,7 +150,10 @@ fn jsx_node_signature(node: &JsxNode) -> String {
             child_signatures(&element.children).join(",")
         ),
         JsxNode::Fragment(fragment) => {
-            format!("fragment:children[{}]", child_signatures(&fragment.children).join(","))
+            format!(
+                "fragment:children[{}]",
+                child_signatures(&fragment.children).join(",")
+            )
         }
     }
 }

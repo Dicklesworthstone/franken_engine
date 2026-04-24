@@ -345,22 +345,60 @@ fn real_budget_controller_rejects_overspend() {
 }
 
 #[test]
-fn mock_decision_contract_drains_queued_verdicts() {
-    let mut mock = control_plane_mocks::MockDecisionContract::new(vec![
-        DecisionVerdict::Allow,
-        DecisionVerdict::Deny,
-    ]);
-    let request = DecisionRequest {
+fn real_decision_contract_evaluates_deterministic_verdicts() {
+    // Create real DecisionContract with deterministic policy
+    let mut contract = DecisionContract::new();
+
+    // Add a simple deterministic decision rule
+    let policy_id = control_plane::PolicyId::new("test.real", 1);
+    contract.add_rule(policy_id.clone(), |req: &DecisionRequest| {
+        // Deterministic rule: Allow if calibration_score_bps >= 5000, otherwise Deny
+        if req.calibration_score_bps >= 5_000 {
+            DecisionVerdict::Allow
+        } else {
+            DecisionVerdict::Deny
+        }
+    });
+
+    let allow_request = DecisionRequest {
         decision_id: control_plane::DecisionId::from_parts(1_000, 1_u128),
-        policy_id: control_plane::PolicyId::new("test.mock", 1),
+        policy_id: policy_id.clone(),
         trace_id: control_plane::TraceId::from_parts(1_000, 1_u128),
         ts_unix_ms: 1_000,
-        calibration_score_bps: 5_000,
+        calibration_score_bps: 6_000, // >= 5000 -> Allow
         e_process_milli: 100,
         ci_width_milli: 50,
     };
-    assert_eq!(mock.evaluate(&request).unwrap(), DecisionVerdict::Allow);
-    assert_eq!(mock.evaluate(&request).unwrap(), DecisionVerdict::Deny);
+
+    let deny_request = DecisionRequest {
+        decision_id: control_plane::DecisionId::from_parts(2_000, 2_u128),
+        policy_id: policy_id.clone(),
+        trace_id: control_plane::TraceId::from_parts(2_000, 2_u128),
+        ts_unix_ms: 2_000,
+        calibration_score_bps: 3_000, // < 5000 -> Deny
+        e_process_milli: 100,
+        ci_width_milli: 50,
+    };
+
+    // Test real decision evaluation - deterministic, not queued
+    assert_eq!(
+        contract.evaluate(&allow_request).unwrap(),
+        DecisionVerdict::Allow
+    );
+    assert_eq!(
+        contract.evaluate(&deny_request).unwrap(),
+        DecisionVerdict::Deny
+    );
+
+    // Test idempotency - same request yields same result
+    assert_eq!(
+        contract.evaluate(&allow_request).unwrap(),
+        DecisionVerdict::Allow
+    );
+    assert_eq!(
+        contract.evaluate(&deny_request).unwrap(),
+        DecisionVerdict::Deny
+    );
 }
 
 #[test]

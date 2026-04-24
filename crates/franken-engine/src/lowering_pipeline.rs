@@ -12401,6 +12401,7 @@ mod tests {
             declarations: vec![VariableDeclarator {
                 pattern: BindingPattern::Identifier("a".to_string()),
                 initializer: Some(Expression::NumericLiteral(1)),
+                span: span(),
             }],
             span: span(),
         });
@@ -12410,6 +12411,7 @@ mod tests {
             declarations: vec![VariableDeclarator {
                 pattern: BindingPattern::Identifier("b".to_string()),
                 initializer: Some(Expression::NumericLiteral(2)),
+                span: span(),
             }],
             span: span(),
         });
@@ -12419,6 +12421,7 @@ mod tests {
             declarations: vec![VariableDeclarator {
                 pattern: BindingPattern::Identifier("c".to_string()),
                 initializer: Some(Expression::NumericLiteral(3)),
+                span: span(),
             }],
             span: span(),
         });
@@ -12506,6 +12509,7 @@ mod tests {
             declarations: vec![VariableDeclarator {
                 pattern: BindingPattern::Identifier("x".to_string()),
                 initializer: Some(Expression::NumericLiteral(10)),
+                span: span(),
             }],
             span: span(),
         });
@@ -12582,6 +12586,7 @@ mod tests {
                     declarations: vec![VariableDeclarator {
                         pattern: BindingPattern::Identifier(format!("var_{}", i)),
                         initializer: Some(Expression::NumericLiteral(i)),
+                        span: span(),
                     }],
                     span: span(),
                 })
@@ -12675,14 +12680,11 @@ mod tests {
         ir0: &Ir0Module,
         test_name: &str,
     ) -> LoweringPipelineOutput {
-        let context = LoweringContext {
-            trace_id: format!("golden_test_{}", test_name),
-            decision_id: format!("decision_{}", test_name),
-            policy_id: format!("policy_{}", test_name),
-            session_id: format!("session_{}", test_name),
-            security_epoch: crate::security_epoch::SecurityEpoch::from_raw(1),
-            start_time_epoch_ms: 1640995200000, // Fixed timestamp for determinism
-        };
+        let context = LoweringContext::new(
+            format!("golden_test_{}", test_name),
+            format!("decision_{}", test_name),
+            format!("policy_{}", test_name),
+        );
 
         lower_ir0_to_ir3(ir0, &context).expect("Lowering pipeline should succeed for golden test")
     }
@@ -12742,12 +12744,11 @@ mod tests {
         let tree = SyntaxTree {
             goal: ParseGoal::Script,
             body: vec![Statement::Expression(ExpressionStatement {
-                expression: Expression::BinaryExpression(BinaryExpression {
+                expression: Expression::Binary {
                     left: Box::new(Expression::NumericLiteral(42)),
                     operator: BinaryOperator::Add,
                     right: Box::new(Expression::NumericLiteral(7)),
-                    span: span(),
-                }),
+                },
                 span: span(),
             })],
             span: span(),
@@ -12760,15 +12761,11 @@ mod tests {
         let tree = SyntaxTree {
             goal: ParseGoal::Script,
             body: vec![Statement::If(IfStatement {
-                test: Expression::BinaryExpression(BinaryExpression {
-                    left: Box::new(Expression::Identifier(Identifier {
-                        name: "x".to_string(),
-                        span: span(),
-                    })),
+                condition: Expression::Binary {
+                    left: Box::new(Expression::Identifier("x".to_string())),
                     operator: BinaryOperator::GreaterThan,
                     right: Box::new(Expression::NumericLiteral(0)),
-                    span: span(),
-                }),
+                },
                 consequent: Box::new(Statement::Expression(ExpressionStatement {
                     expression: Expression::StringLiteral("positive".to_string()),
                     span: span(),
@@ -12788,49 +12785,31 @@ mod tests {
     fn function_declaration_ir0() -> Ir0Module {
         let tree = SyntaxTree {
             goal: ParseGoal::Script,
-            body: vec![Statement::Function(FunctionDeclaration {
-                name: Identifier {
-                    name: "add".to_string(),
-                    span: span(),
-                },
+            body: vec![Statement::FunctionDeclaration(FunctionDeclaration {
+                name: Some("add".to_string()),
                 params: vec![
-                    FormalParameter {
-                        pattern: BindingPattern::Identifier(Identifier {
-                            name: "a".to_string(),
-                            span: span(),
-                        }),
-                        default_value: None,
+                    FunctionParam {
+                        pattern: BindingPattern::Identifier("a".to_string()),
                         span: span(),
                     },
-                    FormalParameter {
-                        pattern: BindingPattern::Identifier(Identifier {
-                            name: "b".to_string(),
-                            span: span(),
-                        }),
-                        default_value: None,
+                    FunctionParam {
+                        pattern: BindingPattern::Identifier("b".to_string()),
                         span: span(),
                     },
                 ],
-                body: ArrowBody::Block(BlockStatement {
+                body: BlockStatement {
                     body: vec![Statement::Return(ReturnStatement {
-                        argument: Some(Expression::BinaryExpression(BinaryExpression {
-                            left: Box::new(Expression::Identifier(Identifier {
-                                name: "a".to_string(),
-                                span: span(),
-                            })),
+                        argument: Some(Expression::Binary {
+                            left: Box::new(Expression::Identifier("a".to_string())),
                             operator: BinaryOperator::Add,
-                            right: Box::new(Expression::Identifier(Identifier {
-                                name: "b".to_string(),
-                                span: span(),
-                            })),
-                            span: span(),
-                        })),
+                            right: Box::new(Expression::Identifier("b".to_string())),
+                        }),
                         span: span(),
                     })],
                     span: span(),
-                }),
-                generator: false,
-                async_: false,
+                },
+                is_generator: false,
+                is_async: false,
                 span: span(),
             })],
             span: span(),
@@ -12846,10 +12825,7 @@ mod tests {
                 Statement::VariableDeclaration(VariableDeclaration {
                     kind: VariableDeclarationKind::Let,
                     declarations: vec![VariableDeclarator {
-                        id: BindingPattern::Identifier(Identifier {
-                            name: "x".to_string(),
-                            span: span(),
-                        }),
+                        pattern: BindingPattern::Identifier("x".to_string()),
                         initializer: Some(Expression::NumericLiteral(10)),
                         span: span(),
                     }],
@@ -12858,10 +12834,7 @@ mod tests {
                 Statement::VariableDeclaration(VariableDeclaration {
                     kind: VariableDeclarationKind::Const,
                     declarations: vec![VariableDeclarator {
-                        id: BindingPattern::Identifier(Identifier {
-                            name: "message".to_string(),
-                            span: span(),
-                        }),
+                        pattern: BindingPattern::Identifier("message".to_string()),
                         initializer: Some(Expression::StringLiteral("Hello, world!".to_string())),
                         span: span(),
                     }],
@@ -12878,50 +12851,29 @@ mod tests {
         let tree = SyntaxTree {
             goal: ParseGoal::Script,
             body: vec![Statement::For(ForStatement {
-                init: Some(VariableDeclaration {
+                init: Some(Box::new(Statement::VariableDeclaration(VariableDeclaration {
                     kind: VariableDeclarationKind::Let,
                     declarations: vec![VariableDeclarator {
-                        id: BindingPattern::Identifier(Identifier {
-                            name: "i".to_string(),
-                            span: span(),
-                        }),
+                        pattern: BindingPattern::Identifier("i".to_string()),
                         initializer: Some(Expression::NumericLiteral(0)),
                         span: span(),
                     }],
                     span: span(),
-                }),
-                test: Some(Expression::BinaryExpression(BinaryExpression {
-                    left: Box::new(Expression::Identifier(Identifier {
-                        name: "i".to_string(),
-                        span: span(),
-                    })),
+                }))),
+                condition: Some(Expression::Binary {
+                    left: Box::new(Expression::Identifier("i".to_string())),
                     operator: BinaryOperator::LessThan,
                     right: Box::new(Expression::NumericLiteral(5)),
-                    span: span(),
-                })),
-                update: Some(Expression::UpdateExpression(UpdateExpression {
-                    operator: UpdateOperator::Increment,
-                    argument: Box::new(Expression::Identifier(Identifier {
-                        name: "i".to_string(),
-                        span: span(),
-                    })),
-                    prefix: false,
-                    span: span(),
-                })),
+                }),
+                update: Some(Expression::Unary {
+                    operator: UnaryOperator::Increment,
+                    argument: Box::new(Expression::Identifier("i".to_string())),
+                }),
                 body: Box::new(Statement::Expression(ExpressionStatement {
-                    expression: Expression::CallExpression(CallExpression {
-                        callee: Box::new(Expression::Identifier(Identifier {
-                            name: "console".to_string(),
-                            span: span(),
-                        })),
-                        arguments: vec![CallArgument::Expression(Expression::Identifier(
-                            Identifier {
-                                name: "i".to_string(),
-                                span: span(),
-                            },
-                        ))],
-                        span: span(),
-                    }),
+                    expression: Expression::Call {
+                        callee: Box::new(Expression::Identifier("log".to_string())),
+                        arguments: vec![Expression::Identifier("i".to_string())],
+                    },
                     span: span(),
                 })),
                 span: span(),

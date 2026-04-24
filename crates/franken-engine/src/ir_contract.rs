@@ -6095,8 +6095,8 @@ mod tests {
         let source_hash = ContentHash::compute(b"test_source");
 
         // Create two IR1 modules with same logical content but different internal ordering
-        let mut module_a = Ir1Module::new(source_hash, "test_a.js".to_string(), 10);
-        let mut module_b = Ir1Module::new(source_hash, "test_b.js".to_string(), 10);
+        let mut module_a = Ir1Module::with_capacity(source_hash, "test_a.js".to_string(), 10);
+        let mut module_b = Ir1Module::with_capacity(source_hash, "test_b.js".to_string(), 10);
 
         // Add scopes in different orders with different binding arrangements
         let scope1_bindings_order_a = vec![
@@ -6173,7 +6173,7 @@ mod tests {
     fn ir1_module_canonicalization_true_idempotency() {
         // Test mathematical idempotency: canonical(canonical(x)) == canonical(x)
         let source_hash = ContentHash::compute(b"idempotency_test");
-        let mut module = Ir1Module::new(source_hash, "idempotent.js".to_string(), 5);
+        let mut module = Ir1Module::with_capacity(source_hash, "idempotent.js".to_string(), 5);
 
         // Add realistic content
         module.scopes.push(ScopeNode {
@@ -6191,7 +6191,7 @@ mod tests {
         module.ops.push(Ir1Op::LoadLiteral {
             value: Ir1Literal::String("test".to_string()),
         });
-        module.ops.push(Ir1Op::StoreLocal { binding_id: 100 });
+        module.ops.push(Ir1Op::StoreBinding { binding_id: 100 });
         module.ops.push(Ir1Op::Return);
 
         // First canonicalization
@@ -6235,20 +6235,19 @@ mod tests {
 
         let tree = SyntaxTree {
             goal: ParseGoal::Script,
-            source: "const x = 42;".to_string(),
-            span: SourceSpan {
-                start_offset: 0,
-                end_offset: 13,
-                start_line: 1,
-                start_column: 1,
-                end_line: 1,
-                end_column: 14,
-            },
             body: vec![Statement::VariableDeclaration(VariableDeclaration {
                 kind: crate::ast::VariableDeclarationKind::Const,
                 declarations: vec![VariableDeclarator {
-                    id: BindingPattern::Identifier("x".to_string()),
+                    pattern: BindingPattern::Identifier("x".to_string()),
                     initializer: Some(Expression::NumericLiteral(42)),
+                    span: SourceSpan {
+                        start_offset: 0,
+                        end_offset: 13,
+                        start_line: 1,
+                        start_column: 1,
+                        end_line: 1,
+                        end_column: 14,
+                    },
                 }],
                 span: SourceSpan {
                     start_offset: 0,
@@ -6259,6 +6258,14 @@ mod tests {
                     end_column: 14,
                 },
             })],
+            span: SourceSpan {
+                start_offset: 0,
+                end_offset: 13,
+                start_line: 1,
+                start_column: 1,
+                end_line: 1,
+                end_column: 14,
+            },
         };
 
         let module = Ir0Module::from_syntax_tree(tree, "simple.js");

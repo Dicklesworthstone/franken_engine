@@ -10991,7 +10991,8 @@ fn test_array_some_callback_invocation_integration() {
     );
 
     // Test case 3: more complex callback with index parameter
-    let result3 = interpreter.evaluate_expression("[10, 20, 30].some((value, index) => value === index * 10)");
+    let result3 = interpreter
+        .evaluate_expression("[10, 20, 30].some((value, index) => value === index * 10)");
     assert!(result3.is_ok(), "Expression should evaluate successfully");
     assert_eq!(
         result3.unwrap(),

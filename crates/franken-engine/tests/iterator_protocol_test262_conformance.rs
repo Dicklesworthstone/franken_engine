@@ -11,9 +11,6 @@
 //! from ES2020 §25.1 (Iterator Interface) and §7.4 (Iterator Operations).
 
 use frankenengine_engine::HybridRouter;
-use frankenengine_engine::engine_object_id::{ObjectDomain, SchemaId, derive_id};
-use frankenengine_engine::iterator_protocol::*;
-use frankenengine_engine::object_model::{PropertyKey, WellKnownSymbol};
 use frankenengine_engine::security_epoch::SecurityEpoch;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -41,7 +38,7 @@ pub enum RequirementLevel {
 }
 
 /// Test category classification for iterator conformance.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum IteratorTestCategory {
     /// Basic iterator interface (§25.1.1)
     Interface,
@@ -426,11 +423,13 @@ impl IteratorConformanceHarness {
 
         // Calculate pass rate
         let passed_or_expected = statistics.passed + statistics.expected_failures;
-        statistics.pass_rate_millionths = if statistics.total_tests > 0 {
-            (passed_or_expected * 1_000_000) / statistics.total_tests
-        } else {
-            0
-        };
+        statistics.pass_rate_millionths = passed_or_expected
+            .saturating_mul(1_000_000)
+            .checked_div(statistics.total_tests)
+            .unwrap_or(0);
+
+        let coverage_by_category = self.calculate_coverage_by_category(&results);
+        let compliance_score = self.calculate_compliance_score(&statistics);
 
         IteratorConformanceReport {
             schema_version: ITERATOR_CONFORMANCE_SCHEMA_VERSION.to_string(),
@@ -439,8 +438,8 @@ impl IteratorConformanceHarness {
             timestamp: chrono::Utc::now().to_rfc3339(),
             test_results: results,
             statistics,
-            coverage_by_category: self.calculate_coverage_by_category(&results),
-            compliance_score: self.calculate_compliance_score(&statistics),
+            coverage_by_category,
+            compliance_score,
         }
     }
 

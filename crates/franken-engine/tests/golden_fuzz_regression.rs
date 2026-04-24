@@ -8,13 +8,12 @@
 
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use frankenengine_engine::parser::{
-    CanonicalEs2020Parser, ParseDiagnosticEnvelope, ParseEventIr, ParseEventKind, ParseGoal,
-    ParserBudget, ParserMode, ParserOptions,
+    CanonicalEs2020Parser, ParseDiagnosticEnvelope, ParseGoal, ParserBudget, ParserMode,
+    ParserOptions,
 };
 
 /// Golden test result for parser boundary fuzzing

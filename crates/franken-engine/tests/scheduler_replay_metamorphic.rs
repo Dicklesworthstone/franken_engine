@@ -11,7 +11,7 @@
 use std::collections::BTreeSet;
 
 use frankenengine_engine::scheduler_invariants::{
-    RegressionFixture, SchedulerAutomaton, StateId, Transition, TransitionLabel,
+    SchedulerAutomaton, StateId, Transition, TransitionLabel,
 };
 use proptest::prelude::*;
 
@@ -216,6 +216,16 @@ fn mr_replay_composition() {
         &result1[..],
         "Combined replay diverged in first segment"
     );
+
+    // Second part should match the stateful continuation from the join state.
+    // simulate_replay prefixes the start state, so the combined tail beginning
+    // at result1.len()-1 (the join state) must equal result2_from_active in full.
+    let join = result1.len() - 1;
+    assert_eq!(
+        &combined_result[join..join + result2_from_active.len()],
+        &result2_from_active[..],
+        "Combined replay diverged in second segment"
+    );
 }
 
 /// Helper function for stateful replay composition
@@ -290,10 +300,11 @@ fn mr_composite_identity_subsequence() {
         for prefix_len in 1..full_actions.len() {
             let prefix = &full_actions[..prefix_len];
 
-            // MR1: Identity replay for prefix
+            // MR1: Identity replay for prefix (compare by reference so prefix_result1
+            // is still owned for the MR2 check below)
             let prefix_result1 = simulate_replay(&automaton, prefix);
             let prefix_result2 = simulate_replay(&automaton, prefix);
-            prop_assert_eq!(prefix_result1, prefix_result2,
+            prop_assert_eq!(&prefix_result1, &prefix_result2,
                 "Identity property failed for prefix");
 
             // MR2: Subsequence property
@@ -361,8 +372,9 @@ proptest! {
         let result1 = simulate_replay(&automaton, &actions);
         let result2 = simulate_replay(&automaton, &actions);
 
-        // Identity property (MR1)
-        prop_assert_eq!(result1, result2, "Random input failed identity replay");
+        // Identity property (MR1) — compare by reference so result1 is still owned
+        // for the subsequence check below.
+        prop_assert_eq!(&result1, &result2, "Random input failed identity replay");
 
         // Subsequence property (MR2) - test random prefix
         if actions.len() > 1 {

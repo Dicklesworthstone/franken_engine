@@ -2596,7 +2596,7 @@ mod tests {
         let ledger = build_golden_ledger("test", "evidence-v1", 1);
         let entry = &ledger.entries[0];
 
-        let migrated = v1_to_v2_migration(entry).expect("serde deserialization should succeed");
+        let migrated = v1_to_v2_migration(entry).expect("test migration should succeed");
         assert_eq!(migrated.schema_version, "evidence-v2");
         assert_eq!(
             migrated.metadata.get("migrated_from").map(String::as_str),
@@ -2645,15 +2645,25 @@ mod tests {
     }
 
     fn run_full_migration(runner: &mut CutoverMigrationRunner, id: &str) -> AppliedMigrationEntry {
-        runner.begin(id, 100, "trace-1").expect("serde deserialization should succeed");
+        runner
+            .begin(id, 100, "trace-1")
+            .expect("cutover begin should succeed");
         runner.set_tick(10);
-        runner.create_checkpoint(1, "trace-1").expect("serde deserialization should succeed");
+        runner
+            .create_checkpoint(1, "trace-1")
+            .expect("cutover checkpoint should succeed");
         runner.set_tick(20);
-        runner.execute(100, "trace-1").expect("serde deserialization should succeed");
+        runner
+            .execute(100, "trace-1")
+            .expect("cutover execute should succeed");
         runner.set_tick(30);
-        runner.verify(0, "trace-1").expect("serde deserialization should succeed");
+        runner
+            .verify(0, "trace-1")
+            .expect("cutover verify should succeed");
         runner.set_tick(40);
-        runner.commit("trace-1").expect("serde deserialization should succeed")
+        runner
+            .commit("trace-1")
+            .expect("cutover commit should succeed")
     }
 
     // -- CutoverType -------------------------------------------------------
@@ -2902,7 +2912,9 @@ mod tests {
     fn declare_valid_migration() {
         let mut runner = CutoverMigrationRunner::new();
         let decl = test_declaration("mig-1", CutoverType::HardCutover);
-        runner.declare(decl, "trace-1").expect("serde deserialization should succeed");
+        runner
+            .declare(decl, "trace-1")
+            .expect("test operation should succeed");
         assert_eq!(runner.declaration_count(), 1);
     }
 
@@ -2938,7 +2950,7 @@ mod tests {
         let mut runner = CutoverMigrationRunner::new();
         runner
             .declare(test_declaration("mig-1", CutoverType::HardCutover), "t")
-            .expect("serde deserialization should succeed");
+            .expect("test operation should succeed");
         let err = runner
             .declare(test_declaration("mig-1", CutoverType::SoftMigration), "t")
             .unwrap_err();
@@ -2951,7 +2963,9 @@ mod tests {
     fn hard_cutover_full_lifecycle() {
         let mut runner = CutoverMigrationRunner::new();
         let decl = test_declaration("mig-1", CutoverType::HardCutover);
-        runner.declare(decl, "trace-1").expect("serde deserialization should succeed");
+        runner
+            .declare(decl, "trace-1")
+            .expect("test operation should succeed");
 
         let entry = run_full_migration(&mut runner, "mig-1");
         assert_eq!(entry.state, CutoverState::Committed);
@@ -2965,7 +2979,7 @@ mod tests {
         let mut runner = CutoverMigrationRunner::new();
         runner
             .declare(test_declaration("mig-1", CutoverType::HardCutover), "t")
-            .expect("serde deserialization should succeed");
+            .expect("test operation should succeed");
         run_full_migration(&mut runner, "mig-1");
 
         let err = runner
@@ -2979,13 +2993,13 @@ mod tests {
         let mut runner = CutoverMigrationRunner::new();
         runner
             .declare(test_declaration("mig-1", CutoverType::HardCutover), "t")
-            .expect("serde deserialization should succeed");
+            .expect("test operation should succeed");
         run_full_migration(&mut runner, "mig-1");
 
         // KeyFormat was not affected by this migration.
         runner
             .check_format_acceptance(ObjectClass::KeyFormat)
-            .expect("serde deserialization should succeed");
+            .expect("test operation should succeed");
     }
 
     // -- Soft migration lifecycle -------------------------------------------
@@ -2995,7 +3009,7 @@ mod tests {
         let mut runner = CutoverMigrationRunner::new();
         runner
             .declare(test_declaration("mig-1", CutoverType::SoftMigration), "t")
-            .expect("serde deserialization should succeed");
+            .expect("test operation should succeed");
         run_full_migration(&mut runner, "mig-1");
 
         assert_eq!(runner.transition_windows().len(), 1);
@@ -3009,14 +3023,14 @@ mod tests {
         let mut runner = CutoverMigrationRunner::new();
         runner
             .declare(test_declaration("mig-1", CutoverType::SoftMigration), "t")
-            .expect("serde deserialization should succeed");
+            .expect("test operation should succeed");
         run_full_migration(&mut runner, "mig-1");
 
         // Still within transition window.
         runner.set_tick(41);
         runner
             .check_format_acceptance(ObjectClass::SerializationSchema)
-            .expect("serde deserialization should succeed");
+            .expect("test operation should succeed");
     }
 
     #[test]
@@ -3024,7 +3038,7 @@ mod tests {
         let mut runner = CutoverMigrationRunner::new();
         runner
             .declare(test_declaration("mig-1", CutoverType::SoftMigration), "t")
-            .expect("serde deserialization should succeed");
+            .expect("test operation should succeed");
         run_full_migration(&mut runner, "mig-1");
 
         // After transition window expires (commit at tick 40, window = 1000).
@@ -3042,13 +3056,19 @@ mod tests {
         let mut runner = CutoverMigrationRunner::new();
         runner
             .declare(test_declaration("mig-1", CutoverType::ParallelRun), "t")
-            .expect("serde deserialization should succeed");
+            .expect("test operation should succeed");
 
-        runner.begin("mig-1", 100, "t").expect("serde deserialization should succeed");
+        runner
+            .begin("mig-1", 100, "t")
+            .expect("test operation should succeed");
         runner.set_tick(10);
-        runner.create_checkpoint(1, "t").expect("serde deserialization should succeed");
+        runner
+            .create_checkpoint(1, "t")
+            .expect("test operation should succeed");
         runner.set_tick(20);
-        runner.execute(100, "t").expect("serde deserialization should succeed");
+        runner
+            .execute(100, "t")
+            .expect("test operation should succeed");
 
         runner.set_tick(25);
         let err = runner.report_parallel_discrepancies(5, "t").unwrap_err();
@@ -3066,15 +3086,23 @@ mod tests {
         let mut runner = CutoverMigrationRunner::new();
         runner
             .declare(test_declaration("mig-1", CutoverType::ParallelRun), "t")
-            .expect("serde deserialization should succeed");
+            .expect("test operation should succeed");
 
-        runner.begin("mig-1", 100, "t").expect("serde deserialization should succeed");
+        runner
+            .begin("mig-1", 100, "t")
+            .expect("test operation should succeed");
         runner.set_tick(10);
-        runner.create_checkpoint(1, "t").expect("serde deserialization should succeed");
+        runner
+            .create_checkpoint(1, "t")
+            .expect("test operation should succeed");
         runner.set_tick(20);
-        runner.execute(100, "t").expect("serde deserialization should succeed");
+        runner
+            .execute(100, "t")
+            .expect("test operation should succeed");
 
-        runner.report_parallel_discrepancies(0, "t").expect("serde deserialization should succeed");
+        runner
+            .report_parallel_discrepancies(0, "t")
+            .expect("test operation should succeed");
         // Can continue to verify and commit.
     }
 
@@ -3083,8 +3111,10 @@ mod tests {
         let mut runner = CutoverMigrationRunner::new();
         runner
             .declare(test_declaration("mig-1", CutoverType::HardCutover), "t")
-            .expect("serde deserialization should succeed");
-        runner.begin("mig-1", 100, "t").expect("serde deserialization should succeed");
+            .expect("test operation should succeed");
+        runner
+            .begin("mig-1", 100, "t")
+            .expect("test operation should succeed");
 
         let err = runner.report_parallel_discrepancies(0, "t").unwrap_err();
         assert!(matches!(err, CutoverError::PhaseFailed { .. }));
@@ -3097,11 +3127,17 @@ mod tests {
         let mut runner = CutoverMigrationRunner::new();
         runner
             .declare(test_declaration("mig-1", CutoverType::HardCutover), "t")
-            .expect("serde deserialization should succeed");
+            .expect("test operation should succeed");
 
-        runner.begin("mig-1", 100, "t").expect("serde deserialization should succeed");
-        runner.create_checkpoint(1, "t").expect("serde deserialization should succeed");
-        runner.execute(100, "t").expect("serde deserialization should succeed");
+        runner
+            .begin("mig-1", 100, "t")
+            .expect("test operation should succeed");
+        runner
+            .create_checkpoint(1, "t")
+            .expect("test operation should succeed");
+        runner
+            .execute(100, "t")
+            .expect("test operation should succeed");
 
         let err = runner.verify(3, "t").unwrap_err();
         assert!(matches!(
@@ -3123,9 +3159,11 @@ mod tests {
         let mut runner = CutoverMigrationRunner::new();
         runner
             .declare(test_declaration("mig-1", CutoverType::HardCutover), "t")
-            .expect("serde deserialization should succeed");
+            .expect("test operation should succeed");
 
-        runner.begin("mig-1", 100, "t").expect("serde deserialization should succeed");
+        runner
+            .begin("mig-1", 100, "t")
+            .expect("test operation should succeed");
         let err = runner.fail_dry_run(10, "t").unwrap_err();
         assert!(matches!(
             err,
@@ -3143,12 +3181,18 @@ mod tests {
         let mut runner = CutoverMigrationRunner::new();
         runner
             .declare(test_declaration("mig-1", CutoverType::HardCutover), "t")
-            .expect("serde deserialization should succeed");
+            .expect("test operation should succeed");
 
-        runner.begin("mig-1", 100, "t").expect("serde deserialization should succeed");
-        runner.create_checkpoint(1, "t").expect("serde deserialization should succeed");
-        runner.execute(100, "t").expect("serde deserialization should succeed");
-        runner.rollback("t").expect("serde deserialization should succeed");
+        runner
+            .begin("mig-1", 100, "t")
+            .expect("test operation should succeed");
+        runner
+            .create_checkpoint(1, "t")
+            .expect("test operation should succeed");
+        runner
+            .execute(100, "t")
+            .expect("test operation should succeed");
+        runner.rollback("t").expect("test operation should succeed");
 
         assert!(runner.active_migration_id().is_none());
         assert_eq!(
@@ -3162,7 +3206,7 @@ mod tests {
         let mut runner = CutoverMigrationRunner::new();
         runner
             .declare(test_declaration("mig-1", CutoverType::HardCutover), "t")
-            .expect("serde deserialization should succeed");
+            .expect("test operation should succeed");
         run_full_migration(&mut runner, "mig-1");
 
         // No active migration to rollback.
@@ -3177,9 +3221,13 @@ mod tests {
         let mut runner = CutoverMigrationRunner::new();
         runner
             .declare(test_declaration("mig-1", CutoverType::HardCutover), "t")
-            .expect("serde deserialization should succeed");
-        runner.begin("mig-1", 100, "t").expect("serde deserialization should succeed");
-        runner.create_checkpoint(1, "t").expect("serde deserialization should succeed");
+            .expect("test operation should succeed");
+        runner
+            .begin("mig-1", 100, "t")
+            .expect("test operation should succeed");
+        runner
+            .create_checkpoint(1, "t")
+            .expect("test operation should succeed");
 
         // Already checkpointed; creating another should fail.
         let err = runner.create_checkpoint(2, "t").unwrap_err();
@@ -3191,8 +3239,10 @@ mod tests {
         let mut runner = CutoverMigrationRunner::new();
         runner
             .declare(test_declaration("mig-1", CutoverType::HardCutover), "t")
-            .expect("serde deserialization should succeed");
-        runner.begin("mig-1", 100, "t").expect("serde deserialization should succeed");
+            .expect("test operation should succeed");
+        runner
+            .begin("mig-1", 100, "t")
+            .expect("test operation should succeed");
 
         // Trying to execute without checkpoint.
         let err = runner.execute(100, "t").unwrap_err();
@@ -3204,9 +3254,13 @@ mod tests {
         let mut runner = CutoverMigrationRunner::new();
         runner
             .declare(test_declaration("mig-1", CutoverType::HardCutover), "t")
-            .expect("serde deserialization should succeed");
-        runner.begin("mig-1", 100, "t").expect("serde deserialization should succeed");
-        runner.create_checkpoint(1, "t").expect("serde deserialization should succeed");
+            .expect("test operation should succeed");
+        runner
+            .begin("mig-1", 100, "t")
+            .expect("test operation should succeed");
+        runner
+            .create_checkpoint(1, "t")
+            .expect("test operation should succeed");
 
         let err = runner.verify(0, "t").unwrap_err();
         assert!(matches!(err, CutoverError::PhaseFailed { .. }));
@@ -3217,10 +3271,16 @@ mod tests {
         let mut runner = CutoverMigrationRunner::new();
         runner
             .declare(test_declaration("mig-1", CutoverType::HardCutover), "t")
-            .expect("serde deserialization should succeed");
-        runner.begin("mig-1", 100, "t").expect("serde deserialization should succeed");
-        runner.create_checkpoint(1, "t").expect("serde deserialization should succeed");
-        runner.execute(100, "t").expect("serde deserialization should succeed");
+            .expect("test operation should succeed");
+        runner
+            .begin("mig-1", 100, "t")
+            .expect("test operation should succeed");
+        runner
+            .create_checkpoint(1, "t")
+            .expect("test operation should succeed");
+        runner
+            .execute(100, "t")
+            .expect("test operation should succeed");
 
         let err = runner.commit("t").unwrap_err();
         assert!(matches!(err, CutoverError::PhaseFailed { .. }));
@@ -3242,13 +3302,17 @@ mod tests {
         let mut runner = CutoverMigrationRunner::new();
         runner
             .declare(test_declaration("mig-1", CutoverType::HardCutover), "t")
-            .expect("serde deserialization should succeed");
+            .expect("test operation should succeed");
         let mut decl2 = test_declaration("mig-2", CutoverType::SoftMigration);
         decl2.from_version = "v2".to_string();
         decl2.to_version = "v3".to_string();
-        runner.declare(decl2, "t").expect("serde deserialization should succeed");
+        runner
+            .declare(decl2, "t")
+            .expect("test operation should succeed");
 
-        runner.begin("mig-1", 100, "t").expect("serde deserialization should succeed");
+        runner
+            .begin("mig-1", 100, "t")
+            .expect("test operation should succeed");
         let err = runner.begin("mig-2", 50, "t").unwrap_err();
         assert!(matches!(err, CutoverError::PhaseFailed { .. }));
     }
@@ -3260,7 +3324,7 @@ mod tests {
         let mut runner = CutoverMigrationRunner::new();
         runner
             .declare(test_declaration("mig-1", CutoverType::HardCutover), "t")
-            .expect("serde deserialization should succeed");
+            .expect("test operation should succeed");
         run_full_migration(&mut runner, "mig-1");
 
         let events = runner.audit_events();
@@ -3277,17 +3341,23 @@ mod tests {
         let mut runner = CutoverMigrationRunner::new();
         runner
             .declare(test_declaration("mig-1", CutoverType::HardCutover), "t")
-            .expect("serde deserialization should succeed");
-        runner.begin("mig-1", 100, "t").expect("serde deserialization should succeed");
-        runner.create_checkpoint(1, "t").expect("serde deserialization should succeed");
-        runner.execute(100, "t").expect("serde deserialization should succeed");
+            .expect("test operation should succeed");
+        runner
+            .begin("mig-1", 100, "t")
+            .expect("test operation should succeed");
+        runner
+            .create_checkpoint(1, "t")
+            .expect("test operation should succeed");
+        runner
+            .execute(100, "t")
+            .expect("test operation should succeed");
         let _ = runner.verify(2, "t");
 
         let events = runner.drain_audit_events();
         let fail_event = events
             .iter()
             .find(|e| e.event == "verification_failed")
-            .expect("serde deserialization should succeed");
+            .expect("test operation should succeed");
         assert_eq!(
             fail_event.error_code.as_deref(),
             Some("MC_VERIFICATION_FAILED")
@@ -3300,7 +3370,7 @@ mod tests {
         let mut runner = CutoverMigrationRunner::new();
         runner
             .declare(test_declaration("mig-1", CutoverType::HardCutover), "t")
-            .expect("serde deserialization should succeed");
+            .expect("test operation should succeed");
         assert!(!runner.audit_events().is_empty());
         let drained = runner.drain_audit_events();
         assert!(!drained.is_empty());
@@ -3314,7 +3384,7 @@ mod tests {
         let mut runner = CutoverMigrationRunner::new();
         runner
             .declare(test_declaration("mig-1", CutoverType::HardCutover), "t")
-            .expect("serde deserialization should succeed");
+            .expect("test operation should succeed");
         run_full_migration(&mut runner, "mig-1");
 
         let applied = runner.applied_migrations();
@@ -3394,7 +3464,7 @@ mod tests {
             let mut runner = CutoverMigrationRunner::new();
             runner
                 .declare(test_declaration("mig-1", CutoverType::HardCutover), "t")
-                .expect("serde deserialization should succeed");
+                .expect("test operation should succeed");
             run_full_migration(&mut runner, "mig-1");
             serde_json::to_string(runner.audit_events())
         };
@@ -3559,7 +3629,7 @@ mod tests {
         let mut runner = CutoverMigrationRunner::new();
         runner
             .declare(test_declaration("m1", CutoverType::HardCutover), "t")
-            .expect("serde deserialization should succeed");
+            .expect("test operation should succeed");
         assert!(matches!(
             runner.begin("nonexistent", 50, "t"),
             Err(CutoverError::MigrationNotFound { .. })
@@ -3570,33 +3640,41 @@ mod tests {
     fn parallel_run_accepts_old_format_after_commit() {
         let mut runner = CutoverMigrationRunner::new();
         let decl = test_declaration("m-par", CutoverType::ParallelRun);
-        runner.declare(decl, "t").expect("serde deserialization should succeed");
+        runner
+            .declare(decl, "t")
+            .expect("test operation should succeed");
         let _entry = run_full_migration(&mut runner, "m-par");
         // ParallelRun always accepts both formats
         runner
             .check_format_acceptance(ObjectClass::SerializationSchema)
-            .expect("serde deserialization should succeed");
+            .expect("test operation should succeed");
     }
 
     #[test]
     fn check_format_acceptance_unaffected_class_always_ok() {
         let mut runner = CutoverMigrationRunner::new();
         let decl = test_declaration("m-hard", CutoverType::HardCutover);
-        runner.declare(decl, "t").expect("serde deserialization should succeed");
+        runner
+            .declare(decl, "t")
+            .expect("test operation should succeed");
         let _entry = run_full_migration(&mut runner, "m-hard");
         // KeyFormat is not in affected_objects, so should pass
         runner
             .check_format_acceptance(ObjectClass::KeyFormat)
-            .expect("serde deserialization should succeed");
+            .expect("test operation should succeed");
     }
 
     #[test]
     fn active_state_tracks_through_lifecycle() {
         let mut runner = CutoverMigrationRunner::new();
         let decl = test_declaration("m-track", CutoverType::HardCutover);
-        runner.declare(decl, "t").expect("serde deserialization should succeed");
+        runner
+            .declare(decl, "t")
+            .expect("test operation should succeed");
         assert!(runner.active_state().is_none());
-        runner.begin("m-track", 50, "t").expect("serde deserialization should succeed");
+        runner
+            .begin("m-track", 50, "t")
+            .expect("test operation should succeed");
         assert_eq!(runner.active_state(), Some(CutoverState::PreMigrated));
         assert_eq!(runner.active_migration_id(), Some("m-track"));
     }
@@ -3689,7 +3767,9 @@ mod tests {
     fn applied_entry_committed_at_present_after_commit() {
         let mut runner = CutoverMigrationRunner::new();
         let decl = test_declaration("m-ts", CutoverType::HardCutover);
-        runner.declare(decl, "t").expect("serde deserialization should succeed");
+        runner
+            .declare(decl, "t")
+            .expect("test operation should succeed");
         let entry = run_full_migration(&mut runner, "m-ts");
         assert_eq!(entry.state, CutoverState::Committed);
         assert!(entry.committed_at.is_some());
@@ -4115,11 +4195,17 @@ mod tests {
         let mut runner = CutoverMigrationRunner::new();
         runner
             .declare(test_declaration("m-rb", CutoverType::HardCutover), "t")
-            .expect("serde deserialization should succeed");
-        runner.begin("m-rb", 50, "t").expect("serde deserialization should succeed");
-        runner.create_checkpoint(1, "t").expect("serde deserialization should succeed");
-        runner.execute(50, "t").expect("serde deserialization should succeed");
-        runner.rollback("t").expect("serde deserialization should succeed");
+            .expect("test operation should succeed");
+        runner
+            .begin("m-rb", 50, "t")
+            .expect("test operation should succeed");
+        runner
+            .create_checkpoint(1, "t")
+            .expect("test operation should succeed");
+        runner
+            .execute(50, "t")
+            .expect("test operation should succeed");
+        runner.rollback("t").expect("test operation should succeed");
 
         let applied = runner.applied_migrations();
         assert_eq!(applied.len(), 1);
@@ -4139,7 +4225,7 @@ mod tests {
         let no_path_event = events
             .iter()
             .find(|e| e.event == "no_migration_path")
-            .expect("serde deserialization should succeed");
+            .expect("test operation should succeed");
         assert_eq!(
             no_path_event.error_code.as_deref(),
             Some("no_migration_path")
@@ -4167,7 +4253,7 @@ mod tests {
         let fail_event = events
             .iter()
             .find(|e| e.event == "migration_apply")
-            .expect("serde deserialization should succeed");
+            .expect("test operation should succeed");
         assert_eq!(
             fail_event.error_code.as_deref(),
             Some("migration_function_failed")
@@ -4208,7 +4294,7 @@ mod tests {
         let mut runner = CutoverMigrationRunner::new();
         runner
             .declare(test_declaration("m-soft", CutoverType::SoftMigration), "t")
-            .expect("serde deserialization should succeed");
+            .expect("test operation should succeed");
         // Commit happens at tick 40 in run_full_migration
         let _entry = run_full_migration(&mut runner, "m-soft");
 
@@ -4223,7 +4309,7 @@ mod tests {
         let mut runner = CutoverMigrationRunner::new();
         runner
             .declare(test_declaration("m-hard", CutoverType::HardCutover), "t")
-            .expect("serde deserialization should succeed");
+            .expect("test operation should succeed");
         let _entry = run_full_migration(&mut runner, "m-hard");
         assert!(runner.transition_windows().is_empty());
     }

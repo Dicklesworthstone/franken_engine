@@ -299,10 +299,15 @@ pub fn run_workload_preflight_doctor(
     let mut findings = build_signal_findings(&signals, config);
     findings.extend(build_contract_findings(&missing_fields, config));
     findings.extend(build_domain_coverage_findings(&signals, config));
-    sort_and_cap_findings(&mut findings, config.max_findings);
+    sort_and_dedup_findings(&mut findings);
     let domain_scores = build_domain_scores(&signals, &findings, config);
     let verdict = choose_verdict(&findings);
     let reproducible_commands = collect_reproducible_commands(&findings, config);
+    let report_findings = findings
+        .iter()
+        .take(config.max_findings)
+        .cloned()
+        .collect::<Vec<_>>();
     missing_fields.sort();
     missing_fields.dedup();
 
@@ -312,7 +317,7 @@ pub fn run_workload_preflight_doctor(
         target_platforms: &target_platforms,
         verdict,
         domain_scores: &domain_scores,
-        findings: &findings,
+        findings: &report_findings,
         missing_fields: &missing_fields,
         reproducible_commands: &reproducible_commands,
     });
@@ -326,7 +331,7 @@ pub fn run_workload_preflight_doctor(
         target_platforms,
         verdict,
         domain_scores,
-        findings,
+        findings: report_findings,
         missing_fields,
         reproducible_commands,
         artifact_id,
@@ -565,7 +570,7 @@ fn build_domain_coverage_findings(
         .collect()
 }
 
-fn sort_and_cap_findings(findings: &mut Vec<WorkloadPreflightFinding>, max_findings: usize) {
+fn sort_and_dedup_findings(findings: &mut Vec<WorkloadPreflightFinding>) {
     findings.sort_by(|left, right| {
         right
             .severity
@@ -579,7 +584,6 @@ fn sort_and_cap_findings(findings: &mut Vec<WorkloadPreflightFinding>, max_findi
             && left.domain == right.domain
             && left.severity == right.severity
     });
-    findings.truncate(max_findings);
 }
 
 fn build_domain_scores(
@@ -1178,6 +1182,33 @@ mod tests {
         };
         let report = run_workload_preflight_doctor(&input, &config);
         assert_eq!(report.findings.len(), 2);
+    }
+
+    #[test]
+    fn max_findings_zero_does_not_fail_open() {
+        let mut input = clean_input();
+        input.signals[0].severity = WorkloadPreflightSeverity::Critical;
+        input.signals[0].reproducible_command = "runtime_diagnostics check critical".to_string();
+        let config = WorkloadPreflightDoctorConfig {
+            max_findings: 0,
+            ..WorkloadPreflightDoctorConfig::default()
+        };
+        let report = run_workload_preflight_doctor(&input, &config);
+
+        assert_eq!(report.verdict, WorkloadPreflightVerdict::Blocked);
+        assert!(report.findings.is_empty());
+        assert!(
+            report
+                .reproducible_commands
+                .iter()
+                .any(|command| command == "runtime_diagnostics check critical")
+        );
+        let score = report
+            .domain_scores
+            .get(input.signals[0].domain.as_str())
+            .expect("domain score");
+        assert_eq!(score.blocking_findings, 1);
+        assert_eq!(score.verdict, WorkloadPreflightVerdict::Blocked);
     }
 
     #[test]

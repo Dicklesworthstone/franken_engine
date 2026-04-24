@@ -167,7 +167,7 @@ impl ConformanceStatistics {
 ///
 /// Parameterized by category type for type-safe category-specific reports.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Test262Report<Category: Serialize> {
+pub struct Test262Report<Category: Serialize + std::cmp::Ord + std::fmt::Debug + Clone> {
     pub schema_version: String,
     pub test_suite_name: String,
     pub security_epoch: SecurityEpoch,
@@ -177,7 +177,7 @@ pub struct Test262Report<Category: Serialize> {
     pub coverage_by_category: BTreeMap<Category, CategoryCoverage>,
 }
 
-impl<Category: Serialize + Ord + Clone> Test262Report<Category> {
+impl<Category: Serialize + Ord + Clone + std::fmt::Debug> Test262Report<Category> {
     /// Generate human-readable conformance summary
     pub fn generate_summary(&self) -> String {
         let mut summary = String::new();

@@ -388,6 +388,9 @@ impl ArrowFunctionHarness {
                 ExpectedResult::RuntimeError { error_type: _ } => ArrowFunctionResult::Fail {
                     reason: "Expected runtime error but execution succeeded".to_string(),
                 },
+                ExpectedResult::IteratorSequence { values: _ } => ArrowFunctionResult::Fail {
+                    reason: "Expected iterator sequence but got success".to_string(),
+                },
             },
             Err(error) => match &test.expected_result {
                 ExpectedResult::SyntaxError { error_type } => {

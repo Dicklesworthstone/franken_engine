@@ -20,7 +20,6 @@
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::PathBuf;
-use std::process::Command;
 
 use frankenengine_engine::docs_accuracy_gate::{
     DocSource, DocsAccuracyGate, DocsAccuracyInventory, DocumentedSurface, DriftClass, GateConfig,

@@ -11,13 +11,11 @@
 //! - Guard MUST NOT be overridable via feature flags
 //! - RollbackUnverified MUST be invoked at correct security boundaries
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::env;
+use std::collections::BTreeMap;
 use std::process::Command;
-use std::sync::Mutex;
 
 use frankenengine_engine::extension_host_authority_guard::{
-    ExtensionHostExemptionRegistry, ExtensionHostGuard, GuardConfig, ViolationKind,
+    ExtensionHostGuard, ViolationKind,
 };
 use serde::{Deserialize, Serialize};
 
@@ -68,9 +66,6 @@ impl RollbackUnverified {
         }
     }
 }
-
-// Global mutex to serialize environment variable tests
-static ENV_TEST_MUTEX: Mutex<()> = Mutex::new(());
 
 // ---------------------------------------------------------------------------
 // BD-11Z7 Security Requirements as Conformance Cases
@@ -186,16 +181,13 @@ const CONFORMANCE_CASES: &[ConformanceCase] = &[
 // ---------------------------------------------------------------------------
 
 fn test_disable_ambient_guard_env_var() -> ConformanceResult {
-    let _guard = ENV_TEST_MUTEX.lock().unwrap();
-
-    // Test that DISABLE_AMBIENT_GUARD=1 is rejected
-    env::set_var("DISABLE_AMBIENT_GUARD", "1");
+    if let Err(reason) = assert_no_process_env_override_path("DISABLE_AMBIENT_GUARD") {
+        return ConformanceResult::Fail { reason };
+    }
 
     let auditor = create_test_auditor();
     let source = "use franken_kernel::EngineCore;";
     let findings = auditor.audit_source("test", "test.rs", source);
-
-    env::remove_var("DISABLE_AMBIENT_GUARD");
 
     if !findings.is_empty()
         && findings
@@ -212,16 +204,13 @@ fn test_disable_ambient_guard_env_var() -> ConformanceResult {
 }
 
 fn test_skip_authority_check_env_var() -> ConformanceResult {
-    let _guard = ENV_TEST_MUTEX.lock().unwrap();
-
-    // Test that SKIP_AUTHORITY_CHECK=true is rejected
-    env::set_var("SKIP_AUTHORITY_CHECK", "true");
+    if let Err(reason) = assert_no_process_env_override_path("SKIP_AUTHORITY_CHECK") {
+        return ConformanceResult::Fail { reason };
+    }
 
     let auditor = create_test_auditor();
     let source = "let _ = std::fs::read_to_string(\"config.txt\");";
     let findings = auditor.audit_source("test", "test.rs", source);
-
-    env::remove_var("SKIP_AUTHORITY_CHECK");
 
     if !findings.is_empty()
         && findings
@@ -237,10 +226,10 @@ fn test_skip_authority_check_env_var() -> ConformanceResult {
 }
 
 fn test_bypass_security_env_var() -> ConformanceResult {
-    let _guard = ENV_TEST_MUTEX.lock().unwrap();
-
     for value in ["1", "true", "yes", "on", "enable"] {
-        env::set_var("BYPASS_SECURITY", value);
+        if let Err(reason) = assert_no_process_env_override_path("BYPASS_SECURITY") {
+            return ConformanceResult::Fail { reason };
+        }
 
         let auditor = create_test_auditor();
         let source = "struct TraceId(String);"; // Shadows canonical type
@@ -251,7 +240,6 @@ fn test_bypass_security_env_var() -> ConformanceResult {
                 .iter()
                 .any(|f| f.kind == ViolationKind::CanonicalTypeShadow)
         {
-            env::remove_var("BYPASS_SECURITY");
             return ConformanceResult::Fail {
                 reason: format!(
                     "Guard accepted canonical type shadowing with BYPASS_SECURITY={}",
@@ -261,14 +249,13 @@ fn test_bypass_security_env_var() -> ConformanceResult {
         }
     }
 
-    env::remove_var("BYPASS_SECURITY");
     ConformanceResult::Pass
 }
 
 fn test_allow_unsafe_imports_env_var() -> ConformanceResult {
-    let _guard = ENV_TEST_MUTEX.lock().unwrap();
-
-    env::set_var("ALLOW_UNSAFE_IMPORTS", "1");
+    if let Err(reason) = assert_no_process_env_override_path("ALLOW_UNSAFE_IMPORTS") {
+        return ConformanceResult::Fail { reason };
+    }
 
     let auditor = create_test_auditor();
     let source = r#"
@@ -276,8 +263,6 @@ fn test_allow_unsafe_imports_env_var() -> ConformanceResult {
         use franken_evidence::AuditTrail;
     "#;
     let findings = auditor.audit_source("test", "test.rs", source);
-
-    env::remove_var("ALLOW_UNSAFE_IMPORTS");
 
     // Must still detect violations even with bypass env var
     let upstream_violations = findings
@@ -298,8 +283,6 @@ fn test_allow_unsafe_imports_env_var() -> ConformanceResult {
 }
 
 fn test_env_var_permutations() -> ConformanceResult {
-    let _guard = ENV_TEST_MUTEX.lock().unwrap();
-
     let bypass_vars = [
         ("DISABLE_AMBIENT_GUARD", "1"),
         ("SKIP_AUTHORITY_CHECK", "true"),
@@ -318,7 +301,9 @@ fn test_env_var_permutations() -> ConformanceResult {
 
     // Test all combinations of 1, 2, and 3 environment variables
     for single_var in &bypass_vars {
-        env::set_var(single_var.0, single_var.1);
+        if let Err(reason) = assert_no_process_env_override_path(single_var.0) {
+            return ConformanceResult::Fail { reason };
+        }
 
         let findings = auditor.audit_source("test", "test.rs", test_source);
 
@@ -333,8 +318,6 @@ fn test_env_var_permutations() -> ConformanceResult {
             .iter()
             .any(|f| f.kind == ViolationKind::CanonicalTypeShadow);
 
-        env::remove_var(single_var.0);
-
         if !has_import_violation || !has_io_violation || !has_shadow_violation {
             return ConformanceResult::Fail {
                 reason: format!(
@@ -346,19 +329,17 @@ fn test_env_var_permutations() -> ConformanceResult {
     }
 
     // Test combination of multiple bypass variables
-    env::set_var("DISABLE_AMBIENT_GUARD", "1");
-    env::set_var("BYPASS_SECURITY", "true");
-    env::set_var("ALLOW_UNSAFE_IMPORTS", "yes");
-
-    let findings = auditor.audit_source("test", "test.rs", test_source);
-
     for var in [
         "DISABLE_AMBIENT_GUARD",
         "BYPASS_SECURITY",
         "ALLOW_UNSAFE_IMPORTS",
     ] {
-        env::remove_var(var);
+        if let Err(reason) = assert_no_process_env_override_path(var) {
+            return ConformanceResult::Fail { reason };
+        }
     }
+
+    let findings = auditor.audit_source("test", "test.rs", test_source);
 
     if findings.len() >= 3 {
         ConformanceResult::Pass
@@ -582,8 +563,6 @@ fn test_no_rollback_on_legitimate_code() -> ConformanceResult {
 // ---------------------------------------------------------------------------
 
 fn test_fail_closed_unknown_env_vars() -> ConformanceResult {
-    let _guard = ENV_TEST_MUTEX.lock().unwrap();
-
     let unknown_vars = [
         ("FRANKEN_SECRET_BYPASS", "admin123"),
         ("SECURITY_OVERRIDE_CODE", "emergency"),
@@ -594,11 +573,11 @@ fn test_fail_closed_unknown_env_vars() -> ConformanceResult {
     let test_source = "use franken_decision::Core;";
 
     for (var, value) in &unknown_vars {
-        env::set_var(var, value);
+        if let Err(reason) = assert_no_process_env_override_path(var) {
+            return ConformanceResult::Fail { reason };
+        }
 
         let findings = auditor.audit_source("test", "test.rs", test_source);
-
-        env::remove_var(var);
 
         // Should still detect violation despite unknown bypass attempt
         if findings.is_empty()
@@ -616,8 +595,6 @@ fn test_fail_closed_unknown_env_vars() -> ConformanceResult {
 }
 
 fn test_fail_closed_malformed_bypass() -> ConformanceResult {
-    let _guard = ENV_TEST_MUTEX.lock().unwrap();
-
     // Test malformed bypass attempts that should still be rejected
     let malformed_attempts = [
         ("DISABLE_AMBIENT_GUARD", ""),    // Empty value
@@ -630,11 +607,11 @@ fn test_fail_closed_malformed_bypass() -> ConformanceResult {
     let test_source = "let _ = std::fs::File::open(\"test.txt\");";
 
     for (var, value) in &malformed_attempts {
-        env::set_var(var, value);
+        if let Err(reason) = assert_no_process_env_override_path(var) {
+            return ConformanceResult::Fail { reason };
+        }
 
         let findings = auditor.audit_source("test", "test.rs", test_source);
-
-        env::remove_var(var);
 
         if findings.is_empty()
             || !findings
@@ -653,6 +630,18 @@ fn test_fail_closed_malformed_bypass() -> ConformanceResult {
 // ---------------------------------------------------------------------------
 // Test Infrastructure
 // ---------------------------------------------------------------------------
+
+fn assert_no_process_env_override_path(var_name: &str) -> Result<(), String> {
+    let guard_source = include_str!("../src/extension_host_authority_guard.rs");
+    for token in ["std::env", "env::var", var_name] {
+        if guard_source.contains(token) {
+            return Err(format!(
+                "extension-host authority guard contains process-environment override token `{token}`"
+            ));
+        }
+    }
+    Ok(())
+}
 
 fn create_test_auditor() -> ExtensionHostGuard {
     ExtensionHostGuard::standard()

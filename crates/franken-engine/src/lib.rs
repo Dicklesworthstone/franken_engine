@@ -2,6 +2,8 @@
 
 extern crate self as frankenengine_engine;
 
+use std::fmt;
+
 pub mod aara_resource_certificate;
 pub mod aara_resource_consumer;
 pub mod acquisition_experiment_oracle;
@@ -487,7 +489,7 @@ pub mod workload_transfer_prior;
 pub mod zero_placeholder_gate;
 pub mod zero_placeholder_scan;
 
-use std::{cmp::Ordering, error::Error, fmt};
+use std::{cmp::Ordering, error::Error};
 
 use crate::ast::{ParseGoal, SourceSpan};
 use crate::baseline_interpreter::{
@@ -834,23 +836,94 @@ boundaries.";
 /// Malicious extensions could generate huge error messages - bound them to 4KB.
 const MAX_ERROR_MSG_LEN: usize = 4096;
 
+const ERROR_TRUNCATION_SUFFIX: &str = "... (truncated for security)";
+
 /// Maximum total aggregated error bytes per batch to prevent accumulation attacks.
 /// Reserved for future batch processing where multiple errors are aggregated.
 #[allow(dead_code)]
 const MAX_AGGREGATED_ERROR_BYTES: usize = 65536; // 64KB
 
-/// Safely convert an error to a bounded string to prevent memory exhaustion DoS.
-/// Truncates at MAX_ERROR_MSG_LEN and appends indicator if truncated.
-pub fn bound_error_message<E: std::fmt::Display>(error: E) -> String {
-    let error_str = error.to_string();
-    if error_str.len() <= MAX_ERROR_MSG_LEN {
-        error_str
-    } else {
-        let mut truncated = error_str;
-        truncated.truncate(MAX_ERROR_MSG_LEN.saturating_sub(20)); // Reserve space for suffix
-        truncated.push_str("... (truncated for security)");
-        truncated
+struct BoundedErrorMessage {
+    rendered: String,
+    truncated: bool,
+}
+
+impl BoundedErrorMessage {
+    fn new() -> Self {
+        Self {
+            rendered: String::new(),
+            truncated: false,
+        }
     }
+
+    fn finish(mut self) -> String {
+        if self.truncated {
+            truncate_to_utf8_boundary(
+                &mut self.rendered,
+                MAX_ERROR_MSG_LEN.saturating_sub(ERROR_TRUNCATION_SUFFIX.len()),
+            );
+            self.rendered.push_str(ERROR_TRUNCATION_SUFFIX);
+        }
+        self.rendered
+    }
+}
+
+impl fmt::Write for BoundedErrorMessage {
+    fn write_str(&mut self, text: &str) -> fmt::Result {
+        if text.is_empty() {
+            return Ok(());
+        }
+
+        if self.rendered.len() >= MAX_ERROR_MSG_LEN {
+            self.truncated = true;
+            return Err(fmt::Error);
+        }
+
+        let remaining = MAX_ERROR_MSG_LEN - self.rendered.len();
+        if text.len() <= remaining {
+            self.rendered.push_str(text);
+            return Ok(());
+        }
+
+        let split_at = utf8_prefix_len(text, remaining);
+        self.rendered.push_str(&text[..split_at]);
+        self.truncated = true;
+        Err(fmt::Error)
+    }
+}
+
+fn utf8_prefix_len(text: &str, max_len: usize) -> usize {
+    if text.len() <= max_len {
+        return text.len();
+    }
+
+    let mut split_at = 0;
+    for (idx, ch) in text.char_indices() {
+        let next = idx + ch.len_utf8();
+        if next > max_len {
+            break;
+        }
+        split_at = next;
+    }
+    split_at
+}
+
+fn truncate_to_utf8_boundary(text: &mut String, max_len: usize) {
+    if text.len() <= max_len {
+        return;
+    }
+
+    let split_at = utf8_prefix_len(text, max_len);
+    text.truncate(split_at);
+}
+
+/// Safely render an error to a bounded string to prevent memory exhaustion DoS.
+/// Formatting writes into a capped sink instead of allocating the full message
+/// and then truncating it.
+pub fn bound_error_message<E: std::fmt::Display>(error: E) -> String {
+    let mut writer = BoundedErrorMessage::new();
+    let _ = fmt::write(&mut writer, format_args!("{error}"));
+    writer.finish()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -2451,6 +2524,13 @@ mod tests {
         let bounded_small = bound_error_message(&small);
         assert_eq!(bounded_small, "Small error: test");
         assert!(bounded_small.len() < MAX_ERROR_MSG_LEN);
+
+        // A message at the exact hard limit should remain unchanged. The
+        // truncation suffix is reserved only after an actual overflow.
+        let exact = "x".repeat(MAX_ERROR_MSG_LEN);
+        let bounded_exact = bound_error_message(exact.as_str());
+        assert_eq!(bounded_exact.len(), MAX_ERROR_MSG_LEN);
+        assert_eq!(bounded_exact, exact);
 
         // Test huge error (should be truncated)
         #[derive(Debug)]

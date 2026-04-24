@@ -1779,4 +1779,152 @@ mod tests {
         assert_eq!(outcome_a.events_dispatched.len(), 5);
         assert_eq!(outcome_b.events_dispatched.len(), 5);
     }
+
+    #[test]
+    fn metamorphic_task_ordering_equivalence_under_independent_swap() {
+        // Metamorphic test: swapping two independent tasks should produce
+        // equivalent scheduling outcomes modulo explicit priority constraints.
+        //
+        // This test implements the metamorphic property specified in bd-3i0z8:
+        // schedule(X) ~ schedule(T(X)) where T(X) is X with independent tasks swapped.
+
+        let policy = SimPolicy {
+            default_priority: SimPriority::Normal,
+            priority_overrides: BTreeMap::new(),
+            drain_microtasks_first: true,
+            deterministic_tie_break: true,
+        };
+
+        let mut scheduler_original =
+            SimScheduler::new(policy.clone(), SecurityEpoch::from_raw(100));
+        let mut scheduler_swapped = SimScheduler::new(policy, SecurityEpoch::from_raw(100));
+
+        // Create task set X: 4 tasks with different priorities to establish independence
+        // - task_1: High priority (always dispatched first)
+        // - task_2: Normal priority (independent from task_3)
+        // - task_3: Normal priority (independent from task_2)
+        // - task_4: Low priority (always dispatched last)
+        let tasks = vec![
+            ("task_high", SimPriority::High, 1000),
+            ("task_normal_a", SimPriority::Normal, 2000),
+            ("task_normal_b", SimPriority::Normal, 3000),
+            ("task_low", SimPriority::Low, 4000),
+        ];
+
+        // Schedule tasks in original order: high, normal_a, normal_b, low
+        let mut original_ids = Vec::new();
+        for (label, priority, payload) in &tasks {
+            let id = scheduler_original.schedule(
+                SimEventKind::ModuleResolve,
+                *priority,
+                0,
+                label,
+                *payload,
+            );
+            original_ids.push(id);
+        }
+
+        // Schedule tasks in swapped order: high, normal_b, normal_a, low
+        // This swaps the two independent normal-priority tasks
+        let swapped_tasks = vec![
+            ("task_high", SimPriority::High, 1000),
+            ("task_normal_b", SimPriority::Normal, 3000), // Swapped
+            ("task_normal_a", SimPriority::Normal, 2000), // Swapped
+            ("task_low", SimPriority::Low, 4000),
+        ];
+
+        let mut swapped_ids = Vec::new();
+        for (label, priority, payload) in &swapped_tasks {
+            let id = scheduler_swapped.schedule(
+                SimEventKind::ModuleResolve,
+                *priority,
+                0,
+                label,
+                *payload,
+            );
+            swapped_ids.push(id);
+        }
+
+        // Dispatch both schedulers
+        let outcome_original = scheduler_original
+            .advance_tick()
+            .expect("original scheduler should dispatch tasks");
+        let outcome_swapped = scheduler_swapped
+            .advance_tick()
+            .expect("swapped scheduler should dispatch tasks");
+
+        // Metamorphic property verification:
+        // Priority-based dispatch order should be: High -> Normal tasks -> Low
+        // The two normal tasks are independent, so their relative order within
+        // the normal priority band doesn't affect correctness.
+
+        // Both outcomes should have 4 tasks dispatched
+        assert_eq!(outcome_original.events_dispatched.len(), 4);
+        assert_eq!(outcome_swapped.events_dispatched.len(), 4);
+
+        // Extract the dispatched events for analysis
+        let original_events: Vec<_> = outcome_original
+            .events_dispatched
+            .iter()
+            .map(|&id| {
+                scheduler_original
+                    .pending_events
+                    .get(&id)
+                    .expect("dispatched event should exist in pending")
+            })
+            .collect();
+        let swapped_events: Vec<_> = outcome_swapped
+            .events_dispatched
+            .iter()
+            .map(|&id| {
+                scheduler_swapped
+                    .pending_events
+                    .get(&id)
+                    .expect("dispatched event should exist in pending")
+            })
+            .collect();
+
+        // Priority equivalence: both should dispatch in priority order
+        assert_eq!(original_events[0].priority, SimPriority::High);
+        assert_eq!(original_events[3].priority, SimPriority::Low);
+        assert_eq!(swapped_events[0].priority, SimPriority::High);
+        assert_eq!(swapped_events[3].priority, SimPriority::Low);
+
+        // The two middle events should both be Normal priority (order may vary)
+        assert_eq!(original_events[1].priority, SimPriority::Normal);
+        assert_eq!(original_events[2].priority, SimPriority::Normal);
+        assert_eq!(swapped_events[1].priority, SimPriority::Normal);
+        assert_eq!(swapped_events[2].priority, SimPriority::Normal);
+
+        // Metamorphic equivalence: the set of payloads should be identical
+        // (regardless of order within same priority level)
+        let mut original_payloads: Vec<_> =
+            original_events.iter().map(|e| e.payload_bytes).collect();
+        let mut swapped_payloads: Vec<_> = swapped_events.iter().map(|e| e.payload_bytes).collect();
+
+        original_payloads.sort_unstable();
+        swapped_payloads.sort_unstable();
+        assert_eq!(original_payloads, swapped_payloads);
+
+        // Priority band invariant: High priority task always first, Low always last
+        assert_eq!(original_events[0].payload_bytes, 1000); // task_high
+        assert_eq!(original_events[3].payload_bytes, 4000); // task_low
+        assert_eq!(swapped_events[0].payload_bytes, 1000); // task_high
+        assert_eq!(swapped_events[3].payload_bytes, 4000); // task_low
+
+        // The normal-priority tasks (2000, 3000) can appear in either order
+        // within their priority band, confirming independence property
+        let normal_payloads_original: BTreeSet<_> = original_events[1..3]
+            .iter()
+            .map(|e| e.payload_bytes)
+            .collect();
+        let normal_payloads_swapped: BTreeSet<_> = swapped_events[1..3]
+            .iter()
+            .map(|e| e.payload_bytes)
+            .collect();
+        let expected_normal_payloads = [2000, 3000].iter().copied().collect();
+
+        assert_eq!(normal_payloads_original, expected_normal_payloads);
+        assert_eq!(normal_payloads_swapped, expected_normal_payloads);
+    }
 }

@@ -190,7 +190,9 @@ pub fn is_sensitive(input: &str) -> bool {
         "cookie",
         "credential",
         "jwt",
+        "private-key",
         "private_key",
+        "privatekey",
         "secret",
         "session",
         "token",
@@ -502,6 +504,34 @@ mod tests {
     }
 
     #[test]
+    fn hyphenated_private_key_config_key_is_redacted() {
+        let mut input = sample_input();
+        input
+            .config
+            .insert("x-private-key".to_string(), "ssh-ed25519 AAAA".to_string());
+        let bundle = export_support_bundle(&input).expect("bundle");
+        let json = bundle.to_json_string().expect("json");
+        assert!(!json.contains("x-private-key"));
+        assert!(!json.contains("x_private_key"));
+        assert!(!json.contains("ssh-ed25519 AAAA"));
+        assert!(json.contains("config_hash.redacted_key."));
+    }
+
+    #[test]
+    fn compact_privatekey_diagnostic_key_is_redacted() {
+        let mut input = sample_input();
+        input
+            .diagnostics
+            .insert("privatekey".to_string(), "opaque-key-material".to_string());
+        let bundle = export_support_bundle(&input).expect("bundle");
+        let json = bundle.to_json_string().expect("json");
+        assert!(!json.contains("privatekey"));
+        assert!(!json.contains("opaque-key-material"));
+        assert!(json.contains("diagnostic.redacted_key."));
+        assert!(json.contains(REDACTION_MARKER));
+    }
+
+    #[test]
     fn cookie_diagnostic_key_is_redacted() {
         let mut input = sample_input();
         input
@@ -661,7 +691,9 @@ mod tests {
         assert!(is_sensitive("aws.access_key_id"));
         assert!(is_sensitive("http.cookie"));
         assert!(is_sensitive("jwt"));
+        assert!(is_sensitive("x-private-key"));
         assert!(is_sensitive("PRIVATE_KEY"));
+        assert!(is_sensitive("privatekey"));
         assert!(is_sensitive("password"));
         assert!(!is_sensitive("panic_count"));
     }

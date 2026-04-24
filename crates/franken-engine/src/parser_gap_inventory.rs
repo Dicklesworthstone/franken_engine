@@ -1679,7 +1679,7 @@ mod tests {
                 "assignment_expression",
             ];
             assert!(
-                valid_families.contains(&feature_family.as_str()),
+                valid_families.contains(&feature_family),
                 "{:?} has unexpected feature family: {}",
                 site_id,
                 feature_family

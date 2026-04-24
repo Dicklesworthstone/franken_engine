@@ -386,6 +386,13 @@ fn has_deterministic_split_points(input: &[u8]) -> bool {
     !collect_internal_partition_boundaries(input).is_empty()
 }
 
+fn bounded_worker_count(input_len: u64, boundary_count: usize, max_workers: u32) -> u32 {
+    let len_limit = u32::try_from(input_len).unwrap_or(u32::MAX);
+    let boundary_limit = u32::try_from(boundary_count.saturating_add(1)).unwrap_or(u32::MAX);
+
+    max_workers.min(len_limit).min(boundary_limit).max(1)
+}
+
 /// Compute deterministic chunk boundaries using depth-aware split points.
 pub fn compute_chunk_plan(input: &[u8], max_workers: u32) -> ChunkPlan {
     let len = input.len() as u64;
@@ -409,7 +416,7 @@ pub fn compute_chunk_plan(input: &[u8], max_workers: u32) -> ChunkPlan {
             worker_count: 1,
         };
     }
-    let worker_count = max_workers.min(len as u32).min(boundaries.len() as u32 + 1);
+    let worker_count = bounded_worker_count(len, boundaries.len(), max_workers);
 
     let mut chunks = Vec::new();
     let mut start = 0u64;
@@ -2138,10 +2145,7 @@ pub fn compute_routing_digest(source: &str, config: &ParallelConfig) -> RoutingD
         input_bytes >= config.min_parallel_bytes && config.max_workers > 1 && has_partition_points;
 
     let effective_workers = if should_parallel {
-        config
-            .max_workers
-            .min(input_bytes as u32)
-            .min(internal_boundaries.len() as u32 + 1)
+        bounded_worker_count(input_bytes, internal_boundaries.len(), config.max_workers)
     } else {
         1
     };
@@ -2397,6 +2401,21 @@ mod tests {
         let plan = compute_chunk_plan(b"", 4);
         assert!(plan.chunks.is_empty());
         assert_eq!(plan.worker_count, 1);
+    }
+
+    #[test]
+    fn bounded_worker_count_saturates_large_lengths() {
+        let huge_len = u64::from(u32::MAX) + 1;
+
+        assert_eq!(bounded_worker_count(huge_len, 16, 4), 4);
+        assert_eq!(bounded_worker_count(huge_len, 1, 4), 2);
+    }
+
+    #[test]
+    fn bounded_worker_count_saturates_large_boundary_counts() {
+        let huge_len = u64::from(u32::MAX) + 1;
+
+        assert_eq!(bounded_worker_count(huge_len, usize::MAX, 8), 8);
     }
 
     #[test]
@@ -4689,8 +4708,7 @@ mod tests {
             let mut config = base_config.clone();
             config.max_workers = worker_count;
             let input = make_input(&source, &config);
-            let output = parse(&input)
-                .unwrap_or_else(|_| panic!("Parse with {} workers should succeed", worker_count));
+            let output = parse(&input).expect("parse with configured workers should succeed");
             outputs.push(output);
         }
 
@@ -4735,8 +4753,7 @@ mod tests {
 
         // Multiple runs to ensure boundary consistency
         for run in 1..=5 {
-            let output =
-                parse(&input).unwrap_or_else(|_| panic!("Parse run {} should succeed", run));
+            let output = parse(&input).expect("parse run should succeed");
 
             // Verify tokens are in order and non-overlapping
             for (i, window) in output.tokens.windows(2).enumerate() {
@@ -4752,9 +4769,9 @@ mod tests {
             }
 
             // Verify complete coverage of input
-            if !output.tokens.is_empty() {
-                let first_token = &output.tokens[0];
-                let last_token = &output.tokens[output.tokens.len() - 1];
+            if let (Some(first_token), Some(last_token)) =
+                (output.tokens.first(), output.tokens.last())
+            {
                 assert_eq!(
                     first_token.start, 0,
                     "Run {}: First token should start at position 0",
@@ -4798,10 +4815,9 @@ mod tests {
 
         let mut token_sequences = Vec::new();
 
-        for (i, config) in configs.iter().enumerate() {
+        for config in &configs {
             let input = make_input(&source, config);
-            let output =
-                parse(&input).unwrap_or_else(|_| panic!("Parse with config {} should succeed", i));
+            let output = parse(&input).expect("parse with deterministic config should succeed");
             token_sequences.push(output.tokens);
         }
 

@@ -2768,10 +2768,20 @@ mod tests {
     }
 
     #[test]
-    fn malformed_migration_json_returns_error() {
-        assert!(serde_json::from_str::<MigrationDeclaration>("{not-json").is_err());
-        assert!(serde_json::from_str::<GoldenLedger>("{\"entries\":").is_err());
-        assert!(serde_json::from_str::<CutoverAuditEvent>("[]").is_err());
+    fn malformed_migration_json_returns_descriptive_errors() {
+        let declaration_err =
+            serde_json::from_str::<MigrationDeclaration>("{not-json").expect_err("invalid JSON");
+        assert!(declaration_err.to_string().contains("key must be a string"));
+
+        let ledger_err =
+            serde_json::from_str::<GoldenLedger>("{\"entries\":").expect_err("truncated JSON");
+        assert!(ledger_err.to_string().contains("EOF while parsing a value"));
+
+        let audit_err =
+            serde_json::from_str::<CutoverAuditEvent>("[]").expect_err("wrong JSON shape");
+        let audit_msg = audit_err.to_string();
+        assert!(audit_msg.contains("invalid type: sequence"));
+        assert!(audit_msg.contains("CutoverAuditEvent"));
     }
 
     // -- CutoverError display and codes ------------------------------------

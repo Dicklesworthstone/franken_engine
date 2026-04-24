@@ -4439,9 +4439,9 @@ mod tests {
     // Metamorphic Property Tests - Deterministic Partitioning
     // ---------------------------------------------------------------------------
 
-    /// Test that partitioning the SAME input across parallel parser workers
-    /// multiple times yields IDENTICAL partition boundaries.
-    /// This is critical for reproducible replays and deterministic execution.
+    // Test that partitioning the SAME input across parallel parser workers
+    // multiple times yields IDENTICAL partition boundaries.
+    // This is critical for reproducible replays and deterministic execution.
 
     /// Create a medium-size JavaScript source file for testing partitioning
     fn create_medium_js_source() -> String {
@@ -4634,10 +4634,8 @@ mod tests {
             let mut config = base_config.clone();
             config.max_workers = worker_count;
             let input = make_input(&source, &config);
-            let output = parse(&input).expect(&format!(
-                "Parse with {} workers should succeed",
-                worker_count
-            ));
+            let output = parse(&input)
+                .unwrap_or_else(|_| panic!("Parse with {} workers should succeed", worker_count));
             outputs.push(output);
         }
 
@@ -4682,7 +4680,8 @@ mod tests {
 
         // Multiple runs to ensure boundary consistency
         for run in 1..=5 {
-            let output = parse(&input).expect(&format!("Parse run {} should succeed", run));
+            let output =
+                parse(&input).unwrap_or_else(|_| panic!("Parse run {} should succeed", run));
 
             // Verify tokens are in order and non-overlapping
             for (i, window) in output.tokens.windows(2).enumerate() {
@@ -4746,7 +4745,8 @@ mod tests {
 
         for (i, config) in configs.iter().enumerate() {
             let input = make_input(&source, config);
-            let output = parse(&input).expect(&format!("Parse with config {} should succeed", i));
+            let output =
+                parse(&input).unwrap_or_else(|_| panic!("Parse with config {} should succeed", i));
             token_sequences.push(output.tokens);
         }
 

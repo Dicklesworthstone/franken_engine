@@ -2236,7 +2236,6 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile;
 
     // ── DeterministicRng ───────────────────────────────────────────────
 

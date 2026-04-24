@@ -12851,23 +12851,26 @@ mod tests {
         let tree = SyntaxTree {
             goal: ParseGoal::Script,
             body: vec![Statement::For(ForStatement {
-                init: Some(Box::new(Statement::VariableDeclaration(VariableDeclaration {
-                    kind: VariableDeclarationKind::Let,
-                    declarations: vec![VariableDeclarator {
-                        pattern: BindingPattern::Identifier("i".to_string()),
-                        initializer: Some(Expression::NumericLiteral(0)),
+                init: Some(Box::new(Statement::VariableDeclaration(
+                    VariableDeclaration {
+                        kind: VariableDeclarationKind::Let,
+                        declarations: vec![VariableDeclarator {
+                            pattern: BindingPattern::Identifier("i".to_string()),
+                            initializer: Some(Expression::NumericLiteral(0)),
+                            span: span(),
+                        }],
                         span: span(),
-                    }],
-                    span: span(),
-                }))),
+                    },
+                ))),
                 condition: Some(Expression::Binary {
                     left: Box::new(Expression::Identifier("i".to_string())),
                     operator: BinaryOperator::LessThan,
                     right: Box::new(Expression::NumericLiteral(5)),
                 }),
-                update: Some(Expression::Unary {
-                    operator: UnaryOperator::Increment,
-                    argument: Box::new(Expression::Identifier("i".to_string())),
+                update: Some(Expression::Assignment {
+                    operator: AssignmentOperator::AddAssign,
+                    left: Box::new(Expression::Identifier("i".to_string())),
+                    right: Box::new(Expression::NumericLiteral(1)),
                 }),
                 body: Box::new(Statement::Expression(ExpressionStatement {
                     expression: Expression::Call {

@@ -1290,9 +1290,7 @@ fn parse_help_command(args: &[String]) -> Result<CommandSpec, String> {
         "reports" => parse_leaf_help_topic("reports", HelpTopic::Reports, &args[1..]),
         "test" => parse_leaf_help_topic("test", HelpTopic::Test, &args[1..]),
         "synth" => parse_leaf_help_topic("synth", HelpTopic::Synth, &args[1..]),
-        "orchestrate" => {
-            parse_leaf_help_topic("orchestrate", HelpTopic::Orchestrate, &args[1..])
-        }
+        "orchestrate" => parse_leaf_help_topic("orchestrate", HelpTopic::Orchestrate, &args[1..]),
         "runtime" => parse_leaf_help_topic("runtime", HelpTopic::Runtime, &args[1..]),
         other => Err(format!(
             "unknown help topic `{other}` (expected compile|run|doctor|verify|benchmark|replay|react|gates|reports|test|synth|orchestrate|runtime)"

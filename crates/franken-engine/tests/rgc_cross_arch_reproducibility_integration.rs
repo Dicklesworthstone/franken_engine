@@ -409,8 +409,6 @@ fn verify_cross_arch_reproducibility_zero_iterations_fails() {
 #[test]
 fn verify_cross_arch_reproducibility_exercises_target_architectures() {
     // Test with custom config to verify target architectures are exercised
-    use frankenengine_engine::rgc_cross_arch_reproducibility::*;
-
     let config = CrossArchConfig {
         target_architectures: vec![ArchitectureId::X86_64, ArchitectureId::Aarch64],
         replay_iterations: 2,
@@ -444,7 +442,7 @@ fn verify_cross_arch_reproducibility_zero_iterations_fails_closed() {
 }
 
 #[test]
-fn verify_cross_arch_reproducibility_exercises_target_architectures() {
+fn verify_cross_arch_reproducibility_default_path_exercises_target_architectures() {
     // Test that target architectures from config are actually consulted
     // Current implementation should attempt cross-arch validation for configured targets
     let result = verify_cross_arch_reproducibility("cross-arch-test", 2);
@@ -458,10 +456,7 @@ fn verify_cross_arch_reproducibility_exercises_target_architectures() {
 }
 
 #[test]
-fn verify_cross_arch_reproducibility_honors_config_iterations() {
-    // Test that the function uses config.replay_iterations, not the parameter
-    // Default config has replay_iterations: 3, so the parameter should be ignored
-
+fn verify_cross_arch_reproducibility_honors_iteration_parameter() {
     let result_param_1 = verify_cross_arch_reproducibility("config-test-1", 1);
     let result_param_5 = verify_cross_arch_reproducibility("config-test-5", 5);
 
@@ -472,7 +467,10 @@ fn verify_cross_arch_reproducibility_honors_config_iterations() {
     let comparison_1 = result_param_1.unwrap();
     let comparison_5 = result_param_5.unwrap();
 
-    // Both use config default (3 iterations), not the parameters (1 vs 5)
+    assert_ne!(
+        comparison_1.matching_events, comparison_5.matching_events,
+        "1 vs 5 iterations should exercise different replay counts"
+    );
     assert_eq!(comparison_1.assessment, comparison_5.assessment);
     assert!(comparison_1.traces_identical);
     assert!(comparison_5.traces_identical);

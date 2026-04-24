@@ -476,7 +476,7 @@ fn push_emitted_token(
 
 #[inline]
 fn finalize_tokens(storage: Option<TokenSpanStorage>) -> Vec<Token> {
-    storage.map(TokenSpanStorage::into_tokens).unwrap()
+    storage.map(TokenSpanStorage::into_tokens).unwrap_or_default()
 }
 
 const SWAR_HIGH_BITS: u64 = 0x8080_8080_8080_8080_u64;

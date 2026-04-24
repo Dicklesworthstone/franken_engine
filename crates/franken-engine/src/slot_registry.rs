@@ -1006,7 +1006,7 @@ impl SlotRegistry {
         let mut recommended_replacement_order = Vec::new();
 
         for (slot_id, entry) in &self.slots {
-            let signal = signals.get(slot_id).cloned().unwrap();
+            let signal = signals.get(slot_id).cloned().unwrap_or_default();
             signal.validate(slot_id)?;
 
             let weight = u128::from(signal.invocation_weight_millionths);

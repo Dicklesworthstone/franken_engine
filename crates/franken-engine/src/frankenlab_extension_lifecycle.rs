@@ -548,21 +548,11 @@ fn scenario_multi_extension<C: ContextAdapter>(seed: u64, cx: &mut C) -> Scenari
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::control_plane::mocks::trace_id_from_seed;
-    use crate::control_plane::{ControlPlaneCx, BudgetController, BudgetConfig};
-    use crate::security_epoch::SecurityEpoch;
+    use crate::control_plane::mocks::{MockBudget, MockCx, trace_id_from_seed};
 
-    fn real_cx(budget_ms: u64) -> ControlPlaneCx {
-        let budget_config = BudgetConfig {
-            compute_budget_us: budget_ms * 1000, // Convert ms to microseconds
-            memory_budget_bytes: 10_000_000, // 10MB
-            warning_threshold_millionths: 800_000, // 80%
-            deterministic_fallback_on_exhaust: true,
-        };
-        let budget_controller = BudgetController::new(budget_config, SecurityEpoch::from_raw(42));
+    fn real_cx(budget_ms: u64) -> MockCx {
         let trace_id = trace_id_from_seed(42);
-
-        ControlPlaneCx::new(trace_id, budget_controller)
+        MockCx::new(trace_id, MockBudget::new(budget_ms))
     }
 
     // -----------------------------------------------------------------------

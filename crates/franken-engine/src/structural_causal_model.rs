@@ -392,12 +392,12 @@ impl StructuralCausalModel {
 
     /// Get children (direct effects) of a node.
     pub fn children_of(&self, id: &str) -> BTreeSet<NodeId> {
-        self.children.get(id).cloned().unwrap()
+        self.children.get(id).cloned().unwrap_or_default()
     }
 
     /// Get parents (direct causes) of a node.
     pub fn parents_of(&self, id: &str) -> BTreeSet<NodeId> {
-        self.parents.get(id).cloned().unwrap()
+        self.parents.get(id).cloned().unwrap_or_default()
     }
 
     /// Get all ancestors of a node (transitive parents).

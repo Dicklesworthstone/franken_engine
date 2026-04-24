@@ -679,6 +679,11 @@ mod tests {
         .unwrap()
     }
 
+    fn test_verification_key_from_seed(seed_byte: u8) -> VerificationKey {
+        let seed = [seed_byte; SIGNING_KEY_LEN];
+        generate_keypair_from_seed(&seed).1
+    }
+
     fn test_object() -> TestObject {
         TestObject {
             domain: ObjectDomain::PolicyObject,
@@ -858,7 +863,7 @@ mod tests {
     fn verify_fails_with_wrong_key() {
         let mut ctx = SignatureContext::new();
         let sk = test_signing_key();
-        let wrong_vk = VerificationKey::from_bytes([0xFFu8; VERIFICATION_KEY_LEN]).unwrap();
+        let wrong_vk = test_verification_key_from_seed(0xFF);
         let obj = test_object();
 
         let sig = ctx.sign(&obj, &sk, "t-wrong-key").unwrap();
@@ -1160,7 +1165,7 @@ mod tests {
     fn context_tracks_failure_events() {
         let mut ctx = SignatureContext::new();
         let sk = test_signing_key();
-        let wrong_vk = VerificationKey::from_bytes([0xAA; VERIFICATION_KEY_LEN]).unwrap();
+        let wrong_vk = test_verification_key_from_seed(0xAA);
         let obj = test_object();
 
         let sig = ctx.sign(&obj, &sk, "t-fail").unwrap();
@@ -1194,7 +1199,7 @@ mod tests {
 
     #[test]
     fn signature_error_display() {
-        let vk = VerificationKey::from_bytes([1u8; VERIFICATION_KEY_LEN]).unwrap();
+        let vk = test_verification_key_from_seed(1);
         let err = SignatureError::VerificationFailed {
             signer: vk,
             reason: "bad sig".to_string(),
@@ -1209,7 +1214,7 @@ mod tests {
 
     #[test]
     fn event_type_display() {
-        let vk = VerificationKey::from_bytes([1u8; VERIFICATION_KEY_LEN]).unwrap();
+        let vk = test_verification_key_from_seed(1);
         let evt = SignatureEventType::Signed { signer: vk };
         assert!(evt.to_string().contains("signed by"));
     }
@@ -1323,8 +1328,7 @@ mod tests {
 
     #[test]
     fn signature_event_type_display_all_unique() {
-        let vk1 = VerificationKey::from_bytes([1u8; VERIFICATION_KEY_LEN]).unwrap();
-        let _vk2 = VerificationKey::from_bytes([2u8; VERIFICATION_KEY_LEN]).unwrap();
+        let vk1 = test_verification_key_from_seed(1);
         let types = [
             SignatureEventType::Signed {
                 signer: vk1.clone(),
@@ -1358,9 +1362,10 @@ mod tests {
 
     #[test]
     fn verification_key_bytes_roundtrip() {
-        let bytes = [99u8; VERIFICATION_KEY_LEN];
-        let vk = VerificationKey::from_bytes(bytes).unwrap();
-        assert_eq!(vk.as_bytes(), &bytes);
+        let vk = test_verification_key_from_seed(99);
+        let bytes = *vk.as_bytes();
+        let restored = VerificationKey::from_bytes(bytes).unwrap();
+        assert_eq!(restored.as_bytes(), &bytes);
     }
 
     #[test]
@@ -1450,7 +1455,7 @@ mod tests {
     #[test]
     fn enrichment_signature_error_clone_equality() {
         let err = SignatureError::VerificationFailed {
-            signer: VerificationKey::from_bytes([0xAB; VERIFICATION_KEY_LEN]).unwrap(),
+            signer: test_verification_key_from_seed(0xAB),
             reason: "tampered".to_string(),
         };
         let err2 = err.clone();
@@ -1505,7 +1510,7 @@ mod tests {
     fn enrichment_signature_event_json_has_all_fields() {
         let event = SignatureEvent {
             event_type: SignatureEventType::Verified {
-                signer: VerificationKey::from_bytes([0x11; VERIFICATION_KEY_LEN]).unwrap(),
+                signer: test_verification_key_from_seed(0x11),
             },
             domain: ObjectDomain::SignedManifest,
             trace_id: "t-json-fields".to_string(),
@@ -1518,8 +1523,12 @@ mod tests {
 
     #[test]
     fn enrichment_verification_key_serde_roundtrip_preserves_ordering() {
-        let vk_a = VerificationKey::from_bytes([0x01; VERIFICATION_KEY_LEN]).unwrap();
-        let vk_b = VerificationKey::from_bytes([0x02; VERIFICATION_KEY_LEN]).unwrap();
+        let mut keys = [
+            test_verification_key_from_seed(0x01),
+            test_verification_key_from_seed(0x02),
+        ];
+        keys.sort();
+        let [vk_a, vk_b] = keys;
         assert!(vk_a < vk_b, "Ord should order by bytes");
 
         let json_a = serde_json::to_string(&vk_a).unwrap();
@@ -1534,7 +1543,7 @@ mod tests {
 
     #[test]
     fn enrichment_all_signature_error_displays_unique() {
-        let vk = VerificationKey::from_bytes([0x77; VERIFICATION_KEY_LEN]).unwrap();
+        let vk = test_verification_key_from_seed(0x77);
         let variants = [
             SignatureError::VerificationFailed {
                 signer: vk,
@@ -1650,7 +1659,7 @@ mod tests {
 
     #[test]
     fn enrichment_verification_key_hex_is_lowercase() {
-        let vk = VerificationKey::from_bytes([0xAB; VERIFICATION_KEY_LEN]).unwrap();
+        let vk = test_verification_key_from_seed(0xAB);
         let hex = vk.to_hex();
         assert!(
             hex.chars()
@@ -1696,7 +1705,7 @@ mod tests {
         let sk = test_signing_key();
         let obj = test_object();
         let sig = ctx.sign(&obj, &sk, "t-wrong").unwrap();
-        let wrong_vk = VerificationKey::from_bytes([0xBB; VERIFICATION_KEY_LEN]).unwrap();
+        let wrong_vk = test_verification_key_from_seed(0xBB);
         let err = ctx.verify(&obj, &wrong_vk, &sig, "t-wrong2").unwrap_err();
         assert!(matches!(err, SignatureError::VerificationFailed { .. }));
         assert_eq!(ctx.failure_count(), 1);

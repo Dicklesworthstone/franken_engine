@@ -96,6 +96,30 @@ impl fmt::Display for RuntimeCapability {
 }
 
 impl RuntimeCapability {
+    /// Every runtime capability variant in canonical declaration order.
+    pub const ALL: [Self; 20] = [
+        Self::VmDispatch,
+        Self::GcInvoke,
+        Self::IrLowering,
+        Self::PolicyRead,
+        Self::PolicyWrite,
+        Self::EvidenceEmit,
+        Self::DecisionInvoke,
+        Self::NetworkEgress,
+        Self::LeaseManagement,
+        Self::IdempotencyDerive,
+        Self::ExtensionLifecycle,
+        Self::HeapAllocate,
+        Self::EnvRead,
+        Self::ProcessSpawn,
+        Self::FsRead,
+        Self::FsWrite,
+        Self::ModuleLoad,
+        Self::Console,
+        Self::Timer,
+        Self::Builtin,
+    ];
+
     /// Map a capability-tag string (as used in [`CapabilityTag`] / hostcall
     /// dispatch) to the corresponding typed capability.
     ///
@@ -407,21 +431,23 @@ mod tests {
     #[test]
     fn full_caps_contains_all_capabilities() {
         let full = CapabilityProfile::full();
-        assert_eq!(full.len(), 17);
-        assert!(full.has(RuntimeCapability::VmDispatch));
-        assert!(full.has(RuntimeCapability::PolicyWrite));
-        assert!(full.has(RuntimeCapability::NetworkEgress));
-        assert!(full.has(RuntimeCapability::FsWrite));
+        assert_eq!(full.len(), RuntimeCapability::ALL.len());
+        for capability in RuntimeCapability::ALL {
+            assert!(full.has(capability), "missing {capability:?}");
+        }
     }
 
     #[test]
-    fn engine_core_caps_contains_only_vm_gc_ir_heap() {
+    fn engine_core_caps_contains_only_vm_gc_ir_heap_and_local_runtime() {
         let ec = CapabilityProfile::engine_core();
-        assert_eq!(ec.len(), 4);
+        assert_eq!(ec.len(), 7);
         assert!(ec.has(RuntimeCapability::VmDispatch));
         assert!(ec.has(RuntimeCapability::GcInvoke));
         assert!(ec.has(RuntimeCapability::IrLowering));
         assert!(ec.has(RuntimeCapability::HeapAllocate));
+        assert!(ec.has(RuntimeCapability::Console));
+        assert!(ec.has(RuntimeCapability::Timer));
+        assert!(ec.has(RuntimeCapability::Builtin));
         // Must NOT have policy, network, or lifecycle.
         assert!(!ec.has(RuntimeCapability::PolicyWrite));
         assert!(!ec.has(RuntimeCapability::NetworkEgress));
@@ -606,7 +632,7 @@ mod tests {
     #[test]
     fn capability_profile_display() {
         let ec = CapabilityProfile::engine_core();
-        assert_eq!(ec.to_string(), "EngineCoreCaps[4]");
+        assert_eq!(ec.to_string(), "EngineCoreCaps[7]");
     }
 
     // -- Serialization --
@@ -763,30 +789,12 @@ mod tests {
     // ── Enrichment: has / len / is_empty ─────────────────────────
 
     #[test]
-    fn full_profile_has_all_16_capabilities() {
+    fn full_profile_has_all_capabilities() {
         let full = CapabilityProfile::full();
-        let all = [
-            RuntimeCapability::VmDispatch,
-            RuntimeCapability::GcInvoke,
-            RuntimeCapability::IrLowering,
-            RuntimeCapability::PolicyRead,
-            RuntimeCapability::PolicyWrite,
-            RuntimeCapability::EvidenceEmit,
-            RuntimeCapability::DecisionInvoke,
-            RuntimeCapability::NetworkEgress,
-            RuntimeCapability::LeaseManagement,
-            RuntimeCapability::IdempotencyDerive,
-            RuntimeCapability::ExtensionLifecycle,
-            RuntimeCapability::HeapAllocate,
-            RuntimeCapability::EnvRead,
-            RuntimeCapability::ProcessSpawn,
-            RuntimeCapability::FsRead,
-            RuntimeCapability::FsWrite,
-        ];
-        for cap in &all {
-            assert!(full.has(*cap), "full should have {:?}", cap);
+        for cap in RuntimeCapability::ALL {
+            assert!(full.has(cap), "full should have {:?}", cap);
         }
-        assert_eq!(full.len(), all.len());
+        assert_eq!(full.len(), RuntimeCapability::ALL.len());
         assert!(!full.is_empty());
     }
 
@@ -867,7 +875,10 @@ mod tests {
     #[test]
     fn capability_profile_display_includes_count() {
         let full = CapabilityProfile::full();
-        assert_eq!(full.to_string(), "FullCaps[16]");
+        assert_eq!(
+            full.to_string(),
+            format!("FullCaps[{}]", RuntimeCapability::ALL.len())
+        );
         let co = CapabilityProfile::compute_only();
         assert_eq!(co.to_string(), "ComputeOnlyCaps[0]");
     }
@@ -1094,32 +1105,15 @@ mod tests {
     }
 
     #[test]
-    fn runtime_capability_display_all_16_unique() {
-        let displays: BTreeSet<String> = [
-            RuntimeCapability::VmDispatch,
-            RuntimeCapability::GcInvoke,
-            RuntimeCapability::IrLowering,
-            RuntimeCapability::PolicyRead,
-            RuntimeCapability::PolicyWrite,
-            RuntimeCapability::EvidenceEmit,
-            RuntimeCapability::DecisionInvoke,
-            RuntimeCapability::NetworkEgress,
-            RuntimeCapability::LeaseManagement,
-            RuntimeCapability::IdempotencyDerive,
-            RuntimeCapability::ExtensionLifecycle,
-            RuntimeCapability::HeapAllocate,
-            RuntimeCapability::EnvRead,
-            RuntimeCapability::ProcessSpawn,
-            RuntimeCapability::FsRead,
-            RuntimeCapability::FsWrite,
-        ]
-        .iter()
-        .map(|c| c.to_string())
-        .collect();
+    fn runtime_capability_display_all_unique() {
+        let displays: BTreeSet<String> = RuntimeCapability::ALL
+            .iter()
+            .map(|c| c.to_string())
+            .collect();
         assert_eq!(
             displays.len(),
-            16,
-            "all 16 RuntimeCapability variants have unique Display"
+            RuntimeCapability::ALL.len(),
+            "all RuntimeCapability variants have unique Display"
         );
     }
 
@@ -1196,8 +1190,11 @@ mod tests {
     }
 
     #[test]
-    fn full_profile_display_shows_count_16() {
-        assert_eq!(CapabilityProfile::full().to_string(), "FullCaps[16]");
+    fn full_profile_display_shows_count() {
+        assert_eq!(
+            CapabilityProfile::full().to_string(),
+            format!("FullCaps[{}]", RuntimeCapability::ALL.len())
+        );
     }
 
     #[test]
@@ -1213,56 +1210,25 @@ mod tests {
     // -- Enum completeness --------------------------------------------------
 
     #[test]
-    fn full_profile_contains_all_16_capabilities() {
-        use RuntimeCapability::*;
-        let all = [
-            VmDispatch,
-            GcInvoke,
-            IrLowering,
-            PolicyRead,
-            PolicyWrite,
-            EvidenceEmit,
-            DecisionInvoke,
-            NetworkEgress,
-            LeaseManagement,
-            IdempotencyDerive,
-            ExtensionLifecycle,
-            HeapAllocate,
-            EnvRead,
-            ProcessSpawn,
-            FsRead,
-            FsWrite,
-        ];
+    fn full_profile_contains_all_capabilities_against_canonical_list() {
         let full = CapabilityProfile::full();
-        for cap in &all {
-            assert!(full.has(*cap), "full profile should have {:?}", cap);
+        for cap in RuntimeCapability::ALL {
+            assert!(full.has(cap), "full profile should have {:?}", cap);
         }
-        assert_eq!(full.len(), 17);
+        assert_eq!(full.len(), RuntimeCapability::ALL.len());
     }
 
     #[test]
-    fn runtime_capability_display_all_unique() {
-        use RuntimeCapability::*;
-        let all = [
-            VmDispatch,
-            GcInvoke,
-            IrLowering,
-            PolicyRead,
-            PolicyWrite,
-            EvidenceEmit,
-            DecisionInvoke,
-            NetworkEgress,
-            LeaseManagement,
-            IdempotencyDerive,
-            ExtensionLifecycle,
-            HeapAllocate,
-            EnvRead,
-            ProcessSpawn,
-            FsRead,
-            FsWrite,
-        ];
-        let strings: BTreeSet<String> = all.iter().map(|c| c.to_string()).collect();
-        assert_eq!(strings.len(), 16, "all display strings should be unique");
+    fn runtime_capability_display_canonical_list_unique() {
+        let strings: BTreeSet<String> = RuntimeCapability::ALL
+            .iter()
+            .map(|c| c.to_string())
+            .collect();
+        assert_eq!(
+            strings.len(),
+            RuntimeCapability::ALL.len(),
+            "all display strings should be unique"
+        );
     }
 
     // -- Profile disjointness pairwise matrix -------------------------------
@@ -1414,7 +1380,7 @@ mod tests {
     fn sequential_intersections_narrow_to_empty() {
         let mut result = CapabilityProfile::full();
         result = result.intersect(&CapabilityProfile::engine_core());
-        assert_eq!(result.len(), 4);
+        assert_eq!(result.len(), CapabilityProfile::engine_core().len());
         result = result.intersect(&CapabilityProfile::policy());
         assert!(result.is_empty(), "ec ∩ policy should be empty");
     }
@@ -1617,8 +1583,8 @@ mod tests {
         // The union of narrow profiles should be a subset of full.
         let full = CapabilityProfile::full();
         assert!(union_caps.is_subset(&full.capabilities));
-        // But should not cover all 16 (missing ExtensionLifecycle, EnvRead, ProcessSpawn, FsRead, FsWrite).
-        assert!(union_caps.len() < 16);
+        // But should not cover the full authority surface.
+        assert!(union_caps.len() < RuntimeCapability::ALL.len());
     }
 
     // -- Deterministic serialization ----------------------------------------

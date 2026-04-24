@@ -1593,7 +1593,7 @@ pub mod differential_testing {
             let summary = report.generate_summary();
 
             assert!(summary.contains("Cross-Engine Differential Testing Report"));
-            assert!(summary.contains("Total Tests: 8"));
+            assert!(summary.contains("**Total Tests:** 8"));
             assert!(summary.contains("bd-3rbnw"));
         }
     }

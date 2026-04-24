@@ -1,244 +1,221 @@
-//! Contract tests for external crate API surfaces
+#![forbid(unsafe_code)]
+
+//! Contract tests for external crate API surfaces.
 //!
-//! These tests verify that our usage of external asupersync crates
-//! matches their expected API interfaces.
+//! These tests verify that FrankenEngine's approved control-plane import
+//! boundary still maps to the concrete upstream `/dp/asupersync` crates when the
+//! integration feature is enabled, and to functional local fallbacks otherwise.
 
 #[cfg(feature = "asupersync-integration")]
 mod asupersync_contracts {
-    use std::collections::BTreeMap;
+    use frankenengine_engine::control_plane;
 
-    /// Test that franken-kernel provides expected governance types
-    #[test]
-    fn franken_kernel_contract() {
-        // API surface contract verification for franken-kernel crate
-        // Tests critical interfaces we depend on for context/budget/trace semantics
+    #[derive(Clone)]
+    struct ContractHarness {
+        loss_matrix: control_plane::LossMatrix,
+        fallback_policy: control_plane::FallbackPolicy,
+    }
 
-        #[cfg(feature = "asupersync-integration")]
-        {
-            // Test 1: Kernel context types must be accessible
-            // We expect these types to exist for budget and trace semantics
-            let _kernel_context_available = true;
-
-            // Test 2: Budget allocation interface contract
-            // The kernel should provide budget types for resource management
-            let budget_interface_test = || -> Result<(), &'static str> {
-                // Mock test - in real implementation would import and test:
-                // use franken_kernel::{Budget, BudgetAllocation, BudgetConstraint};
-                // Budget::new(1000).map_err(|_| "Budget creation failed")
-                Ok(())
-            };
-            assert!(budget_interface_test().is_ok(), "Budget interface contract violated");
-
-            // Test 3: Trace context interface contract
-            // The kernel should provide trace types for execution tracking
-            let trace_interface_test = || -> Result<(), &'static str> {
-                // Mock test - in real implementation would import and test:
-                // use franken_kernel::{TraceContext, TraceId, SpanId};
-                // TraceContext::new().map_err(|_| "Trace context creation failed")
-                Ok(())
-            };
-            assert!(trace_interface_test().is_ok(), "Trace interface contract violated");
-
-            // Test 4: Context isolation interface contract
-            // The kernel should provide context isolation primitives
-            let context_isolation_test = || -> Result<(), &'static str> {
-                // Mock test - in real implementation would import and test:
-                // use franken_kernel::{Cx, ContextBoundary, IsolationLevel};
-                // Cx::new().map_err(|_| "Context isolation failed")
-                Ok(())
-            };
-            assert!(context_isolation_test().is_ok(), "Context isolation contract violated");
-        }
-
-        #[cfg(not(feature = "asupersync-integration"))]
-        {
-            // In standalone mode, verify graceful degradation
-            assert!(true, "franken-kernel contract: standalone mode graceful fallback");
+    impl ContractHarness {
+        fn new() -> Self {
+            Self {
+                loss_matrix: control_plane::LossMatrix::new(
+                    vec!["benign".to_string(), "risky".to_string()],
+                    vec!["allow".to_string(), "deny".to_string()],
+                    vec![
+                        0.10, 0.60, // benign
+                        0.80, 0.40, // risky
+                    ],
+                )
+                .expect("valid loss matrix"),
+                fallback_policy: control_plane::FallbackPolicy::default(),
+            }
         }
     }
 
-    /// Test that franken-decision provides expected policy types
-    #[test]
-    fn franken_decision_contract() {
-        // API surface contract verification for franken-decision crate
-        // Tests critical interfaces we depend on for decision evaluation linkage
-
-        #[cfg(feature = "asupersync-integration")]
-        {
-            // Test 1: Decision evaluation interface contract
-            // The decision crate should provide policy evaluation primitives
-            let decision_evaluation_test = || -> Result<(), &'static str> {
-                // Mock test - in real implementation would import and test:
-                // use franken_decision::{DecisionRequest, DecisionVerdict, PolicyEngine};
-                // PolicyEngine::evaluate(DecisionRequest::new()).map_err(|_| "Decision evaluation failed")
-                Ok(())
-            };
-            assert!(decision_evaluation_test().is_ok(), "Decision evaluation contract violated");
-
-            // Test 2: Policy management interface contract
-            // The decision crate should provide policy configuration types
-            let policy_management_test = || -> Result<(), &'static str> {
-                // Mock test - in real implementation would import and test:
-                // use franken_decision::{Policy, PolicyId, PolicyConfig};
-                // Policy::from_config(PolicyConfig::default()).map_err(|_| "Policy management failed")
-                Ok(())
-            };
-            assert!(policy_management_test().is_ok(), "Policy management contract violated");
-
-            // Test 3: Decision verdict interface contract
-            // The decision crate should provide standardized verdict types
-            let verdict_interface_test = || -> Result<(), &'static str> {
-                // Mock test - in real implementation would import and test:
-                // use franken_decision::{DecisionVerdict, VerdictReason, VerdictConfidence};
-                // DecisionVerdict::allow(VerdictReason::PolicyMatch).map_err(|_| "Verdict creation failed")
-                Ok(())
-            };
-            assert!(verdict_interface_test().is_ok(), "Verdict interface contract violated");
-
-            // Test 4: Policy adapter interface contract
-            // The decision crate should provide adapter interfaces for integration
-            let adapter_interface_test = || -> Result<(), &'static str> {
-                // Mock test - in real implementation would import and test:
-                // use franken_decision::{DecisionAdapter, AdapterConfig};
-                // DecisionAdapter::new(AdapterConfig::default()).map_err(|_| "Adapter creation failed")
-                Ok(())
-            };
-            assert!(adapter_interface_test().is_ok(), "Adapter interface contract violated");
+    impl control_plane::DecisionContract for ContractHarness {
+        fn name(&self) -> &str {
+            "dependency_contract_harness"
         }
 
-        #[cfg(not(feature = "asupersync-integration"))]
-        {
-            // In standalone mode, verify graceful degradation
-            assert!(true, "franken-decision contract: standalone mode graceful fallback");
+        fn state_space(&self) -> &[String] {
+            self.loss_matrix.state_names()
+        }
+
+        fn action_set(&self) -> &[String] {
+            self.loss_matrix.action_names()
+        }
+
+        fn loss_matrix(&self) -> &control_plane::LossMatrix {
+            &self.loss_matrix
+        }
+
+        fn update_posterior(&self, posterior: &mut control_plane::Posterior, state_index: usize) {
+            match state_index {
+                0 => posterior.bayesian_update(&[0.90, 0.10]),
+                1 => posterior.bayesian_update(&[0.10, 0.90]),
+                _ => posterior.bayesian_update(&[0.50, 0.50]),
+            }
+        }
+
+        fn choose_action(&self, posterior: &control_plane::Posterior) -> usize {
+            self.loss_matrix.bayes_action(posterior)
+        }
+
+        fn fallback_action(&self) -> usize {
+            1
+        }
+
+        fn fallback_policy(&self) -> &control_plane::FallbackPolicy {
+            &self.fallback_policy
         }
     }
 
-    /// Test that franken-evidence provides expected audit types
+    fn require_kernel_capability_set<C: franken_kernel::CapabilitySet>(_: &C) {}
+
     #[test]
-    fn franken_evidence_contract() {
-        // API surface contract verification for franken-evidence crate
-        // Tests critical interfaces we depend on for evidence collection and ledger validity
+    fn franken_kernel_contract_uses_real_upstream_types() {
+        let trace_id: franken_kernel::TraceId =
+            control_plane::TraceId::from_parts(1_700_000_000_000, 7);
+        let decision_id: franken_kernel::DecisionId =
+            control_plane::DecisionId::from_parts(1_700_000_000_000, 9);
+        let policy_id: franken_kernel::PolicyId =
+            control_plane::PolicyId::new("dependency.contract", 1);
+        let schema_version: franken_kernel::SchemaVersion =
+            control_plane::SchemaVersion::new(1, 2, 3);
+        let budget: franken_kernel::Budget = control_plane::Budget::new(500);
+        let caps = control_plane::NoCaps;
+        require_kernel_capability_set(&caps);
 
-        #[cfg(feature = "asupersync-integration")]
-        {
-            // Test 1: Evidence collection interface contract
-            // The evidence crate should provide evidence collection primitives
-            let evidence_collection_test = || -> Result<(), &'static str> {
-                // Mock test - in real implementation would import and test:
-                // use franken_evidence::{EvidenceCollector, EvidenceEntry, EvidenceType};
-                // EvidenceCollector::new().collect(EvidenceEntry::new()).map_err(|_| "Evidence collection failed")
-                Ok(())
-            };
-            assert!(evidence_collection_test().is_ok(), "Evidence collection contract violated");
-
-            // Test 2: Evidence ledger interface contract
-            // The evidence crate should provide ledger management types
-            let evidence_ledger_test = || -> Result<(), &'static str> {
-                // Mock test - in real implementation would import and test:
-                // use franken_evidence::{EvidenceLedger, LedgerEntry, LedgerQuery};
-                // EvidenceLedger::new().append(LedgerEntry::new()).map_err(|_| "Ledger operation failed")
-                Ok(())
-            };
-            assert!(evidence_ledger_test().is_ok(), "Evidence ledger contract violated");
-
-            // Test 3: Audit trail interface contract
-            // The evidence crate should provide audit trail verification
-            let audit_trail_test = || -> Result<(), &'static str> {
-                // Mock test - in real implementation would import and test:
-                // use franken_evidence::{AuditTrail, TrailVerifier, VerificationResult};
-                // TrailVerifier::new().verify(AuditTrail::new()).map_err(|_| "Audit verification failed")
-                Ok(())
-            };
-            assert!(audit_trail_test().is_ok(), "Audit trail contract violated");
-
-            // Test 4: Evidence integrity interface contract
-            // The evidence crate should provide integrity verification
-            let evidence_integrity_test = || -> Result<(), &'static str> {
-                // Mock test - in real implementation would import and test:
-                // use franken_evidence::{IntegrityChecker, EvidenceHash, IntegrityProof};
-                // IntegrityChecker::verify_hash(EvidenceHash::compute(b"test")).map_err(|_| "Integrity check failed")
-                Ok(())
-            };
-            assert!(evidence_integrity_test().is_ok(), "Evidence integrity contract violated");
-
-            // Test 5: Evidence query interface contract
-            // The evidence crate should provide query capabilities for audit compliance
-            let evidence_query_test = || -> Result<(), &'static str> {
-                // Mock test - in real implementation would import and test:
-                // use franken_evidence::{EvidenceQuery, QueryFilter, QueryResult};
-                // EvidenceQuery::new().filter(QueryFilter::by_timestamp()).map_err(|_| "Evidence query failed")
-                Ok(())
-            };
-            assert!(evidence_query_test().is_ok(), "Evidence query contract violated");
-        }
-
-        #[cfg(not(feature = "asupersync-integration"))]
-        {
-            // In standalone mode, verify graceful degradation
-            assert!(true, "franken-evidence contract: standalone mode graceful fallback");
-        }
+        let mut cx: franken_kernel::Cx<'_, franken_kernel::NoCaps> =
+            control_plane::Cx::new(trace_id, budget, caps);
+        assert_eq!(trace_id.timestamp_ms(), 1_700_000_000_000);
+        assert_eq!(decision_id.timestamp_ms(), 1_700_000_000_000);
+        assert_eq!(policy_id.name(), "dependency.contract");
+        assert_eq!(policy_id.version(), 1);
+        assert!(schema_version.is_compatible(&franken_kernel::SchemaVersion::new(1, 9, 0)));
+        assert_eq!(cx.trace_id(), trace_id);
+        assert_eq!(cx.budget().remaining_ms(), 500);
+        assert!(cx.consume_budget(125));
+        assert_eq!(cx.budget().remaining_ms(), 375);
+        assert!(!cx.consume_budget(500));
+        assert_eq!(cx.budget().remaining_ms(), 375);
     }
 
-    /// Test that external crate integration points compile
     #[test]
-    fn integration_compilation() {
-        // Verify that code using external crates compiles correctly
-        // This catches breaking changes in external crate APIs
+    fn franken_decision_contract_evaluates_real_upstream_surface() {
+        let contract = ContractHarness::new();
+        let _: &dyn franken_decision::DecisionContract = &contract;
 
-        // Mock data structures that would use external types
-        let _governance_config: BTreeMap<String, String> = BTreeMap::new();
-        let _policy_decisions: Vec<String> = Vec::new();
-        let _evidence_records: Vec<String> = Vec::new();
+        let posterior: franken_decision::Posterior =
+            control_plane::Posterior::new(vec![0.75, 0.25]).expect("normalized posterior");
+        let eval_context: franken_decision::EvalContext = control_plane::EvalContext {
+            calibration_score: 0.95,
+            e_process: 0.10,
+            ci_width: 0.05,
+            decision_id: control_plane::DecisionId::from_parts(1_700_000_000_100, 11),
+            trace_id: control_plane::TraceId::from_parts(1_700_000_000_100, 13),
+            ts_unix_ms: 1_700_000_000_100,
+        };
 
-        // This test passes if compilation succeeds
-        // (No runtime assertion needed — the compile itself is the verification.)
+        let outcome: franken_decision::DecisionOutcome =
+            control_plane::evaluate_contract(&contract, &posterior, &eval_context);
+
+        assert_eq!(outcome.action_name, "allow");
+        assert!(!outcome.fallback_active);
+        assert_eq!(
+            outcome.audit_entry.contract_name,
+            "dependency_contract_harness"
+        );
+        assert_eq!(outcome.audit_entry.decision_id, eval_context.decision_id);
+        assert_eq!(outcome.audit_entry.trace_id, eval_context.trace_id);
+    }
+
+    #[test]
+    fn franken_evidence_contract_builds_valid_deterministic_ledger() {
+        let builder: franken_evidence::EvidenceLedgerBuilder =
+            control_plane::EvidenceLedgerBuilder::new();
+        let entry: franken_evidence::EvidenceLedger = builder
+            .ts_unix_ms(1_700_000_000_200)
+            .component("dependency_contracts")
+            .action("allow")
+            .posterior(vec![0.75, 0.25])
+            .expected_loss("allow", 0.45)
+            .expected_loss("deny", 0.50)
+            .chosen_expected_loss(0.45)
+            .calibration_score(0.95)
+            .fallback_active(false)
+            .top_feature("calibration", 0.70)
+            .build()
+            .expect("valid evidence ledger");
+
+        assert!(entry.is_valid(), "evidence ledger validation must succeed");
+        assert_eq!(entry.component, "dependency_contracts");
+        assert_eq!(entry.action, "allow");
+        assert_eq!(entry.expected_loss_by_action.len(), 2);
+        assert!((entry.expected_loss_by_action["allow"] - 0.45).abs() < f64::EPSILON);
+        assert!((entry.expected_loss_by_action["deny"] - 0.50).abs() < f64::EPSILON);
+        assert!(!entry.fallback_active);
+
+        let serialized_once = serde_json::to_string(&entry).expect("serialize evidence ledger");
+        let serialized_twice =
+            serde_json::to_string(&entry).expect("serialize evidence ledger again");
+        assert_eq!(serialized_once, serialized_twice);
+        assert!(serialized_once.contains("\"component\":\"dependency_contracts\""));
+        let allow_position = serialized_once
+            .find("\"allow\"")
+            .expect("serialized evidence ledger contains allow action");
+        let deny_position = serialized_once
+            .find("\"deny\"")
+            .expect("serialized evidence ledger contains deny action");
+        assert!(
+            allow_position < deny_position,
+            "expected-loss map serialization should remain key-ordered"
+        );
     }
 }
 
 #[cfg(not(feature = "asupersync-integration"))]
 mod standalone_contracts {
-    /// Test that standalone mode compiles without external dependencies
+    use frankenengine_engine::control_plane;
+
     #[test]
-    fn standalone_compilation() {
-        // Verify that core functionality works without external crates
-        assert!(true, "Standalone mode compilation check passed");
+    fn standalone_kernel_fallback_contract_is_functional() {
+        let trace_id = control_plane::TraceId::from_parts(1_700_000_000_000, 7);
+        let budget = control_plane::Budget::new(100);
+        let mut cx = control_plane::Cx::new(trace_id, budget, control_plane::NoCaps);
+
+        assert_eq!(cx.trace_id(), trace_id);
+        assert_eq!(cx.budget().remaining_ms(), 100);
+        assert!(cx.consume_budget(40));
+        assert_eq!(cx.budget().remaining_ms(), 60);
+        assert!(!cx.consume_budget(80));
+        assert_eq!(cx.budget().remaining_ms(), 60);
     }
 
-    /// Test that governance modules provide fallback behavior
     #[test]
-    fn governance_fallback_behavior() {
-        // In standalone mode, governance modules should compile
-        // but provide appropriate fallback behavior
+    fn standalone_evidence_fallback_contract_validates_and_serializes() {
+        let entry = control_plane::EvidenceLedgerBuilder::new()
+            .ts_unix_ms(1_700_000_000_200)
+            .component("standalone_dependency_contracts")
+            .action("deny")
+            .posterior(vec![0.25, 0.75])
+            .expected_loss("allow", 0.80)
+            .expected_loss("deny", 0.40)
+            .chosen_expected_loss(0.40)
+            .calibration_score(0.90)
+            .fallback_active(true)
+            .build()
+            .expect("valid standalone evidence ledger");
 
-        // Mock governance operation that would normally use external crates
-        let governance_available = cfg!(feature = "asupersync-integration");
+        assert!(entry.is_valid(), "standalone evidence ledger must validate");
+        assert_eq!(entry.component, "standalone_dependency_contracts");
+        assert_eq!(entry.action, "deny");
 
-        if governance_available {
-            // Full functionality available
-            assert!(true, "Full governance functionality enabled");
-        } else {
-            // Fallback behavior - operations should fail gracefully
-            assert!(true, "Governance fallback behavior active");
-        }
+        let serialized_once = serde_json::to_string(&entry).expect("serialize standalone ledger");
+        let serialized_twice =
+            serde_json::to_string(&entry).expect("serialize standalone ledger again");
+        assert_eq!(serialized_once, serialized_twice);
+        assert!(serialized_once.contains("\"fallback_active\":true"));
     }
-}
-
-/// Integration test for build mode verification
-#[test]
-fn build_mode_verification() {
-    // Test that verifies the current build mode is correctly configured
-
-    #[cfg(feature = "asupersync-integration")]
-    {
-        // Full integration mode
-        println!("Running in full integration mode with external dependencies");
-    }
-
-    #[cfg(not(feature = "asupersync-integration"))]
-    {
-        // Standalone mode
-        println!("Running in standalone mode without external dependencies");
-    }
-
-    // This test always passes - the compile-time feature check is the verification.
 }

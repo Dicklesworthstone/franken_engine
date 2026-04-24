@@ -1,0 +1,1 @@
+{"certificate_id":"cert-future","region_id":"region-seed","epoch":9,"verdict":"Certified","bounds":[{"dimension":"HostcallCount","upper_bound_millionths":1000000,"is_tight":true,"confidence_millionths":990000}],"abstention_count":0,"min_confidence_millionths":990000}

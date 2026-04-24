@@ -1,0 +1,1 @@
+{"certificate_id":"cert-seed","region_id":"region-seed","epoch":1,"verdict":"Certified","bounds":[{"dimension":"Time","upper_bound_millionths":10000000,"is_tight":true,"confidence_millionths":990000},{"dimension":"HeapMemory","upper_bound_millionths":5000000,"is_tight":false,"confidence_millionths":950000}],"abstention_count":0,"min_confidence_millionths":950000}

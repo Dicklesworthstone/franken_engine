@@ -648,8 +648,10 @@ impl ManifoldTrajectory {
             total_path_length = total_path_length.saturating_add(dist);
         }
 
-        // SAFETY: Function expects non-empty coordinates slice; first() returns Some for non-empty slice
-        let schema_id = coordinates.first().map(|c| c.schema_id.clone()).unwrap();
+        let schema_id = coordinates
+            .first()
+            .map(|c| c.schema_id.clone())
+            .unwrap_or_default();
 
         Self {
             trajectory_id: trajectory_id.into(),

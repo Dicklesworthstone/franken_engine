@@ -1651,10 +1651,8 @@ impl Default for CutoverMigrationRunner {
 mod tests {
     use super::*;
     use crate::control_plane::mocks::{
-        decision_id_from_seed, policy_id_from_seed, trace_id_from_seed,
+        MockBudget, MockCx, decision_id_from_seed, policy_id_from_seed, trace_id_from_seed,
     };
-    use crate::control_plane::{ControlPlaneCx, BudgetController, BudgetConfig};
-    use crate::security_epoch::SecurityEpoch;
     use crate::evidence_emission::{
         ActionCategory, CanonicalEvidenceEmitter, EmitterConfig, EvidenceEmissionRequest,
     };
@@ -1664,17 +1662,9 @@ mod tests {
     // Helpers
     // -------------------------------------------------------------------
 
-    fn real_cx() -> ControlPlaneCx {
-        let budget_config = BudgetConfig {
-            compute_budget_us: 100_000_000, // 100ms in microseconds
-            memory_budget_bytes: 10_000_000, // 10MB
-            warning_threshold_millionths: 800_000, // 80%
-            deterministic_fallback_on_exhaust: true,
-        };
-        let budget_controller = BudgetController::new(budget_config, SecurityEpoch::from_raw(1));
+    fn real_cx() -> MockCx {
         let trace_id = trace_id_from_seed(1);
-
-        ControlPlaneCx::new(trace_id, budget_controller)
+        MockCx::new(trace_id, MockBudget::new(100_000))
     }
 
     fn make_emitter() -> CanonicalEvidenceEmitter {

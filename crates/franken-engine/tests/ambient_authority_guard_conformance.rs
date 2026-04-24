@@ -12,11 +12,8 @@
 //! - RollbackUnverified MUST be invoked at correct security boundaries
 
 use std::collections::BTreeMap;
-use std::process::Command;
 
-use frankenengine_engine::extension_host_authority_guard::{
-    ExtensionHostGuard, ViolationKind,
-};
+use frankenengine_engine::extension_host_authority_guard::{ExtensionHostGuard, ViolationKind};
 use serde::{Deserialize, Serialize};
 
 /// Conformance test requirement levels from security specification
@@ -358,58 +355,11 @@ fn test_env_var_permutations() -> ConformanceResult {
 // ---------------------------------------------------------------------------
 
 fn test_disable_ambient_guard_feature() -> ConformanceResult {
-    // Test that compilation with --features disable-ambient-guard still enforces checks
-    let output = Command::new("cargo")
-        .args(&["check", "--features", "disable-ambient-guard", "--lib"])
-        .current_dir("/data/projects/franken_engine/crates/franken-extension-host")
-        .output();
-
-    match output {
-        Ok(result) => {
-            let stderr = String::from_utf8_lossy(&result.stderr);
-
-            // Feature should either not exist or not disable the guard
-            if stderr.contains("feature `disable-ambient-guard` does not exist") {
-                ConformanceResult::Pass
-            } else if result.status.success() {
-                // If it compiles, the guard should still be active
-                ConformanceResult::Pass
-            } else {
-                ConformanceResult::Fail {
-                    reason: "Compilation failed for unknown reasons".to_string(),
-                }
-            }
-        }
-        Err(e) => ConformanceResult::Fail {
-            reason: format!("Failed to run cargo check: {}", e),
-        },
-    }
+    assert_forbidden_extension_host_feature_absent("disable-ambient-guard")
 }
 
 fn test_unsafe_extension_host_feature() -> ConformanceResult {
-    // Test that unsafe-extension-host feature flag is rejected
-    let output = Command::new("cargo")
-        .args(&["check", "--features", "unsafe-extension-host"])
-        .current_dir("/data/projects/franken_engine/crates/franken-extension-host")
-        .output();
-
-    match output {
-        Ok(result) => {
-            let stderr = String::from_utf8_lossy(&result.stderr);
-
-            if stderr.contains("feature `unsafe-extension-host` does not exist") {
-                ConformanceResult::Pass
-            } else {
-                ConformanceResult::Fail {
-                    reason: "unsafe-extension-host feature flag exists and could bypass security"
-                        .to_string(),
-                }
-            }
-        }
-        Err(e) => ConformanceResult::Fail {
-            reason: format!("Failed to check feature flags: {}", e),
-        },
-    }
+    assert_forbidden_extension_host_feature_absent("unsafe-extension-host")
 }
 
 fn test_bypass_security_feature() -> ConformanceResult {
@@ -423,26 +373,14 @@ fn test_bypass_security_feature() -> ConformanceResult {
     ];
 
     for feature in &bypass_features {
-        let output = Command::new("cargo")
-            .args(&["check", "--features", feature])
-            .current_dir("/data/projects/franken_engine/crates/franken-extension-host")
-            .output();
-
-        match output {
-            Ok(result) => {
-                let stderr = String::from_utf8_lossy(&result.stderr);
-
-                if !stderr.contains(&format!("feature `{}` does not exist", feature)) {
-                    return ConformanceResult::Fail {
-                        reason: format!("Bypass feature '{}' exists", feature),
-                    };
-                }
-            }
-            Err(e) => {
-                return ConformanceResult::Fail {
-                    reason: format!("Failed to check feature '{}': {}", feature, e),
-                };
-            }
+        if let ConformanceResult::Fail { reason } =
+            assert_forbidden_extension_host_feature_absent(feature)
+        {
+            return ConformanceResult::Fail {
+                reason: format!(
+                    "Bypass feature '{feature}' exists or manifest is invalid: {reason}"
+                ),
+            };
         }
     }
 
@@ -460,7 +398,7 @@ fn test_rollback_on_direct_imports() -> ConformanceResult {
 
     for finding in &findings {
         if finding.kind == ViolationKind::DirectUpstreamImport {
-            let should_rollback = RollbackUnverified::should_trigger(finding.kind, &source);
+            let should_rollback = RollbackUnverified::should_trigger(finding.kind, source);
             if should_rollback {
                 return ConformanceResult::Pass;
             }
@@ -632,6 +570,9 @@ fn test_fail_closed_malformed_bypass() -> ConformanceResult {
 // ---------------------------------------------------------------------------
 
 fn assert_no_process_env_override_path(var_name: &str) -> Result<(), String> {
+    // Rust 2024 makes process-global environment mutation unsafe. These tests
+    // prove the guard has no code path that can observe env-based bypass knobs,
+    // then exercise the same findings the bypass would have tried to suppress.
     let guard_source = include_str!("../src/extension_host_authority_guard.rs");
     for token in ["std::env", "env::var", var_name] {
         if guard_source.contains(token) {
@@ -647,6 +588,34 @@ fn create_test_auditor() -> ExtensionHostGuard {
     ExtensionHostGuard::standard()
 }
 
+fn assert_forbidden_extension_host_feature_absent(feature: &str) -> ConformanceResult {
+    match extension_host_feature_names() {
+        Ok(features)
+            if features
+                .iter()
+                .any(|candidate| candidate.as_str() == feature) =>
+        {
+            ConformanceResult::Fail {
+                reason: format!("forbidden extension-host feature '{feature}' is declared"),
+            }
+        }
+        Ok(_) => ConformanceResult::Pass,
+        Err(reason) => ConformanceResult::Fail { reason },
+    }
+}
+
+fn extension_host_feature_names() -> Result<Vec<String>, String> {
+    let manifest: toml::Value =
+        toml::from_str(include_str!("../../franken-extension-host/Cargo.toml"))
+            .map_err(|error| format!("failed to parse extension-host Cargo.toml: {error}"))?;
+
+    Ok(manifest
+        .get("features")
+        .and_then(toml::Value::as_table)
+        .map(|features| features.keys().cloned().collect())
+        .unwrap_or_default())
+}
+
 // ---------------------------------------------------------------------------
 // Conformance Test Runner
 // ---------------------------------------------------------------------------
@@ -656,12 +625,16 @@ fn extension_host_ambient_authority_conformance() {
     let mut pass = 0;
     let mut fail = 0;
     let mut xfail = 0;
+    let mut must_pass = 0;
 
     for case in CONFORMANCE_CASES {
         let result = (case.test_fn)();
         let verdict = match result {
             ConformanceResult::Pass => {
                 pass += 1;
+                if case.level == RequirementLevel::Must {
+                    must_pass += 1;
+                }
                 "PASS"
             }
             ConformanceResult::Fail { ref reason } => {
@@ -676,11 +649,16 @@ fn extension_host_ambient_authority_conformance() {
             }
         };
 
-        // Structured JSON-line output for CI parsing
-        eprintln!(
-            "{{\"id\":\"{}\",\"verdict\":\"{}\",\"level\":\"{:?}\",\"section\":\"{}\"}}",
-            case.id, verdict, case.level, case.section
-        );
+        // Structured JSON-line output for CI parsing. Build it through serde so
+        // future descriptions with quotes or backslashes remain valid JSON.
+        let record = serde_json::json!({
+            "id": case.id,
+            "verdict": verdict,
+            "level": format!("{:?}", case.level),
+            "section": case.section,
+            "description": case.description,
+        });
+        eprintln!("{record}");
     }
 
     let total = pass + fail + xfail;
@@ -718,14 +696,16 @@ fn extension_host_ambient_authority_conformance() {
     // MUST clause coverage ≥ 95% requirement
     let total_must = by_section.values().map(|(must, _, _)| must).sum::<usize>();
     let must_score = if total_must > 0 {
-        (pass as f32) / (total_must as f32)
+        (must_pass as f32) / (total_must as f32)
     } else {
         0.0
     };
 
     assert!(
         must_score >= 0.95,
-        "MUST clause coverage {:.2}% < 95% minimum",
-        must_score * 100.0
+        "MUST clause coverage {:.2}% < 95% minimum ({}/{} MUST clauses passed)",
+        must_score * 100.0,
+        must_pass,
+        total_must
     );
 }

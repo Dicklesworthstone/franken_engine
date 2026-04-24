@@ -22,7 +22,8 @@
 #[test]
 fn certified_rewrite_optimizer_intentionally_unavailable() {
     // Verify the module is not accessible from the public API
-    let module_available = cfg!(feature = "certified_rewrite_optimizer_production");
+    let module_available =
+        option_env!("CARGO_FEATURE_CERTIFIED_REWRITE_OPTIMIZER_PRODUCTION").is_some();
 
     // Should be false - module is intentionally disabled
     assert!(

@@ -17,7 +17,6 @@ use std::path::{Path, PathBuf};
 
 // Golden file testing imports
 use regex::Regex;
-use serde_json;
 
 use frankenengine_engine::capability::RuntimeCapability;
 use frankenengine_engine::capability_token::{

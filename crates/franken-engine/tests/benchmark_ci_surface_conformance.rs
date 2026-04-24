@@ -13,13 +13,12 @@
 //!
 //! Pattern: Spec-Derived Test Matrix (Pattern 4 from testing-conformance-harnesses)
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use frankenengine_engine::benchmark_coverage_saturation::{
     BenchmarkEntry, DEFAULT_MIN_REPRESENTATIVENESS_SCORE_MILLIONTHS, RepresentativenessMetric,
-    RepresentativenessScore, SaturationBoard, SaturationConfig, SaturationReport, WorkloadFamily,
+    SaturationBoard, SaturationConfig, WorkloadFamily,
 };
-use frankenengine_engine::hash_tiers::ContentHash;
 use serde::{Deserialize, Serialize};
 
 /// Conformance requirement levels from RFC-style specifications
@@ -47,15 +46,6 @@ enum ConformanceResult {
     Pass,
     Fail { reason: String },
     ExpectedFailure { reason: String }, // Known divergence (XFAIL)
-}
-
-impl ConformanceResult {
-    fn is_success(&self) -> bool {
-        matches!(
-            self,
-            ConformanceResult::Pass | ConformanceResult::ExpectedFailure { .. }
-        )
-    }
 }
 
 /// Benchmark CI surface fail-closed conformance requirements
@@ -203,11 +193,12 @@ fn test_uniform_distribution_fails_representativeness() -> ConformanceResult {
         }
     }
 
-    let mut config = SaturationConfig::default();
-    config.min_families_covered = WorkloadFamily::COUNT as u64;
-    config.min_representativeness_score_millionths =
-        DEFAULT_MIN_REPRESENTATIVENESS_SCORE_MILLIONTHS;
-    config.target_families = WorkloadFamily::ALL.iter().copied().collect();
+    let config = SaturationConfig {
+        min_families_covered: WorkloadFamily::COUNT as u64,
+        min_representativeness_score_millionths: DEFAULT_MIN_REPRESENTATIVENESS_SCORE_MILLIONTHS,
+        target_families: WorkloadFamily::ALL.iter().copied().collect(),
+        ..SaturationConfig::default()
+    };
 
     let report = board.evaluate(&config);
 
@@ -253,10 +244,12 @@ fn test_single_tag_fails_diversity() -> ConformanceResult {
         }
     }
 
-    let mut config = SaturationConfig::default();
-    config.min_families_covered = WorkloadFamily::COUNT as u64;
-    config.min_representativeness_score_millionths = 200_000; // Moderate threshold
-    config.target_families = WorkloadFamily::ALL.iter().copied().collect();
+    let config = SaturationConfig {
+        min_families_covered: WorkloadFamily::COUNT as u64,
+        min_representativeness_score_millionths: 200_000, // Moderate threshold
+        target_families: WorkloadFamily::ALL.iter().copied().collect(),
+        ..SaturationConfig::default()
+    };
 
     let report = board.evaluate(&config);
 
@@ -305,10 +298,12 @@ fn test_representativeness_passed_requires_floor() -> ConformanceResult {
         }
     }
 
-    let mut config = SaturationConfig::default();
-    config.min_families_covered = WorkloadFamily::COUNT as u64;
-    config.min_representativeness_score_millionths = 950_000; // Impossibly high threshold
-    config.target_families = WorkloadFamily::ALL.iter().copied().collect();
+    let config = SaturationConfig {
+        min_families_covered: WorkloadFamily::COUNT as u64,
+        min_representativeness_score_millionths: 950_000, // Impossibly high threshold
+        target_families: WorkloadFamily::ALL.iter().copied().collect(),
+        ..SaturationConfig::default()
+    };
 
     let report = board.evaluate(&config);
 
@@ -348,12 +343,14 @@ fn test_passes_gate_requires_both_conditions() -> ConformanceResult {
         }
     }
 
-    let mut config = SaturationConfig::default();
-    config.min_families_covered = 8;
-    config.min_entries_per_family = 3;
-    config.min_saturation_score_millionths = 100_000; // Low - should pass verdict
-    config.min_representativeness_score_millionths = 400_000; // High - should fail representativeness
-    config.target_families = WorkloadFamily::ALL.iter().take(8).copied().collect();
+    let config = SaturationConfig {
+        min_families_covered: 8,
+        min_entries_per_family: 3,
+        min_saturation_score_millionths: 100_000, // Low - should pass verdict
+        min_representativeness_score_millionths: 400_000, // High - should fail representativeness
+        target_families: WorkloadFamily::ALL.iter().take(8).copied().collect(),
+        ..SaturationConfig::default()
+    };
 
     let report = board.evaluate(&config);
 

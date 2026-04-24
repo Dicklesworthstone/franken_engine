@@ -233,9 +233,9 @@ fn parser_boundary_source(data: &[u8], goal: ParseGoal) -> String {
 #[test]
 fn parser_boundary_golden_regression_test() {
     // Test a curated set of interesting parser boundary cases
-    let test_cases = vec![
+    let test_cases = [
         // Empty case
-        vec![],
+        Vec::new(),
         // Simple script case
         vec![0x00, 0x10, 0x08, 0x42],
         // Module case

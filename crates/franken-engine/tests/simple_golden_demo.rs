@@ -63,7 +63,7 @@ fn test_deterministic_formatting() {
     output.push_str("==================================\n\n");
 
     // Test deterministic data structures
-    let test_values = vec![42u64, 100, 255, 1000];
+    let test_values = [42u64, 100, 255, 1000];
     for (i, value) in test_values.iter().enumerate() {
         output.push_str(&format!("Value {}: {:#x} ({})\n", i, value, value));
     }

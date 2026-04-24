@@ -13,15 +13,15 @@ use frankenengine_engine::scheduler_invariants::{
 };
 use proptest::prelude::*;
 
-/// MR Strength Matrix for Scheduler Replay
-///
-/// | MR | Fault Sensitivity | Independence | Cost | Score | Category |
-/// |----|------------------|--------------|------|-------|----------|
-/// | Identity replay | 5 (core correctness) | 5 (unique) | 1 (fast) | 25.0 | Equivalence |
-/// | Action permutation | 4 (race conditions) | 4 (orthogonal) | 2 (medium) | 8.0 | Permutative |
-/// | Subsequence monotonic | 3 (prefix bugs) | 4 (different domain) | 1 (fast) | 12.0 | Inclusive |
-/// | Replay composition | 4 (complex sequences) | 3 (related to identity) | 3 (slow) | 4.0 | Additive |
-/// | State idempotence | 3 (convergence bugs) | 3 (medium independence) | 2 (medium) | 4.5 | Invertive |
+// MR Strength Matrix for Scheduler Replay
+//
+// | MR | Fault Sensitivity | Independence | Cost | Score | Category |
+// |----|------------------|--------------|------|-------|----------|
+// | Identity replay | 5 (core correctness) | 5 (unique) | 1 (fast) | 25.0 | Equivalence |
+// | Action permutation | 4 (race conditions) | 4 (orthogonal) | 2 (medium) | 8.0 | Permutative |
+// | Subsequence monotonic | 3 (prefix bugs) | 4 (different domain) | 1 (fast) | 12.0 | Inclusive |
+// | Replay composition | 4 (complex sequences) | 3 (related to identity) | 3 (slow) | 4.0 | Additive |
+// | State idempotence | 3 (convergence bugs) | 3 (medium independence) | 2 (medium) | 4.5 | Invertive |
 
 // ---------------------------------------------------------------------------
 // Test Infrastructure
@@ -103,7 +103,7 @@ fn mr_identity_replay_determinism() {
     )| {
         let automaton = create_test_automaton();
         let actions: Vec<TransitionLabel> = action_sequence.iter()
-            .map(|s| TransitionLabel::new(s))
+            .map(TransitionLabel::new)
             .collect();
 
         // Two identical replays must produce identical state sequences
@@ -124,7 +124,7 @@ fn mr_subsequence_monotonic() {
     )| {
         let automaton = create_test_automaton();
         let full_actions: Vec<TransitionLabel> = full_sequence.iter()
-            .map(|s| TransitionLabel::new(s))
+            .map(TransitionLabel::new)
             .collect();
 
         // Test all prefixes
@@ -155,7 +155,7 @@ fn mr_action_permutation_invariance() {
         TransitionLabel::new("finish"),
     ];
 
-    let noise_actions = vec![
+    let noise_actions = [
         TransitionLabel::new("invalid1"),
         TransitionLabel::new("invalid2"),
     ];
@@ -216,11 +216,13 @@ fn mr_replay_composition() {
     );
 
     // Second part should match the stateful continuation from the join state.
-    // simulate_replay prefixes the start state, so the combined tail beginning
-    // at result1.len()-1 (the join state) must equal result2_from_active in full.
+    // simulate_replay prefixes the start state, so combined_result[join..] (the
+    // tail beginning at the join state) must equal result2_from_active in full.
+    // Open-ended slice keeps a length mismatch as a clean assert_eq failure
+    // rather than an out-of-bounds panic.
     let join = result1.len() - 1;
     assert_eq!(
-        &combined_result[join..join + result2_from_active.len()],
+        &combined_result[join..],
         &result2_from_active[..],
         "Combined replay diverged in second segment"
     );
@@ -292,7 +294,7 @@ fn mr_composite_identity_subsequence() {
     )| {
         let automaton = create_test_automaton();
         let full_actions: Vec<TransitionLabel> = full_sequence.iter()
-            .map(|s| TransitionLabel::new(s))
+            .map(TransitionLabel::new)
             .collect();
 
         for prefix_len in 1..full_actions.len() {

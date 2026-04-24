@@ -88,44 +88,46 @@ fn controller_profile(
     }
 }
 
-fn timescale_certificate(
-    certificate_id: &str,
-    fast_controller: &str,
-    slow_controller: &str,
+struct TimescaleCertificateSpec<'a> {
+    certificate_id: &'a str,
+    fast_controller: &'a str,
+    slow_controller: &'a str,
     fast_interval_millionths: i64,
     slow_interval_millionths: i64,
     ratio_millionths: u64,
     verdict: SeparationVerdict,
     issued_epoch: u64,
-) -> TimescaleSeparationCertificate {
-    let pair = controller_pair(fast_controller, slow_controller);
+}
+
+fn timescale_certificate(spec: TimescaleCertificateSpec<'_>) -> TimescaleSeparationCertificate {
+    let pair = controller_pair(spec.fast_controller, spec.slow_controller);
     TimescaleSeparationCertificate {
         schema_version: TIMESCALE_CERTIFICATE_SCHEMA_VERSION.to_string(),
         bead_id: TIMESCALE_CERTIFICATE_BEAD_ID.to_string(),
-        certificate_id: certificate_id.to_string(),
+        certificate_id: spec.certificate_id.to_string(),
         pair: pair.clone(),
         ratio: TimescaleRatio {
             pair,
-            ratio_millionths,
+            ratio_millionths: spec.ratio_millionths,
             ratio_basis: RatioBasis::Observation,
         },
-        verdict,
+        verdict: spec.verdict,
         sufficient_threshold_millionths: DEFAULT_SUFFICIENT_RATIO_MILLIONTHS,
         marginal_threshold_millionths: DEFAULT_MARGINAL_RATIO_MILLIONTHS,
         fast_profile: controller_profile(
-            fast_controller,
-            fast_interval_millionths,
+            spec.fast_controller,
+            spec.fast_interval_millionths,
             1_000,
-            issued_epoch,
+            spec.issued_epoch,
         ),
         slow_profile: controller_profile(
-            slow_controller,
-            slow_interval_millionths,
+            spec.slow_controller,
+            spec.slow_interval_millionths,
             200,
-            issued_epoch,
+            spec.issued_epoch,
         ),
-        issued_epoch,
-        evidence_ids: vec![format!("evidence_{certificate_id}")],
+        issued_epoch: spec.issued_epoch,
+        evidence_ids: vec![format!("evidence_{}", spec.certificate_id)],
     }
 }
 
@@ -195,16 +197,16 @@ fn certificate_evidence_network_io() {
 
 #[test]
 fn timescale_separation_certificate_sufficient() {
-    let cert = timescale_certificate(
-        "cert_sufficient_001",
-        "gc_controller",
-        "batch_processor",
-        100_000,
-        5_000_000,
-        50_000_000,
-        SeparationVerdict::Sufficient,
-        1_640_995_200,
-    );
+    let cert = timescale_certificate(TimescaleCertificateSpec {
+        certificate_id: "cert_sufficient_001",
+        fast_controller: "gc_controller",
+        slow_controller: "batch_processor",
+        fast_interval_millionths: 100_000,
+        slow_interval_millionths: 5_000_000,
+        ratio_millionths: 50_000_000,
+        verdict: SeparationVerdict::Sufficient,
+        issued_epoch: 1_640_995_200,
+    });
 
     let json = to_deterministic_json(&cert);
     assert_golden("timescale_certificate_sufficient", &json);
@@ -212,16 +214,16 @@ fn timescale_separation_certificate_sufficient() {
 
 #[test]
 fn timescale_separation_certificate_marginal() {
-    let cert = timescale_certificate(
-        "cert_marginal_002",
-        "realtime_monitor",
-        "periodic_cleanup",
-        50_000,
-        200_000,
-        4_000_000,
-        SeparationVerdict::Marginal,
-        1_640_995_300,
-    );
+    let cert = timescale_certificate(TimescaleCertificateSpec {
+        certificate_id: "cert_marginal_002",
+        fast_controller: "realtime_monitor",
+        slow_controller: "periodic_cleanup",
+        fast_interval_millionths: 50_000,
+        slow_interval_millionths: 200_000,
+        ratio_millionths: 4_000_000,
+        verdict: SeparationVerdict::Marginal,
+        issued_epoch: 1_640_995_300,
+    });
 
     let json = to_deterministic_json(&cert);
     assert_golden("timescale_certificate_marginal", &json);
@@ -229,16 +231,16 @@ fn timescale_separation_certificate_marginal() {
 
 #[test]
 fn timescale_separation_certificate_insufficient() {
-    let cert = timescale_certificate(
-        "cert_insufficient_003",
-        "high_freq_trader",
-        "low_freq_trader",
-        1_000,
-        2_000,
-        2_000_000,
-        SeparationVerdict::Insufficient,
-        1_640_995_400,
-    );
+    let cert = timescale_certificate(TimescaleCertificateSpec {
+        certificate_id: "cert_insufficient_003",
+        fast_controller: "high_freq_trader",
+        slow_controller: "low_freq_trader",
+        fast_interval_millionths: 1_000,
+        slow_interval_millionths: 2_000,
+        ratio_millionths: 2_000_000,
+        verdict: SeparationVerdict::Insufficient,
+        issued_epoch: 1_640_995_400,
+    });
 
     let json = to_deterministic_json(&cert);
     assert_golden("timescale_certificate_insufficient", &json);
@@ -247,26 +249,26 @@ fn timescale_separation_certificate_insufficient() {
 #[test]
 fn certificate_bundle_mixed_verdicts() {
     let certificates = vec![
-        timescale_certificate(
-            "bundle_cert_1",
-            "controller_a",
-            "controller_b",
-            10_000,
-            100_000,
-            10_000_000,
-            SeparationVerdict::Sufficient,
-            1_640_995_500,
-        ),
-        timescale_certificate(
-            "bundle_cert_2",
-            "controller_a",
-            "controller_c",
-            10_000,
-            30_000,
-            3_000_000,
-            SeparationVerdict::Marginal,
-            1_640_995_500,
-        ),
+        timescale_certificate(TimescaleCertificateSpec {
+            certificate_id: "bundle_cert_1",
+            fast_controller: "controller_a",
+            slow_controller: "controller_b",
+            fast_interval_millionths: 10_000,
+            slow_interval_millionths: 100_000,
+            ratio_millionths: 10_000_000,
+            verdict: SeparationVerdict::Sufficient,
+            issued_epoch: 1_640_995_500,
+        }),
+        timescale_certificate(TimescaleCertificateSpec {
+            certificate_id: "bundle_cert_2",
+            fast_controller: "controller_a",
+            slow_controller: "controller_c",
+            fast_interval_millionths: 10_000,
+            slow_interval_millionths: 30_000,
+            ratio_millionths: 3_000_000,
+            verdict: SeparationVerdict::Marginal,
+            issued_epoch: 1_640_995_500,
+        }),
     ];
 
     let bundle = CertificateBundle {

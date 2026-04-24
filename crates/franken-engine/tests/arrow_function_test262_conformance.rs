@@ -374,7 +374,7 @@ impl ArrowFunctionHarness {
             schema_version: ARROW_FUNCTION_CONFORMANCE_SCHEMA.to_string(),
             security_epoch,
             timestamp: chrono::Utc::now().to_rfc3339(),
-            test_results: results,
+            test_results: results.clone(),
             statistics,
             coverage_by_category: self.calculate_coverage_by_category(&results),
         }

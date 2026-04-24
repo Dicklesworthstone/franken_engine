@@ -42,4 +42,11 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "resource_certificate_consumer"
+path = "fuzz_targets/resource_certificate_consumer.rs"
+test = false
+doc = false
+bench = false
+
 [workspace]

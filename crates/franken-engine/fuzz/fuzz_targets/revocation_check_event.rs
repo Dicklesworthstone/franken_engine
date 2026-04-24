@@ -4,7 +4,9 @@ use arbitrary::{Arbitrary, Unstructured};
 use frankenengine_engine::engine_object_id::EngineObjectId;
 use frankenengine_engine::policy_checkpoint::DeterministicTimestamp;
 use frankenengine_engine::revocation_chain::RevocationTargetType;
-use frankenengine_engine::revocation_enforcement::{EnforcementPoint, RevocationCheckEvent};
+use frankenengine_engine::revocation_enforcement::{
+    EnforcementPoint, RevocationCheckEvent, SchemaVersion,
+};
 use libfuzzer_sys::fuzz_target;
 
 struct ArbitraryRevocationCheckEvent(RevocationCheckEvent);
@@ -12,6 +14,7 @@ struct ArbitraryRevocationCheckEvent(RevocationCheckEvent);
 impl<'a> Arbitrary<'a> for ArbitraryRevocationCheckEvent {
     fn arbitrary(u: &mut Unstructured<'a>) -> arbitrary::Result<Self> {
         Ok(Self(RevocationCheckEvent {
+            schema_version: SchemaVersion::V1.as_u16(),
             enforcement_point: arbitrary_enforcement_point(u)?,
             target_id: EngineObjectId(<[u8; 32]>::arbitrary(u)?),
             target_type: arbitrary_target_type(u)?,

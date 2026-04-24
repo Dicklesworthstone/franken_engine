@@ -834,7 +834,7 @@ impl BudgetEnforcer {
             .extensions
             .get(extension_id)
             .map(|s| s.budget_snapshots())
-            .unwrap();
+            .unwrap_or_default();
 
         self.decision_sequence += 1;
         let receipt = EnforcementReceipt::from_input(EnforcementReceiptInput {

@@ -295,21 +295,53 @@ fn control_plane_adapter_error_codes_are_stable() {
 // ---------- Mock infrastructure ----------
 
 #[test]
-fn mock_budget_tracks_consumption() {
-    let mut budget = control_plane_mocks::MockBudget::new(100);
-    assert_eq!(budget.remaining_ms(), 100);
-    assert_eq!(budget.consumed_ms(), 0);
+fn real_budget_controller_tracks_consumption() {
+    use frankenengine_engine::runtime_decision_theory::{BudgetConfig, BudgetController};
+    use frankenengine_engine::security_epoch::SecurityEpoch;
 
-    budget.consume(30).expect("consume 30ms");
-    assert_eq!(budget.remaining_ms(), 70);
-    assert_eq!(budget.consumed_ms(), 30);
+    let config = BudgetConfig {
+        compute_budget_us: 100_000, // 100ms in microseconds
+        memory_budget_bytes: 1_000_000,
+        warning_threshold_millionths: 800_000, // 80%
+        deterministic_fallback_on_exhaust: true,
+    };
+
+    let mut controller = BudgetController::new(config, SecurityEpoch::from_raw(1));
+
+    // Initially, no consumption
+    assert_eq!(controller.compute_consumed_us(), 0);
+    assert_eq!(controller.compute_remaining_us(), 100_000);
+    assert!(!controller.fallback_active());
+
+    // Consume 30ms (30,000 microseconds)
+    let result = controller.consume_compute(30_000);
+    assert!(result.is_ok());
+    assert_eq!(controller.compute_consumed_us(), 30_000);
+    assert_eq!(controller.compute_remaining_us(), 70_000);
+    assert!(!controller.fallback_active());
 }
 
 #[test]
-fn mock_budget_rejects_overspend() {
-    let mut budget = control_plane_mocks::MockBudget::new(10);
-    let result = budget.consume(20);
+fn real_budget_controller_rejects_overspend() {
+    use frankenengine_engine::runtime_decision_theory::{BudgetConfig, BudgetController};
+    use frankenengine_engine::security_epoch::SecurityEpoch;
+
+    let config = BudgetConfig {
+        compute_budget_us: 10_000, // 10ms in microseconds
+        memory_budget_bytes: 1_000_000,
+        warning_threshold_millionths: 800_000,
+        deterministic_fallback_on_exhaust: true,
+    };
+
+    let mut controller = BudgetController::new(config, SecurityEpoch::from_raw(1));
+
+    // Try to consume 20ms (20,000 microseconds) when budget is only 10ms
+    let result = controller.consume_compute(20_000);
     assert!(result.is_err());
+
+    // Budget should remain unchanged after failed consumption
+    assert_eq!(controller.compute_consumed_us(), 0);
+    assert_eq!(controller.compute_remaining_us(), 10_000);
 }
 
 #[test]

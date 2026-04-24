@@ -1788,10 +1788,12 @@ mod tests {
         // This test implements the metamorphic property specified in bd-3i0z8:
         // schedule(X) ~ schedule(T(X)) where T(X) is X with independent tasks swapped.
 
-        let policy = SimPolicy {
-            default_priority: SimPriority::Normal,
-            priority_overrides: BTreeMap::new(),
+        let policy = SchedulerPolicy {
+            max_ticks: 10,
+            max_events_per_tick: 100,
             drain_microtasks_first: true,
+            gc_interval_ticks: 0,
+            enable_timer_coalescing: false,
             deterministic_tie_break: true,
         };
 
@@ -1805,10 +1807,10 @@ mod tests {
         // - task_3: Normal priority (independent from task_2)
         // - task_4: Low priority (always dispatched last)
         let tasks = vec![
-            ("task_high", SimPriority::High, 1000),
+            ("task_high", SimPriority::HighPriority, 1000),
             ("task_normal_a", SimPriority::Normal, 2000),
             ("task_normal_b", SimPriority::Normal, 3000),
-            ("task_low", SimPriority::Low, 4000),
+            ("task_low", SimPriority::LowPriority, 4000),
         ];
 
         // Schedule tasks in original order: high, normal_a, normal_b, low
@@ -1827,10 +1829,10 @@ mod tests {
         // Schedule tasks in swapped order: high, normal_b, normal_a, low
         // This swaps the two independent normal-priority tasks
         let swapped_tasks = vec![
-            ("task_high", SimPriority::High, 1000),
+            ("task_high", SimPriority::HighPriority, 1000),
             ("task_normal_b", SimPriority::Normal, 3000), // Swapped
             ("task_normal_a", SimPriority::Normal, 2000), // Swapped
-            ("task_low", SimPriority::Low, 4000),
+            ("task_low", SimPriority::LowPriority, 4000),
         ];
 
         let mut swapped_ids = Vec::new();
@@ -1844,6 +1846,18 @@ mod tests {
             );
             swapped_ids.push(id);
         }
+
+        let event_map_by_id = |scheduler: &SimScheduler| -> BTreeMap<u64, SimEvent> {
+            scheduler
+                .event_queue
+                .values()
+                .flat_map(|events| events.iter().cloned())
+                .map(|event| (event.id, event))
+                .collect()
+        };
+
+        let original_event_map = event_map_by_id(&scheduler_original);
+        let swapped_event_map = event_map_by_id(&scheduler_swapped);
 
         // Dispatch both schedulers
         let outcome_original = scheduler_original
@@ -1866,29 +1880,29 @@ mod tests {
         let original_events: Vec<_> = outcome_original
             .events_dispatched
             .iter()
-            .map(|&id| {
-                scheduler_original
-                    .pending_events
-                    .get(&id)
-                    .expect("dispatched event should exist in pending")
+            .map(|id| {
+                original_event_map
+                    .get(id)
+                    .expect("dispatched event should exist in scheduled snapshot")
+                    .clone()
             })
             .collect();
         let swapped_events: Vec<_> = outcome_swapped
             .events_dispatched
             .iter()
-            .map(|&id| {
-                scheduler_swapped
-                    .pending_events
-                    .get(&id)
-                    .expect("dispatched event should exist in pending")
+            .map(|id| {
+                swapped_event_map
+                    .get(id)
+                    .expect("dispatched event should exist in scheduled snapshot")
+                    .clone()
             })
             .collect();
 
         // Priority equivalence: both should dispatch in priority order
-        assert_eq!(original_events[0].priority, SimPriority::High);
-        assert_eq!(original_events[3].priority, SimPriority::Low);
-        assert_eq!(swapped_events[0].priority, SimPriority::High);
-        assert_eq!(swapped_events[3].priority, SimPriority::Low);
+        assert_eq!(original_events[0].priority, SimPriority::HighPriority);
+        assert_eq!(original_events[3].priority, SimPriority::LowPriority);
+        assert_eq!(swapped_events[0].priority, SimPriority::HighPriority);
+        assert_eq!(swapped_events[3].priority, SimPriority::LowPriority);
 
         // The two middle events should both be Normal priority (order may vary)
         assert_eq!(original_events[1].priority, SimPriority::Normal);
@@ -1898,29 +1912,34 @@ mod tests {
 
         // Metamorphic equivalence: the set of payloads should be identical
         // (regardless of order within same priority level)
-        let mut original_payloads: Vec<_> =
-            original_events.iter().map(|e| e.payload_bytes).collect();
-        let mut swapped_payloads: Vec<_> = swapped_events.iter().map(|e| e.payload_bytes).collect();
+        let mut original_payloads: Vec<_> = original_events
+            .iter()
+            .map(|e| e.deterministic_seed)
+            .collect();
+        let mut swapped_payloads: Vec<_> = swapped_events
+            .iter()
+            .map(|e| e.deterministic_seed)
+            .collect();
 
         original_payloads.sort_unstable();
         swapped_payloads.sort_unstable();
         assert_eq!(original_payloads, swapped_payloads);
 
         // Priority band invariant: High priority task always first, Low always last
-        assert_eq!(original_events[0].payload_bytes, 1000); // task_high
-        assert_eq!(original_events[3].payload_bytes, 4000); // task_low
-        assert_eq!(swapped_events[0].payload_bytes, 1000); // task_high
-        assert_eq!(swapped_events[3].payload_bytes, 4000); // task_low
+        assert_eq!(original_events[0].deterministic_seed, 1000); // task_high
+        assert_eq!(original_events[3].deterministic_seed, 4000); // task_low
+        assert_eq!(swapped_events[0].deterministic_seed, 1000); // task_high
+        assert_eq!(swapped_events[3].deterministic_seed, 4000); // task_low
 
         // The normal-priority tasks (2000, 3000) can appear in either order
         // within their priority band, confirming independence property
-        let normal_payloads_original: BTreeSet<_> = original_events[1..3]
+        let normal_payloads_original: std::collections::BTreeSet<_> = original_events[1..3]
             .iter()
-            .map(|e| e.payload_bytes)
+            .map(|e| e.deterministic_seed)
             .collect();
-        let normal_payloads_swapped: BTreeSet<_> = swapped_events[1..3]
+        let normal_payloads_swapped: std::collections::BTreeSet<_> = swapped_events[1..3]
             .iter()
-            .map(|e| e.payload_bytes)
+            .map(|e| e.deterministic_seed)
             .collect();
         let expected_normal_payloads = [2000, 3000].iter().copied().collect();
 

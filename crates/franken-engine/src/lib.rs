@@ -174,6 +174,7 @@ pub mod frontier_complex_cartography;
 pub mod frontier_demo_gate;
 pub mod frontier_hole_governance;
 pub mod frx_lockstep_oracle;
+pub mod ga_exit_evidence_package;
 pub mod galaxy_brain_explainability;
 pub mod gc;
 pub mod gc_pause;

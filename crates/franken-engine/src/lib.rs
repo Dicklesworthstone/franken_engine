@@ -6,6 +6,7 @@ use std::fmt;
 
 pub mod aara_resource_certificate;
 pub mod aara_resource_consumer;
+pub mod acceptance_ledger;
 pub mod acquisition_experiment_oracle;
 pub mod activation_lifecycle;
 pub mod adversarial_campaign;

@@ -27,6 +27,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::hash_tiers::ContentHash;
+use crate::region_lifecycle::{Obligation, ObligationStatus};
 use crate::security_epoch::SecurityEpoch;
 
 // ---------------------------------------------------------------------------
@@ -785,6 +786,22 @@ impl GovernanceState {
         self.rollbacks.iter().filter(|r| r.epoch == epoch).collect()
     }
 
+    /// Return rollback records for a specific function.
+    pub fn rollbacks_for_function(&self, function_id: &str) -> Vec<&RollbackRecord> {
+        self.rollbacks
+            .iter()
+            .filter(|record| record.function_id == function_id)
+            .collect()
+    }
+
+    /// Return optimization certificates for a specific function.
+    pub fn certificates_for_function(&self, function_id: &str) -> Vec<&OptimizationCertificate> {
+        self.certificates
+            .iter()
+            .filter(|certificate| certificate.function_id == function_id)
+            .collect()
+    }
+
     /// Return forensic entries for a specific function.
     pub fn forensics_for_function(&self, function_id: &str) -> Vec<&ForensicEntry> {
         self.forensic_entries
@@ -1097,6 +1114,256 @@ impl GovernanceState {
 }
 
 // ---------------------------------------------------------------------------
+// ObligationCheck — governance integration for certified optimization
+// ---------------------------------------------------------------------------
+
+/// Workload governance scorecard metrics for obligation checks.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkloadGovernanceScorecard {
+    /// Total optimization attempts in this epoch.
+    pub optimization_attempts: u64,
+    /// Success rate in millionths (1_000_000 = 100%).
+    pub success_rate_millionths: u64,
+    /// Average rollback latency in virtual ticks.
+    pub avg_rollback_latency_ticks: u64,
+    /// Forensic coverage percentage in millionths.
+    pub forensic_coverage_millionths: u64,
+    /// Current risk score in millionths (0 = no risk, 1_000_000 = maximum risk).
+    pub risk_score_millionths: u64,
+}
+
+impl WorkloadGovernanceScorecard {
+    /// Create a scorecard with default safe values.
+    pub fn default_safe() -> Self {
+        Self {
+            optimization_attempts: 0,
+            success_rate_millionths: MILLIONTHS, // 100% success by default
+            avg_rollback_latency_ticks: 0,
+            forensic_coverage_millionths: MILLIONTHS, // 100% coverage by default
+            risk_score_millionths: 0,                 // No risk by default
+        }
+    }
+
+    /// Update the scorecard with new optimization outcome.
+    pub fn record_optimization(&mut self, success: bool, rollback_latency_ticks: u64) {
+        self.optimization_attempts += 1;
+
+        // Update success rate using incremental average
+        if success {
+            let successes =
+                (self.success_rate_millionths * (self.optimization_attempts - 1)) / MILLIONTHS + 1;
+            self.success_rate_millionths = (successes * MILLIONTHS) / self.optimization_attempts;
+        } else {
+            let successes =
+                (self.success_rate_millionths * (self.optimization_attempts - 1)) / MILLIONTHS;
+            self.success_rate_millionths = (successes * MILLIONTHS) / self.optimization_attempts;
+        }
+
+        // Update rollback latency using incremental average
+        if rollback_latency_ticks > 0 {
+            self.avg_rollback_latency_ticks = (self.avg_rollback_latency_ticks
+                * (self.optimization_attempts - 1)
+                + rollback_latency_ticks)
+                / self.optimization_attempts;
+        }
+
+        // Update risk score based on success rate (higher failure rate = higher risk)
+        self.risk_score_millionths = MILLIONTHS - self.success_rate_millionths;
+    }
+}
+
+/// Obligation check linking certified optimization to rollback chain and workload governance.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ObligationCheck {
+    /// Unique identifier for this obligation check.
+    pub check_id: String,
+    /// Function being optimized.
+    pub function_id: String,
+    /// Optimization tier being applied.
+    pub tier: OptimizationTier,
+    /// Current epoch when check was created.
+    pub epoch: SecurityEpoch,
+    /// Reference to rollback chain for this function.
+    pub rollback_chain_refs: Vec<String>,
+    /// Workload governance scorecard at time of check.
+    pub scorecard: WorkloadGovernanceScorecard,
+    /// Underlying obligation that must be resolved.
+    pub obligation: Obligation,
+    /// Hash of the optimization proof (if available).
+    pub proof_hash: Option<ContentHash>,
+    /// Content hash of this check for integrity.
+    pub content_hash: ContentHash,
+}
+
+impl ObligationCheck {
+    /// Create a new obligation check for certified optimization.
+    pub fn new(
+        check_id: String,
+        function_id: String,
+        tier: OptimizationTier,
+        epoch: SecurityEpoch,
+        rollback_chain_refs: Vec<String>,
+        scorecard: WorkloadGovernanceScorecard,
+        proof_hash: Option<ContentHash>,
+    ) -> Self {
+        let obligation = Obligation {
+            id: format!("opt-check-{}", check_id),
+            description: format!(
+                "Certified optimization obligation for function '{}' at tier '{}'",
+                function_id, tier
+            ),
+            status: ObligationStatus::Pending,
+        };
+
+        let mut check = Self {
+            check_id,
+            function_id,
+            tier,
+            epoch,
+            rollback_chain_refs,
+            scorecard,
+            obligation,
+            proof_hash,
+            content_hash: ContentHash::compute(&[]), // Placeholder
+        };
+
+        // Compute actual content hash
+        check.content_hash = check.compute_content_hash();
+        check
+    }
+
+    /// Commit the obligation (mark as successful).
+    pub fn commit(&mut self) -> Result<(), GovernanceError> {
+        if self.obligation.status != ObligationStatus::Pending {
+            return Err(GovernanceError::InvalidConfig {
+                reason: format!(
+                    "Cannot commit obligation in state {:?}",
+                    self.obligation.status
+                ),
+            });
+        }
+        self.obligation.status = ObligationStatus::Committed;
+        self.content_hash = self.compute_content_hash();
+        Ok(())
+    }
+
+    /// Abort the obligation (mark as failed).
+    pub fn abort(&mut self) -> Result<(), GovernanceError> {
+        if self.obligation.status != ObligationStatus::Pending {
+            return Err(GovernanceError::InvalidConfig {
+                reason: format!(
+                    "Cannot abort obligation in state {:?}",
+                    self.obligation.status
+                ),
+            });
+        }
+        self.obligation.status = ObligationStatus::Aborted;
+        self.content_hash = self.compute_content_hash();
+        Ok(())
+    }
+
+    /// Compute content hash for integrity verification.
+    fn compute_content_hash(&self) -> ContentHash {
+        let mut hasher = Sha256::new();
+        hasher.update(self.check_id.as_bytes());
+        hasher.update(self.function_id.as_bytes());
+        hasher.update(&[self.tier.rank() as u8]);
+        hasher.update(&self.epoch.as_u64().to_le_bytes());
+
+        for rollback_ref in &self.rollback_chain_refs {
+            hasher.update(rollback_ref.as_bytes());
+        }
+
+        hasher.update(&self.scorecard.optimization_attempts.to_le_bytes());
+        hasher.update(&self.scorecard.success_rate_millionths.to_le_bytes());
+        hasher.update(&self.scorecard.avg_rollback_latency_ticks.to_le_bytes());
+        hasher.update(&self.scorecard.forensic_coverage_millionths.to_le_bytes());
+        hasher.update(&self.scorecard.risk_score_millionths.to_le_bytes());
+
+        hasher.update(self.obligation.id.as_bytes());
+        hasher.update(self.obligation.description.as_bytes());
+        hasher.update(&[self.obligation.status as u8]);
+
+        if let Some(proof_hash) = &self.proof_hash {
+            hasher.update(proof_hash.as_bytes());
+        }
+
+        ContentHash::from_bytes(hasher.finalize().into())
+    }
+}
+
+impl GovernanceState {
+    /// Emit an obligation check when certified optimization is applied.
+    pub fn emit_obligation_check(
+        &self,
+        check_id: String,
+        function_id: &str,
+        tier: OptimizationTier,
+        proof_hash: Option<ContentHash>,
+    ) -> Result<ObligationCheck, GovernanceError> {
+        // Gather rollback chain references for this function
+        let rollback_chain_refs: Vec<String> = self
+            .rollbacks
+            .iter()
+            .filter(|r| r.function_id == function_id)
+            .map(|r| r.record_id.clone())
+            .collect();
+
+        // Build workload governance scorecard
+        let function_rollbacks = self.rollbacks_for_function(function_id);
+        let function_certificates = self.certificates_for_function(function_id);
+        let function_forensics = self.forensics_for_function(function_id);
+
+        let total_attempts = function_certificates.len() as u64;
+        let valid_certificates = function_certificates
+            .iter()
+            .filter(|c| c.status_at(self.epoch) == CertificateStatus::Valid)
+            .count() as u64;
+
+        let success_rate_millionths = if total_attempts > 0 {
+            (valid_certificates * MILLIONTHS) / total_attempts
+        } else {
+            MILLIONTHS // Default to 100% if no history
+        };
+
+        let avg_rollback_latency_ticks = if !function_rollbacks.is_empty() {
+            function_rollbacks
+                .iter()
+                .map(|r| r.elapsed_steps)
+                .sum::<u64>()
+                / function_rollbacks.len() as u64
+        } else {
+            0
+        };
+
+        let forensic_coverage_millionths = if total_attempts > 0 {
+            let covered_attempts = function_forensics.len() as u64;
+            (covered_attempts.min(total_attempts) * MILLIONTHS) / total_attempts
+        } else {
+            MILLIONTHS
+        };
+
+        let scorecard = WorkloadGovernanceScorecard {
+            optimization_attempts: total_attempts,
+            success_rate_millionths,
+            avg_rollback_latency_ticks,
+            forensic_coverage_millionths,
+            risk_score_millionths: MILLIONTHS - success_rate_millionths,
+        };
+
+        Ok(ObligationCheck::new(
+            check_id,
+            function_id.to_string(),
+            tier,
+            self.epoch,
+            rollback_chain_refs,
+            scorecard,
+            proof_hash,
+        ))
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Unit tests
 // ---------------------------------------------------------------------------
 
@@ -1200,7 +1467,8 @@ mod tests {
     fn tier_serde_roundtrip() {
         for tier in OptimizationTier::ALL {
             let json = serde_json::to_string(tier).expect("serde deserialization should succeed");
-            let back: OptimizationTier = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: OptimizationTier =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*tier, back);
         }
     }
@@ -1234,7 +1502,8 @@ mod tests {
     fn status_serde_roundtrip() {
         for s in CertificateStatus::ALL {
             let json = serde_json::to_string(s).expect("serde deserialization should succeed");
-            let back: CertificateStatus = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: CertificateStatus =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*s, back);
         }
     }
@@ -1272,7 +1541,8 @@ mod tests {
     fn trigger_serde_roundtrip() {
         for t in RollbackTrigger::ALL {
             let json = serde_json::to_string(t).expect("serde deserialization should succeed");
-            let back: RollbackTrigger = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: RollbackTrigger =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*t, back);
         }
     }
@@ -1298,7 +1568,8 @@ mod tests {
     fn forensic_surface_serde_roundtrip() {
         for s in ForensicSurface::ALL {
             let json = serde_json::to_string(s).expect("serde deserialization should succeed");
-            let back: ForensicSurface = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ForensicSurface =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*s, back);
         }
     }
@@ -1362,7 +1633,8 @@ mod tests {
     fn cert_serde_roundtrip() {
         let cert = make_cert("c-serde", "fn-serde", OptimizationTier::Speculative);
         let json = serde_json::to_string(&cert).expect("serde deserialization should succeed");
-        let back: OptimizationCertificate = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: OptimizationCertificate =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cert, back);
     }
 
@@ -1386,7 +1658,8 @@ mod tests {
     fn rollback_serde_roundtrip() {
         let r = make_rollback("r-serde", "fn1", RollbackTrigger::OperatorCommand);
         let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
-        let back: RollbackRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: RollbackRecord =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 
@@ -1410,7 +1683,8 @@ mod tests {
     fn forensic_serde_roundtrip() {
         let f = make_forensic("f-serde", "fn1", ForensicSurface::RewriteChain);
         let json = serde_json::to_string(&f).expect("serde deserialization should succeed");
-        let back: ForensicEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ForensicEntry =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(f, back);
     }
 
@@ -1453,7 +1727,8 @@ mod tests {
     fn config_serde_roundtrip() {
         let cfg = GovernanceConfig::default_config();
         let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
-        let back: GovernanceConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GovernanceConfig =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cfg, back);
     }
 
@@ -1723,7 +1998,8 @@ mod tests {
             rollback_count: 2,
         };
         let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
-        let back: GovernanceVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GovernanceVerdict =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, back);
     }
 
@@ -1922,7 +2198,8 @@ mod tests {
         let config = GovernanceConfig::default_config();
         let report = state.report(&config);
         let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
-        let back: GovernanceReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GovernanceReport =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report, back);
     }
 
@@ -1977,7 +2254,8 @@ mod tests {
             tier: OptimizationTier::Speculative,
         };
         let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
-        let back: GovernanceError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GovernanceError =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(e, back);
     }
 
@@ -1993,5 +2271,374 @@ mod tests {
         assert_eq!(BEAD_ID, "bd-1lsy.7.7.3");
         assert_eq!(POLICY_ID, "RGC-607C");
         assert_eq!(MILLIONTHS, 1_000_000);
+    }
+
+    // --- ObligationCheck and WorkloadGovernanceScorecard tests ---
+
+    #[test]
+    fn workload_governance_scorecard_default_safe() {
+        let scorecard = WorkloadGovernanceScorecard::default_safe();
+        assert_eq!(scorecard.optimization_attempts, 0);
+        assert_eq!(scorecard.success_rate_millionths, MILLIONTHS);
+        assert_eq!(scorecard.avg_rollback_latency_ticks, 0);
+        assert_eq!(scorecard.forensic_coverage_millionths, MILLIONTHS);
+        assert_eq!(scorecard.risk_score_millionths, 0);
+    }
+
+    #[test]
+    fn workload_governance_scorecard_record_success() {
+        let mut scorecard = WorkloadGovernanceScorecard::default_safe();
+        scorecard.record_optimization(true, 100);
+        assert_eq!(scorecard.optimization_attempts, 1);
+        assert_eq!(scorecard.success_rate_millionths, MILLIONTHS);
+        assert_eq!(scorecard.avg_rollback_latency_ticks, 100);
+        assert_eq!(scorecard.risk_score_millionths, 0);
+    }
+
+    #[test]
+    fn workload_governance_scorecard_record_failure() {
+        let mut scorecard = WorkloadGovernanceScorecard::default_safe();
+        scorecard.record_optimization(false, 200);
+        assert_eq!(scorecard.optimization_attempts, 1);
+        assert_eq!(scorecard.success_rate_millionths, 0);
+        assert_eq!(scorecard.avg_rollback_latency_ticks, 200);
+        assert_eq!(scorecard.risk_score_millionths, MILLIONTHS);
+    }
+
+    #[test]
+    fn workload_governance_scorecard_mixed_records() {
+        let mut scorecard = WorkloadGovernanceScorecard::default_safe();
+        scorecard.record_optimization(true, 100);
+        scorecard.record_optimization(false, 300);
+        scorecard.record_optimization(true, 200);
+
+        assert_eq!(scorecard.optimization_attempts, 3);
+        assert_eq!(scorecard.success_rate_millionths, (2 * MILLIONTHS) / 3); // 66.67% success
+        assert_eq!(scorecard.avg_rollback_latency_ticks, 200); // (100 + 300 + 200) / 3
+        assert_eq!(scorecard.risk_score_millionths, MILLIONTHS / 3); // 33.33% risk
+    }
+
+    #[test]
+    fn workload_governance_scorecard_incremental_averages() {
+        let mut scorecard = WorkloadGovernanceScorecard::default_safe();
+        for i in 1..=10 {
+            scorecard.record_optimization(i % 2 == 0, i * 10); // Even numbers succeed
+        }
+
+        assert_eq!(scorecard.optimization_attempts, 10);
+        assert_eq!(scorecard.success_rate_millionths, MILLIONTHS / 2); // 50% success
+        assert_eq!(scorecard.avg_rollback_latency_ticks, 55); // Average of 10,20,...,100
+        assert_eq!(scorecard.risk_score_millionths, MILLIONTHS / 2); // 50% risk
+    }
+
+    #[test]
+    fn obligation_check_new() {
+        let epoch = SecurityEpoch::from_raw(100);
+        let scorecard = WorkloadGovernanceScorecard::default_safe();
+        let rollback_refs = vec!["r1".to_string(), "r2".to_string()];
+        let proof_hash = Some(ContentHash::compute(b"proof"));
+
+        let check = ObligationCheck::new(
+            "check1".to_string(),
+            "fn1".to_string(),
+            OptimizationTier::Aggressive,
+            epoch,
+            rollback_refs.clone(),
+            scorecard.clone(),
+            proof_hash,
+        );
+
+        assert_eq!(check.check_id, "check1");
+        assert_eq!(check.function_id, "fn1");
+        assert_eq!(check.tier, OptimizationTier::Aggressive);
+        assert_eq!(check.epoch, epoch);
+        assert_eq!(check.rollback_chain_refs, rollback_refs);
+        assert_eq!(check.scorecard, scorecard);
+        assert_eq!(check.obligation.id, "opt-check-check1");
+        assert_eq!(check.obligation.status, ObligationStatus::Pending);
+        assert!(check.obligation.description.contains("fn1"));
+        assert!(check.obligation.description.contains("aggressive"));
+    }
+
+    #[test]
+    fn obligation_check_commit() {
+        let epoch = SecurityEpoch::from_raw(100);
+        let scorecard = WorkloadGovernanceScorecard::default_safe();
+        let mut check = ObligationCheck::new(
+            "check1".to_string(),
+            "fn1".to_string(),
+            OptimizationTier::Standard,
+            epoch,
+            vec![],
+            scorecard,
+            None,
+        );
+
+        assert_eq!(check.obligation.status, ObligationStatus::Pending);
+        check.commit().unwrap();
+        assert_eq!(check.obligation.status, ObligationStatus::Committed);
+    }
+
+    #[test]
+    fn obligation_check_abort() {
+        let epoch = SecurityEpoch::from_raw(100);
+        let scorecard = WorkloadGovernanceScorecard::default_safe();
+        let mut check = ObligationCheck::new(
+            "check1".to_string(),
+            "fn1".to_string(),
+            OptimizationTier::Speculative,
+            epoch,
+            vec![],
+            scorecard,
+            None,
+        );
+
+        assert_eq!(check.obligation.status, ObligationStatus::Pending);
+        check.abort().unwrap();
+        assert_eq!(check.obligation.status, ObligationStatus::Aborted);
+    }
+
+    #[test]
+    fn obligation_check_double_commit_fails() {
+        let epoch = SecurityEpoch::from_raw(100);
+        let scorecard = WorkloadGovernanceScorecard::default_safe();
+        let mut check = ObligationCheck::new(
+            "check1".to_string(),
+            "fn1".to_string(),
+            OptimizationTier::Baseline,
+            epoch,
+            vec![],
+            scorecard,
+            None,
+        );
+
+        check.commit().unwrap();
+        let result = check.commit();
+        assert!(result.is_err());
+        if let Err(GovernanceError::InvalidConfig { reason }) = result {
+            assert!(reason.contains("Cannot commit"));
+        } else {
+            panic!("Expected InvalidConfig error");
+        }
+    }
+
+    #[test]
+    fn obligation_check_double_abort_fails() {
+        let epoch = SecurityEpoch::from_raw(100);
+        let scorecard = WorkloadGovernanceScorecard::default_safe();
+        let mut check = ObligationCheck::new(
+            "check1".to_string(),
+            "fn1".to_string(),
+            OptimizationTier::Aggressive,
+            epoch,
+            vec![],
+            scorecard,
+            None,
+        );
+
+        check.abort().unwrap();
+        let result = check.abort();
+        assert!(result.is_err());
+        if let Err(GovernanceError::InvalidConfig { reason }) = result {
+            assert!(reason.contains("Cannot abort"));
+        } else {
+            panic!("Expected InvalidConfig error");
+        }
+    }
+
+    #[test]
+    fn obligation_check_content_hash_stability() {
+        let epoch = SecurityEpoch::from_raw(100);
+        let scorecard = WorkloadGovernanceScorecard::default_safe();
+        let proof_hash = Some(ContentHash::compute(b"proof"));
+
+        let check1 = ObligationCheck::new(
+            "check1".to_string(),
+            "fn1".to_string(),
+            OptimizationTier::Aggressive,
+            epoch,
+            vec!["r1".to_string()],
+            scorecard.clone(),
+            proof_hash,
+        );
+
+        let check2 = ObligationCheck::new(
+            "check1".to_string(),
+            "fn1".to_string(),
+            OptimizationTier::Aggressive,
+            epoch,
+            vec!["r1".to_string()],
+            scorecard,
+            proof_hash,
+        );
+
+        assert_eq!(check1.content_hash, check2.content_hash);
+    }
+
+    #[test]
+    fn obligation_check_content_hash_changes_on_modification() {
+        let epoch = SecurityEpoch::from_raw(100);
+        let scorecard = WorkloadGovernanceScorecard::default_safe();
+        let mut check = ObligationCheck::new(
+            "check1".to_string(),
+            "fn1".to_string(),
+            OptimizationTier::Aggressive,
+            epoch,
+            vec![],
+            scorecard,
+            None,
+        );
+
+        let original_hash = check.content_hash.clone();
+        check.commit().unwrap();
+        assert_ne!(check.content_hash, original_hash);
+    }
+
+    #[test]
+    fn obligation_check_serde_roundtrip() {
+        let epoch = SecurityEpoch::from_raw(100);
+        let scorecard = WorkloadGovernanceScorecard::default_safe();
+        let check = ObligationCheck::new(
+            "check1".to_string(),
+            "fn1".to_string(),
+            OptimizationTier::Speculative,
+            epoch,
+            vec!["r1".to_string(), "r2".to_string()],
+            scorecard,
+            Some(ContentHash::compute(b"proof")),
+        );
+
+        let json = serde_json::to_string(&check).expect("serde deserialization should succeed");
+        let back: ObligationCheck =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        assert_eq!(check, back);
+    }
+
+    #[test]
+    fn governance_state_emit_obligation_check_no_history() {
+        let state = GovernanceState::new(SecurityEpoch::from_raw(100));
+        let check = state
+            .emit_obligation_check(
+                "check1".to_string(),
+                "fn1",
+                OptimizationTier::Aggressive,
+                None,
+            )
+            .unwrap();
+
+        assert_eq!(check.check_id, "check1");
+        assert_eq!(check.function_id, "fn1");
+        assert_eq!(check.tier, OptimizationTier::Aggressive);
+        assert!(check.rollback_chain_refs.is_empty());
+        assert_eq!(check.scorecard.optimization_attempts, 0);
+        assert_eq!(check.scorecard.success_rate_millionths, MILLIONTHS);
+        assert_eq!(check.scorecard.forensic_coverage_millionths, MILLIONTHS);
+    }
+
+    #[test]
+    fn governance_state_emit_obligation_check_with_history() {
+        let mut state = GovernanceState::new(epoch());
+
+        // Add certificates
+        state.add_certificate(make_cert("c1", "fn1", OptimizationTier::Aggressive));
+        state.add_certificate(make_expired_cert("c2", "fn1"));
+
+        // Add rollbacks
+        state.record_rollback(make_rollback("r1", "fn1", RollbackTrigger::ProofFailure));
+        state.record_rollback(make_rollback("r2", "fn1", RollbackTrigger::TimeoutExceeded));
+
+        // Add forensic entries
+        state.add_forensic_entry(make_forensic("f1", "fn1", ForensicSurface::SourceMapping));
+
+        let check = state
+            .emit_obligation_check(
+                "check1".to_string(),
+                "fn1",
+                OptimizationTier::Aggressive,
+                Some(ContentHash::compute(b"proof")),
+            )
+            .unwrap();
+
+        assert_eq!(check.rollback_chain_refs, vec!["r1", "r2"]);
+        assert_eq!(check.scorecard.optimization_attempts, 2);
+        assert_eq!(check.scorecard.success_rate_millionths, MILLIONTHS / 2); // 1 valid cert out of 2
+        assert_eq!(check.scorecard.forensic_coverage_millionths, MILLIONTHS / 2); // 1 forensic out of 2 attempts
+        assert_eq!(check.scorecard.risk_score_millionths, MILLIONTHS / 2); // 50% risk
+        assert!(check.proof_hash.is_some());
+    }
+
+    #[test]
+    fn governance_state_emit_obligation_check_different_functions() {
+        let mut state = GovernanceState::new(epoch());
+
+        // Add history for fn1
+        state.add_certificate(make_cert("c1", "fn1", OptimizationTier::Aggressive));
+        state.record_rollback(make_rollback("r1", "fn1", RollbackTrigger::ProofFailure));
+
+        // Add history for fn2
+        state.add_certificate(make_cert("c2", "fn2", OptimizationTier::Standard));
+
+        let check1 = state
+            .emit_obligation_check(
+                "check1".to_string(),
+                "fn1",
+                OptimizationTier::Aggressive,
+                None,
+            )
+            .unwrap();
+
+        let check2 = state
+            .emit_obligation_check(
+                "check2".to_string(),
+                "fn2",
+                OptimizationTier::Standard,
+                None,
+            )
+            .unwrap();
+
+        // fn1 has rollback history
+        assert_eq!(check1.rollback_chain_refs, vec!["r1"]);
+        assert_eq!(check1.scorecard.optimization_attempts, 1);
+
+        // fn2 has no rollback history
+        assert!(check2.rollback_chain_refs.is_empty());
+        assert_eq!(check2.scorecard.optimization_attempts, 1);
+    }
+
+    #[test]
+    fn governance_state_emit_obligation_check_latency_calculation() {
+        let mut state = GovernanceState::new(epoch());
+
+        // Add rollbacks with different latencies
+        let mut r1 = make_rollback("r1", "fn1", RollbackTrigger::ProofFailure);
+        r1.elapsed_steps = 100;
+        state.record_rollback(r1);
+
+        let mut r2 = make_rollback("r2", "fn1", RollbackTrigger::TimeoutExceeded);
+        r2.elapsed_steps = 300;
+        state.record_rollback(r2);
+
+        let check = state
+            .emit_obligation_check(
+                "check1".to_string(),
+                "fn1",
+                OptimizationTier::Aggressive,
+                None,
+            )
+            .unwrap();
+
+        assert_eq!(check.scorecard.avg_rollback_latency_ticks, 200); // (100 + 300) / 2
+    }
+
+    #[test]
+    fn workload_governance_scorecard_serde_roundtrip() {
+        let mut scorecard = WorkloadGovernanceScorecard::default_safe();
+        scorecard.record_optimization(true, 150);
+        scorecard.record_optimization(false, 250);
+
+        let json = serde_json::to_string(&scorecard).expect("serde deserialization should succeed");
+        let back: WorkloadGovernanceScorecard =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        assert_eq!(scorecard, back);
     }
 }

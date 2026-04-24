@@ -451,8 +451,18 @@ impl IteratorConformanceHarness {
     ) -> IteratorConformanceResult {
         let mut engine = HybridRouter::default();
 
-        match engine.eval(&test.source) {
-            Ok(_) => {
+        let execution = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            engine
+                .eval(&test.source)
+                .map(|_| ())
+                .map_err(|error| error.to_string())
+        }));
+
+        match execution {
+            Err(panic) => IteratorConformanceResult::Error {
+                error: Self::panic_message(panic),
+            },
+            Ok(Ok(())) => {
                 // For now, we'll mark tests as passed if they execute without error
                 // In a full implementation, this would capture and compare actual output
                 match &test.expected_result {
@@ -469,9 +479,9 @@ impl IteratorConformanceHarness {
                     }
                 }
             }
-            Err(error) => match &test.expected_result {
+            Ok(Err(error)) => match &test.expected_result {
                 ExpectedResult::ThrowError { error_type } => {
-                    if error.to_string().contains(error_type) {
+                    if error.contains(error_type) {
                         IteratorConformanceResult::Pass
                     } else {
                         IteratorConformanceResult::Fail {
@@ -479,10 +489,19 @@ impl IteratorConformanceHarness {
                         }
                     }
                 }
-                _ => IteratorConformanceResult::Error {
-                    error: error.to_string(),
-                },
+                _ => IteratorConformanceResult::Error { error },
             },
+        }
+    }
+
+    /// Convert engine panics into reportable conformance errors.
+    fn panic_message(panic: Box<dyn std::any::Any + Send>) -> String {
+        if let Some(message) = panic.downcast_ref::<&str>() {
+            format!("engine panicked: {message}")
+        } else if let Some(message) = panic.downcast_ref::<String>() {
+            format!("engine panicked: {message}")
+        } else {
+            "engine panicked with non-string payload".to_string()
         }
     }
 

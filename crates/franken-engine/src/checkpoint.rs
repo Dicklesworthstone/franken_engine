@@ -255,9 +255,9 @@ impl CheckpointGuard {
 
     /// Advance the iteration counter.
     pub fn tick(&mut self) {
-        self.iterations_since_checkpoint += 1;
-        self.total_iterations += 1;
-        self.virtual_time += 1;
+        self.iterations_since_checkpoint = self.iterations_since_checkpoint.saturating_add(1);
+        self.total_iterations = self.total_iterations.saturating_add(1);
+        self.virtual_time = self.virtual_time.saturating_add(1);
     }
 
     /// Check if a checkpoint should fire and what action to take.
@@ -883,6 +883,25 @@ mod tests {
             guard.tick();
         }
         assert_eq!(guard.total_iterations(), 7);
+    }
+
+    #[test]
+    fn guard_tick_saturates_iteration_counters() {
+        let (mut guard, _) = test_guard();
+        guard.iterations_since_checkpoint = u64::MAX;
+        guard.total_iterations = u64::MAX;
+        guard.virtual_time = u64::MAX;
+
+        guard.tick();
+
+        assert_eq!(guard.iterations_since_checkpoint, u64::MAX);
+        assert_eq!(guard.total_iterations(), u64::MAX);
+        assert_eq!(guard.virtual_time(), u64::MAX);
+        assert_eq!(guard.check(), CheckpointAction::Abort);
+        assert_eq!(
+            guard.drain_events()[0].reason,
+            CheckpointReason::BudgetExhausted
+        );
     }
 
     #[test]

@@ -120,10 +120,7 @@ impl BudgetDerivationStrategy {
             Self::FractionOfRemaining {
                 fraction_millionths,
             } => {
-                let raw = parent_remaining_ms
-                    .saturating_mul(fraction_millionths)
-                    .checked_div(SCALE)
-                    .unwrap_or(0);
+                let raw = fraction_of_remaining(parent_remaining_ms, fraction_millionths);
                 raw.min(parent_remaining_ms)
             }
             Self::FixedAmount { amount_ms } => amount_ms.min(parent_remaining_ms),
@@ -132,16 +129,21 @@ impl BudgetDerivationStrategy {
                 min_ms,
                 max_ms,
             } => {
-                let raw = parent_remaining_ms
-                    .saturating_mul(fraction_millionths)
-                    .checked_div(SCALE)
-                    .unwrap_or(0);
+                let raw = fraction_of_remaining(parent_remaining_ms, fraction_millionths);
                 let bounded = raw.max(min_ms).min(max_ms);
                 bounded.min(parent_remaining_ms)
             }
             Self::AllRemaining => parent_remaining_ms,
         }
     }
+}
+
+fn fraction_of_remaining(parent_remaining_ms: u64, fraction_millionths: u64) -> u64 {
+    let raw = u128::from(parent_remaining_ms)
+        .saturating_mul(u128::from(fraction_millionths))
+        .checked_div(u128::from(SCALE))
+        .unwrap_or(0);
+    u64::try_from(raw).unwrap_or(u64::MAX)
 }
 
 // ---------------------------------------------------------------------------
@@ -697,9 +699,10 @@ impl BudgetPropagationValidator {
 
         let mut boundary_counts: BTreeMap<String, u64> = BTreeMap::new();
         for event in &self.events {
-            *boundary_counts
+            let count = boundary_counts
                 .entry(event.boundary_kind.as_str().to_owned())
-                .or_insert(0) += 1;
+                .or_insert(0);
+            *count = count.saturating_add(1);
         }
 
         let total_derived: u64 = self
@@ -743,7 +746,7 @@ impl BudgetPropagationValidator {
         parent_after: u64,
         strategy: &str,
     ) {
-        self.event_counter += 1;
+        self.event_counter = self.event_counter.saturating_add(1);
         self.events.push(BudgetPropagationEvent {
             parent_trace_id: parent_trace_id.to_owned(),
             child_trace_id: if child_trace_id.is_empty() {
@@ -770,7 +773,7 @@ impl BudgetPropagationValidator {
         parent_before: u64,
         err: &BudgetPropagationError,
     ) {
-        self.event_counter += 1;
+        self.event_counter = self.event_counter.saturating_add(1);
         self.events.push(BudgetPropagationEvent {
             parent_trace_id: parent_trace_id.to_owned(),
             child_trace_id: child_trace_id.map(|s| s.to_owned()),
@@ -1257,6 +1260,42 @@ mod tests {
         let derived = strat.derive(u64::MAX);
         // Verify the result is finite (no panic from saturating arithmetic).
         let _ = derived;
+    }
+
+    #[test]
+    fn test_large_fraction_derivation_preserves_fraction_semantics() {
+        let strat = BudgetDerivationStrategy::FractionOfRemaining {
+            fraction_millionths: 500_000,
+        };
+        assert_eq!(strat.derive(u64::MAX), u64::MAX / 2);
+    }
+
+    #[test]
+    fn test_large_bounded_fraction_uses_wide_arithmetic_before_bounds() {
+        let strat = BudgetDerivationStrategy::BoundedFraction {
+            fraction_millionths: 500_000,
+            min_ms: 0,
+            max_ms: u64::MAX,
+        };
+        assert_eq!(strat.derive(u64::MAX), u64::MAX / 2);
+    }
+
+    #[test]
+    fn test_event_sequence_saturates_at_u64_max() {
+        let mut validator = BudgetPropagationValidator::with_defaults();
+        validator.event_counter = u64::MAX;
+
+        let result = validator
+            .derive_child_budget(
+                "trace-parent",
+                "trace-child",
+                10_000,
+                BudgetBoundaryKind::ParentToChildExtension,
+            )
+            .unwrap();
+
+        assert_eq!(result.derived_budget_ms, 8_000);
+        assert_eq!(validator.events().last().unwrap().sequence, u64::MAX);
     }
 
     #[test]

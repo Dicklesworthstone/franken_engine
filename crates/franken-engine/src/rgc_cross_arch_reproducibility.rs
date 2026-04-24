@@ -572,16 +572,18 @@ pub fn verify_cross_arch_reproducibility_with_config(
     let mut iteration_results = Vec::new();
     let mut architecture_results = BTreeMap::new();
 
-    // Run multiple iterations on current architecture
+    // Run repeated replays on the current architecture with the same captured
+    // nondeterminism inputs. Reproducibility verification must hold artifacts
+    // fixed; varying the seed or component label here would manufacture a
+    // divergence rather than detect nondeterministic replay behavior.
     for iteration in 0..config.replay_iterations {
-        // Create iteration-specific trace
         let mut iteration_trace =
             NondeterminismTrace::new(format!("{}-iter-{}", session_id, iteration));
         iteration_trace.capture(
             crate::deterministic_replay::NondeterminismSource::LaneSelectionRandom,
-            vec![42 + iteration as u8], // Slightly different seed per iteration
+            vec![42],
             100,
-            "test_harness_iteration",
+            "test_harness",
         );
 
         let comparison = controller.compare_trace(session_id, &iteration_trace, current_arch)?;
@@ -591,14 +593,17 @@ pub fn verify_cross_arch_reproducibility_with_config(
     // Test each configured target architecture
     for target_arch in &config.target_architectures {
         if *target_arch != current_arch {
-            // For cross-arch testing, create target-specific trace
+            // In this local harness a target-architecture trace is a simulated
+            // replay of the same artifact on another architecture. Do not bake
+            // the target architecture into the trace payload, or the harness
+            // reports its own synthetic labels as architecture drift.
             let mut target_trace =
                 NondeterminismTrace::new(format!("{}-{}", session_id, target_arch.as_str()));
             target_trace.capture(
                 crate::deterministic_replay::NondeterminismSource::LaneSelectionRandom,
                 vec![42], // Same seed as reference
                 100,
-                format!("test_harness_{}", target_arch.as_str()),
+                "test_harness",
             );
 
             let comparison = controller.compare_trace(session_id, &target_trace, *target_arch)?;
@@ -869,7 +874,27 @@ mod tests {
         assert!(comparison_1.traces_identical);
         assert!(comparison_3.traces_identical);
 
-        // The test validates that multiple iterations are actually executed
-        // (implementation detail: different iteration seeds may produce different outcomes)
+        // The test validates that multiple fixed-artifact replays are actually
+        // executed without manufacturing divergence between iterations.
+    }
+
+    #[test]
+    fn custom_config_replays_fixed_artifacts_across_iterations() {
+        let config = CrossArchConfig {
+            target_architectures: vec![ArchitectureId::current()],
+            replay_iterations: 4,
+            capture_fp_divergences: true,
+            strict_determinism: true,
+            max_divergent_events: 0,
+        };
+
+        let comparison =
+            verify_cross_arch_reproducibility_with_config("fixed-artifact-replay", config)
+                .expect("fixed-artifact replay should verify");
+
+        assert!(comparison.traces_identical);
+        assert_eq!(comparison.divergent_events, 0);
+        assert_eq!(comparison.matching_events, 4);
+        assert_eq!(comparison.assessment, ReproducibilityAssessment::Perfect);
     }
 }

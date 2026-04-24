@@ -512,8 +512,8 @@ impl SafetyDecisionRouter {
                 Some("budget_exhausted"),
             );
             // Default-deny on budget exhaustion.
-            self.deny_count += 1;
-            self.decision_count += 1;
+            self.deny_count = self.deny_count.saturating_add(1);
+            self.decision_count = self.decision_count.saturating_add(1);
             let result = SafetyDecisionResult {
                 action: request.action,
                 verdict: request.action.default_fallback(),
@@ -686,11 +686,13 @@ impl SafetyDecisionRouter {
             let entry = summaries
                 .entry(result.action)
                 .or_insert_with(ActionSummary::default);
-            entry.total += 1;
+            entry.total = entry.total.saturating_add(1);
             match &result.verdict {
-                SafetyVerdict::Allow => entry.allows += 1,
-                SafetyVerdict::Deny { .. } => entry.denials += 1,
-                SafetyVerdict::Fallback { .. } => entry.fallbacks += 1,
+                SafetyVerdict::Allow => entry.allows = entry.allows.saturating_add(1),
+                SafetyVerdict::Deny { .. } => entry.denials = entry.denials.saturating_add(1),
+                SafetyVerdict::Fallback { .. } => {
+                    entry.fallbacks = entry.fallbacks.saturating_add(1);
+                }
             }
         }
         summaries
@@ -710,18 +712,23 @@ impl SafetyDecisionRouter {
             };
         }
 
-        match outcome.action_name.as_str() {
-            "allow" => SafetyVerdict::Allow,
-            "deny" | "reject" | "block" | "stop" | "permit" | "continue" => SafetyVerdict::Deny {
+        if is_allow_action_name(&outcome.action_name) {
+            SafetyVerdict::Allow
+        } else if is_deny_action_name(&outcome.action_name) {
+            SafetyVerdict::Deny {
                 reason: format!(
                     "decision contract denied {}: expected_loss={:.3}",
                     action.as_str(),
                     outcome.expected_loss
                 ),
-            },
-            other => SafetyVerdict::Deny {
-                reason: format!("unknown action '{other}' treated as deny for {action}"),
-            },
+            }
+        } else {
+            SafetyVerdict::Deny {
+                reason: format!(
+                    "unknown action '{}' treated as deny for {action}",
+                    outcome.action_name
+                ),
+            }
         }
     }
 
@@ -746,6 +753,18 @@ impl SafetyDecisionRouter {
             error_code: error_code.map(String::from),
         });
     }
+}
+
+fn is_allow_action_name(action_name: &str) -> bool {
+    ["allow", "permit", "continue"]
+        .iter()
+        .any(|candidate| action_name.eq_ignore_ascii_case(candidate))
+}
+
+fn is_deny_action_name(action_name: &str) -> bool {
+    ["deny", "reject", "block", "stop"]
+        .iter()
+        .any(|candidate| action_name.eq_ignore_ascii_case(candidate))
 }
 
 impl Default for SafetyDecisionRouter {
@@ -793,6 +812,40 @@ mod tests {
             calibration_score_bps: 9_400,
             e_process_milli: 110,
             ci_width_milli: 45,
+        }
+    }
+
+    fn synonym_allow_contract(action_name: &str) -> SafetyContract {
+        let states = vec!["safe".to_string(), "unsafe".to_string()];
+        let actions = vec![action_name.to_string(), "deny".to_string()];
+        let loss_matrix =
+            LossMatrix::new(states.clone(), actions.clone(), vec![0.0, 0.1, 0.9, 0.0])
+                .expect("valid synonym safety loss matrix");
+
+        SafetyContract {
+            action_type: SafetyAction::ExtensionQuarantine,
+            states,
+            actions,
+            loss_matrix,
+            fallback_policy: FallbackPolicy::default(),
+            fallback_action_index: 1,
+        }
+    }
+
+    fn synonym_deny_contract(action_name: &str) -> SafetyContract {
+        let states = vec!["safe".to_string(), "unsafe".to_string()];
+        let actions = vec!["allow".to_string(), action_name.to_string()];
+        let loss_matrix =
+            LossMatrix::new(states.clone(), actions.clone(), vec![0.0, 0.1, 0.9, 0.0])
+                .expect("valid deny synonym safety loss matrix");
+
+        SafetyContract {
+            action_type: SafetyAction::ExtensionQuarantine,
+            states,
+            actions,
+            loss_matrix,
+            fallback_policy: FallbackPolicy::default(),
+            fallback_action_index: 1,
         }
     }
 
@@ -973,6 +1026,48 @@ mod tests {
     }
 
     #[test]
+    fn safety_router_maps_allow_synonyms_to_allow() {
+        for action_name in ["allow", "permit", "continue", "ALLOW", "PERMIT", "CONTINUE"] {
+            let mut router = SafetyDecisionRouter::new();
+            router.register(synonym_allow_contract(action_name));
+            *router
+                .posteriors
+                .get_mut(&SafetyAction::ExtensionQuarantine)
+                .expect("registered posterior") = Posterior::new(vec![0.99, 0.01]).unwrap();
+
+            let mut cx = test_cx(100);
+            let request = test_request(SafetyAction::ExtensionQuarantine, 42);
+            let result = router.evaluate(&mut cx, &request).unwrap();
+            assert!(
+                result.verdict.is_allow(),
+                "{action_name} should permit the safety action"
+            );
+        }
+    }
+
+    #[test]
+    fn safety_router_maps_deny_synonyms_to_deny() {
+        for action_name in [
+            "deny", "reject", "block", "stop", "DENY", "REJECT", "BLOCK", "STOP",
+        ] {
+            let mut router = SafetyDecisionRouter::new();
+            router.register(synonym_deny_contract(action_name));
+            *router
+                .posteriors
+                .get_mut(&SafetyAction::ExtensionQuarantine)
+                .expect("registered posterior") = Posterior::new(vec![0.01, 0.99]).unwrap();
+
+            let mut cx = test_cx(100);
+            let request = test_request(SafetyAction::ExtensionQuarantine, 43);
+            let result = router.evaluate(&mut cx, &request).unwrap();
+            assert!(
+                matches!(result.verdict, SafetyVerdict::Deny { .. }),
+                "{action_name} should deny the safety action"
+            );
+        }
+    }
+
+    #[test]
     fn safety_contract_update_posterior_shifts_belief() {
         let c = SafetyContract::default_for(SafetyAction::ExtensionQuarantine);
         let mut posterior = Posterior::uniform(2);
@@ -1104,6 +1199,23 @@ mod tests {
         let err = r.evaluate(&mut cx, &req).unwrap_err();
         assert!(matches!(err, SafetyRouterError::BudgetExhausted { .. }));
         assert_eq!(r.deny_count(), 1);
+    }
+
+    #[test]
+    fn router_budget_exhaustion_counters_saturate() {
+        let mut r = SafetyDecisionRouter::new();
+        r.register_all_defaults();
+        r.decision_count = u64::MAX;
+        r.deny_count = u64::MAX;
+
+        let mut cx = test_cx(1);
+        let req = test_request(SafetyAction::CrossExtensionShare, 60);
+        let err = r.evaluate(&mut cx, &req).unwrap_err();
+
+        assert!(matches!(err, SafetyRouterError::BudgetExhausted { .. }));
+        assert_eq!(r.decision_count(), u64::MAX);
+        assert_eq!(r.deny_count(), u64::MAX);
+        assert_eq!(r.results().last().unwrap().sequence_number, u64::MAX);
     }
 
     #[test]

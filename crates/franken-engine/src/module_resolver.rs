@@ -480,11 +480,9 @@ impl HostApiAuthorizationError {
     ) -> Self {
         let message = message.into();
         let remediation = remediation.into();
-        // SAFETY: Function invariant requires descriptor to be Some when called.
-        // All call sites pass validated HostApiPermissionDescriptor references.
         let required_capabilities = descriptor
             .map(|value| value.required_capabilities.clone())
-            .unwrap();
+            .unwrap_or_default();
         let descriptor_id = descriptor.map(|value| value.descriptor_id.clone());
         let decision_stable_id = host_api_decision_stable_id(
             context,
@@ -5500,6 +5498,7 @@ mod tests {
             .expect_err("unsupported module should deny");
         assert_eq!(err.code, HostApiErrorCode::UnsupportedModule);
         assert_eq!(err.event.error_code, "FE-HOSTAPI-0001");
+        assert!(err.event.required_capabilities.is_empty());
         assert!(err.event.remediation.contains("node:fs"));
         assert!(err.event.remediation.contains("node:crypto"));
     }
@@ -5514,6 +5513,7 @@ mod tests {
             .expect_err("unsupported operation should deny");
         assert_eq!(err.code, HostApiErrorCode::UnsupportedOperation);
         assert_eq!(err.event.error_code, "FE-HOSTAPI-0002");
+        assert!(err.event.required_capabilities.is_empty());
         assert!(err.event.remediation.contains("read_file"));
         assert!(err.event.remediation.contains("write_file"));
     }

@@ -43,6 +43,15 @@ pub const DEFAULT_TEST262_URL: &str = "https://github.com/tc39/test262.git";
 /// Fixed-point unit: 1.0 in millionths.
 pub const MILLIONTHS: u64 = 1_000_000;
 
+fn ratio_millionths(numerator: u64, denominator: u64) -> u64 {
+    if denominator == 0 {
+        return 0;
+    }
+
+    let raw = u128::from(numerator) * u128::from(MILLIONTHS) / u128::from(denominator);
+    u64::try_from(raw).unwrap_or(u64::MAX)
+}
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -213,9 +222,11 @@ impl TestStatistics {
             .filter(|r| r.result == TestResult::Error)
             .count() as u64;
 
-        let pass_rate_millionths = (passed * MILLIONTHS).checked_div(total_tests).unwrap_or(0);
+        let pass_rate_millionths = ratio_millionths(passed, total_tests);
 
-        let total_duration_us = records.iter().map(|r| r.duration_us).sum();
+        let total_duration_us = records.iter().fold(0u64, |total, record| {
+            total.saturating_add(record.duration_us)
+        });
 
         Self {
             total_tests,
@@ -692,6 +703,24 @@ mod tests {
     }
 
     #[test]
+    fn test_statistics_duration_sum_saturates() {
+        let records = vec![
+            TestRecord::new(
+                PathBuf::from("a.js"),
+                TestResult::Pass,
+                u64::MAX,
+                None,
+                false,
+            ),
+            TestRecord::new(PathBuf::from("b.js"), TestResult::Pass, 1, None, false),
+        ];
+
+        let stats = TestStatistics::from_records(&records);
+        assert_eq!(stats.pass_rate_millionths, MILLIONTHS);
+        assert_eq!(stats.total_duration_us, u64::MAX);
+    }
+
+    #[test]
     fn test_runner_config_default() {
         let config = RunnerConfig::default();
         assert_eq!(config.test262_path, PathBuf::from("test262"));
@@ -957,6 +986,12 @@ pub mod differential_testing {
         pub tests: Vec<DifferentialTest>,
         /// Path to golden fixtures directory.
         pub golden_path: PathBuf,
+    }
+
+    impl Default for DifferentialHarness {
+        fn default() -> Self {
+            Self::new()
+        }
     }
 
     impl DifferentialHarness {
@@ -1424,7 +1459,7 @@ pub mod differential_testing {
                         }
                     }
 
-                    summary.push_str("\n");
+                    summary.push('\n');
                 }
             }
 
@@ -1453,11 +1488,7 @@ pub mod differential_testing {
                 .filter(|r| matches!(r.verdict, DifferentialVerdict::Skipped))
                 .count() as u64;
 
-            let pass_rate_millionths = if total_tests > 0 {
-                (passed * MILLIONTHS) / total_tests
-            } else {
-                0
-            };
+            let pass_rate_millionths = super::ratio_millionths(passed, total_tests);
 
             let v8_coverage = results
                 .iter()

@@ -47,6 +47,9 @@ pub const DEFAULT_BURST_CAPACITY: u64 = 128;
 /// Default token refill rate per epoch-tick.
 pub const DEFAULT_REFILL_RATE: u64 = 64;
 
+/// Hard cap for deterministic worker-sizing search.
+const MAX_SIZING_SEARCH_WORKERS: u64 = 4_096;
+
 // ---------------------------------------------------------------------------
 // Admission priority
 // ---------------------------------------------------------------------------
@@ -234,7 +237,7 @@ impl TokenBucket {
     pub fn try_consume(&mut self, count: u64) -> bool {
         if self.available >= count {
             self.available -= count;
-            self.total_consumed += count;
+            self.total_consumed = self.total_consumed.saturating_add(count);
             true
         } else {
             false
@@ -247,7 +250,7 @@ impl TokenBucket {
             .available
             .saturating_add(self.refill_rate)
             .min(self.capacity);
-        self.total_refills += 1;
+        self.total_refills = self.total_refills.saturating_add(1);
     }
 
     /// Current fill ratio in millionths.
@@ -308,19 +311,19 @@ impl QueuePartition {
 
     /// Admit an item.
     pub fn admit(&mut self) {
-        self.current_depth += 1;
-        self.total_admitted += 1;
+        self.current_depth = self.current_depth.saturating_add(1);
+        self.total_admitted = self.total_admitted.saturating_add(1);
     }
 
     /// Complete an item (dequeue).
     pub fn complete(&mut self) {
         self.current_depth = self.current_depth.saturating_sub(1);
-        self.total_completed += 1;
+        self.total_completed = self.total_completed.saturating_add(1);
     }
 
     /// Record a shed.
     pub fn record_shed(&mut self) {
-        self.total_shed += 1;
+        self.total_shed = self.total_shed.saturating_add(1);
     }
 
     /// Utilization ratio in millionths.
@@ -387,6 +390,7 @@ pub fn compute_worker_pool_sizing(input: &SizingInput) -> WorkerPoolSizing {
     // We work in millionths throughout for determinism.
     let lambda_m = input.arrival_rate_millionths; // items/tick * 10^6
     let service_ns = input.mean_service_ns.max(1);
+    let worker_limit = bounded_worker_limit(input.max_workers);
 
     // Find minimum workers where utilization < target
     // ρ = λ * service / (c * tick_duration)
@@ -398,29 +402,21 @@ pub fn compute_worker_pool_sizing(input: &SizingInput) -> WorkerPoolSizing {
     // (normalizing ns to seconds conceptually, but we keep it all relative)
 
     // Simpler approach: offered load in abstract units
-    let offered_load_i128 = lambda_m as i128 * service_ns as i128;
+    let offered_load_i128 = saturating_mul_u64_to_i128(lambda_m, service_ns);
 
     let mut best_c = 1u64;
-    let mut best_util = MILLIONTHS; // start at 100%
 
-    for c in 1..=input.max_workers.max(1) {
+    for c in 1..=worker_limit {
         // utilization = offered_load / (c * normalization)
         // We normalize so that at c=1 with lambda_m=1_000_000 and service_ns=1_000_000_000,
         // utilization = 100% (1_000_000)
-        let denom_i128 = c as i128 * MILLIONTHS as i128 * 1_000_000_000i128;
-        let util_m = if denom_i128 == 0 {
-            MILLIONTHS
-        } else {
-            ((offered_load_i128 * MILLIONTHS as i128) / denom_i128) as u64
-        };
+        let util_m = utilization_millionths_for_workers(offered_load_i128, c, MILLIONTHS);
 
         if util_m <= input.target_utilization_millionths {
             best_c = c;
-            best_util = util_m;
             break;
         }
         best_c = c;
-        best_util = util_m;
     }
 
     // Minimum workers for SLO: need enough that estimated wait < target_p99
@@ -430,25 +426,31 @@ pub fn compute_worker_pool_sizing(input: &SizingInput) -> WorkerPoolSizing {
         offered_load_i128,
         service_ns,
         input.target_p99_ns,
-        input.max_workers,
+        worker_limit,
     );
 
     // Max useful: workers beyond which utilization drops below 10%
-    let max_useful = find_max_useful_workers(offered_load_i128, input.max_workers);
+    let max_useful = find_max_useful_workers(offered_load_i128, worker_limit);
 
     let recommended = best_c.max(min_c);
+    let estimated_util =
+        utilization_millionths_for_workers(offered_load_i128, recommended, MILLIONTHS);
     let estimated_wait = estimate_p99_wait(offered_load_i128, service_ns, recommended);
 
     WorkerPoolSizing {
         recommended_workers: recommended,
         min_workers_for_slo: min_c,
         max_useful_workers: max_useful,
-        estimated_utilization_millionths: best_util,
+        estimated_utilization_millionths: estimated_util,
         target_p99_ns: input.target_p99_ns,
         estimated_p99_wait_ns: estimated_wait,
         arrival_rate_millionths: input.arrival_rate_millionths,
         mean_service_ns: service_ns,
     }
+}
+
+fn bounded_worker_limit(max_workers: u64) -> u64 {
+    max_workers.clamp(1, MAX_SIZING_SEARCH_WORKERS)
 }
 
 fn find_min_workers_for_slo(
@@ -469,12 +471,7 @@ fn find_min_workers_for_slo(
 fn find_max_useful_workers(offered_load: i128, max_workers: u64) -> u64 {
     let min_useful_utilization = 100_000u64; // 10%
     for c in (1..=max_workers.max(1)).rev() {
-        let denom_i128 = c as i128 * MILLIONTHS as i128 * 1_000_000_000i128;
-        let util_m = if denom_i128 == 0 {
-            0
-        } else {
-            ((offered_load.saturating_mul(MILLIONTHS as i128)) / denom_i128) as u64
-        };
+        let util_m = utilization_millionths_for_workers(offered_load, c, 0);
         if util_m >= min_useful_utilization {
             return c;
         }
@@ -485,12 +482,7 @@ fn find_max_useful_workers(offered_load: i128, max_workers: u64) -> u64 {
 /// Estimate p99 wait time using M/D/c approximation.
 fn estimate_p99_wait(offered_load: i128, service_ns: u64, num_workers: u64) -> u64 {
     let c = num_workers.max(1);
-    let denom_i128 = c as i128 * MILLIONTHS as i128 * 1_000_000_000i128;
-    let rho_m = if denom_i128 == 0 {
-        MILLIONTHS
-    } else {
-        (((offered_load.saturating_mul(MILLIONTHS as i128)) / denom_i128) as u64).min(MILLIONTHS)
-    };
+    let rho_m = utilization_millionths_for_workers(offered_load, c, MILLIONTHS).min(MILLIONTHS);
 
     if rho_m >= MILLIONTHS {
         // System is saturated or oversaturated
@@ -519,6 +511,34 @@ fn estimate_p99_wait(offered_load: i128, service_ns: u64, num_workers: u64) -> u
 
     // p99 ≈ mean_wait * 4.6 ≈ mean_wait * 46 / 10
     mean_wait.saturating_mul(46).checked_div(10).unwrap_or(0)
+}
+
+fn utilization_millionths_for_workers(
+    offered_load: i128,
+    workers: u64,
+    zero_denominator_fallback: u64,
+) -> u64 {
+    let denominator = i128::from(workers.max(1))
+        .saturating_mul(i128::from(MILLIONTHS))
+        .saturating_mul(1_000_000_000i128);
+    if denominator == 0 {
+        zero_denominator_fallback
+    } else {
+        saturating_i128_to_u64(offered_load.saturating_mul(i128::from(MILLIONTHS)) / denominator)
+    }
+}
+
+fn saturating_mul_u64_to_i128(left: u64, right: u64) -> i128 {
+    let product = u128::from(left).saturating_mul(u128::from(right));
+    i128::try_from(product).unwrap_or(i128::MAX)
+}
+
+fn saturating_i128_to_u64(value: i128) -> u64 {
+    if value <= 0 {
+        0
+    } else {
+        u64::try_from(value).unwrap_or(u64::MAX)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -624,11 +644,12 @@ impl AdmissionReceipt {
         let mut h = Sha256::new();
         h.update(ADMISSION_SCHEMA_VERSION.as_bytes());
         h.update(sequence.to_le_bytes());
-        h.update(format!("{decision}").as_bytes());
-        h.update(format!("{priority}").as_bytes());
-        h.update(format!("{stage}").as_bytes());
+        h.update(serde_json::to_vec(&decision).expect("admission decision serializes"));
+        h.update(serde_json::to_vec(&priority).expect("admission priority serializes"));
+        h.update(serde_json::to_vec(&stage).expect("execution stage serializes"));
         h.update(queue_depth.to_le_bytes());
         h.update(utilization_m.to_le_bytes());
+        h.update(tokens.to_le_bytes());
         let hash_bytes: [u8; 32] = h.finalize().into();
         let content_hash = ContentHash::compute(&hash_bytes);
 
@@ -769,8 +790,8 @@ impl AdmissionController {
         // Update counters
         match &decision {
             AdmissionDecision::Admit => {
-                self.total_admitted += 1;
-                self.global_queue_depth += 1;
+                self.total_admitted = self.total_admitted.saturating_add(1);
+                self.global_queue_depth = self.global_queue_depth.saturating_add(1);
                 self.token_bucket
                     .try_consume(self.policy.tokens_per_admission);
                 if let Some(partition) = self.partitions.get_mut(&stage) {
@@ -778,8 +799,8 @@ impl AdmissionController {
                 }
             }
             AdmissionDecision::Queue { .. } => {
-                self.total_queued += 1;
-                self.global_queue_depth += 1;
+                self.total_queued = self.total_queued.saturating_add(1);
+                self.global_queue_depth = self.global_queue_depth.saturating_add(1);
                 self.token_bucket
                     .try_consume(self.policy.tokens_per_admission);
                 if let Some(partition) = self.partitions.get_mut(&stage) {
@@ -787,14 +808,14 @@ impl AdmissionController {
                 }
             }
             AdmissionDecision::Shed { .. } => {
-                self.total_shed += 1;
+                self.total_shed = self.total_shed.saturating_add(1);
                 if let Some(partition) = self.partitions.get_mut(&stage) {
                     partition.record_shed();
                 }
             }
         }
 
-        self.decision_sequence += 1;
+        self.decision_sequence = self.decision_sequence.saturating_add(1);
         let receipt = AdmissionReceipt::from_parts(
             decision,
             priority,
@@ -806,8 +827,10 @@ impl AdmissionController {
         );
 
         if self.policy.max_receipts > 0 {
-            while self.receipts.len() >= self.policy.max_receipts {
-                self.receipts.remove(0);
+            let retained_after_push = self.receipts.len().saturating_add(1);
+            if retained_after_push > self.policy.max_receipts {
+                let excess = retained_after_push - self.policy.max_receipts;
+                self.receipts.drain(0..excess);
             }
             self.receipts.push(receipt.clone());
         }
@@ -926,16 +949,14 @@ impl AdmissionController {
 
     /// Get admission summary statistics.
     pub fn summary(&self) -> AdmissionSummary {
-        let total_checks = self.total_admitted + self.total_queued + self.total_shed;
-        let admission_ratio = if total_checks == 0 {
-            MILLIONTHS
-        } else {
-            self.total_admitted
-                .saturating_add(self.total_queued)
-                .saturating_mul(MILLIONTHS)
-                .checked_div(total_checks)
-                .unwrap_or(0)
-        };
+        let accepted = u128::from(self.total_admitted) + u128::from(self.total_queued);
+        let total = accepted + u128::from(self.total_shed);
+        let total_checks = u64::try_from(total).unwrap_or(u64::MAX);
+        let admission_ratio = accepted
+            .saturating_mul(u128::from(MILLIONTHS))
+            .checked_div(total)
+            .map(|ratio| u64::try_from(ratio).unwrap_or(u64::MAX))
+            .unwrap_or(MILLIONTHS);
 
         AdmissionSummary {
             total_checks,
@@ -993,13 +1014,7 @@ impl AdmissionControlManifest {
     pub fn from_controller(controller: &AdmissionController) -> Self {
         let summary = controller.summary();
         let partitions: Vec<QueuePartition> = controller.partitions.values().cloned().collect();
-
-        let mut h = Sha256::new();
-        h.update(ADMISSION_SCHEMA_VERSION.as_bytes());
-        h.update(ADMISSION_BEAD_ID.as_bytes());
-        let summary_bytes = serde_json::to_vec(&summary).unwrap();
-        h.update(&summary_bytes);
-        let hash_bytes: [u8; 32] = h.finalize().into();
+        let content_hash = Self::content_hash_for(&controller.policy, &summary, None, &partitions);
 
         Self {
             schema_version: ADMISSION_SCHEMA_VERSION.to_string(),
@@ -1008,14 +1023,48 @@ impl AdmissionControlManifest {
             summary,
             sizing: None,
             partitions,
-            content_hash: ContentHash::compute(&hash_bytes),
+            content_hash,
         }
     }
 
     /// Attach sizing recommendation.
     pub fn with_sizing(mut self, sizing: WorkerPoolSizing) -> Self {
         self.sizing = Some(sizing);
+        self.content_hash = Self::content_hash_for(
+            &self.policy,
+            &self.summary,
+            self.sizing.as_ref(),
+            &self.partitions,
+        );
         self
+    }
+
+    fn content_hash_for(
+        policy: &AdmissionControlPolicy,
+        summary: &AdmissionSummary,
+        sizing: Option<&WorkerPoolSizing>,
+        partitions: &[QueuePartition],
+    ) -> ContentHash {
+        #[derive(Serialize)]
+        struct ManifestHashEnvelope<'a> {
+            schema_version: &'a str,
+            bead_id: &'a str,
+            policy: &'a AdmissionControlPolicy,
+            summary: &'a AdmissionSummary,
+            sizing: Option<&'a WorkerPoolSizing>,
+            partitions: &'a [QueuePartition],
+        }
+
+        let bytes = serde_json::to_vec(&ManifestHashEnvelope {
+            schema_version: ADMISSION_SCHEMA_VERSION,
+            bead_id: ADMISSION_BEAD_ID,
+            policy,
+            summary,
+            sizing,
+            partitions,
+        })
+        .expect("admission manifest hash envelope serializes");
+        ContentHash::compute(&bytes)
     }
 }
 
@@ -1121,6 +1170,18 @@ mod tests {
         assert_eq!(tb.fill_ratio_millionths(), 0);
     }
 
+    #[test]
+    fn test_token_bucket_counters_saturate() {
+        let mut tb = TokenBucket::new(u64::MAX, u64::MAX);
+        tb.total_consumed = u64::MAX - 1;
+        assert!(tb.try_consume(2));
+        assert_eq!(tb.total_consumed, u64::MAX);
+
+        tb.total_refills = u64::MAX;
+        tb.refill();
+        assert_eq!(tb.total_refills, u64::MAX);
+    }
+
     // --- Queue partition tests ---
 
     #[test]
@@ -1164,6 +1225,24 @@ mod tests {
     fn test_partition_zero_max_utilization() {
         let p = QueuePartition::new(ExecutionStage::Custom, 0);
         assert_eq!(p.utilization_millionths(), 0);
+    }
+
+    #[test]
+    fn test_partition_counters_saturate() {
+        let mut p = QueuePartition::new(ExecutionStage::Parse, u64::MAX);
+        p.current_depth = u64::MAX;
+        p.total_admitted = u64::MAX;
+        p.total_completed = u64::MAX;
+        p.total_shed = u64::MAX;
+
+        p.admit();
+        p.complete();
+        p.record_shed();
+
+        assert_eq!(p.current_depth, u64::MAX - 1);
+        assert_eq!(p.total_admitted, u64::MAX);
+        assert_eq!(p.total_completed, u64::MAX);
+        assert_eq!(p.total_shed, u64::MAX);
     }
 
     // --- Default policy tests ---
@@ -1358,6 +1437,94 @@ mod tests {
     }
 
     #[test]
+    fn test_receipt_hash_includes_tokens_snapshot() {
+        let decision = AdmissionDecision::Admit;
+        let first = AdmissionReceipt::from_parts(
+            decision.clone(),
+            AdmissionPriority::Normal,
+            ExecutionStage::Parse,
+            1,
+            500_000,
+            1,
+            7,
+        );
+        let second = AdmissionReceipt::from_parts(
+            decision,
+            AdmissionPriority::Normal,
+            ExecutionStage::Parse,
+            1,
+            500_000,
+            2,
+            7,
+        );
+
+        assert_ne!(first.tokens_snapshot, second.tokens_snapshot);
+        assert_ne!(first.content_hash, second.content_hash);
+    }
+
+    #[test]
+    fn test_receipt_hash_includes_full_decision_payload() {
+        let first = AdmissionReceipt::from_parts(
+            AdmissionDecision::Queue {
+                estimated_wait_ns: 100,
+                position: 3,
+            },
+            AdmissionPriority::Normal,
+            ExecutionStage::Parse,
+            3,
+            500_000,
+            1,
+            7,
+        );
+        let second = AdmissionReceipt::from_parts(
+            AdmissionDecision::Queue {
+                estimated_wait_ns: 200,
+                position: 3,
+            },
+            AdmissionPriority::Normal,
+            ExecutionStage::Parse,
+            3,
+            500_000,
+            1,
+            7,
+        );
+
+        assert_eq!(
+            format!("{}", first.decision),
+            format!("{}", second.decision)
+        );
+        assert_ne!(first.content_hash, second.content_hash);
+    }
+
+    #[test]
+    fn test_admission_counter_updates_saturate() {
+        let mut ctrl = make_controller();
+        ctrl.global_queue_depth = u64::MAX;
+        ctrl.total_queued = u64::MAX;
+        ctrl.decision_sequence = u64::MAX;
+
+        let receipt = ctrl.check_admission(ExecutionStage::Parse, AdmissionPriority::Critical);
+
+        assert!(matches!(receipt.decision, AdmissionDecision::Queue { .. }));
+        assert_eq!(ctrl.global_queue_depth, u64::MAX);
+        assert_eq!(ctrl.total_queued, u64::MAX);
+        assert_eq!(ctrl.decision_sequence, u64::MAX);
+    }
+
+    #[test]
+    fn test_admission_summary_total_checks_saturates() {
+        let mut ctrl = make_controller();
+        ctrl.total_admitted = u64::MAX;
+        ctrl.total_queued = 1;
+        ctrl.total_shed = 1;
+
+        let summary = ctrl.summary();
+
+        assert_eq!(summary.total_checks, u64::MAX);
+        assert_eq!(summary.admission_ratio_millionths, MILLIONTHS - 1);
+    }
+
+    #[test]
     fn test_receipts_bounded() {
         let mut policy = make_policy();
         policy.max_receipts = 3;
@@ -1437,6 +1604,31 @@ mod tests {
     }
 
     #[test]
+    fn test_sizing_reports_utilization_for_recommended_workers() {
+        let input = SizingInput {
+            arrival_rate_millionths: 100_000,
+            mean_service_ns: 1_000_000,
+            target_p99_ns: 0,
+            target_utilization_millionths: 900_000,
+            max_workers: 8,
+        };
+
+        let sizing = compute_worker_pool_sizing(&input);
+        let offered_load =
+            saturating_mul_u64_to_i128(input.arrival_rate_millionths, input.mean_service_ns);
+
+        assert_eq!(sizing.recommended_workers, 8);
+        assert_eq!(
+            sizing.estimated_utilization_millionths,
+            utilization_millionths_for_workers(
+                offered_load,
+                sizing.recommended_workers,
+                MILLIONTHS
+            )
+        );
+    }
+
+    #[test]
     fn test_sizing_zero_arrival() {
         let input = SizingInput {
             arrival_rate_millionths: 0,
@@ -1447,6 +1639,24 @@ mod tests {
         };
         let sizing = compute_worker_pool_sizing(&input);
         assert_eq!(sizing.recommended_workers, 1);
+    }
+
+    #[test]
+    fn test_sizing_extreme_inputs_saturate() {
+        let input = SizingInput {
+            arrival_rate_millionths: u64::MAX,
+            mean_service_ns: u64::MAX,
+            target_p99_ns: u64::MAX,
+            target_utilization_millionths: DEFAULT_TARGET_UTILIZATION_MILLIONTHS,
+            max_workers: u64::MAX,
+        };
+
+        let sizing = compute_worker_pool_sizing(&input);
+
+        assert!(sizing.recommended_workers >= 1);
+        assert!(sizing.recommended_workers <= MAX_SIZING_SEARCH_WORKERS);
+        assert!(sizing.estimated_p99_wait_ns >= 1);
+        assert_eq!(sizing.mean_service_ns, u64::MAX);
     }
 
     // --- Manifest tests ---
@@ -1468,6 +1678,7 @@ mod tests {
         let ctrl = make_controller();
         let manifest = AdmissionControlManifest::from_controller(&ctrl);
         assert!(manifest.sizing.is_none());
+        let initial_hash = manifest.content_hash;
         let sizing = WorkerPoolSizing {
             recommended_workers: 4,
             min_workers_for_slo: 2,
@@ -1480,6 +1691,20 @@ mod tests {
         };
         let manifest = manifest.with_sizing(sizing);
         assert!(manifest.sizing.is_some());
+        assert_ne!(manifest.content_hash, initial_hash);
+    }
+
+    #[test]
+    fn test_manifest_hash_covers_policy() {
+        let first = AdmissionControlManifest::from_controller(&make_controller());
+
+        let mut policy = make_policy();
+        policy.token_capacity = policy.token_capacity.saturating_add(1);
+        let second = AdmissionControlManifest::from_controller(&AdmissionController::new(policy));
+
+        assert_eq!(first.summary, second.summary);
+        assert_ne!(first.policy, second.policy);
+        assert_ne!(first.content_hash, second.content_hash);
     }
 
     // --- Serde tests ---

@@ -153,9 +153,12 @@ impl QuarantineState {
 
     /// Record an acknowledgment for a decision.
     pub fn add_acknowledgment(&mut self, ack: QuarantineAck) -> bool {
+        if !ack.enforcement_successful {
+            return false;
+        }
+
         if let Some(ack_set) = self.acknowledgments.get_mut(&ack.decision_evidence_hash) {
-            ack_set.insert(ack.acknowledging_instance);
-            true
+            ack_set.insert(ack.acknowledging_instance)
         } else {
             false // Unknown decision
         }
@@ -266,7 +269,13 @@ impl QuarantineProtocolManager {
         extension_id: String,
         reason: String,
     ) -> Result<ContentHash, QuarantineProtocolError> {
-        self.lamport_clock += 1;
+        if !self.instance_states.contains_key(originator) {
+            return Err(QuarantineProtocolError::InstanceNotFound {
+                instance_id: originator.clone(),
+            });
+        }
+
+        self.lamport_clock = self.lamport_clock.saturating_add(1);
 
         let decision = QuarantineDecision::new(
             extension_id.clone(),
@@ -279,18 +288,16 @@ impl QuarantineProtocolManager {
         let evidence_hash = decision.evidence_hash;
 
         // Record decision in originator's state
-        if let Some(originator_state) = self.instance_states.get_mut(originator) {
-            originator_state.add_decision(decision.clone());
-        } else {
-            return Err(QuarantineProtocolError::InstanceNotFound {
-                instance_id: originator.clone(),
-            });
-        }
+        let originator_state = self
+            .instance_states
+            .get_mut(originator)
+            .expect("originator existence checked before issuing quarantine decision");
+        originator_state.add_decision(decision.clone());
 
         // Broadcast decision to all other instances
         self.broadcast_quarantine_decision(originator, decision)?;
 
-        self.stats.decisions_issued += 1;
+        self.stats.decisions_issued = self.stats.decisions_issued.saturating_add(1);
         Ok(evidence_hash)
     }
 
@@ -300,31 +307,13 @@ impl QuarantineProtocolManager {
         originator: &NodeId,
         decision: QuarantineDecision,
     ) -> Result<(), QuarantineProtocolError> {
-        let mut intent_extensions = BTreeMap::new();
-        intent_extensions.insert("reason".to_string(), decision.reason.clone());
-        let payload = MessagePayload::Protocol(crate::fleet_immune_protocol::FleetMessage::Intent(
-            crate::fleet_immune_protocol::ContainmentIntent {
-                intent_id: format!(
-                    "quarantine-{}-{}",
-                    decision.extension_id, decision.lamport_timestamp
-                ),
-                extension_id: decision.extension_id.clone(),
-                proposed_action: crate::fleet_immune_protocol::ContainmentAction::Quarantine,
-                confidence_millionths: 1_000_000,
-                supporting_evidence_ids: vec![decision.evidence_hash.to_hex()],
-                policy_version: 1,
-                epoch: decision.security_epoch,
-                node_id: originator.clone(),
-                sequence: decision.lamport_timestamp,
-                timestamp_ns: decision.lamport_timestamp,
-                signature: crate::fleet_immune_protocol::MessageSignature {
-                    signer: originator.clone(),
-                    hash: crate::hash_tiers::AuthenticityHash([0u8; 32]),
-                },
-                protocol_version: crate::fleet_immune_protocol::ProtocolVersion::CURRENT,
-                extensions: intent_extensions,
-            },
-        ));
+        let payload = MessagePayload::QuarantineDecision {
+            extension_id: decision.extension_id.clone(),
+            reason: decision.reason.clone(),
+            evidence_hash: decision.evidence_hash.to_hex(),
+            originator_instance: originator.clone(),
+            lamport_timestamp: decision.lamport_timestamp,
+        };
 
         self.fleet_simulator
             .send_message(originator, None, payload) // None = broadcast
@@ -332,7 +321,7 @@ impl QuarantineProtocolManager {
                 error: format!("{}", e),
             })?;
 
-        self.stats.messages_sent += 1;
+        self.stats.messages_sent = self.stats.messages_sent.saturating_add(1);
         Ok(())
     }
 
@@ -355,7 +344,7 @@ impl QuarantineProtocolManager {
             // Send acknowledgment back to originator
             self.send_acknowledgment(target_instance, &decision)?;
         } else {
-            self.stats.duplicates_ignored += 1;
+            self.stats.duplicates_ignored = self.stats.duplicates_ignored.saturating_add(1);
         }
 
         Ok(is_new)
@@ -372,7 +361,7 @@ impl QuarantineProtocolManager {
         acknowledging_instance: &NodeId,
         decision: &QuarantineDecision,
     ) -> Result<(), QuarantineProtocolError> {
-        self.lamport_clock += 1;
+        self.lamport_clock = self.lamport_clock.saturating_add(1);
 
         let payload = MessagePayload::QuarantineAck {
             extension_id: decision.extension_id.clone(),
@@ -392,7 +381,7 @@ impl QuarantineProtocolManager {
                 error: format!("{}", e),
             })?;
 
-        self.stats.messages_sent += 1;
+        self.stats.messages_sent = self.stats.messages_sent.saturating_add(1);
         Ok(())
     }
 
@@ -401,18 +390,41 @@ impl QuarantineProtocolManager {
         &mut self,
         ack: QuarantineAck,
     ) -> Result<bool, QuarantineProtocolError> {
-        // Record acknowledgment in originator's state
         let total_instances = self.instance_states.len();
+        if !self
+            .instance_states
+            .contains_key(&ack.acknowledging_instance)
+        {
+            return Ok(false);
+        }
 
-        if let Some(originator_state) = self.instance_states.get_mut(&ack.acknowledging_instance) {
+        let originator_instance = self.instance_states.iter().find_map(|(node_id, state)| {
+            state
+                .pending_decisions
+                .get(&ack.decision_evidence_hash)
+                .filter(|decision| &decision.originator_instance == node_id)
+                .map(|_| node_id.clone())
+        });
+
+        if let Some(originator_instance) = originator_instance {
+            if ack.acknowledging_instance == originator_instance {
+                return Ok(false);
+            }
+
+            let originator_state = self
+                .instance_states
+                .get_mut(&originator_instance)
+                .expect("originator was selected from instance_states");
             let recorded = originator_state.add_acknowledgment(ack.clone());
 
             if recorded {
-                self.stats.acknowledgments_received += 1;
+                self.stats.acknowledgments_received =
+                    self.stats.acknowledgments_received.saturating_add(1);
 
                 // Check if decision has converged
                 if originator_state.is_converged(&ack.decision_evidence_hash, total_instances) {
-                    self.stats.decisions_converged += 1;
+                    self.stats.decisions_converged =
+                        self.stats.decisions_converged.saturating_add(1);
                     return Ok(true); // Converged
                 }
             }
@@ -550,10 +562,27 @@ mod tests {
         );
 
         assert!(state.add_acknowledgment(ack1));
+        let duplicate_ack = QuarantineAck::new(
+            evidence_hash,
+            NodeId("instance-1".to_string()),
+            4,
+            true,
+            None,
+        );
+        assert!(!state.add_acknowledgment(duplicate_ack));
         assert!(!state.is_converged(&evidence_hash, 3)); // Need 2 acks for 3 instances
 
         assert!(state.add_acknowledgment(ack2));
         assert!(state.is_converged(&evidence_hash, 3)); // Now converged
+
+        let failed_ack = QuarantineAck::new(
+            evidence_hash,
+            NodeId("instance-3".to_string()),
+            5,
+            false,
+            Some("local enforcement failed".to_string()),
+        );
+        assert!(!state.add_acknowledgment(failed_ack));
     }
 
     #[test]
@@ -594,6 +623,27 @@ mod tests {
         let originator_state = &manager.instance_states[originator];
         assert!(originator_state.is_quarantined("suspicious-extension"));
         assert!(originator_state.seen_decisions.contains(&evidence_hash));
+    }
+
+    #[test]
+    fn test_issued_quarantine_broadcast_runs_through_fleet_simulator() {
+        let fleet = FleetSimulator::new(3, test_thresholds()).unwrap();
+        let mut manager =
+            QuarantineProtocolManager::new(fleet, test_security_epoch(), Duration::from_secs(30));
+
+        let instance_ids = manager.fleet_simulator.instance_ids();
+        let originator = instance_ids[0].clone();
+        manager
+            .issue_quarantine_decision(
+                &originator,
+                "simulated-extension".to_string(),
+                "Simulation propagation".to_string(),
+            )
+            .unwrap();
+
+        manager
+            .run_protocol_steps(1)
+            .expect("quarantine decision payload should be supported by the fleet simulator");
     }
 
     #[test]
@@ -678,11 +728,15 @@ mod tests {
         let fleet = FleetSimulator::new(3, test_thresholds()).unwrap();
         let mut manager =
             QuarantineProtocolManager::new(fleet, test_security_epoch(), Duration::from_secs(30));
+        let instance_ids = manager.fleet_simulator.instance_ids();
+        let originator = instance_ids[0].clone();
+        let acking_one = instance_ids[1].clone();
+        let acking_two = instance_ids[2].clone();
 
         let decision = QuarantineDecision::new(
             "test-extension".to_string(),
             "Test reason".to_string(),
-            NodeId("originator".to_string()),
+            originator.clone(),
             1,
             test_security_epoch(),
         );
@@ -692,7 +746,7 @@ mod tests {
         // Add decision to originator state manually for testing
         manager
             .instance_states
-            .get_mut(&NodeId("originator".to_string()))
+            .get_mut(&originator)
             .unwrap()
             .add_decision(decision);
 
@@ -700,23 +754,23 @@ mod tests {
         assert!(!manager.is_decision_converged(&evidence_hash));
 
         // Add acknowledgments
-        let ack1 = QuarantineAck::new(
-            evidence_hash,
-            NodeId("instance-1".to_string()),
-            2,
-            true,
-            None,
-        );
-        let ack2 = QuarantineAck::new(
-            evidence_hash,
-            NodeId("instance-2".to_string()),
-            3,
-            true,
-            None,
-        );
+        let ack1 = QuarantineAck::new(evidence_hash, acking_one.clone(), 2, true, None);
+        let ack2 = QuarantineAck::new(evidence_hash, acking_two, 3, true, None);
 
         manager.process_acknowledgment(ack1).unwrap();
         assert!(!manager.is_decision_converged(&evidence_hash)); // Not yet converged
+        assert!(
+            manager.instance_states[&originator].acknowledgments[&evidence_hash]
+                .contains(&acking_one)
+        );
+        let duplicate_ack = QuarantineAck::new(evidence_hash, acking_one.clone(), 4, true, None);
+        assert!(!manager.process_acknowledgment(duplicate_ack).unwrap());
+        let originator_ack = QuarantineAck::new(evidence_hash, originator.clone(), 5, true, None);
+        assert!(!manager.process_acknowledgment(originator_ack).unwrap());
+        assert_eq!(
+            manager.instance_states[&originator].acknowledgments[&evidence_hash].len(),
+            1
+        );
 
         let converged = manager.process_acknowledgment(ack2).unwrap();
         assert!(converged); // Should be converged now

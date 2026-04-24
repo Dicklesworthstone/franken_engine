@@ -69,7 +69,7 @@ pub struct HotPathSample {
 
 impl HotPathSample {
     fn cache_observations(&self) -> u64 {
-        self.cache_hits + self.cache_misses
+        self.cache_hits.saturating_add(self.cache_misses)
     }
 }
 
@@ -160,7 +160,7 @@ pub fn build_hot_path_profile(report: &ExecutionReport, top_k: usize) -> HotPath
             continue;
         }
 
-        observed_instruction_events += 1;
+        observed_instruction_events = observed_instruction_events.saturating_add(1);
         let key = (event.ip, event.opcode.clone());
         let entry = aggregates.entry(key).or_insert_with(|| PathAccumulator {
             ip: event.ip,
@@ -170,10 +170,10 @@ pub fn build_hot_path_profile(report: &ExecutionReport, top_k: usize) -> HotPath
             cache_misses: 0,
         });
 
-        entry.invocations += 1;
+        entry.invocations = entry.invocations.saturating_add(1);
         match event.cache_hit {
-            Some(true) => entry.cache_hits += 1,
-            Some(false) => entry.cache_misses += 1,
+            Some(true) => entry.cache_hits = entry.cache_hits.saturating_add(1),
+            Some(false) => entry.cache_misses = entry.cache_misses.saturating_add(1),
             None => {}
         }
     }
@@ -366,12 +366,12 @@ fn compute_decision_hash(decision: &TierUpDecision) -> String {
 }
 
 fn cache_hit_rate_millionths(cache_hits: u64, cache_misses: u64) -> i64 {
-    let observed = cache_hits + cache_misses;
+    let observed = u128::from(cache_hits) + u128::from(cache_misses);
     if observed == 0 {
         return 0;
     }
 
-    ((u128::from(cache_hits) * u128::from(MILLIONTHS_DENOMINATOR)) / u128::from(observed)) as i64
+    ((u128::from(cache_hits) * u128::from(MILLIONTHS_DENOMINATOR)) / observed) as i64
 }
 
 fn is_tiering_candidate_event(event: &VmEvent) -> bool {
@@ -451,8 +451,9 @@ impl RegressionMeasurement {
         let regression_ratio_millionths = if baseline_score == 0 {
             0 // No baseline to compare against
         } else {
-            let diff = current_score as i64 - baseline_score as i64;
-            (diff * MILLIONTHS_DENOMINATOR as i64) / baseline_score as i64
+            let diff = i128::from(current_score) - i128::from(baseline_score);
+            let ratio = (diff * i128::from(MILLIONTHS_DENOMINATOR)) / i128::from(baseline_score);
+            clamp_i128_to_i64(ratio)
         };
 
         Self {
@@ -466,7 +467,9 @@ impl RegressionMeasurement {
 
     /// Check if regression exceeds policy threshold.
     pub fn exceeds_policy_threshold(&self, policy: &BoundedRegretPolicy) -> bool {
-        self.regression_ratio_millionths > policy.max_regression_ratio_millionths as i64
+        let max_regression_ratio_millionths =
+            i64::try_from(policy.max_regression_ratio_millionths).unwrap_or(i64::MAX);
+        self.regression_ratio_millionths > max_regression_ratio_millionths
     }
 }
 
@@ -592,40 +595,35 @@ pub fn evaluate_tier_up_safety(
         }
     }
 
-    // Simulate regression measurements (in production, this would use real performance data)
-    let mut regression_measurements = Vec::new();
-    for candidate in &tier_up_decision.selected_candidates {
-        let baseline_score = candidate.invocations * 1000; // Simulated baseline
-        let current_score = baseline_score + (candidate.invocations % 100); // Simulated current
-        let measurement = RegressionMeasurement::calculate_regression(
-            baseline_score,
-            current_score,
-            regret_policy.regression_measurement_window,
-        );
-
-        if measurement.exceeds_policy_threshold(regret_policy) {
-            return SafetyEvaluation {
-                tier_up_decision,
-                regression_measurements: vec![measurement.clone()],
-                active_overrides: valid_overrides,
-                safety_verdict: SafetyVerdict::BlockedRegression,
-                safety_reasoning: format!(
-                    "Regression exceeds threshold: {}% > {}%",
-                    measurement.regression_ratio_millionths / 10_000,
-                    regret_policy.max_regression_ratio_millionths / 10_000
-                ),
-            };
-        }
-
-        regression_measurements.push(measurement);
+    if !tier_up_decision.selected_candidates.is_empty() {
+        return SafetyEvaluation {
+            tier_up_decision,
+            regression_measurements: Vec::new(),
+            active_overrides: valid_overrides,
+            safety_verdict: SafetyVerdict::BlockedRegression,
+            safety_reasoning: format!(
+                "missing real regression measurements for bounded-regret window {}; tier-up safety cannot be established from ExecutionReport alone",
+                regret_policy.regression_measurement_window
+            ),
+        };
     }
 
     SafetyEvaluation {
         tier_up_decision,
-        regression_measurements,
+        regression_measurements: Vec::new(),
         active_overrides: valid_overrides,
         safety_verdict: SafetyVerdict::Safe,
         safety_reasoning: "All safety checks passed".to_string(),
+    }
+}
+
+fn clamp_i128_to_i64(value: i128) -> i64 {
+    if value > i128::from(i64::MAX) {
+        i64::MAX
+    } else if value < i128::from(i64::MIN) {
+        i64::MIN
+    } else {
+        value as i64
     }
 }
 
@@ -666,6 +664,17 @@ mod tests {
             shape_lattice: ShapeTransitionAlgebra::new().manifest(),
             shape_trace: Vec::new(),
         }
+    }
+
+    fn repeated_events(
+        ip: u32,
+        opcode: &str,
+        count: usize,
+        cache_hit: Option<bool>,
+    ) -> Vec<VmEvent> {
+        (0..count)
+            .map(|_| make_vm_event(ip, opcode, cache_hit))
+            .collect()
     }
 
     // -- TierUpPolicy tests --------------------------------------------------
@@ -1083,6 +1092,20 @@ mod tests {
         assert_eq!(sample.cache_observations(), 40);
     }
 
+    #[test]
+    fn hot_path_sample_cache_observations_saturates() {
+        let sample = HotPathSample {
+            ip: 0,
+            opcode: "test".to_string(),
+            invocations: u64::MAX,
+            cache_hits: u64::MAX,
+            cache_misses: 1,
+            cache_hit_rate_millionths: 1_000_000,
+        };
+
+        assert_eq!(sample.cache_observations(), u64::MAX);
+    }
+
     // -- make_event tests ----------------------------------------------------
 
     #[test]
@@ -1444,6 +1467,11 @@ mod tests {
     }
 
     #[test]
+    fn cache_hit_rate_handles_counter_overflow() {
+        assert_eq!(cache_hit_rate_millionths(u64::MAX, u64::MAX), 500_000);
+    }
+
+    #[test]
     fn hot_path_sample_zero_cache_rate_when_no_observations() {
         let sample = HotPathSample {
             ip: 0,
@@ -1528,6 +1556,15 @@ mod tests {
     }
 
     #[test]
+    fn regression_measurement_handles_u64_extremes() {
+        let regression = RegressionMeasurement::calculate_regression(1, u64::MAX, 500);
+        assert_eq!(regression.regression_ratio_millionths, i64::MAX);
+
+        let improvement = RegressionMeasurement::calculate_regression(u64::MAX, 0, 500);
+        assert_eq!(improvement.regression_ratio_millionths, -1_000_000);
+    }
+
+    #[test]
     fn regression_measurement_exceeds_threshold() {
         let policy = BoundedRegretPolicy::default(); // 20% threshold
 
@@ -1538,6 +1575,17 @@ mod tests {
         // Regression above threshold
         let high_regression = RegressionMeasurement::calculate_regression(1000, 1300, 500);
         assert!(high_regression.exceeds_policy_threshold(&policy));
+    }
+
+    #[test]
+    fn regression_measurement_threshold_cast_saturates() {
+        let policy = BoundedRegretPolicy {
+            max_regression_ratio_millionths: u64::MAX,
+            ..BoundedRegretPolicy::default()
+        };
+        let regression = RegressionMeasurement::calculate_regression(1, u64::MAX, 500);
+
+        assert!(!regression.exceeds_policy_threshold(&policy));
     }
 
     #[test]
@@ -1599,7 +1647,7 @@ mod tests {
 
     #[test]
     fn safety_evaluation_blocked_by_override() {
-        let report = make_report(200, vec![make_vm_event(0, "add", Some(true))]);
+        let report = make_report(200, repeated_events(0, "add", 20, Some(true)));
         let tier_policy = TierUpPolicy::default();
         let regret_policy = BoundedRegretPolicy::default();
 
@@ -1630,7 +1678,7 @@ mod tests {
 
     #[test]
     fn safety_evaluation_forced_by_override() {
-        let report = make_report(200, vec![make_vm_event(0, "add", Some(true))]);
+        let report = make_report(200, repeated_events(0, "add", 20, Some(true)));
         let tier_policy = TierUpPolicy::default();
         let regret_policy = BoundedRegretPolicy::default();
 
@@ -1655,5 +1703,26 @@ mod tests {
             safety_eval.safety_verdict,
             SafetyVerdict::ForcedOverride
         ));
+    }
+
+    #[test]
+    fn safety_evaluation_blocks_candidate_without_real_regression_evidence() {
+        let report = make_report(200, repeated_events(0, "add", 20, Some(true)));
+        let tier_policy = TierUpPolicy::default();
+        let regret_policy = BoundedRegretPolicy::default();
+
+        let safety_eval =
+            evaluate_tier_up_safety(&report, &tier_policy, &regret_policy, &[], 9999999998);
+
+        assert!(matches!(
+            safety_eval.safety_verdict,
+            SafetyVerdict::BlockedRegression
+        ));
+        assert!(safety_eval.regression_measurements.is_empty());
+        assert!(
+            safety_eval
+                .safety_reasoning
+                .contains("missing real regression measurements")
+        );
     }
 }

@@ -202,8 +202,15 @@ impl DemotionAppealRequest {
         submitted_at: DeterministicTimestamp,
         demotion_timestamp_ns: u64,
     ) -> Result<Self, GovernanceError> {
-        // Validate appeal deadline
-        let deadline_ns = demotion_timestamp_ns + APPEAL_DEADLINE_NS;
+        // Validate appeal deadline. Overflow here would otherwise panic in
+        // debug builds or wrap in release, creating nondeterministic appeal
+        // acceptance near the timestamp boundary.
+        let deadline_ns = demotion_timestamp_ns
+            .checked_add(APPEAL_DEADLINE_NS)
+            .ok_or_else(|| GovernanceError::InvalidConfiguration {
+                field: "demotion_timestamp_ns".to_string(),
+                reason: "appeal deadline calculation overflowed".to_string(),
+            })?;
         if submitted_at.0 > deadline_ns {
             return Err(GovernanceError::AppealDeadlineExpired {
                 demotion_id: target_demotion_id,
@@ -258,8 +265,9 @@ impl DemotionAppealRequest {
 
     /// Check if appeal is still within deadline.
     pub fn is_within_deadline(&self, demotion_timestamp_ns: u64) -> bool {
-        let deadline_ns = demotion_timestamp_ns + APPEAL_DEADLINE_NS;
-        self.submitted_at.0 <= deadline_ns
+        demotion_timestamp_ns
+            .checked_add(APPEAL_DEADLINE_NS)
+            .is_some_and(|deadline_ns| self.submitted_at.0 <= deadline_ns)
     }
 }
 
@@ -467,20 +475,30 @@ impl GovernanceReview {
 
     /// Compute current approval metrics.
     pub fn compute_approval_metrics(&self) -> (u64, u64, bool) {
-        let total_weight: u64 = self.votes.iter().map(|v| v.weight_millionths).sum();
-        let approval_weight: u64 = self
+        let total_weight: u128 = self
+            .votes
+            .iter()
+            .map(|v| u128::from(v.weight_millionths))
+            .sum();
+        let approval_weight: u128 = self
             .votes
             .iter()
             .filter(|v| v.is_approval)
-            .map(|v| v.weight_millionths)
+            .map(|v| u128::from(v.weight_millionths))
             .sum();
 
-        let approval_ratio_millionths = (approval_weight * 1_000_000)
+        let approval_ratio_millionths = approval_weight
+            .saturating_mul(1_000_000)
             .checked_div(total_weight)
             .unwrap_or(0);
 
-        let threshold_met = approval_ratio_millionths >= self.approval_threshold_millionths;
-        (approval_weight, total_weight, threshold_met)
+        let threshold_met =
+            approval_ratio_millionths >= u128::from(self.approval_threshold_millionths);
+        (
+            total_to_u64_saturating(approval_weight),
+            total_to_u64_saturating(total_weight),
+            threshold_met,
+        )
     }
 
     /// Check if quorum is met (all required roles have voted).
@@ -512,6 +530,10 @@ impl GovernanceReview {
         self.concluded_at = Some(concluded_at);
         Ok(())
     }
+}
+
+fn total_to_u64_saturating(value: u128) -> u64 {
+    u64::try_from(value).unwrap_or(u64::MAX)
 }
 
 // ---------------------------------------------------------------------------
@@ -711,6 +733,27 @@ mod tests {
     }
 
     #[test]
+    fn appeal_creation_fails_closed_on_deadline_overflow() {
+        let result = DemotionAppealRequest::create_new(
+            "appeal-overflow".to_string(),
+            "demotion-overflow".to_string(),
+            "operator-001".to_string(),
+            "Valid appeal rationale".to_string(),
+            Vec::new(),
+            None,
+            1_000_000,
+            DeterministicTimestamp(u64::MAX),
+            u64::MAX - (APPEAL_DEADLINE_NS / 2),
+        );
+
+        assert!(matches!(
+            result,
+            Err(GovernanceError::InvalidConfiguration { field, .. })
+                if field == "demotion_timestamp_ns"
+        ));
+    }
+
+    #[test]
     fn appeal_creation_rejects_empty_rationale() {
         let demotion_time = 1_600_000_000_000_000_000u64;
         let appeal_time = demotion_time + 1_000_000_000; // 1 second after
@@ -854,6 +897,47 @@ mod tests {
     }
 
     #[test]
+    fn governance_review_approval_metrics_do_not_overflow() {
+        let mut review = GovernanceReview::new(
+            "review-overflow".to_string(),
+            "appeal-overflow".to_string(),
+            "demotion_appeal".to_string(),
+            DEFAULT_APPROVAL_THRESHOLD_MILLIONTHS,
+            BTreeSet::new(),
+            test_timestamp(),
+            test_timestamp(),
+        );
+
+        review
+            .add_vote(GovernanceVote {
+                voter_id: "voter-1".to_string(),
+                voter_role: StakeholderRole::Operator,
+                is_approval: true,
+                rationale: "Support".to_string(),
+                weight_millionths: u64::MAX,
+                cast_at: test_timestamp(),
+                signature: Signature::from_bytes([0; 64]),
+            })
+            .expect("add vote1");
+        review
+            .add_vote(GovernanceVote {
+                voter_id: "voter-2".to_string(),
+                voter_role: StakeholderRole::SecurityAnalyst,
+                is_approval: false,
+                rationale: "Concerns".to_string(),
+                weight_millionths: u64::MAX,
+                cast_at: test_timestamp(),
+                signature: Signature::from_bytes([1; 64]),
+            })
+            .expect("add vote2");
+
+        let (approval_weight, total_weight, threshold_met) = review.compute_approval_metrics();
+        assert_eq!(approval_weight, u64::MAX);
+        assert_eq!(total_weight, u64::MAX);
+        assert!(!threshold_met);
+    }
+
+    #[test]
     fn enhanced_quarantine_operation_restrictions() {
         let mut quarantine = EnhancedQuarantineRecord::new(
             "q-123".to_string(),
@@ -947,5 +1031,6 @@ mod tests {
 
         assert!(appeal.is_within_deadline(demotion_time));
         assert!(!appeal.is_within_deadline(demotion_time - APPEAL_DEADLINE_NS - 1));
+        assert!(!appeal.is_within_deadline(u64::MAX - (APPEAL_DEADLINE_NS / 2)));
     }
 }

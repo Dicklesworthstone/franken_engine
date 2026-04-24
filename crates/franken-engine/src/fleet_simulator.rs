@@ -165,19 +165,19 @@ impl MessageBus {
     /// Set partition mode for network simulation.
     pub fn set_partition_mode(&mut self, mode: PartitionMode, success_rate: u8) {
         self.partition_mode = mode;
-        self.delivery_success_rate = success_rate;
+        self.delivery_success_rate = success_rate.min(100);
     }
 
     /// Send a message (adds to queue with timestamp).
     pub fn send_message(&mut self, mut message: FleetMessage) -> Result<(), FleetSimulatorError> {
-        self.current_timestamp += 1;
+        self.current_timestamp = self.current_timestamp.saturating_add(1);
         message.timestamp = self.current_timestamp;
 
         // Simulate message drops in degraded partition mode
         match &self.partition_mode {
             PartitionMode::Normal => {
                 self.message_queue.push_back(message);
-                self.messages_delivered += 1;
+                self.messages_delivered = self.messages_delivered.saturating_add(1);
             }
             PartitionMode::Degraded(_) => {
                 // Simple deterministic "random" based on message hash
@@ -185,21 +185,21 @@ impl MessageBus {
                 let pseudo_random = hash_bytes[0] % 100;
                 if pseudo_random < self.delivery_success_rate {
                     self.message_queue.push_back(message);
-                    self.messages_delivered += 1;
+                    self.messages_delivered = self.messages_delivered.saturating_add(1);
                 } else {
-                    self.messages_dropped += 1;
+                    self.messages_dropped = self.messages_dropped.saturating_add(1);
                 }
             }
             PartitionMode::Healing(_) => {
                 // Healing mode has better delivery than degraded
                 let hash_bytes = message.message_id.as_bytes();
                 let pseudo_random = hash_bytes[0] % 100;
-                let healing_rate = (self.delivery_success_rate + 100) / 2; // Better than degraded
-                if pseudo_random < healing_rate {
+                let healing_rate = (u16::from(self.delivery_success_rate) + 100) / 2; // Better than degraded
+                if u16::from(pseudo_random) < healing_rate {
                     self.message_queue.push_back(message);
-                    self.messages_delivered += 1;
+                    self.messages_delivered = self.messages_delivered.saturating_add(1);
                 } else {
-                    self.messages_dropped += 1;
+                    self.messages_dropped = self.messages_dropped.saturating_add(1);
                 }
             }
         }
@@ -226,6 +226,22 @@ impl MessageBus {
     pub fn delivery_stats(&self) -> (u64, u64) {
         (self.messages_delivered, self.messages_dropped)
     }
+}
+
+fn usize_to_u32_saturating(value: usize) -> u32 {
+    u32::try_from(value).unwrap_or(u32::MAX)
+}
+
+fn scaled_u32_saturating(value: u32, numerator: u32, denominator: u32) -> u32 {
+    if denominator == 0 {
+        return u32::MAX;
+    }
+
+    let scaled = u64::from(value)
+        .saturating_mul(u64::from(numerator))
+        .checked_div(u64::from(denominator))
+        .unwrap_or(u64::MAX);
+    u32::try_from(scaled).unwrap_or(u32::MAX)
 }
 
 /// Fleet simulator managing N engine instances.
@@ -365,7 +381,7 @@ impl FleetSimulator {
                 convergence_engine,
                 partition_info,
                 protocol_state,
-                created_at: i as u64, // Deterministic creation timestamp
+                created_at: u64::try_from(i).unwrap_or(u64::MAX), // Deterministic creation timestamp
                 state: InstanceState::Healthy,
             };
 
@@ -414,7 +430,7 @@ impl FleetSimulator {
 
     /// Get milliseconds elapsed since simulation start.
     fn elapsed_time_ms(&self) -> u64 {
-        self.start_time.elapsed().as_millis() as u64
+        u64::try_from(self.start_time.elapsed().as_millis()).unwrap_or(u64::MAX)
     }
 
     /// Send message from one instance to another.
@@ -445,7 +461,7 @@ impl FleetSimulator {
         self.message_bus.send_message(message)?;
 
         // Log message sent
-        let timestamp_ms = self.start_time.elapsed().as_millis() as u64;
+        let timestamp_ms = self.elapsed_time_ms();
         self.event_log.push(SimulationEvent {
             timestamp_ms,
             node_id: from_clone,
@@ -481,7 +497,7 @@ impl FleetSimulator {
                     self.handle_message_for_node(&target_id, &message)?;
 
                     // Log message received
-                    let timestamp_ms = self.start_time.elapsed().as_millis() as u64;
+                    let timestamp_ms = self.elapsed_time_ms();
                     self.event_log.push(SimulationEvent {
                         timestamp_ms,
                         node_id: target_id.clone(),
@@ -493,7 +509,7 @@ impl FleetSimulator {
                 }
             }
 
-            self.simulation_steps += 1;
+            self.simulation_steps = self.simulation_steps.saturating_add(1);
             Ok(true)
         } else {
             Ok(false) // No messages to process
@@ -581,7 +597,7 @@ impl FleetSimulator {
         instance.state = new_state;
 
         // Log state transition
-        let timestamp_ms = self.start_time.elapsed().as_millis() as u64;
+        let timestamp_ms = self.elapsed_time_ms();
         self.event_log.push(SimulationEvent {
             timestamp_ms,
             node_id: node_id.clone(),
@@ -600,23 +616,30 @@ impl FleetSimulator {
 
     /// Set partition mode for network simulation.
     pub fn set_partition_mode(&mut self, mode: PartitionMode, success_rate: u8) {
+        let success_rate = success_rate.min(100);
+
         // Update partition info for all instances
-        let total_nodes = self.instances.len() as u32;
+        let total_nodes = usize_to_u32_saturating(self.instances.len());
         let reachable_nodes = match &mode {
             PartitionMode::Normal => total_nodes,
-            PartitionMode::Degraded(_) => (total_nodes * success_rate as u32) / 100,
-            PartitionMode::Healing(_) => (total_nodes * (success_rate + 100) as u32) / 200,
+            PartitionMode::Degraded(_) => {
+                scaled_u32_saturating(total_nodes, u32::from(success_rate), 100)
+            }
+            PartitionMode::Healing(_) => {
+                scaled_u32_saturating(total_nodes, u32::from(success_rate) + 100, 200)
+            }
         };
 
         for instance in self.instances.values_mut() {
-            instance.partition_info.local_partition_size = reachable_nodes as usize;
+            instance.partition_info.local_partition_size =
+                usize::try_from(reachable_nodes).unwrap_or(usize::MAX);
         }
 
         self.message_bus
             .set_partition_mode(mode.clone(), success_rate);
 
         // Log partition mode change
-        let timestamp_ms = self.start_time.elapsed().as_millis() as u64;
+        let timestamp_ms = self.elapsed_time_ms();
         self.event_log.push(SimulationEvent {
             timestamp_ms,
             node_id: NodeId("simulator".to_string()),
@@ -634,20 +657,21 @@ impl FleetSimulator {
             self.instances
                 .values()
                 .fold(BTreeMap::new(), |mut acc, instance| {
-                    *acc.entry(instance.state).or_insert(0) += 1;
+                    let count = acc.entry(instance.state).or_insert(0);
+                    *count = count.saturating_add(1);
                     acc
                 });
 
         let (messages_delivered, messages_dropped) = self.message_bus.delivery_stats();
 
         SimulationStats {
-            total_instances: self.instances.len() as u32,
+            total_instances: usize_to_u32_saturating(self.instances.len()),
             instance_states,
             simulation_steps: self.simulation_steps,
             messages_delivered,
             messages_dropped,
-            events_logged: self.event_log.len() as u32,
-            queue_length: self.message_bus.queue_length() as u32,
+            events_logged: usize_to_u32_saturating(self.event_log.len()),
+            queue_length: usize_to_u32_saturating(self.message_bus.queue_length()),
         }
     }
 
@@ -708,7 +732,7 @@ impl FleetSimulator {
         }
 
         // Increment Lamport clock
-        self.lamport_clock += 1;
+        self.lamport_clock = self.lamport_clock.saturating_add(1);
         let decision_timestamp = self.lamport_clock;
 
         // Create quarantine record
@@ -785,7 +809,8 @@ impl FleetSimulator {
         receiving_instance: NodeId,
     ) -> Result<(), FleetSimulatorError> {
         // Update Lamport clock
-        self.lamport_clock = std::cmp::max(self.lamport_clock, decision_timestamp) + 1;
+        self.lamport_clock =
+            std::cmp::max(self.lamport_clock, decision_timestamp).saturating_add(1);
 
         // Enforce quarantine locally (add extension to quarantine set)
         if let Some(instance) = self.instances.get_mut(&receiving_instance) {
@@ -841,7 +866,7 @@ impl FleetSimulator {
         ack_timestamp: u64,
     ) -> Result<(), FleetSimulatorError> {
         // Update Lamport clock
-        self.lamport_clock = std::cmp::max(self.lamport_clock, ack_timestamp) + 1;
+        self.lamport_clock = std::cmp::max(self.lamport_clock, ack_timestamp).saturating_add(1);
 
         // Record acknowledgment
         let expected_acks = self.instances.len();
@@ -946,6 +971,7 @@ pub struct QuarantineStats {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fleet_convergence::HealingInfo;
 
     fn test_thresholds() -> ContainmentThresholds {
         ContainmentThresholds {
@@ -954,6 +980,66 @@ mod tests {
             terminate_threshold: 10_000_000,  // 10.0
             quarantine_threshold: 20_000_000, // 20.0
         }
+    }
+
+    fn test_partition_info(total_fleet_size: usize) -> PartitionInfo {
+        PartitionInfo {
+            detected_at_ns: 0,
+            unreachable_nodes: std::collections::BTreeSet::new(),
+            local_partition_size: total_fleet_size,
+            total_fleet_size,
+        }
+    }
+
+    fn test_healing_info() -> HealingInfo {
+        HealingInfo {
+            heal_started_ns: 0,
+            reconciling_nodes: std::collections::BTreeSet::new(),
+            conflict_count: 0,
+            merged_evidence_count: 0,
+        }
+    }
+
+    fn test_fleet_message(message_id: &str) -> FleetMessage {
+        let from = NodeId("node_a".to_string());
+        let to = NodeId("node_b".to_string());
+        FleetMessage {
+            timestamp: 0,
+            from: from.clone(),
+            to: Some(to.clone()),
+            payload: MessagePayload::StateChange {
+                old_state: InstanceState::Healthy,
+                new_state: InstanceState::Sandboxed,
+                reason: "saturation regression".to_string(),
+            },
+            message_id: ContentHash::compute(message_id.as_bytes()),
+            sender: from,
+            recipient: to,
+            lamport_timestamp: 0,
+        }
+    }
+
+    #[test]
+    fn test_message_bus_timestamps_stats_and_success_rate_saturate() {
+        let mut bus = MessageBus::new();
+        bus.current_timestamp = u64::MAX;
+        bus.messages_delivered = u64::MAX;
+
+        bus.send_message(test_fleet_message("deliver")).unwrap();
+        assert_eq!(bus.current_timestamp, u64::MAX);
+        assert_eq!(bus.delivery_stats().0, u64::MAX);
+
+        bus.set_partition_mode(PartitionMode::Degraded(test_partition_info(2)), u8::MAX);
+        assert_eq!(bus.delivery_success_rate, 100);
+
+        bus.set_partition_mode(PartitionMode::Degraded(test_partition_info(2)), 0);
+        bus.messages_dropped = u64::MAX;
+        bus.send_message(test_fleet_message("drop")).unwrap();
+        assert_eq!(bus.delivery_stats().1, u64::MAX);
+
+        bus.set_partition_mode(PartitionMode::Healing(test_healing_info()), u8::MAX);
+        bus.send_message(test_fleet_message("healing")).unwrap();
+        assert_eq!(bus.delivery_success_rate, 100);
     }
 
     #[test]
@@ -1381,6 +1467,56 @@ mod tests {
         // Should adopt the higher timestamp + 1
         let final_ts = fleet.current_lamport_timestamp();
         assert!(final_ts > after_broadcast + 5);
+    }
+
+    #[test]
+    fn test_fleet_lamport_and_partition_boundaries_saturate() {
+        let mut fleet = FleetSimulator::new(2, test_thresholds()).unwrap();
+        let instance_ids = fleet.instance_ids();
+        let originator = instance_ids[0].clone();
+        let receiver = instance_ids[1].clone();
+
+        fleet.set_partition_mode(PartitionMode::Healing(test_healing_info()), u8::MAX);
+        assert_eq!(fleet.message_bus.delivery_success_rate, 100);
+        assert!(
+            fleet
+                .instances
+                .values()
+                .all(|instance| instance.partition_info.local_partition_size <= 2)
+        );
+
+        fleet.lamport_clock = u64::MAX;
+        fleet
+            .broadcast_quarantine_decision(
+                "saturating_ext".to_string(),
+                "Boundary regression".to_string(),
+                "saturating_evidence".to_string(),
+                originator.clone(),
+            )
+            .unwrap();
+        assert_eq!(fleet.current_lamport_timestamp(), u64::MAX);
+
+        fleet
+            .process_quarantine_decision(
+                "remote_ext".to_string(),
+                "Remote boundary regression".to_string(),
+                "remote_evidence".to_string(),
+                originator.clone(),
+                u64::MAX,
+                receiver.clone(),
+            )
+            .unwrap();
+        assert_eq!(fleet.current_lamport_timestamp(), u64::MAX);
+
+        fleet
+            .process_quarantine_ack(
+                "saturating_ext".to_string(),
+                "saturating_evidence".to_string(),
+                receiver,
+                u64::MAX,
+            )
+            .unwrap();
+        assert_eq!(fleet.current_lamport_timestamp(), u64::MAX);
     }
 
     #[test]

@@ -492,8 +492,9 @@ pub fn write_tail_latency_control_plane_bundle(
         profile,
         guardrail_state: report.guardrails.state,
         fallback_activated: report.guardrails.fallback_activated,
-        stage_count: report.envelope_bundle.stage_count as u64,
-        violated_stage_count: report.envelope_bundle.violated_count as u64,
+        stage_count: u64::try_from(report.envelope_bundle.stage_count).unwrap_or(u64::MAX),
+        violated_stage_count: u64::try_from(report.envelope_bundle.violated_count)
+            .unwrap_or(u64::MAX),
         shed_count: report.admission_manifest.summary.total_shed,
         artifact_paths: TailLatencyControlPlaneArtifactPaths {
             latency_control_plane_report: TAIL_LATENCY_CONTROL_PLANE_REPORT_FILE.to_string(),
@@ -1043,7 +1044,7 @@ fn compose_end_to_end_bounds(
 
     EndToEndLatencyBounds {
         composition_model: "serial_min_plus_sum".to_string(),
-        stage_count: observations.len() as u64,
+        stage_count: u64::try_from(observations.len()).unwrap_or(u64::MAX),
         budget_p50_ns,
         budget_p95_ns,
         budget_p99_ns,

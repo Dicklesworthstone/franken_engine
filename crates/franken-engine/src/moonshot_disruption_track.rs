@@ -614,7 +614,12 @@ pub fn validate_moonshot_contracts(
     let mut current_metrics: BTreeMap<String, i64> = BTreeMap::new();
     for (gate_id, gate_result) in &execution.gate_results {
         if let Some(score) = gate_result.evidence_score_millionths {
-            current_metrics.insert(format!("{}_score", gate_id), score as i64);
+            let score =
+                i64::try_from(score).map_err(|_| DisruptionTrackError::InvalidEvidence {
+                    gate_id: gate_id.clone(),
+                    detail: "evidence score exceeds signed contract metric range".to_string(),
+                })?;
+            current_metrics.insert(format!("{}_score", gate_id), score);
         }
         // Add gate pass/fail as binary metric
         current_metrics.insert(
@@ -1310,6 +1315,27 @@ mod tests {
         assert!(result.is_ok());
 
         // The validation function extracted real metrics - success proves no placeholder usage
+    }
+
+    #[test]
+    fn validate_moonshot_contracts_rejects_score_outside_signed_metric_range() {
+        let mut execution =
+            DisruptionTrackExecution::new(SecurityEpoch::from_raw(1), "test-env".to_string());
+
+        execution.record_gate_result(MoonshotGateResult::pass(
+            MoonshotGateId::NodeBunComparisonHarness,
+            u64::MAX,
+            ContentHash::compute(b"oversized-evidence-score"),
+            vec!["bd-1ze".to_string()],
+            "2026-04-19T00:00:00Z".to_string(),
+        ));
+
+        let err = validate_moonshot_contracts(&execution, &[]).unwrap_err();
+        assert!(matches!(
+            err,
+            DisruptionTrackError::InvalidEvidence { gate_id, detail }
+                if gate_id == "bd-1ze" && detail.contains("signed contract metric range")
+        ));
     }
 
     #[test]

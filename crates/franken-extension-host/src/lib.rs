@@ -10313,7 +10313,10 @@ mod enrichment_tests {
         let sig_2 = key_2.sign(payload);
 
         assert_eq!(key_1, key_2, "Keys from same seed must be identical");
-        assert_eq!(sig_1, sig_2, "Signatures from identical keys must be byte-identical");
+        assert_eq!(
+            sig_1, sig_2,
+            "Signatures from identical keys must be byte-identical"
+        );
     }
 
     #[test]
@@ -10365,9 +10368,7 @@ mod enrichment_tests {
             &[0x00, 0x01, 0x02, 0xFF], // binary payload
         ];
 
-        let signatures: Vec<Vec<u8>> = payloads.iter()
-            .map(|payload| key.sign(payload))
-            .collect();
+        let signatures: Vec<Vec<u8>> = payloads.iter().map(|payload| key.sign(payload)).collect();
 
         // All signatures must be different
         for i in 0..signatures.len() {
@@ -10385,7 +10386,8 @@ mod enrichment_tests {
         for (i, payload) in payloads.iter().enumerate() {
             assert!(
                 pubkey.verify(payload, &signatures[i]),
-                "Signature {} must verify against its payload", i
+                "Signature {} must verify against its payload",
+                i
             );
         }
     }
@@ -10402,7 +10404,10 @@ mod enrichment_tests {
 
         // Multiple signatures of same content should be identical (determinism with domain separation)
         let signature_2 = key.sign(manifest_payload);
-        assert_eq!(signature, signature_2, "Domain-separated signatures must be deterministic");
+        assert_eq!(
+            signature, signature_2,
+            "Domain-separated signatures must be deterministic"
+        );
 
         // The raw signing should be consistent
         assert!(pubkey.verify(manifest_payload, &signature));
@@ -10420,10 +10425,10 @@ mod enrichment_tests {
 
         // Test with various malformed signature lengths
         let malformed_signatures = [
-            vec![], // empty signature
-            vec![0xFF], // too short
-            vec![0x00; 63], // one byte short
-            vec![0x00; 65], // one byte too long
+            vec![],          // empty signature
+            vec![0xFF],      // too short
+            vec![0x00; 63],  // one byte short
+            vec![0x00; 65],  // one byte too long
             vec![0xFF; 128], // way too long
         ];
 
@@ -10453,11 +10458,16 @@ mod enrichment_tests {
             let payload = payload_str.as_bytes();
 
             // Create multiple instances with same seed
-            let instances = (0..3).map(|_| DecisionSigningKey::new(*seed)).collect::<Vec<_>>();
+            let instances = (0..3)
+                .map(|_| DecisionSigningKey::new(*seed))
+                .collect::<Vec<_>>();
 
             // All instances should be identical
             for i in 1..instances.len() {
-                assert_eq!(instances[0], instances[i], "Keys from same seed must be identical");
+                assert_eq!(
+                    instances[0], instances[i],
+                    "Keys from same seed must be identical"
+                );
             }
 
             // All signatures should be identical
@@ -10465,7 +10475,8 @@ mod enrichment_tests {
             for i in 1..signatures.len() {
                 assert_eq!(
                     signatures[0], signatures[i],
-                    "Signatures from identical keys must be byte-identical (seed: {:?})", seed
+                    "Signatures from identical keys must be byte-identical (seed: {:?})",
+                    seed
                 );
             }
         }

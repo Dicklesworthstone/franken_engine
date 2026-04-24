@@ -370,6 +370,7 @@ pub mod rgc_planning_track;
 pub mod rgc_test_harness;
 pub mod rollback_governance_extension;
 pub mod rollback_safemode_synthesizer;
+pub mod rollout_controller;
 pub mod rough_path_regime_geometry;
 pub mod runtime_comparison_gate;
 pub mod runtime_config;

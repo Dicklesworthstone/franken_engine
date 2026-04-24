@@ -8,8 +8,6 @@
 //! Based on existing P-DETERM-01 property: "Given identical nondeterminism trace,
 //! replay produces identical state sequence."
 
-use std::collections::BTreeSet;
-
 use frankenengine_engine::scheduler_invariants::{
     SchedulerAutomaton, StateId, Transition, TransitionLabel,
 };

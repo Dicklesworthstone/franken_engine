@@ -517,7 +517,7 @@ mod tests {
         assert_eq!(first.content_hash, second.content_hash);
         assert!(first.content_hash.starts_with("sha256:"));
         let summary = render_operator_summary(&first);
-        assert!(summary.contains("go_targeted"));
+        assert!(summary.contains("targeted_promotion"));
         assert!(summary.contains("extension-host topology assessment"));
         assert!(summary.contains("control_plane_policy_diagnostics"));
     }

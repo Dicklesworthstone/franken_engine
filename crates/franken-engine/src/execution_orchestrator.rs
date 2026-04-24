@@ -2133,6 +2133,10 @@ mod tests {
     use crate::ifc_artifacts::{DeclassificationDecision, IfcSchemaVersion};
     use crate::signature_preimage::{SIGNATURE_SENTINEL, Signature, SigningKey};
 
+    fn execution_capabilities() -> Vec<String> {
+        vec!["vm_dispatch".to_string(), "heap_allocate".to_string()]
+    }
+
     fn simple_package() -> ExtensionPackage {
         ExtensionPackage {
             extension_id: "test-ext-1".to_string(),
@@ -2143,7 +2147,7 @@ mod tests {
             // orchestrator turns these strings into `RuntimeCapability` grants
             // via `RuntimeCapability::from_tag_str`, which requires the
             // canonical snake_case tag names.
-            capabilities: vec!["vm_dispatch".to_string(), "heap_allocate".to_string()],
+            capabilities: execution_capabilities(),
             version: "1.0.0".to_string(),
             metadata: BTreeMap::new(),
         }
@@ -2165,7 +2169,7 @@ mod tests {
             extension_id: extension_id.to_string(),
             source: source.to_string(),
             source_file: None,
-            capabilities: Vec::new(),
+            capabilities: execution_capabilities(),
             version: "1.0.0".to_string(),
             metadata: metadata
                 .iter()
@@ -3082,7 +3086,12 @@ mod tests {
             extension_id: "ext-cap".to_string(),
             source: "42".to_string(),
             source_file: None,
-            capabilities: vec!["fs_read".to_string(), "net".to_string()],
+            capabilities: vec![
+                "vm_dispatch".to_string(),
+                "heap_allocate".to_string(),
+                "fs_read".to_string(),
+                "net".to_string(),
+            ],
             version: "2.0.0".to_string(),
             metadata: {
                 let mut m = BTreeMap::new();
@@ -3096,7 +3105,7 @@ mod tests {
         // Evidence metadata should contain capabilities count.
         let entry = &result.evidence_entries[0];
         let cap_count = entry.metadata.get("capabilities_count").unwrap();
-        assert_eq!(cap_count, "2");
+        assert_eq!(cap_count, "4");
     }
 
     // -- action_to_saga_type coverage (via different risk scenarios) -----------
@@ -3998,7 +4007,7 @@ mod tests {
             extension_id: "ext-ver".to_string(),
             source: "42".to_string(),
             source_file: None,
-            capabilities: vec![],
+            capabilities: execution_capabilities(),
             version: "7.3.1".to_string(),
             metadata: BTreeMap::new(),
         };

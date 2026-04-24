@@ -1277,14 +1277,11 @@ mod tests {
             }],
         );
         let d = sel.select(&basic_context(), epoch());
-        assert!(d.is_override());
-        assert_eq!(
-            d.selected_strategy_id.as_deref(),
-            Some("nonexistent-strategy")
-        );
-        // kind is None because the strategy wasn't found
+        assert!(d.is_fallback());
+        assert_eq!(d.selected_strategy_id, None);
         assert!(d.selected_kind.is_none());
         assert_eq!(d.feasible_count, 0);
+        assert_eq!(d.infeasible_count, 1);
     }
 
     #[test]

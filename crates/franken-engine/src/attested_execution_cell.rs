@@ -1078,8 +1078,7 @@ impl CellRegistry {
         self.function_index
             .get(&function)
             .map(|ids| ids.iter().filter_map(|id| self.cells.get(id)).collect())
-            // SAFETY: Function index is maintained in sync with registered functions
-            .unwrap()
+            .unwrap_or_default()
     }
 
     /// Get all active cells.
@@ -1092,11 +1091,10 @@ impl CellRegistry {
 
     /// Get all cells in a zone.
     pub fn cells_in_zone(&self, zone: &str) -> Vec<&ExecutionCell> {
-        // SAFETY: Caller must ensure zone exists in zone_index
         self.zone_index
             .get(zone)
             .map(|ids| ids.iter().filter_map(|id| self.cells.get(id)).collect())
-            .unwrap()
+            .unwrap_or_default()
     }
 
     /// Total cell count.

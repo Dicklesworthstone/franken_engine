@@ -1,0 +1,11 @@
+{
+  "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "git_sha": "$(git rev-parse HEAD)",
+  "scenario": "hot_path_profiling",
+  "cpu": "$(lscpu | grep 'Model name' | cut -d: -f2 | xargs)",
+  "cores": "$(nproc)",
+  "governor": "$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null || echo unknown)",
+  "kernel": "$(uname -r)",
+  "rustc": "$(rustc --version)",
+  "build_profile": "release-perf"
+}

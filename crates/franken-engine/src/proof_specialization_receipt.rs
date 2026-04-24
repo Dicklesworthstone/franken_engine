@@ -715,7 +715,7 @@ impl ReceiptIndex {
             .iter()
             .find(|r| &r.receipt_id == receipt_id)
             .map(|r| r.proof_inputs.iter().collect())
-            .unwrap()
+            .unwrap_or_default()
     }
 
     /// Find all receipts for a given optimization class.

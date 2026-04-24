@@ -250,6 +250,8 @@ pub enum LaneError {
     TaskNotFound { task_id: u64 },
     /// Empty trace ID.
     EmptyTraceId,
+    /// Scheduler cannot allocate another unique task ID.
+    TaskIdExhausted,
 }
 
 impl fmt::Display for LaneError {
@@ -270,6 +272,7 @@ impl fmt::Display for LaneError {
             }
             Self::TaskNotFound { task_id } => write!(f, "task {task_id} not found"),
             Self::EmptyTraceId => f.write_str("trace_id must be non-empty"),
+            Self::TaskIdExhausted => f.write_str("task ID space exhausted"),
         }
     }
 }
@@ -366,7 +369,10 @@ impl LaneScheduler {
         }
 
         let task_id = TaskId(self.next_task_id);
-        self.next_task_id = self.next_task_id.saturating_add(1);
+        self.next_task_id = self
+            .next_task_id
+            .checked_add(1)
+            .ok_or(LaneError::TaskIdExhausted)?;
 
         let task = ScheduledTask {
             task_id,
@@ -997,12 +1003,27 @@ mod tests {
             },
             LaneError::TaskNotFound { task_id: 42 },
             LaneError::EmptyTraceId,
+            LaneError::TaskIdExhausted,
         ];
         for err in &errors {
             let json = serde_json::to_string(err).unwrap();
             let restored: LaneError = serde_json::from_str(&json).unwrap();
             assert_eq!(*err, restored);
         }
+    }
+
+    #[test]
+    fn submit_fails_closed_when_task_id_space_exhausted() {
+        let mut sched = LaneScheduler::new(LaneConfig::default());
+        sched.next_task_id = u64::MAX;
+
+        let err = sched
+            .submit(ready_label("t1"), 0, "payload", 0)
+            .expect_err("exhausted ID space must fail closed");
+
+        assert_eq!(err, LaneError::TaskIdExhausted);
+        assert_eq!(sched.queue_depth(SchedulerLane::Ready), 0);
+        assert_eq!(sched.event_counts().get("submit"), None);
     }
 
     #[test]

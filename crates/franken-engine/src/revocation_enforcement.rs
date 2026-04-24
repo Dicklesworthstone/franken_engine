@@ -754,20 +754,11 @@ mod tests {
     use crate::engine_object_id::{self, ObjectDomain};
     use crate::revocation_chain::{Revocation, RevocationReason, revocation_schema_id};
     use crate::signature_preimage::{
-        SIGNATURE_SENTINEL, Signature, SignaturePreimage, SigningKey, sign_preimage,
+        SIGNATURE_SENTINEL, Signature, SignaturePreimage, SigningKey, generate_keypair_from_seed,
+        sign_preimage,
     };
 
     const TEST_ZONE: &str = "test-zone";
-
-    fn test_signing_key() -> SigningKey {
-        SigningKey::from_bytes([
-            0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E,
-            0x0F, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C,
-            0x1D, 0x1E, 0x1F, 0x20,
-        ])
-        // SAFETY: Fixed 32-byte array is valid signing key format for test helper
-        .unwrap()
-    }
 
     fn revocation_key() -> SigningKey {
         SigningKey::from_bytes([
@@ -783,13 +774,11 @@ mod tests {
     ///
     /// Arbitrary 32-byte arrays are NOT valid Ed25519 public keys, so the raw
     /// `VerificationKey::from_bytes([N; 32])` pattern used historically in
-    /// these tests fails with `InvalidVerificationKey`. Deriving a VK from a
-    /// `SigningKey` seed (which accepts any 32 bytes) always yields a valid VK.
+    /// these tests fails with `InvalidVerificationKey`. Deriving a VK from an
+    /// Ed25519 seed always yields a valid VK, including the all-zero seed used
+    /// by deterministic edge-case coverage.
     fn test_vk(byte: u8) -> VerificationKey {
-        SigningKey::from_bytes([byte; 32])
-            // SAFETY: 32-byte array is valid signing key format for test helper
-            .unwrap()
-            .verification_key()
+        generate_keypair_from_seed(&[byte; 32]).1
     }
 
     fn make_revocation(
@@ -838,7 +827,7 @@ mod tests {
         target_bytes: [u8; 32],
     ) {
         let rev = make_revocation(target_type, RevocationReason::Compromised, target_bytes);
-        let sk = test_signing_key();
+        let sk = revocation_key();
         // SAFETY: Test helper uses valid revocation and signing key for chain append
         enforcer.chain_mut().append(rev, &sk, "t-revoke").unwrap();
     }
@@ -1618,7 +1607,7 @@ mod tests {
             RevocationReason::Compromised,
             [1; 32],
         );
-        let sk = test_signing_key();
+        let sk = revocation_key();
         enforcer.chain_mut().append(rev, &sk, "t-mut").unwrap();
         assert_eq!(enforcer.chain().len(), 1);
     }

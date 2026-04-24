@@ -424,12 +424,11 @@ fn validate_signal(
                     ),
                 ));
             }
-            // SAFETY: signer field is guaranteed to be Some in this validation context
             if artifact
                 .signer
                 .as_deref()
                 .map(str::trim)
-                .unwrap()
+                .unwrap_or("")
                 .is_empty()
             {
                 findings.push(finding(
@@ -441,12 +440,11 @@ fn validate_signal(
                     ),
                 ));
             }
-            // SAFETY: signature_ref field is guaranteed to be Some in this validation context
             if artifact
                 .signature_ref
                 .as_deref()
                 .map(str::trim)
-                .unwrap()
+                .unwrap_or("")
                 .is_empty()
             {
                 findings.push(finding(
@@ -552,7 +550,19 @@ pub fn integrate_milestone_release_test_evidence(
             });
             if let Some(artifact) = artifacts
                 .iter()
-                .find(|artifact| artifact.signature_status == SignatureStatus::Signed)
+                .find(|artifact| {
+                    artifact.signature_status == SignatureStatus::Signed
+                        && artifact
+                            .signer
+                            .as_deref()
+                            .map(str::trim)
+                            .is_some_and(|signer| !signer.is_empty())
+                        && artifact
+                            .signature_ref
+                            .as_deref()
+                            .map(str::trim)
+                            .is_some_and(|signature_ref| !signature_ref.is_empty())
+                })
             {
                 for category in source.gate_categories() {
                     signed_evidence_links.push(SignedEvidenceLink {
@@ -564,8 +574,7 @@ pub fn integrate_milestone_release_test_evidence(
                             .signer
                             .clone()
                             .unwrap_or_else(|| "unknown-signer".to_string()),
-                        // SAFETY: signature_ref is guaranteed to be Some for passed artifacts
-                        signature_ref: artifact.signature_ref.clone().unwrap(),
+                        signature_ref: artifact.signature_ref.clone().unwrap_or_default(),
                     });
                 }
             }

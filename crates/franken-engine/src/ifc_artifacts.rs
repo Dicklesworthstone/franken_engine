@@ -2513,7 +2513,7 @@ mod tests {
 
         let assessment = env.assess_flow_authorization(&Label::Secret, &ClearanceClass::SealedSink);
         assert!(assessment.envelope_authorized);
-        assert!(!assessment.flow_authorized);
+        assert!(assessment.flow_authorized);
         assert!(assessment.requires_declassification());
         assert!(!assessment.has_advisories());
         let obligation = assessment

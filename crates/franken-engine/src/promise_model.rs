@@ -2663,15 +2663,12 @@ mod tests {
         let registration_seq = event_loop.set_timeout(handler, 100, label.clone());
         assert!(event_loop.has_pending_work());
 
-        // At time 0, no timer should be ready
+        // The deterministic loop advances to the next timer and returns it in
+        // the same turn.
         let result1 = event_loop.turn();
-        assert!(result1.macrotask.is_none());
-        assert!(result1.clock_advanced); // Clock should advance to next timer
-
-        // After clock advancement, timer should be ready
-        let result2 = event_loop.turn();
-        assert!(result2.macrotask.is_some());
-        let task = result2.macrotask.unwrap();
+        assert!(result1.clock_advanced);
+        assert!(result1.macrotask.is_some());
+        let task = result1.macrotask.unwrap();
         assert_eq!(task.source, MacrotaskSource::Timer);
         assert_eq!(task.handler, handler);
         assert_eq!(task.registration_seq, registration_seq);
@@ -2719,9 +2716,7 @@ mod tests {
         let result1 = event_loop.turn();
         assert!(result1.clock_advanced);
         assert_eq!(event_loop.clock.now_ms(), 100);
-
-        let result2 = event_loop.turn();
-        let task2 = result2.macrotask.unwrap();
+        let task2 = result1.macrotask.unwrap();
         assert_eq!(task2.handler, ClosureHandle(2));
         assert_eq!(task2.registration_seq, seq2);
 
@@ -2729,9 +2724,7 @@ mod tests {
         let result3 = event_loop.turn();
         assert!(result3.clock_advanced);
         assert_eq!(event_loop.clock.now_ms(), 200);
-
-        let result4 = event_loop.turn();
-        let task1 = result4.macrotask.unwrap();
+        let task1 = result3.macrotask.unwrap();
         assert_eq!(task1.handler, ClosureHandle(1));
         assert_eq!(task1.registration_seq, seq1);
 
@@ -2739,9 +2732,7 @@ mod tests {
         let result5 = event_loop.turn();
         assert!(result5.clock_advanced);
         assert_eq!(event_loop.clock.now_ms(), 300);
-
-        let result6 = event_loop.turn();
-        let task3 = result6.macrotask.unwrap();
+        let task3 = result5.macrotask.unwrap();
         assert_eq!(task3.handler, ClosureHandle(3));
         assert_eq!(task3.registration_seq, seq3);
     }
@@ -2754,16 +2745,12 @@ mod tests {
         // Schedule initial timer
         event_loop.set_timeout(ClosureHandle(1), 100, label.clone());
 
-        // First turn fires the timer
-        event_loop.turn(); // advance clock
         let result1 = event_loop.turn();
         assert!(result1.macrotask.is_some());
 
         // Simulate timer callback scheduling another timer
         event_loop.set_timeout(ClosureHandle(2), 50, label);
 
-        // Next turn should fire the nested timer
-        event_loop.turn(); // advance clock
         let result2 = event_loop.turn();
         assert!(result2.macrotask.is_some());
         assert_eq!(result2.macrotask.unwrap().handler, ClosureHandle(2));

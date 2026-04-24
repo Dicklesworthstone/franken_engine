@@ -2319,11 +2319,11 @@ mod tests {
 
     #[test]
     fn verification_result_serde_roundtrip() {
+        let publisher_key = test_signing_key().verification_key();
         let vr = VerificationResult {
             valid: false,
             package_id: EngineObjectId([20; 32]),
-            // SAFETY: Test scenario with valid byte array for VerificationKey creation
-            publisher_key: VerificationKey::from_bytes([21; 32]).unwrap(),
+            publisher_key,
             publisher_active: true,
             package_active: false,
             structure_valid: true,

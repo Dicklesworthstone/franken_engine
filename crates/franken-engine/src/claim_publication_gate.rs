@@ -642,7 +642,11 @@ pub fn route_verdict_to_surfaces(
     av: &AnnotatedVerdict,
     config: &SurfaceRoutingConfig,
 ) -> Vec<PublicationSurface> {
-    config.domain_to_surfaces.get(&av.domain).cloned().unwrap()
+    config
+        .domain_to_surfaces
+        .get(&av.domain)
+        .cloned()
+        .unwrap_or_default()
 }
 
 /// Render a human-readable summary of a publication gate evaluation.

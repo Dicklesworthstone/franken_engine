@@ -2232,11 +2232,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "removal index")]
-    fn escalator_max_log_entries_zero_panics_on_first_evaluate() {
-        // Setting max_log_entries=0 triggers a panic on the first evaluate because
-        // len()==0 >= 0 is true, so remove(0) is called on an empty vec.
-        // This documents the edge case.
+    fn escalator_max_log_entries_zero_disables_logging() {
         let policy = EscalationPolicy::default();
         let mut escalator = HindsightTraceEscalator::new(policy, test_epoch());
         escalator.max_log_entries = 0;
@@ -2248,7 +2244,9 @@ mod tests {
             "profiler",
             test_epoch(),
         );
-        escalator.evaluate(t); // panics
+        let decision = escalator.evaluate(t);
+        assert!(!decision.decision_hash.is_empty());
+        assert!(escalator.decision_log.is_empty());
     }
 
     #[test]

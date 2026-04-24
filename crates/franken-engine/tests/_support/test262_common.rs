@@ -285,7 +285,7 @@ impl ConformanceThresholds {
         report: &Test262Report<Category>,
     ) -> (bool, Vec<String>)
     where
-        Category: Serialize,
+        Category: Serialize + Ord + Clone + std::fmt::Debug,
     {
         let mut issues = Vec::new();
         let mut passed = true;

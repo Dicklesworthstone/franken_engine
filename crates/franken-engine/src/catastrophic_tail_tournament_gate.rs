@@ -653,7 +653,7 @@ impl CatastrophicTailTournamentGate {
         let mut total_rounds: u64 = 0;
 
         for threat_id in self.threat_classes.keys() {
-            let threat_campaigns = by_threat.get(threat_id).cloned().unwrap();
+            let threat_campaigns = by_threat.get(threat_id).cloned().unwrap_or_default();
             let mut all_payoffs: Vec<i64> = Vec::new();
             let mut worst_exploit: Option<String> = None;
             let mut max_payoff: i64 = 0;

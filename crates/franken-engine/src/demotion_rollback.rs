@@ -2385,8 +2385,9 @@ mod tests {
         assert!(receipt.verify_signature(&vk).is_ok());
 
         // Wrong key should fail.
-        // SAFETY: from_bytes cannot fail on correctly sized byte array
-        let wrong_vk = VerificationKey::from_bytes([0xAB; 32]).unwrap();
+        let wrong_vk = SigningKey::from_bytes([99u8; 32])
+            .unwrap()
+            .verification_key();
         assert!(receipt.verify_signature(&wrong_vk).is_err());
     }
 

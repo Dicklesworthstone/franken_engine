@@ -1273,7 +1273,7 @@ mod tests {
     #[test]
     fn test_broadcast_reaches_all() {
         let mut fleet = FleetSimulator::new(3, test_thresholds()).unwrap();
-        let originator = NodeId("node_0".to_string());
+        let originator = NodeId("instance-000".to_string());
         let extension_id = "malicious_ext".to_string();
         let evidence_hash = "evidence_123".to_string();
 
@@ -1300,8 +1300,8 @@ mod tests {
     #[test]
     fn test_enforcement_blocks_extension() {
         let mut fleet = FleetSimulator::new(2, test_thresholds()).unwrap();
-        let receiving_instance = NodeId("node_1".to_string());
-        let originator = NodeId("node_0".to_string());
+        let receiving_instance = NodeId("instance-001".to_string());
+        let originator = NodeId("instance-000".to_string());
 
         // Process quarantine decision on receiving instance
         fleet
@@ -1327,8 +1327,8 @@ mod tests {
     #[test]
     fn test_ack_sent_after_enforcement() {
         let mut fleet = FleetSimulator::new(2, test_thresholds()).unwrap();
-        let receiving_instance = NodeId("node_1".to_string());
-        let originator = NodeId("node_0".to_string());
+        let receiving_instance = NodeId("instance-001".to_string());
+        let originator = NodeId("instance-000".to_string());
 
         // First broadcast the decision to create the record
         fleet
@@ -1359,7 +1359,7 @@ mod tests {
     #[test]
     fn test_convergence_detected() {
         let mut fleet = FleetSimulator::new(2, test_thresholds()).unwrap();
-        let originator = NodeId("node_0".to_string());
+        let originator = NodeId("instance-000".to_string());
         let evidence_hash = "convergence_test".to_string();
 
         // Broadcast decision
@@ -1377,7 +1377,7 @@ mod tests {
             .process_quarantine_ack(
                 "conv_ext".to_string(),
                 evidence_hash.clone(),
-                NodeId("node_0".to_string()),
+                NodeId("instance-000".to_string()),
                 10,
             )
             .unwrap();
@@ -1386,7 +1386,7 @@ mod tests {
             .process_quarantine_ack(
                 "conv_ext".to_string(),
                 evidence_hash.clone(),
-                NodeId("node_1".to_string()),
+                NodeId("instance-001".to_string()),
                 11,
             )
             .unwrap();
@@ -1402,7 +1402,7 @@ mod tests {
     #[test]
     fn test_duplicate_ignored() {
         let mut fleet = FleetSimulator::new(2, test_thresholds()).unwrap();
-        let originator = NodeId("node_0".to_string());
+        let originator = NodeId("instance-000".to_string());
         let evidence_hash = "duplicate_test".to_string();
 
         // First broadcast

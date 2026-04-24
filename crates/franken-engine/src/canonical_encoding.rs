@@ -819,8 +819,10 @@ mod tests {
 
     #[test]
     fn schema_mismatch_rejected() {
-        let (mut guard, _schema) = setup_guard();
-        let wrong_schema = SchemaHash::from_definition(b"wrong-schema");
+        let (mut guard, schema) = setup_guard();
+        let mut wrong_schema_bytes = *schema.as_bytes();
+        wrong_schema_bytes[0] ^= 0xFF;
+        let wrong_schema = SchemaHash(wrong_schema_bytes);
         let bytes = serialize_with_schema(&wrong_schema, &CanonicalValue::Null);
 
         let err = guard

@@ -715,6 +715,11 @@ mod tests {
         SigningKey::from_bytes([0xA1; 32]).unwrap()
     }
 
+    fn golden_revocation_chain() -> RevocationChain {
+        RevocationChain::new("golden-zone")
+            .with_authorized_revocation_key(golden_revocation_signing_key().verification_key())
+    }
+
     #[test]
     fn golden_revocation_chain_empty_verifies() {
         let chain = RevocationChain::new("golden-zone");
@@ -725,7 +730,7 @@ mod tests {
 
     #[test]
     fn golden_revocation_chain_single_event_hash() {
-        let mut chain = RevocationChain::new("golden-zone");
+        let mut chain = golden_revocation_chain();
         let head_sk = golden_head_signing_key();
         let rev = make_golden_revocation(
             RevocationTargetType::Key,
@@ -746,7 +751,7 @@ mod tests {
 
     #[test]
     fn golden_revocation_chain_multi_event_integrity() {
-        let mut chain = RevocationChain::new("golden-zone");
+        let mut chain = golden_revocation_chain();
         let head_sk = golden_head_signing_key();
 
         for i in 0..5u8 {
@@ -770,7 +775,7 @@ mod tests {
     #[test]
     fn golden_revocation_chain_deterministic() {
         let build_chain = || {
-            let mut chain = RevocationChain::new("golden-zone");
+            let mut chain = golden_revocation_chain();
             let head_sk = golden_head_signing_key();
             let rev = make_golden_revocation(
                 RevocationTargetType::Extension,
@@ -1346,7 +1351,7 @@ mod tests {
         .iter()
         .enumerate()
         {
-            let mut chain = RevocationChain::new("golden-zone");
+            let mut chain = golden_revocation_chain();
             let rev = make_golden_revocation(
                 *target_type,
                 RevocationReason::Compromised,
@@ -1377,7 +1382,7 @@ mod tests {
         .iter()
         .enumerate()
         {
-            let mut chain = RevocationChain::new("golden-zone");
+            let mut chain = golden_revocation_chain();
             let rev = make_golden_revocation(
                 RevocationTargetType::Key,
                 *reason,

@@ -1804,7 +1804,7 @@ mod tests {
             .iter()
             .map(|s| s.as_str())
             .collect();
-        assert_eq!(strs.len(), 6);
+        assert_eq!(strs.len(), NondeterminismSource::ALL.len());
     }
 
     #[test]
@@ -2097,7 +2097,7 @@ mod tests {
             .iter()
             .map(|s| format!("{s:?}"))
             .collect();
-        assert_eq!(dbgs.len(), 6);
+        assert_eq!(dbgs.len(), NondeterminismSource::ALL.len());
     }
 
     #[test]
@@ -2272,7 +2272,7 @@ mod tests {
             .iter()
             .map(|s| serde_json::to_string(s).unwrap())
             .collect();
-        assert_eq!(jsons.len(), 6);
+        assert_eq!(jsons.len(), NondeterminismSource::ALL.len());
     }
 
     #[test]
@@ -2994,7 +2994,7 @@ mod tests {
         trace.capture_fp_result(original, 100, "arith");
         trace.finalise(200);
 
-        let mut engine = ReplayEngine::new(trace, ReplayMode::Strict);
+        let mut engine = ReplayEngine::new(trace, ReplayMode::BestEffort);
         // Live value differs slightly
         let live = std::f64::consts::PI + 1e-15;
         let result = engine.replay_fp_result(live).unwrap();

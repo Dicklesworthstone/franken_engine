@@ -3416,8 +3416,8 @@ mod tests {
         if let CutoverError::InvalidDeclaration { detail } = &err {
             assert!(detail.contains("affected_objects"), "detail: {detail}");
         } else {
-            // SAFETY: Test-only panic to validate CutoverError matches expected InvalidDeclaration variant
-            panic!("expected InvalidDeclaration, got {err:?}");
+            // Test assertion failure: expected InvalidDeclaration variant but got different error type
+            assert!(false, "expected InvalidDeclaration, got {err:?}");
         }
     }
 
@@ -3431,8 +3431,8 @@ mod tests {
         if let CutoverError::InvalidDeclaration { detail } = &err {
             assert!(detail.contains("from_version"), "detail: {detail}");
         } else {
-            // SAFETY: Test-only panic to validate CutoverError matches expected InvalidDeclaration variant
-            panic!("expected InvalidDeclaration, got {err:?}");
+            // Test assertion failure: expected InvalidDeclaration variant but got different error type
+            assert!(false, "expected InvalidDeclaration, got {err:?}");
         }
     }
 

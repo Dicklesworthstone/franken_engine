@@ -714,7 +714,7 @@ fn run_single_esm_cjs_specimen(specimen: &EsmCjsParitySpecimen) -> EsmCjsParityS
         extension_id: format!("esm-cjs-parity-{}", specimen.specimen_id),
         source: specimen.source.clone(),
         source_file: specimen.source_file.clone(),
-        capabilities: vec![],
+        capabilities: vec!["vm_dispatch".to_string(), "heap_allocate".to_string()],
         version: "1.0.0".into(),
         metadata: BTreeMap::new(),
     };

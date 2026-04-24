@@ -1143,7 +1143,7 @@ fn build_baseline_reference_id(
         metadata
             .baseline_benchmark_run_id
             .as_deref()
-            .unwrap()
+            .unwrap_or("")
             .as_bytes(),
     );
     hasher.update(evidence_link.optimization_decision_id.as_bytes());

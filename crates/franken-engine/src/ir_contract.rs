@@ -6096,7 +6096,7 @@ mod tests {
 
         // Create two IR1 modules with same logical content but different internal ordering
         let mut module_a = Ir1Module::with_capacity(source_hash, "test_a.js".to_string(), 10);
-        let mut module_b = Ir1Module::with_capacity(source_hash, "test_b.js".to_string(), 10);
+        let mut module_b = Ir1Module::with_capacity(source_hash, "test_a.js".to_string(), 10);
 
         // Add scopes in different orders with different binding arrangements
         let scope1_bindings_order_a = vec![

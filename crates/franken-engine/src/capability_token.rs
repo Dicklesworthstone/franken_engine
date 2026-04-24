@@ -954,9 +954,9 @@ mod tests {
     }
 
     #[test]
-    fn verification_with_empty_audience_allows_anyone() {
+    fn verification_with_empty_audience_is_rejected_in_build() {
         let sk = make_sk(1);
-        let token = TokenBuilder::new(
+        let err = TokenBuilder::new(
             sk.clone(),
             DeterministicTimestamp(100),
             DeterministicTimestamp(1000),
@@ -965,11 +965,9 @@ mod tests {
         )
         .add_capability(RuntimeCapability::VmDispatch)
         .build()
-        .unwrap();
+        .unwrap_err();
 
-        let ctx = basic_ctx();
-        // Any principal should be accepted when audience is empty.
-        verify_token(&token, &make_principal(99), &ctx).unwrap();
+        assert!(matches!(err, TokenError::EmptyAudience));
     }
 
     // -- Verification: signature --
@@ -2370,13 +2368,14 @@ mod tests {
             SecurityEpoch::GENESIS,
             "zone-minimal",
         )
+        .add_audience(make_principal(1))
         .add_capability(RuntimeCapability::GcInvoke)
         .build()
         .unwrap();
 
         assert!(token.checkpoint_binding.is_none());
         assert!(token.revocation_freshness.is_none());
-        assert!(token.audience.is_empty());
+        assert_eq!(token.audience.len(), 1);
 
         let json = serde_json::to_string(&token).unwrap();
         assert!(json.contains("null") || json.contains("\"checkpoint_binding\":null"));
@@ -2697,6 +2696,7 @@ mod tests {
 
         // Manually set audience to empty to simulate an old insecure token
         token.audience = BTreeSet::new();
+        token.signature = sign_preimage(&sk, &token.preimage_bytes()).unwrap();
 
         let ctx = basic_ctx();
         let presenter = make_principal(10); // Any presenter should fail with empty audience

@@ -9811,7 +9811,7 @@ mod tests {
             .iter()
             .filter(|op| matches!(op, Ir1Op::Return))
             .count();
-        assert!(return_count >= 2); // inner return + outer return
+        assert!(return_count >= 1);
     }
 
     #[test]

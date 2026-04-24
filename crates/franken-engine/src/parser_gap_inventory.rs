@@ -1553,8 +1553,12 @@ mod tests {
             assert!(diagnostic.canonical_hash().len() > 20);
             assert!(!diagnostic.message_template.is_empty());
 
-            // Verify the diagnostic contains the expected parser gap context
-            assert!(diagnostic.message_template.contains("not implemented"));
+            // Resolved historical gaps retain provenance diagnostics without
+            // claiming that the syntax is still unimplemented.
+            assert!(
+                diagnostic.message_template.contains("not implemented")
+                    || diagnostic.message_template.contains("is resolved")
+            );
         }
     }
 
@@ -1632,8 +1636,8 @@ mod tests {
         assert!(resolved_families.contains("for_of_statement"));
         assert!(resolved_families.contains("template_literal"));
         assert!(resolved_families.contains("new_expression"));
-        assert!(resolved_families.contains("binary_expression"));
-        assert!(resolved_families.contains("assignment_expression"));
+        assert!(resolved_families.contains("binary_non_arithmetic_expression"));
+        assert!(resolved_families.contains("member_assignment_expression"));
     }
 
     #[test]
@@ -1661,10 +1665,10 @@ mod tests {
                 site_id
             );
 
-            // Diagnostic codes should be distinct
+            // Diagnostic codes should use the stable parser-gap namespace.
             assert!(
-                diagnostic_code.contains("franken"),
-                "{:?} diagnostic code should contain 'franken': {}",
+                diagnostic_code.starts_with("FE-PARSER-GAP-"),
+                "{:?} diagnostic code should use parser-gap namespace: {}",
                 site_id,
                 diagnostic_code
             );

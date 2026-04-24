@@ -69,6 +69,8 @@ pub enum BarrierError {
         current: SecurityEpoch,
         attempted: SecurityEpoch,
     },
+    /// Guard acquisition cannot allocate another unique guard ID.
+    GuardIdExhausted { current_epoch: SecurityEpoch },
 }
 
 impl fmt::Display for BarrierError {
@@ -97,6 +99,9 @@ impl fmt::Display for BarrierError {
                 f,
                 "non-monotonic transition: current {current}, attempted {attempted}"
             ),
+            Self::GuardIdExhausted { current_epoch } => {
+                write!(f, "guard ID space exhausted at {current_epoch}")
+            }
         }
     }
 }
@@ -303,7 +308,12 @@ impl EpochBarrier {
         }
 
         let guard_id = self.next_guard_id;
-        self.next_guard_id = self.next_guard_id.saturating_add(1);
+        self.next_guard_id =
+            self.next_guard_id
+                .checked_add(1)
+                .ok_or(BarrierError::GuardIdExhausted {
+                    current_epoch: self.current_epoch,
+                })?;
         self.in_flight_count = self.in_flight_count.saturating_add(1);
         self.active_guard_ids.insert(guard_id);
 
@@ -920,6 +930,9 @@ mod tests {
             BarrierError::NonMonotonicTransition {
                 current: SecurityEpoch::from_raw(5),
                 attempted: SecurityEpoch::from_raw(3),
+            },
+            BarrierError::GuardIdExhausted {
+                current_epoch: SecurityEpoch::from_raw(8),
             },
         ];
         for err in &errors {
@@ -2417,5 +2430,24 @@ mod tests {
             let restored: BarrierError = serde_json::from_str(&json).unwrap();
             assert_eq!(err, restored);
         }
+    }
+
+    #[test]
+    fn enter_critical_fails_closed_when_guard_id_space_exhausted() {
+        let mut barrier = det_barrier(8);
+        barrier.next_guard_id = u64::MAX;
+
+        let err = barrier
+            .enter_critical(CriticalOpKind::DecisionEval, "trace")
+            .expect_err("exhausted guard ID space must fail closed");
+
+        assert_eq!(
+            err,
+            BarrierError::GuardIdExhausted {
+                current_epoch: SecurityEpoch::from_raw(8),
+            }
+        );
+        assert_eq!(barrier.in_flight(), 0);
+        assert!(barrier.active_guard_ids.is_empty());
     }
 }

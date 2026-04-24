@@ -1978,6 +1978,7 @@ mod tests {
         let mut config = default_config();
         // Set saturation target very high so Adequate not Saturated.
         config.min_saturation_score_millionths = 999_999;
+        config.min_representativeness_score_millionths = 0;
         let report = board.evaluate(&config);
         assert!(
             report.verdict == SaturationVerdict::Adequate

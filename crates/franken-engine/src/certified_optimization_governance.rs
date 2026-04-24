@@ -1064,7 +1064,7 @@ impl GovernanceState {
             h.update(
                 row.last_rollback_epoch
                     .map(SecurityEpoch::as_u64)
-                    .unwrap()
+                    .unwrap_or(0)
                     .to_le_bytes(),
             );
             h.update((row.forensic_surfaces.len() as u64).to_le_bytes());
@@ -1074,7 +1074,7 @@ impl GovernanceState {
             h.update(
                 row.latest_forensic_epoch
                     .map(SecurityEpoch::as_u64)
-                    .unwrap()
+                    .unwrap_or(0)
                     .to_le_bytes(),
             );
         }

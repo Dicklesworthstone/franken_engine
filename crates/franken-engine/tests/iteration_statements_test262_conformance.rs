@@ -9,9 +9,9 @@
 //! variable scoping in headers, break/continue semantics, and iterator protocol
 //! integration for for-in/for-of statements.
 
-use std::collections::BTreeMap;
-use serde::{Deserialize, Serialize};
 use frankenengine_engine::HybridRouter;
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 const SCHEMA_VERSION: &str = "franken-engine.iteration-statements-test262-conformance.v1";
 const BEAD_ID: &str = "bd-ai64f";
@@ -28,22 +28,6 @@ pub enum IterationStatementTestCategory {
     VariableScoping,
     IteratorProtocol,
     EdgeCases,
-}
-
-impl IterationStatementTestCategory {
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::ForStatement => "for_statement",
-            Self::ForInStatement => "for_in_statement",
-            Self::ForOfStatement => "for_of_statement",
-            Self::WhileStatement => "while_statement",
-            Self::DoWhileStatement => "do_while_statement",
-            Self::BreakContinue => "break_continue",
-            Self::VariableScoping => "variable_scoping",
-            Self::IteratorProtocol => "iterator_protocol",
-            Self::EdgeCases => "edge_cases",
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -156,7 +140,6 @@ impl IterationStatementConformanceHarness {
             es_spec_section: "13.2.4",
             requirement_level: "MUST",
         },
-
         // For-in statement tests (13.2.5)
         StaticIterationStatementTestCase {
             id: "for-in-statement-basic",
@@ -182,7 +165,6 @@ impl IterationStatementConformanceHarness {
             es_spec_section: "13.2.5",
             requirement_level: "MUST",
         },
-
         // For-of statement tests (13.2.6)
         StaticIterationStatementTestCase {
             id: "for-of-statement-basic",
@@ -208,7 +190,6 @@ impl IterationStatementConformanceHarness {
             es_spec_section: "13.2.6",
             requirement_level: "MUST",
         },
-
         // While statement tests (13.2.3)
         StaticIterationStatementTestCase {
             id: "while-statement-basic",
@@ -226,7 +207,6 @@ impl IterationStatementConformanceHarness {
             es_spec_section: "13.2.3",
             requirement_level: "MUST",
         },
-
         // Do-while statement tests (13.2.2)
         StaticIterationStatementTestCase {
             id: "do-while-statement-basic",
@@ -244,7 +224,6 @@ impl IterationStatementConformanceHarness {
             es_spec_section: "13.2.2",
             requirement_level: "MUST",
         },
-
         // Break and continue tests
         StaticIterationStatementTestCase {
             id: "break-statement-for-loop",
@@ -278,7 +257,6 @@ impl IterationStatementConformanceHarness {
             es_spec_section: "13.13",
             requirement_level: "SHOULD",
         },
-
         // Iterator protocol integration
         StaticIterationStatementTestCase {
             id: "for-of-iterator-protocol",
@@ -288,7 +266,6 @@ impl IterationStatementConformanceHarness {
             es_spec_section: "13.2.6",
             requirement_level: "SHOULD",
         },
-
         // Edge cases
         StaticIterationStatementTestCase {
             id: "for-statement-empty-body",
@@ -340,13 +317,11 @@ impl IterationStatementConformanceHarness {
             results.insert(test_case.id.clone(), result);
         }
 
-        statistics.pass_rate_millionths = if statistics.total_tests > 0 {
-            statistics.passed.checked_div(statistics.total_tests)
-                .map(|rate| rate * 1_000_000)
-                .unwrap_or(0)
-        } else {
-            0
-        };
+        statistics.pass_rate_millionths = statistics
+            .passed
+            .saturating_mul(1_000_000)
+            .checked_div(statistics.total_tests)
+            .unwrap_or(0);
 
         IterationStatementConformanceReport {
             schema_version: SCHEMA_VERSION.to_string(),
@@ -374,7 +349,9 @@ impl IterationStatementConformanceHarness {
         }
     }
 
-    fn calculate_coverage_by_category(results: &BTreeMap<String, IterationStatementResult>) -> BTreeMap<IterationStatementTestCategory, CategoryCoverage> {
+    fn calculate_coverage_by_category(
+        results: &BTreeMap<String, IterationStatementResult>,
+    ) -> BTreeMap<IterationStatementTestCategory, CategoryCoverage> {
         let mut coverage = BTreeMap::new();
 
         for static_case in Self::STATIC_TEST_CASES {
@@ -384,7 +361,8 @@ impl IterationStatementConformanceHarness {
             category_coverage.total += 1;
 
             if let Some(result) = results.get(static_case.id)
-                && matches!(result, IterationStatementResult::Pass) {
+                && matches!(result, IterationStatementResult::Pass)
+            {
                 category_coverage.passed += 1;
             }
         }
@@ -401,55 +379,85 @@ mod tests {
     fn test_for_statement_basic() {
         let static_case = &IterationStatementConformanceHarness::STATIC_TEST_CASES[0];
         let test_case = IterationStatementTestCase::from(static_case);
-        assert_eq!(test_case.category, IterationStatementTestCategory::ForStatement);
+        assert_eq!(
+            test_case.category,
+            IterationStatementTestCategory::ForStatement
+        );
 
         let result = IterationStatementConformanceHarness::execute_test_case(&test_case);
         // Basic for loops should be supported
-        assert!(matches!(result, IterationStatementResult::Pass | IterationStatementResult::Fail));
+        assert!(matches!(
+            result,
+            IterationStatementResult::Pass | IterationStatementResult::Fail
+        ));
     }
 
     #[test]
     fn test_for_in_statement() {
         let static_case = &IterationStatementConformanceHarness::STATIC_TEST_CASES[5];
         let test_case = IterationStatementTestCase::from(static_case);
-        assert_eq!(test_case.category, IterationStatementTestCategory::ForInStatement);
+        assert_eq!(
+            test_case.category,
+            IterationStatementTestCategory::ForInStatement
+        );
 
         let result = IterationStatementConformanceHarness::execute_test_case(&test_case);
         // For-in loops are critical JavaScript functionality
-        assert!(matches!(result, IterationStatementResult::Pass | IterationStatementResult::Fail));
+        assert!(matches!(
+            result,
+            IterationStatementResult::Pass | IterationStatementResult::Fail
+        ));
     }
 
     #[test]
     fn test_for_of_statement() {
         let static_case = &IterationStatementConformanceHarness::STATIC_TEST_CASES[8];
         let test_case = IterationStatementTestCase::from(static_case);
-        assert_eq!(test_case.category, IterationStatementTestCategory::ForOfStatement);
+        assert_eq!(
+            test_case.category,
+            IterationStatementTestCategory::ForOfStatement
+        );
 
         let result = IterationStatementConformanceHarness::execute_test_case(&test_case);
         // For-of loops are ES2015+ feature
-        assert!(matches!(result, IterationStatementResult::Pass | IterationStatementResult::Fail));
+        assert!(matches!(
+            result,
+            IterationStatementResult::Pass | IterationStatementResult::Fail
+        ));
     }
 
     #[test]
     fn test_while_statement() {
         let static_case = &IterationStatementConformanceHarness::STATIC_TEST_CASES[11];
         let test_case = IterationStatementTestCase::from(static_case);
-        assert_eq!(test_case.category, IterationStatementTestCategory::WhileStatement);
+        assert_eq!(
+            test_case.category,
+            IterationStatementTestCategory::WhileStatement
+        );
 
         let result = IterationStatementConformanceHarness::execute_test_case(&test_case);
         // While loops are fundamental JavaScript
-        assert!(matches!(result, IterationStatementResult::Pass | IterationStatementResult::Fail));
+        assert!(matches!(
+            result,
+            IterationStatementResult::Pass | IterationStatementResult::Fail
+        ));
     }
 
     #[test]
     fn test_do_while_statement() {
         let static_case = &IterationStatementConformanceHarness::STATIC_TEST_CASES[13];
         let test_case = IterationStatementTestCase::from(static_case);
-        assert_eq!(test_case.category, IterationStatementTestCategory::DoWhileStatement);
+        assert_eq!(
+            test_case.category,
+            IterationStatementTestCategory::DoWhileStatement
+        );
 
         let result = IterationStatementConformanceHarness::execute_test_case(&test_case);
         // Do-while loops are fundamental JavaScript
-        assert!(matches!(result, IterationStatementResult::Pass | IterationStatementResult::Fail));
+        assert!(matches!(
+            result,
+            IterationStatementResult::Pass | IterationStatementResult::Fail
+        ));
     }
 
     #[test]
@@ -458,7 +466,10 @@ mod tests {
 
         assert_eq!(report.schema_version, SCHEMA_VERSION);
         assert_eq!(report.bead_id, BEAD_ID);
-        assert_eq!(report.statistics.total_tests as usize, IterationStatementConformanceHarness::STATIC_TEST_CASES.len());
+        assert_eq!(
+            report.statistics.total_tests as usize,
+            IterationStatementConformanceHarness::STATIC_TEST_CASES.len()
+        );
 
         // Statistics should be consistent
         assert_eq!(
@@ -467,7 +478,9 @@ mod tests {
         );
 
         // Coverage by category should account for all tests
-        let total_coverage: u32 = report.coverage_by_category.values()
+        let total_coverage: u32 = report
+            .coverage_by_category
+            .values()
             .map(|coverage| coverage.total)
             .sum();
         assert_eq!(total_coverage, report.statistics.total_tests);
@@ -477,7 +490,11 @@ mod tests {
     fn test_all_test_cases_have_unique_ids() {
         let mut ids = std::collections::HashSet::new();
         for test_case in IterationStatementConformanceHarness::STATIC_TEST_CASES {
-            assert!(ids.insert(&test_case.id), "Duplicate test case ID: {}", test_case.id);
+            assert!(
+                ids.insert(&test_case.id),
+                "Duplicate test case ID: {}",
+                test_case.id
+            );
         }
     }
 
@@ -485,10 +502,11 @@ mod tests {
     fn test_all_categories_covered() {
         use std::collections::HashSet;
 
-        let covered_categories: HashSet<_> = IterationStatementConformanceHarness::STATIC_TEST_CASES
-            .iter()
-            .map(|test| &test.category)
-            .collect();
+        let covered_categories: HashSet<_> =
+            IterationStatementConformanceHarness::STATIC_TEST_CASES
+                .iter()
+                .map(|test| &test.category)
+                .collect();
 
         // Verify we have tests for all major iteration statement types
         assert!(covered_categories.contains(&IterationStatementTestCategory::ForStatement));
@@ -510,7 +528,10 @@ fn iteration_statements_test262_conformance_integration() {
     println!("Passed: {}", report.statistics.passed);
     println!("Failed: {}", report.statistics.failed);
     println!("Parse errors: {}", report.statistics.parse_errors);
-    println!("Pass rate: {:.2}%", report.statistics.pass_rate_millionths as f64 / 10_000.0);
+    println!(
+        "Pass rate: {:.2}%",
+        report.statistics.pass_rate_millionths as f64 / 10_000.0
+    );
 
     println!("\nCoverage by Category:");
     for (category, coverage) in &report.coverage_by_category {
@@ -519,17 +540,28 @@ fn iteration_statements_test262_conformance_integration() {
         } else {
             0
         };
-        println!("  {:?}: {}/{} ({}%)", category, coverage.passed, coverage.total, rate);
+        println!(
+            "  {:?}: {}/{} ({}%)",
+            category, coverage.passed, coverage.total, rate
+        );
     }
 
     // Log individual test results for analysis
     println!("\nIndividual Test Results:");
     for test_case in IterationStatementConformanceHarness::STATIC_TEST_CASES {
         if let Some(result) = report.test_results.get(test_case.id) {
-            println!("  {} [{}]: {:?}", test_case.id, test_case.requirement_level, result);
+            println!(
+                "  {} [{}]: {:?}",
+                test_case.id, test_case.requirement_level, result
+            );
         }
     }
 
-    // The test always passes - this is a conformance measurement, not a gate
-    assert!(true, "Iteration statement conformance test completed");
+    // Conformance gate: Fail if pass rate drops below 95%
+    let pass_rate_percent = report.statistics.pass_rate_millionths as f64 / 10_000.0;
+    assert!(
+        pass_rate_percent >= 95.0,
+        "Iteration statement ES2020 conformance below threshold: {:.2}% (required: ≥95%)",
+        pass_rate_percent
+    );
 }

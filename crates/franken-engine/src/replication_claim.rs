@@ -28,7 +28,7 @@ impl ContentDigest {
 }
 
 /// Externally replicated claim with exact expected witness matching.
-#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Debug)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub struct ReplicationClaim {
     /// Stable claim identifier.
     pub claim_id: String,
@@ -245,6 +245,19 @@ mod tests {
         let mut claim = claim();
         claim.record_observation(&set(&["node-baseline", "franken-run"]));
         assert_eq!(claim.clone(), claim);
+    }
+
+    #[test]
+    fn claim_ordering_is_deterministic() {
+        let mut claims = vec![
+            ReplicationClaim::new("b-claim", set(&["witness"])),
+            ReplicationClaim::new("a-claim", set(&["witness"])),
+        ];
+
+        claims.sort();
+
+        assert_eq!(claims[0].claim_id, "a-claim");
+        assert_eq!(claims[1].claim_id, "b-claim");
     }
 
     #[test]

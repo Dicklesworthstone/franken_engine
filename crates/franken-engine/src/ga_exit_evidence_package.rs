@@ -129,7 +129,7 @@ impl EvidenceVerdict {
 }
 
 /// Source and dependency provenance for the build that produced the evidence.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct BuildProvenance {
     /// Source commit used for the package.
     pub source_commit: String,
@@ -160,7 +160,7 @@ impl BuildProvenance {
 }
 
 /// One required or optional artifact in the GA evidence package.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct EvidenceArtifact {
     /// Stable artifact identifier.
     pub artifact_id: String,
@@ -209,7 +209,7 @@ impl EvidenceArtifact {
 }
 
 /// Byte-identical replay witness for external verification.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ReproducibilityWitness {
     /// Stable witness identifier.
     pub witness_id: String,
@@ -224,17 +224,15 @@ pub struct ReproducibilityWitness {
 }
 
 impl ReproducibilityWitness {
-    /// Return a copy with replay instructions sorted for deterministic output.
+    /// Return a copy preserving ordered replay instructions.
     #[must_use]
     pub fn canonicalized(&self) -> Self {
-        let mut copy = self.clone();
-        copy.replay_instructions.sort();
-        copy
+        self.clone()
     }
 }
 
 /// Deterministic GA exit evidence package.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct GaExitEvidencePackage {
     /// Schema version for this bundle.
     pub schema_version: String,
@@ -285,14 +283,7 @@ impl GaExitEvidencePackage {
         &mut self,
         artifact: EvidenceArtifact,
     ) -> Result<(), GaExitEvidencePackageError> {
-        validate_non_empty("artifact_id", &artifact.artifact_id)?;
-        validate_non_empty("artifact schema_version", &artifact.schema_version)?;
-        validate_non_empty("artifact locator", &artifact.locator)?;
-        if artifact.required && artifact.replay_command.as_deref().is_none_or(str::is_empty) {
-            return Err(GaExitEvidencePackageError::MissingArtifactReplayCommand {
-                artifact_id: artifact.artifact_id,
-            });
-        }
+        validate_artifact_fields(&artifact)?;
         if self.evidence_artifacts.contains_key(&artifact.artifact_id) {
             return Err(GaExitEvidencePackageError::DuplicateArtifact {
                 artifact_id: artifact.artifact_id,
@@ -308,21 +299,7 @@ impl GaExitEvidencePackage {
         &mut self,
         witness: ReproducibilityWitness,
     ) -> Result<(), GaExitEvidencePackageError> {
-        validate_non_empty("witness_id", &witness.witness_id)?;
-        validate_non_empty("witness schema_version", &witness.schema_version)?;
-        validate_non_empty("witness verifier", &witness.verifier)?;
-        if witness
-            .replay_instructions
-            .iter()
-            .any(|instruction| instruction.trim().is_empty())
-            || witness.replay_instructions.is_empty()
-        {
-            return Err(
-                GaExitEvidencePackageError::MissingWitnessReplayInstruction {
-                    witness_id: witness.witness_id,
-                },
-            );
-        }
+        validate_witness_fields(&witness)?;
         if self
             .reproducibility_witnesses
             .contains_key(&witness.witness_id)
@@ -391,6 +368,7 @@ impl GaExitEvidencePackage {
 
     /// Validate that the package is complete enough for GA handoff.
     pub fn validate(&self) -> Result<(), GaExitEvidencePackageError> {
+        validate_non_empty("schema_version", &self.schema_version)?;
         validate_non_empty("package_id", &self.package_id)?;
         validate_non_empty("source_commit", &self.build_provenance.source_commit)?;
         validate_non_empty("rustc_version", &self.build_provenance.rustc_version)?;
@@ -414,11 +392,28 @@ impl GaExitEvidencePackage {
             }
         }
 
-        for artifact in self.evidence_artifacts.values() {
+        for (artifact_key, artifact) in &self.evidence_artifacts {
+            validate_artifact_fields(artifact)?;
+            if artifact_key != &artifact.artifact_id {
+                return Err(GaExitEvidencePackageError::ArtifactKeyMismatch {
+                    key: artifact_key.clone(),
+                    artifact_id: artifact.artifact_id.clone(),
+                });
+            }
             if artifact.required && artifact.verdict.blocks_release() {
                 return Err(GaExitEvidencePackageError::BlockingEvidence {
                     artifact_id: artifact.artifact_id.clone(),
                     verdict: artifact.verdict,
+                });
+            }
+        }
+
+        for (witness_key, witness) in &self.reproducibility_witnesses {
+            validate_witness_fields(witness)?;
+            if witness_key != &witness.witness_id {
+                return Err(GaExitEvidencePackageError::WitnessKeyMismatch {
+                    key: witness_key.clone(),
+                    witness_id: witness.witness_id.clone(),
                 });
             }
         }
@@ -502,6 +497,10 @@ pub enum GaExitEvidencePackageError {
     DuplicateArtifact { artifact_id: String },
     /// Witness id was duplicated.
     DuplicateWitness { witness_id: String },
+    /// Artifact map key disagreed with the embedded artifact id.
+    ArtifactKeyMismatch { key: String, artifact_id: String },
+    /// Witness map key disagreed with the embedded witness id.
+    WitnessKeyMismatch { key: String, witness_id: String },
     /// Required artifact lacked a replay command.
     MissingArtifactReplayCommand { artifact_id: String },
     /// Witness lacked replay instructions.
@@ -531,6 +530,14 @@ impl fmt::Display for GaExitEvidencePackageError {
             Self::DuplicateWitness { witness_id } => {
                 write!(f, "duplicate GA reproducibility witness: {witness_id}")
             }
+            Self::ArtifactKeyMismatch { key, artifact_id } => write!(
+                f,
+                "GA evidence artifact key mismatch: map key {key} embeds {artifact_id}"
+            ),
+            Self::WitnessKeyMismatch { key, witness_id } => write!(
+                f,
+                "GA reproducibility witness key mismatch: map key {key} embeds {witness_id}"
+            ),
             Self::MissingArtifactReplayCommand { artifact_id } => write!(
                 f,
                 "required GA evidence artifact lacks replay command: {artifact_id}"
@@ -567,6 +574,47 @@ impl Error for GaExitEvidencePackageError {}
 fn validate_non_empty(field: &'static str, value: &str) -> Result<(), GaExitEvidencePackageError> {
     if value.trim().is_empty() {
         return Err(GaExitEvidencePackageError::EmptyField { field });
+    }
+    Ok(())
+}
+
+fn validate_artifact_fields(
+    artifact: &EvidenceArtifact,
+) -> Result<(), GaExitEvidencePackageError> {
+    validate_non_empty("artifact_id", &artifact.artifact_id)?;
+    validate_non_empty("artifact schema_version", &artifact.schema_version)?;
+    validate_non_empty("artifact locator", &artifact.locator)?;
+    if artifact
+        .required
+        && artifact
+            .replay_command
+            .as_deref()
+            .is_none_or(|command| command.trim().is_empty())
+    {
+        return Err(GaExitEvidencePackageError::MissingArtifactReplayCommand {
+            artifact_id: artifact.artifact_id.clone(),
+        });
+    }
+    Ok(())
+}
+
+fn validate_witness_fields(
+    witness: &ReproducibilityWitness,
+) -> Result<(), GaExitEvidencePackageError> {
+    validate_non_empty("witness_id", &witness.witness_id)?;
+    validate_non_empty("witness schema_version", &witness.schema_version)?;
+    validate_non_empty("witness verifier", &witness.verifier)?;
+    if witness.replay_instructions.is_empty()
+        || witness
+            .replay_instructions
+            .iter()
+            .any(|instruction| instruction.trim().is_empty())
+    {
+        return Err(
+            GaExitEvidencePackageError::MissingWitnessReplayInstruction {
+                witness_id: witness.witness_id.clone(),
+            },
+        );
     }
     Ok(())
 }
@@ -745,6 +793,19 @@ mod tests {
     }
 
     #[test]
+    fn required_artifact_rejects_whitespace_replay_command() {
+        let mut package =
+            GaExitEvidencePackage::new("pkg", SecurityEpoch::GENESIS, build_provenance());
+        let mut item = artifact("conformance", EvidenceDomain::Conformance);
+        item.replay_command = Some("   ".to_string());
+        let err = package.add_evidence_artifact(item).unwrap_err();
+        assert!(matches!(
+            err,
+            GaExitEvidencePackageError::MissingArtifactReplayCommand { .. }
+        ));
+    }
+
+    #[test]
     fn add_witness_indexes_by_id() -> Result<(), GaExitEvidencePackageError> {
         let mut package =
             GaExitEvidencePackage::new("pkg", SecurityEpoch::GENESIS, build_provenance());
@@ -817,6 +878,21 @@ mod tests {
     }
 
     #[test]
+    fn witness_replay_instruction_order_is_preserved() {
+        let item = ReproducibilityWitness {
+            witness_id: "ordered".to_string(),
+            schema_version: "franken-engine.repro-witness.v1".to_string(),
+            content_hash: hash("ordered"),
+            verifier: "third-party-verifier".to_string(),
+            replay_instructions: vec!["second".to_string(), "first".to_string()],
+        };
+        assert_eq!(
+            item.canonicalized().replay_instructions,
+            vec!["second".to_string(), "first".to_string()]
+        );
+    }
+
+    #[test]
     fn complete_package_validates() -> Result<(), GaExitEvidencePackageError> {
         complete_package()?.validate()
     }
@@ -824,6 +900,16 @@ mod tests {
     #[test]
     fn validation_rejects_empty_package_id() {
         let package = GaExitEvidencePackage::new("", SecurityEpoch::GENESIS, build_provenance());
+        assert!(matches!(
+            package.validate(),
+            Err(GaExitEvidencePackageError::EmptyField { .. })
+        ));
+    }
+
+    #[test]
+    fn validation_rejects_empty_schema_version() {
+        let mut package = complete_package().expect("package should build");
+        package.schema_version.clear();
         assert!(matches!(
             package.validate(),
             Err(GaExitEvidencePackageError::EmptyField { .. })
@@ -872,6 +958,67 @@ mod tests {
         assert!(matches!(
             package.validate(),
             Err(GaExitEvidencePackageError::BlockingEvidence { .. })
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn validation_rejects_public_artifact_key_mismatch() -> Result<(), GaExitEvidencePackageError> {
+        let mut package = complete_package()?;
+        let mut item = artifact("embedded-id", EvidenceDomain::BuildProvenance);
+        item.required = false;
+        package
+            .evidence_artifacts
+            .insert("map-key".to_string(), item);
+        assert!(matches!(
+            package.validate(),
+            Err(GaExitEvidencePackageError::ArtifactKeyMismatch { .. })
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn validation_rejects_public_witness_key_mismatch() -> Result<(), GaExitEvidencePackageError> {
+        let mut package = complete_package()?;
+        package
+            .reproducibility_witnesses
+            .insert("map-key".to_string(), witness("embedded-id"));
+        assert!(matches!(
+            package.validate(),
+            Err(GaExitEvidencePackageError::WitnessKeyMismatch { .. })
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn validation_rejects_public_blank_witness_instruction(
+    ) -> Result<(), GaExitEvidencePackageError> {
+        let mut package = complete_package()?;
+        package
+            .reproducibility_witnesses
+            .get_mut("witness-main")
+            .expect("witness exists")
+            .replay_instructions
+            .push(" ".to_string());
+        assert!(matches!(
+            package.validate(),
+            Err(GaExitEvidencePackageError::MissingWitnessReplayInstruction { .. })
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn validation_rejects_public_blank_artifact_schema() -> Result<(), GaExitEvidencePackageError> {
+        let mut package = complete_package()?;
+        package
+            .evidence_artifacts
+            .get_mut("security")
+            .expect("security artifact exists")
+            .schema_version
+            .clear();
+        assert!(matches!(
+            package.validate(),
+            Err(GaExitEvidencePackageError::EmptyField { .. })
         ));
         Ok(())
     }

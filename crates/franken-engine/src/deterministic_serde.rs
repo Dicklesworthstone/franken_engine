@@ -2026,13 +2026,14 @@ mod tests {
     // This catches non-deterministic serialization bugs that break consensus protocols.
 
     use crate::object_model::{
-        JsValue, ManagedObject, ObjectHandle, ObjectHeap, OrdinaryObject, PropertyDescriptor,
-        PropertyKey, ProxyObject, SymbolId, SymbolRegistry, WellKnownSymbol,
+        JsValue, ObjectHandle, ObjectHeap, OrdinaryObject, PropertyDescriptor, PropertyKey,
+        SymbolId, SymbolRegistry, WellKnownSymbol,
     };
     use crate::recovery_artifact::{
-        ArtifactType, OperatorAction, ProofElement, RecoveryArtifact, RecoveryEvent,
-        RecoveryTrigger, RecoveryVerdict, VerificationError,
+        ArtifactBuilder, ArtifactType, OperatorAction, ProofElement, RecoveryArtifact,
+        RecoveryEvent, RecoveryTrigger,
     };
+    use crate::{hash_tiers::AuthenticityHash, security_epoch::SecurityEpoch};
 
     /// Helper function to test metamorphic round-trip determinism property for serde types.
     /// Verifies that serialize(deserialize(serialize(X))) == serialize(X).
@@ -2058,6 +2059,54 @@ mod tests {
         );
     }
 
+    fn ordinary_object(
+        properties: BTreeMap<PropertyKey, PropertyDescriptor>,
+        prototype: Option<ObjectHandle>,
+        extensible: bool,
+    ) -> OrdinaryObject {
+        let mut object = OrdinaryObject::with_prototype(prototype);
+        object.properties = properties;
+        object.extensible = extensible;
+        object
+    }
+
+    fn recovery_artifact_fixture(label: &str, artifact_type: ArtifactType) -> RecoveryArtifact {
+        ArtifactBuilder::new(
+            artifact_type,
+            RecoveryTrigger::IntegrityCheckFailure {
+                check_id: format!("{label}-check"),
+                details: "metamorphic serde fixture".to_string(),
+            },
+            ContentHash::compute(format!("{label}-before").as_bytes()),
+            label,
+            7,
+            1_640_995_200_000_000_000,
+            b"deterministic-serde-test-key",
+        )
+        .after_state(ContentHash::compute(format!("{label}-after").as_bytes()))
+        .proof(ProofElement::HashChainVerification {
+            start_marker_id: 1,
+            end_marker_id: 2,
+            chain_hash: ContentHash::compute(format!("{label}-chain").as_bytes()),
+            verified: true,
+        })
+        .proof(ProofElement::EpochValidityCheck {
+            epoch: SecurityEpoch::from_raw(7),
+            is_valid: true,
+            reason: "fixture epoch accepted".to_string(),
+        })
+        .operator_action(OperatorAction {
+            operator: "serde-test".to_string(),
+            action: "verify deterministic recovery artifact serialization".to_string(),
+            authorization_hash: AuthenticityHash::compute_keyed(
+                b"deterministic-serde-test-key",
+                label.as_bytes(),
+            ),
+            timestamp_ticks: 1_640_995_200_000_000_000,
+        })
+        .build()
+    }
+
     #[test]
     fn metamorphic_property_key_determinism() {
         let fixtures = [
@@ -2066,8 +2115,8 @@ mod tests {
             PropertyKey::Symbol(SymbolId(42)),
             PropertyKey::Symbol(SymbolId(0)),        // Zero ID
             PropertyKey::Symbol(SymbolId(u32::MAX)), // Max ID
-            PropertyKey::WellKnown(WellKnownSymbol::Iterator),
-            PropertyKey::WellKnown(WellKnownSymbol::ToPrimitive),
+            WellKnownSymbol::Iterator.key(),
+            WellKnownSymbol::ToPrimitive.key(),
         ];
 
         for fixture in &fixtures {
@@ -2080,21 +2129,19 @@ mod tests {
         let fixtures = [
             JsValue::Undefined,
             JsValue::Null,
-            JsValue::Boolean(true),
-            JsValue::Boolean(false),
-            JsValue::Number(42.0),
-            JsValue::Number(0.0),
-            JsValue::Number(-0.0),
-            JsValue::Number(std::f64::INFINITY),
-            JsValue::Number(std::f64::NEG_INFINITY),
-            JsValue::Number(std::f64::NAN),
-            JsValue::String("hello".to_string()),
-            JsValue::String("".to_string()),
+            JsValue::Bool(true),
+            JsValue::Bool(false),
+            JsValue::Int(42),
+            JsValue::from_f64(0.0),
+            JsValue::from_f64(-0.0),
+            JsValue::from_f64(std::f64::INFINITY),
+            JsValue::from_f64(std::f64::NEG_INFINITY),
+            JsValue::from_f64(std::f64::NAN),
+            JsValue::Str("hello".to_string()),
+            JsValue::Str("".to_string()),
             JsValue::Symbol(SymbolId(123)),
             JsValue::Object(ObjectHandle(456)),
-            JsValue::BigInt("123456789012345678901234567890".to_string()),
-            JsValue::BigInt("0".to_string()),
-            JsValue::BigInt("-999999999999999999999999999".to_string()),
+            JsValue::Function(789),
         ];
 
         for fixture in &fixtures {
@@ -2106,13 +2153,13 @@ mod tests {
     fn metamorphic_property_descriptor_determinism() {
         let fixtures = [
             PropertyDescriptor::Data {
-                value: JsValue::String("test".to_string()),
+                value: JsValue::Str("test".to_string()),
                 writable: true,
                 enumerable: true,
                 configurable: true,
             },
             PropertyDescriptor::Data {
-                value: JsValue::Number(42.0),
+                value: JsValue::Int(42),
                 writable: false,
                 enumerable: false,
                 configurable: false,
@@ -2142,7 +2189,7 @@ mod tests {
         properties.insert(
             PropertyKey::String("name".to_string()),
             PropertyDescriptor::Data {
-                value: JsValue::String("test_object".to_string()),
+                value: JsValue::Str("test_object".to_string()),
                 writable: true,
                 enumerable: true,
                 configurable: true,
@@ -2151,84 +2198,42 @@ mod tests {
         properties.insert(
             PropertyKey::String("value".to_string()),
             PropertyDescriptor::Data {
-                value: JsValue::Number(123.45),
+                value: JsValue::from_f64(123.45),
                 writable: false,
                 enumerable: true,
                 configurable: false,
             },
         );
 
-        let fixture = OrdinaryObject {
-            properties,
-            prototype: Some(ObjectHandle(999)),
-            extensible: true,
-        };
+        let fixture = ordinary_object(properties, Some(ObjectHandle(999)), true);
 
         assert_metamorphic_serde_determinism(&fixture);
     }
 
     #[test]
     fn metamorphic_object_heap_determinism() {
-        let mut objects = BTreeMap::new();
-        objects.insert(
-            ObjectHandle(1),
-            ManagedObject::Ordinary(OrdinaryObject {
-                properties: BTreeMap::new(),
-                prototype: None,
-                extensible: true,
-            }),
-        );
-        objects.insert(
-            ObjectHandle(2),
-            ManagedObject::Proxy(ProxyObject {
-                target: ObjectHandle(1),
-                handler: ObjectHandle(3),
-            }),
-        );
-
-        let fixture = ObjectHeap {
-            objects,
-            next_handle: ObjectHandle(4),
-        };
+        let mut fixture = ObjectHeap::new();
+        let target = fixture.alloc_plain();
+        let handler = fixture.alloc_plain();
+        fixture.alloc_proxy(target, handler);
 
         assert_metamorphic_serde_determinism(&fixture);
     }
 
     #[test]
     fn metamorphic_symbol_registry_determinism() {
-        let mut global_symbols = BTreeMap::new();
-        global_symbols.insert("test.symbol.1".to_string(), SymbolId(100));
-        global_symbols.insert("test.symbol.2".to_string(), SymbolId(200));
-        global_symbols.insert("".to_string(), SymbolId(300)); // Empty key edge case
-
-        let fixture = SymbolRegistry {
-            global_symbols,
-            next_symbol_id: SymbolId(400),
-        };
+        let mut heap = ObjectHeap::new();
+        let mut fixture = SymbolRegistry::new();
+        fixture.symbol_for("test.symbol.1", &mut heap);
+        fixture.symbol_for("test.symbol.2", &mut heap);
+        fixture.symbol_for("", &mut heap); // Empty key edge case
 
         assert_metamorphic_serde_determinism(&fixture);
     }
 
     #[test]
     fn metamorphic_recovery_artifact_determinism() {
-        let fixture = RecoveryArtifact {
-            artifact_type: ArtifactType::CrashDump,
-            trigger: RecoveryTrigger::StackOverflow,
-            proof_elements: vec![
-                ProofElement::StackFrame("main".to_string()),
-                ProofElement::StackFrame("process_request".to_string()),
-                ProofElement::RegisterDump(vec![0x42, 0x43, 0x44]),
-            ],
-            operator_action: OperatorAction::RestartProcess,
-            timestamp_ns: 1640995200000000000_u64, // Fixed timestamp for determinism
-            recovery_id: "rec_12345".to_string(),
-            metadata: {
-                let mut map = BTreeMap::new();
-                map.insert("process_id".to_string(), "1234".to_string());
-                map.insert("exit_code".to_string(), "139".to_string());
-                map
-            },
-        };
+        let fixture = recovery_artifact_fixture("rec_12345", ArtifactType::StateRepair);
 
         assert_metamorphic_serde_determinism(&fixture);
     }
@@ -2237,22 +2242,22 @@ mod tests {
     fn metamorphic_recovery_event_determinism() {
         let fixtures = [
             RecoveryEvent {
-                event_id: "evt_001".to_string(),
-                timestamp_ns: 1640995200000000000_u64,
-                verdict: RecoveryVerdict::Success,
-                error: None,
-                details: {
-                    let mut map = BTreeMap::new();
-                    map.insert("duration_ms".to_string(), "150".to_string());
-                    map
-                },
+                artifact_id: ContentHash::compute(b"evt_001").to_hex(),
+                artifact_type: ArtifactType::StateRepair.to_string(),
+                trigger: "integrity_check_failure:event-001".to_string(),
+                verification_verdict: "valid".to_string(),
+                trace_id: "trace-001".to_string(),
+                epoch_id: 7,
+                event: "artifact_verified".to_string(),
             },
             RecoveryEvent {
-                event_id: "evt_002".to_string(),
-                timestamp_ns: 1640995200000001000_u64,
-                verdict: RecoveryVerdict::Failed,
-                error: Some(VerificationError::InvalidProof),
-                details: BTreeMap::new(), // Empty details
+                artifact_id: ContentHash::compute(b"evt_002").to_hex(),
+                artifact_type: ArtifactType::FailedAttestation.to_string(),
+                trigger: "integrity_check_failure:event-002".to_string(),
+                verification_verdict: "invalid(empty proof bundle)".to_string(),
+                trace_id: "trace-002".to_string(),
+                epoch_id: 7,
+                event: "artifact_rejected".to_string(),
             },
         ];
 
@@ -2265,18 +2270,19 @@ mod tests {
     fn metamorphic_btree_map_ordering_determinism() {
         // Critical test: BTreeMap must maintain deterministic key ordering across serialization
         let mut map = BTreeMap::new();
-        map.insert("zebra".to_string(), JsValue::String("last".to_string()));
-        map.insert("apple".to_string(), JsValue::String("first".to_string()));
-        map.insert("banana".to_string(), JsValue::String("second".to_string()));
+        map.insert("zebra".to_string(), JsValue::Str("last".to_string()));
+        map.insert("apple".to_string(), JsValue::Str("first".to_string()));
+        map.insert("banana".to_string(), JsValue::Str("second".to_string()));
+        assert_metamorphic_serde_determinism(&map);
 
         // Wrap in an object that contains BTreeMap
-        let ordinary_obj = OrdinaryObject {
-            properties: {
+        let ordinary_obj = ordinary_object(
+            {
                 let mut props = BTreeMap::new();
                 props.insert(
                     PropertyKey::String("data".to_string()),
                     PropertyDescriptor::Data {
-                        value: JsValue::String("btree_test".to_string()),
+                        value: JsValue::Str("btree_test".to_string()),
                         writable: true,
                         enumerable: true,
                         configurable: true,
@@ -2284,36 +2290,17 @@ mod tests {
                 );
                 props
             },
-            prototype: None,
-            extensible: true,
-        };
+            None,
+            true,
+        );
 
         assert_metamorphic_serde_determinism(&ordinary_obj);
 
         // Also test BTreeMap directly via ObjectHeap
-        let heap = ObjectHeap {
-            objects: {
-                let mut objects = BTreeMap::new();
-                objects.insert(ObjectHandle(3), ManagedObject::Ordinary(ordinary_obj));
-                objects.insert(
-                    ObjectHandle(1),
-                    ManagedObject::Ordinary(OrdinaryObject {
-                        properties: BTreeMap::new(),
-                        prototype: None,
-                        extensible: false,
-                    }),
-                );
-                objects.insert(
-                    ObjectHandle(2),
-                    ManagedObject::Proxy(ProxyObject {
-                        target: ObjectHandle(1),
-                        handler: ObjectHandle(3),
-                    }),
-                );
-                objects
-            },
-            next_handle: ObjectHandle(4),
-        };
+        let mut heap = ObjectHeap::new();
+        let target = heap.alloc_plain();
+        let handler = heap.alloc_plain();
+        heap.alloc_proxy(target, handler);
 
         assert_metamorphic_serde_determinism(&heap);
     }
@@ -2323,14 +2310,10 @@ mod tests {
         // Test edge cases that might break deterministic serialization
         let fixtures = [
             // Empty structures
-            OrdinaryObject {
-                properties: BTreeMap::new(),
-                prototype: None,
-                extensible: true,
-            },
+            ordinary_object(BTreeMap::new(), None, true),
             // Maximum values
-            OrdinaryObject {
-                properties: {
+            ordinary_object(
+                {
                     let mut props = BTreeMap::new();
                     props.insert(
                         PropertyKey::Symbol(SymbolId(u32::MAX)),
@@ -2343,9 +2326,9 @@ mod tests {
                     );
                     props
                 },
-                prototype: Some(ObjectHandle(u32::MAX)),
-                extensible: false,
-            },
+                Some(ObjectHandle(u32::MAX)),
+                false,
+            ),
         ];
 
         for fixture in &fixtures {
@@ -2356,36 +2339,16 @@ mod tests {
     #[test]
     fn metamorphic_nested_btree_determinism() {
         // Test deeply nested BTreeMap structures
-        let mut symbols = BTreeMap::new();
-        symbols.insert("level1".to_string(), SymbolId(1));
-        symbols.insert("level1_alt".to_string(), SymbolId(2));
-
-        let registry = SymbolRegistry {
-            global_symbols: symbols,
-            next_symbol_id: SymbolId(3),
-        };
+        let mut heap = ObjectHeap::new();
+        let mut registry = SymbolRegistry::new();
+        registry.symbol_for("level1", &mut heap);
+        registry.symbol_for("level1_alt", &mut heap);
 
         assert_metamorphic_serde_determinism(&registry);
 
         // Test multiple nested BTrees in recovery metadata
-        let recovery_with_nested_metadata = RecoveryArtifact {
-            artifact_type: ArtifactType::CoreDump,
-            trigger: RecoveryTrigger::OutOfMemory,
-            proof_elements: vec![
-                ProofElement::StackFrame("nested_function_a".to_string()),
-                ProofElement::StackFrame("nested_function_b".to_string()),
-            ],
-            operator_action: OperatorAction::CollectDebugInfo,
-            timestamp_ns: 1640995200000000000_u64,
-            recovery_id: "nested_test".to_string(),
-            metadata: {
-                let mut meta = BTreeMap::new();
-                meta.insert("subsystem_a".to_string(), "value_a".to_string());
-                meta.insert("subsystem_b".to_string(), "value_b".to_string());
-                meta.insert("subsystem_z".to_string(), "value_z".to_string());
-                meta
-            },
-        };
+        let recovery_with_nested_metadata =
+            recovery_artifact_fixture("nested_test", ArtifactType::ForcedReconciliation);
 
         assert_metamorphic_serde_determinism(&recovery_with_nested_metadata);
     }

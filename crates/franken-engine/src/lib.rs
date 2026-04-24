@@ -39,6 +39,7 @@ pub mod benchmark_denominator;
 pub mod benchmark_e2e;
 pub mod benchmark_evidence_bundle;
 pub mod benchmark_freshness_gate;
+pub mod benchmark_publication;
 pub mod bifurcation_boundary_scanner;
 pub mod bounded_feedback_controller;
 pub mod bounded_regret_safety_case;

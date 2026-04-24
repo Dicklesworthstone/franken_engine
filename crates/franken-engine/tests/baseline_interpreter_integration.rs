@@ -10966,6 +10966,59 @@ fn test_array_prototype_some_callback_parameter_ignored() {
 }
 
 #[test]
+#[ignore = "callback invocation not implemented - bd-6vwi8"]
+fn test_array_some_callback_invocation_integration() {
+    // Integration test for proper Array.some() callback execution
+    // This test will pass when callback invocation is properly implemented
+    let mut interpreter = make_default_interpreter();
+
+    // Test case 1: callback should find matching element
+    let result1 = interpreter.evaluate_expression("[1, 2, 3].some(x => x > 2)");
+    assert!(result1.is_ok(), "Expression should evaluate successfully");
+    assert_eq!(
+        result1.unwrap(),
+        Value::Bool(true),
+        "Array.some should return true when callback finds element > 2 (finds 3)"
+    );
+
+    // Test case 2: callback should not find matching element
+    let result2 = interpreter.evaluate_expression("[1, 2, 3].some(x => x > 5)");
+    assert!(result2.is_ok(), "Expression should evaluate successfully");
+    assert_eq!(
+        result2.unwrap(),
+        Value::Bool(false),
+        "Array.some should return false when no element > 5"
+    );
+
+    // Test case 3: more complex callback with index parameter
+    let result3 = interpreter.evaluate_expression("[10, 20, 30].some((value, index) => value === index * 10)");
+    assert!(result3.is_ok(), "Expression should evaluate successfully");
+    assert_eq!(
+        result3.unwrap(),
+        Value::Bool(true),
+        "Array.some should return true when callback logic matches pattern"
+    );
+
+    // Test case 4: early termination behavior
+    let result4 = interpreter.evaluate_expression("[1, 2, 3, 4].some(x => x === 2)");
+    assert!(result4.is_ok(), "Expression should evaluate successfully");
+    assert_eq!(
+        result4.unwrap(),
+        Value::Bool(true),
+        "Array.some should return true and terminate early when first match found"
+    );
+
+    // Test case 5: empty array behavior
+    let result5 = interpreter.evaluate_expression("[].some(x => true)");
+    assert!(result5.is_ok(), "Expression should evaluate successfully");
+    assert_eq!(
+        result5.unwrap(),
+        Value::Bool(false),
+        "Array.some should return false for empty array regardless of callback"
+    );
+}
+
+#[test]
 fn test_math_round_negative_half_semantics_integration() {
     // Regression test for commit 5e20ceac: Math.round negative half semantics
     // Validates JavaScript Math.round uses floor(x + 0.5) not round-away-from-zero

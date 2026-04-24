@@ -485,6 +485,7 @@ pub mod workload_corpus_gate;
 pub mod workload_embedding;
 pub mod workload_manifold_transfer;
 pub mod workload_policy_manifold;
+pub mod workload_preflight_doctor;
 pub mod workload_transfer_prior;
 pub mod zero_placeholder_gate;
 pub mod zero_placeholder_scan;

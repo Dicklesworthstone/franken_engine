@@ -1147,28 +1147,25 @@ impl WorkloadGovernanceScorecard {
     /// Update the scorecard with new optimization outcome.
     pub fn record_optimization(&mut self, success: bool, rollback_latency_ticks: u64) {
         self.optimization_attempts += 1;
+        let prior_attempts = self.optimization_attempts - 1;
 
-        // Update success rate using incremental average
-        if success {
-            let successes =
-                (self.success_rate_millionths * (self.optimization_attempts - 1)) / MILLIONTHS + 1;
-            self.success_rate_millionths = (successes * MILLIONTHS) / self.optimization_attempts;
-        } else {
-            let successes =
-                (self.success_rate_millionths * (self.optimization_attempts - 1)) / MILLIONTHS;
-            self.success_rate_millionths = (successes * MILLIONTHS) / self.optimization_attempts;
-        }
+        // Track success and risk as direct running averages over millionth-scaled
+        // outcomes to avoid re-deriving exact counts from previously rounded rates.
+        let success_outcome = if success { MILLIONTHS } else { 0 };
+        self.success_rate_millionths = ((self.success_rate_millionths * prior_attempts)
+            + success_outcome)
+            / self.optimization_attempts;
+
+        let risk_outcome = if success { 0 } else { MILLIONTHS };
+        self.risk_score_millionths = ((self.risk_score_millionths * prior_attempts) + risk_outcome)
+            / self.optimization_attempts;
 
         // Update rollback latency using incremental average
         if rollback_latency_ticks > 0 {
-            self.avg_rollback_latency_ticks = (self.avg_rollback_latency_ticks
-                * (self.optimization_attempts - 1)
+            self.avg_rollback_latency_ticks = (self.avg_rollback_latency_ticks * prior_attempts
                 + rollback_latency_ticks)
                 / self.optimization_attempts;
         }
-
-        // Update risk score based on success rate (higher failure rate = higher risk)
-        self.risk_score_millionths = MILLIONTHS - self.success_rate_millionths;
     }
 }
 
@@ -1267,22 +1264,22 @@ impl ObligationCheck {
         let mut hasher = Sha256::new();
         hasher.update(self.check_id.as_bytes());
         hasher.update(self.function_id.as_bytes());
-        hasher.update(&[self.tier.rank() as u8]);
-        hasher.update(&self.epoch.as_u64().to_le_bytes());
+        hasher.update([self.tier.rank() as u8]);
+        hasher.update(self.epoch.as_u64().to_le_bytes());
 
         for rollback_ref in &self.rollback_chain_refs {
             hasher.update(rollback_ref.as_bytes());
         }
 
-        hasher.update(&self.scorecard.optimization_attempts.to_le_bytes());
-        hasher.update(&self.scorecard.success_rate_millionths.to_le_bytes());
-        hasher.update(&self.scorecard.avg_rollback_latency_ticks.to_le_bytes());
-        hasher.update(&self.scorecard.forensic_coverage_millionths.to_le_bytes());
-        hasher.update(&self.scorecard.risk_score_millionths.to_le_bytes());
+        hasher.update(self.scorecard.optimization_attempts.to_le_bytes());
+        hasher.update(self.scorecard.success_rate_millionths.to_le_bytes());
+        hasher.update(self.scorecard.avg_rollback_latency_ticks.to_le_bytes());
+        hasher.update(self.scorecard.forensic_coverage_millionths.to_le_bytes());
+        hasher.update(self.scorecard.risk_score_millionths.to_le_bytes());
 
         hasher.update(self.obligation.id.as_bytes());
         hasher.update(self.obligation.description.as_bytes());
-        hasher.update(&[self.obligation.status as u8]);
+        hasher.update([self.obligation.status as u8]);
 
         if let Some(proof_hash) = &self.proof_hash {
             hasher.update(proof_hash.as_bytes());
@@ -1320,27 +1317,26 @@ impl GovernanceState {
             .filter(|c| c.status_at(self.epoch) == CertificateStatus::Valid)
             .count() as u64;
 
-        let success_rate_millionths = if total_attempts > 0 {
-            (valid_certificates * MILLIONTHS) / total_attempts
-        } else {
-            MILLIONTHS // Default to 100% if no history
-        };
+        let success_rate_millionths = (valid_certificates * MILLIONTHS)
+            .checked_div(total_attempts)
+            .unwrap_or(MILLIONTHS); // Default to 100% if no history
 
         let avg_rollback_latency_ticks = if !function_rollbacks.is_empty() {
             function_rollbacks
                 .iter()
                 .map(|r| r.elapsed_steps)
                 .sum::<u64>()
-                / function_rollbacks.len() as u64
+                .checked_div(function_rollbacks.len() as u64)
+                .unwrap_or(0)
         } else {
             0
         };
 
-        let forensic_coverage_millionths = if total_attempts > 0 {
+        let forensic_coverage_millionths = {
             let covered_attempts = function_forensics.len() as u64;
-            (covered_attempts.min(total_attempts) * MILLIONTHS) / total_attempts
-        } else {
-            MILLIONTHS
+            (covered_attempts.min(total_attempts) * MILLIONTHS)
+                .checked_div(total_attempts)
+                .unwrap_or(MILLIONTHS)
         };
 
         let scorecard = WorkloadGovernanceScorecard {

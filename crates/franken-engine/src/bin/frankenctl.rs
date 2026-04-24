@@ -6856,13 +6856,14 @@ mod tests {
         let report: serde_json::Value =
             load_json_file(&report_path).expect("verify report should parse");
         let expected_artifact_path = artifact_path.display().to_string();
+        let expected_report_path = report_path.display().to_string();
         assert_eq!(
             report["artifact_path"].as_str(),
             Some(expected_artifact_path.as_str())
         );
         assert_eq!(
             report["report_path"].as_str(),
-            Some(&report_path.display().to_string())
+            Some(expected_report_path.as_str())
         );
         assert_eq!(report["passed"].as_bool(), Some(true));
     }

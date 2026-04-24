@@ -27,8 +27,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use frankenengine_engine::baseline_interpreter::{
     ConsoleLevel, ExecutionResult, HeapObject, InterpreterConfig, InterpreterCore,
-    InterpreterError, InterpreterEvent, LaneChoice, LaneReason, LaneRouter, ObjectId, QuickJsLane,
-    V8Lane, Value,
+    InterpreterError, InterpreterEvent, LaneChoice, LaneReason, LaneRouter,
+    ModuleResolutionFailureReason, ObjectId, QuickJsLane, V8Lane, Value,
 };
 use frankenengine_engine::capability::RuntimeCapability;
 use frankenengine_engine::ir_contract::{
@@ -1119,7 +1119,10 @@ fn hostcall_module_require_rejects_bare_specifier() {
     match err {
         InterpreterError::ModuleResolutionFailed { specifier, reason } => {
             assert_eq!(specifier, "dep");
-            assert!(reason.contains("bare specifiers not supported"));
+            assert_eq!(
+                reason,
+                ModuleResolutionFailureReason::BareSpecifiersNotSupported
+            );
         }
         other => panic!("expected ModuleResolutionFailed, got {other:?}"),
     }
@@ -1154,7 +1157,7 @@ fn hostcall_module_require_rejects_missing_file() {
     match err {
         InterpreterError::ModuleResolutionFailed { specifier, reason } => {
             assert!(specifier.ends_with("missing.cjs"));
-            assert!(reason.contains("module not found"));
+            assert_eq!(reason, ModuleResolutionFailureReason::ModuleNotFound);
         }
         other => panic!("expected ModuleResolutionFailed, got {other:?}"),
     }

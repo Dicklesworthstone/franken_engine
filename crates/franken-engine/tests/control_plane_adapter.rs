@@ -163,11 +163,10 @@ fn adapter_surfaces_decision_and_evidence_without_direct_upstream_imports() {
     };
 
     let verdict = adapter.evaluate(&request).expect("decision");
-    assert!(matches!(
-        verdict,
-        DecisionVerdict::Allow | DecisionVerdict::Deny | DecisionVerdict::Timeout
-    ));
+    assert_eq!(verdict, DecisionVerdict::Deny);
     assert_eq!(adapter.events().len(), 1);
+    assert_eq!(adapter.events()[0].event, "decision_eval");
+    assert_eq!(adapter.events()[0].outcome, "deny");
 
     let action = verdict_to_action(verdict);
     let chosen = match action {
@@ -376,18 +375,13 @@ fn real_decision_contract_evaluates_deterministic_verdicts() {
         .evaluate(&deny_request)
         .expect("decision should succeed");
 
-    // Both should be valid decisions (Allow, Deny, or Timeout)
-    assert!(matches!(
-        verdict1,
-        DecisionVerdict::Allow | DecisionVerdict::Deny | DecisionVerdict::Timeout
-    ));
-    assert!(matches!(
-        verdict2,
-        DecisionVerdict::Allow | DecisionVerdict::Deny | DecisionVerdict::Timeout
-    ));
-
-    // Should produce evidence events
-    assert!(!adapter.events().is_empty());
+    assert_eq!(verdict1, DecisionVerdict::Deny);
+    assert_eq!(verdict2, DecisionVerdict::Timeout);
+    assert_eq!(adapter.events().len(), 2);
+    assert_eq!(adapter.events()[0].event, "decision_eval");
+    assert_eq!(adapter.events()[0].outcome, "deny");
+    assert_eq!(adapter.events()[1].event, "decision_eval");
+    assert_eq!(adapter.events()[1].outcome, "timeout");
 }
 
 #[test]

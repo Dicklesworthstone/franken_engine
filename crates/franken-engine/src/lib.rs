@@ -446,6 +446,7 @@ pub mod synthesis_eligibility_envelope;
 pub mod synthesis_kernel_promotion;
 pub mod tail_latency_control_plane;
 pub mod tail_latency_feedback_control;
+pub mod technical_report;
 pub mod tee_attestation_policy;
 pub mod test262_conformance_runner;
 pub mod test262_release_gate;

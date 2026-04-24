@@ -105,6 +105,7 @@ pub mod counterexample_synthesizer;
 pub mod counterfactual_evaluator;
 pub mod counterfactual_intervention_planner;
 pub mod counterfactual_replay_engine;
+pub mod cross_arch_reproducibility;
 pub mod cross_repo_contract;
 pub mod cross_workload_transfer;
 pub mod cut_line_automation;

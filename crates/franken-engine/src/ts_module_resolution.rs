@@ -1534,7 +1534,8 @@ pub fn write_ts_resolution_artifacts(
         drift_report: "drift_report.json".to_string(),
     };
 
-    let mut commands_file = BufWriter::new(File::create(output_dir.join(&artifact_paths.commands))?);
+    let mut commands_file =
+        BufWriter::new(File::create(output_dir.join(&artifact_paths.commands))?);
     for command in commands {
         writeln!(commands_file, "{command}")?;
     }
@@ -1555,7 +1556,9 @@ pub fn write_ts_resolution_artifacts(
         writeln!(events_file, "{line}")?;
     }
 
-    let mut trace_file = BufWriter::new(File::create(output_dir.join(&artifact_paths.ts_resolution_trace))?);
+    let mut trace_file = BufWriter::new(File::create(
+        output_dir.join(&artifact_paths.ts_resolution_trace),
+    )?);
     for trace in traces {
         let line = serde_json::to_string(trace)
             .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err.to_string()))?;
@@ -1610,7 +1613,8 @@ pub fn write_ts_resolution_index_artifacts(
     let step_logs_dir = output_dir.join(&artifact_paths.step_logs_dir);
     fs::create_dir_all(&step_logs_dir)?;
 
-    let mut commands_file = BufWriter::new(File::create(output_dir.join(&artifact_paths.commands))?);
+    let mut commands_file =
+        BufWriter::new(File::create(output_dir.join(&artifact_paths.commands))?);
     for command in commands {
         writeln!(commands_file, "{command}")?;
     }

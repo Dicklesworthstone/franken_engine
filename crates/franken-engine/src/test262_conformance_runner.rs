@@ -1039,7 +1039,10 @@ pub mod differential_testing {
         }
 
         /// Run all differential tests against franken_engine.
-        pub fn run_differential_tests(&self, security_epoch: SecurityEpoch) -> Result<DifferentialReport, String> {
+        pub fn run_differential_tests(
+            &self,
+            security_epoch: SecurityEpoch,
+        ) -> Result<DifferentialReport, String> {
             let mut results = Vec::new();
             let start_time = Instant::now();
 
@@ -1053,7 +1056,11 @@ pub mod differential_testing {
         }
 
         /// Execute a single differential test.
-        fn execute_differential_test(&self, test: &DifferentialTest, security_epoch: SecurityEpoch) -> Result<DifferentialResult, String> {
+        fn execute_differential_test(
+            &self,
+            test: &DifferentialTest,
+            security_epoch: SecurityEpoch,
+        ) -> Result<DifferentialResult, String> {
             let start_time = Instant::now();
 
             // Execute test through franken_engine
@@ -1067,10 +1074,12 @@ pub mod differential_testing {
             // Determine overall verdict
             let verdict = if franken_output.exit_code > 1 {
                 DifferentialVerdict::Error
-            } else if !v8_comparison.reference_available && !quickjs_comparison.reference_available {
+            } else if !v8_comparison.reference_available && !quickjs_comparison.reference_available
+            {
                 DifferentialVerdict::Skipped
-            } else if (v8_comparison.reference_available && !v8_comparison.matches) ||
-                     (quickjs_comparison.reference_available && !quickjs_comparison.matches) {
+            } else if (v8_comparison.reference_available && !v8_comparison.matches)
+                || (quickjs_comparison.reference_available && !quickjs_comparison.matches)
+            {
                 DifferentialVerdict::Fail
             } else {
                 DifferentialVerdict::Pass
@@ -1087,7 +1096,11 @@ pub mod differential_testing {
         }
 
         /// Execute JavaScript through franken_engine and capture output.
-        fn execute_franken_engine(&self, source: &str, _security_epoch: SecurityEpoch) -> Result<ActualOutput, String> {
+        fn execute_franken_engine(
+            &self,
+            source: &str,
+            _security_epoch: SecurityEpoch,
+        ) -> Result<ActualOutput, String> {
             // Mock implementation - in reality this would go through the full pipeline:
             // parse -> lower_ir0_to_ir1 -> lower_ir1_to_ir2 -> lower_ir2_to_ir3 -> execute
 
@@ -1110,7 +1123,11 @@ pub mod differential_testing {
                 stdout: mock_stdout,
                 stderr: mock_stderr.clone(),
                 exit_code: mock_exit_code,
-                error_message: if mock_exit_code != 0 { Some(mock_stderr) } else { None },
+                error_message: if mock_exit_code != 0 {
+                    Some(mock_stderr)
+                } else {
+                    None
+                },
             })
         }
 
@@ -1175,7 +1192,11 @@ pub mod differential_testing {
         }
 
         /// Compare franken_engine output against reference engine output.
-        fn compare_outputs(&self, actual: &ActualOutput, expected: &ExpectedOutput) -> ComparisonResult {
+        fn compare_outputs(
+            &self,
+            actual: &ActualOutput,
+            expected: &ExpectedOutput,
+        ) -> ComparisonResult {
             if !expected.available {
                 return ComparisonResult {
                     matches: false,
@@ -1326,49 +1347,80 @@ pub mod differential_testing {
         pub fn generate_summary(&self) -> String {
             let mut summary = String::new();
 
-            summary.push_str(&format!("# Cross-Engine Differential Testing Report ({})\n\n", self.bead_id));
+            summary.push_str(&format!(
+                "# Cross-Engine Differential Testing Report ({})\n\n",
+                self.bead_id
+            ));
             summary.push_str(&format!("**Generated:** {}\n", self.timestamp));
             summary.push_str(&format!("**Duration:** {}ms\n\n", self.total_duration_ms));
 
             summary.push_str("## Summary Statistics\n\n");
-            summary.push_str(&format!("- **Total Tests:** {}\n", self.statistics.total_tests));
-            summary.push_str(&format!("- **Passed:** {} ({:.1}%)\n",
+            summary.push_str(&format!(
+                "- **Total Tests:** {}\n",
+                self.statistics.total_tests
+            ));
+            summary.push_str(&format!(
+                "- **Passed:** {} ({:.1}%)\n",
                 self.statistics.passed,
-                (self.statistics.pass_rate_millionths as f64 / 10_000.0)));
+                (self.statistics.pass_rate_millionths as f64 / 10_000.0)
+            ));
             summary.push_str(&format!("- **Failed:** {}\n", self.statistics.failed));
             summary.push_str(&format!("- **Errored:** {}\n", self.statistics.errored));
-            summary.push_str(&format!("- **Skipped:** {} (no reference)\n\n", self.statistics.skipped));
+            summary.push_str(&format!(
+                "- **Skipped:** {} (no reference)\n\n",
+                self.statistics.skipped
+            ));
 
-            summary.push_str(&format!("- **V8 Coverage:** {} tests\n", self.statistics.v8_coverage));
-            summary.push_str(&format!("- **QuickJS Coverage:** {} tests\n\n", self.statistics.quickjs_coverage));
+            summary.push_str(&format!(
+                "- **V8 Coverage:** {} tests\n",
+                self.statistics.v8_coverage
+            ));
+            summary.push_str(&format!(
+                "- **QuickJS Coverage:** {} tests\n\n",
+                self.statistics.quickjs_coverage
+            ));
 
             // Add failure details
-            let failures: Vec<_> = self.test_results.iter()
+            let failures: Vec<_> = self
+                .test_results
+                .iter()
                 .filter(|r| matches!(r.verdict, DifferentialVerdict::Fail))
                 .collect();
 
             if !failures.is_empty() {
                 summary.push_str("## Failed Tests\n\n");
                 for failure in failures {
-                    summary.push_str(&format!("### {} ({})\n", failure.test_id,
-                        self.test_results.iter()
+                    summary.push_str(&format!(
+                        "### {} ({})\n",
+                        failure.test_id,
+                        self.test_results
+                            .iter()
                             .find(|t| t.test_id == failure.test_id)
                             .map(|_| "unknown category") // We'd need to store category in result
-                            .unwrap_or("unknown")));
+                            .unwrap_or("unknown")
+                    ));
 
                     if !failure.v8_comparison.differences.is_empty() {
                         summary.push_str("**V8 Differences:**\n");
                         for diff in &failure.v8_comparison.differences {
-                            summary.push_str(&format!("- {:?}: expected `{}`, got `{}`\n",
-                                diff.kind, diff.expected.trim(), diff.actual.trim()));
+                            summary.push_str(&format!(
+                                "- {:?}: expected `{}`, got `{}`\n",
+                                diff.kind,
+                                diff.expected.trim(),
+                                diff.actual.trim()
+                            ));
                         }
                     }
 
                     if !failure.quickjs_comparison.differences.is_empty() {
                         summary.push_str("**QuickJS Differences:**\n");
                         for diff in &failure.quickjs_comparison.differences {
-                            summary.push_str(&format!("- {:?}: expected `{}`, got `{}`\n",
-                                diff.kind, diff.expected.trim(), diff.actual.trim()));
+                            summary.push_str(&format!(
+                                "- {:?}: expected `{}`, got `{}`\n",
+                                diff.kind,
+                                diff.expected.trim(),
+                                diff.actual.trim()
+                            ));
                         }
                     }
 
@@ -1384,10 +1436,22 @@ pub mod differential_testing {
         /// Create statistics from test results.
         fn from_results(results: &[DifferentialResult]) -> Self {
             let total_tests = results.len() as u64;
-            let passed = results.iter().filter(|r| matches!(r.verdict, DifferentialVerdict::Pass)).count() as u64;
-            let failed = results.iter().filter(|r| matches!(r.verdict, DifferentialVerdict::Fail)).count() as u64;
-            let errored = results.iter().filter(|r| matches!(r.verdict, DifferentialVerdict::Error)).count() as u64;
-            let skipped = results.iter().filter(|r| matches!(r.verdict, DifferentialVerdict::Skipped)).count() as u64;
+            let passed = results
+                .iter()
+                .filter(|r| matches!(r.verdict, DifferentialVerdict::Pass))
+                .count() as u64;
+            let failed = results
+                .iter()
+                .filter(|r| matches!(r.verdict, DifferentialVerdict::Fail))
+                .count() as u64;
+            let errored = results
+                .iter()
+                .filter(|r| matches!(r.verdict, DifferentialVerdict::Error))
+                .count() as u64;
+            let skipped = results
+                .iter()
+                .filter(|r| matches!(r.verdict, DifferentialVerdict::Skipped))
+                .count() as u64;
 
             let pass_rate_millionths = if total_tests > 0 {
                 (passed * MILLIONTHS) / total_tests
@@ -1395,8 +1459,14 @@ pub mod differential_testing {
                 0
             };
 
-            let v8_coverage = results.iter().filter(|r| r.v8_comparison.reference_available).count() as u64;
-            let quickjs_coverage = results.iter().filter(|r| r.quickjs_comparison.reference_available).count() as u64;
+            let v8_coverage = results
+                .iter()
+                .filter(|r| r.v8_comparison.reference_available)
+                .count() as u64;
+            let quickjs_coverage = results
+                .iter()
+                .filter(|r| r.quickjs_comparison.reference_available)
+                .count() as u64;
 
             Self {
                 total_tests,
@@ -1478,7 +1548,10 @@ pub mod differential_testing {
             let comparison = harness.compare_outputs(&actual, &expected);
             assert!(!comparison.matches);
             assert_eq!(comparison.differences.len(), 1);
-            assert!(matches!(comparison.differences[0].kind, DifferenceKind::Stdout));
+            assert!(matches!(
+                comparison.differences[0].kind,
+                DifferenceKind::Stdout
+            ));
         }
 
         #[test]

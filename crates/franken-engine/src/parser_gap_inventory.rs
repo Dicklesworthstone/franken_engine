@@ -1497,9 +1497,8 @@ mod tests {
         assert_eq!(inventory_resolved.open_placeholder_site_count(), 0);
 
         // Test with single open placeholder
-        let inventory_single = test_inventory_with_open_placeholders(&[
-            ParserGapSiteId::ForInStatementPlaceholder
-        ]);
+        let inventory_single =
+            test_inventory_with_open_placeholders(&[ParserGapSiteId::ForInStatementPlaceholder]);
         assert_eq!(inventory_single.open_placeholder_site_count(), 1);
 
         // Test with multiple open placeholders
@@ -1524,10 +1523,17 @@ mod tests {
 
         for site in &inventory.sites {
             if site.site_id == "lower_ir0_to_ir1.for_of_placeholder"
-                || site.site_id == "lower_ir0_to_ir1.new_call_placeholder" {
-                assert_eq!(site.remediation_status, ParserGapRemediationStatus::OpenPlaceholder);
+                || site.site_id == "lower_ir0_to_ir1.new_call_placeholder"
+            {
+                assert_eq!(
+                    site.remediation_status,
+                    ParserGapRemediationStatus::OpenPlaceholder
+                );
             } else {
-                assert_eq!(site.remediation_status, ParserGapRemediationStatus::Resolved);
+                assert_eq!(
+                    site.remediation_status,
+                    ParserGapRemediationStatus::Resolved
+                );
             }
         }
     }
@@ -1555,7 +1561,9 @@ mod tests {
     #[test]
     fn parser_gap_remediation_status_ordering_for_validation() {
         // Test that OpenPlaceholder status has correct ordering for validation gates
-        assert!(ParserGapRemediationStatus::FailClosed < ParserGapRemediationStatus::OpenPlaceholder);
+        assert!(
+            ParserGapRemediationStatus::FailClosed < ParserGapRemediationStatus::OpenPlaceholder
+        );
         assert!(ParserGapRemediationStatus::OpenPlaceholder < ParserGapRemediationStatus::Resolved);
 
         // Ensure OpenPlaceholder is in middle of severity spectrum
@@ -1637,21 +1645,45 @@ mod tests {
             let feature_family = site_id.feature_family();
 
             // Each site should have meaningful diagnostic identifiers
-            assert!(!diagnostic_code.is_empty(), "{:?} missing diagnostic code", site_id);
-            assert!(!syntax_shape.is_empty(), "{:?} missing syntax shape", site_id);
-            assert!(!feature_family.is_empty(), "{:?} missing feature family", site_id);
+            assert!(
+                !diagnostic_code.is_empty(),
+                "{:?} missing diagnostic code",
+                site_id
+            );
+            assert!(
+                !syntax_shape.is_empty(),
+                "{:?} missing syntax shape",
+                site_id
+            );
+            assert!(
+                !feature_family.is_empty(),
+                "{:?} missing feature family",
+                site_id
+            );
 
             // Diagnostic codes should be distinct
-            assert!(diagnostic_code.contains("franken"),
-                "{:?} diagnostic code should contain 'franken': {}", site_id, diagnostic_code);
+            assert!(
+                diagnostic_code.contains("franken"),
+                "{:?} diagnostic code should contain 'franken': {}",
+                site_id,
+                diagnostic_code
+            );
 
             // Feature families should match expected ES2020+ syntax categories
             let valid_families = [
-                "for_in_statement", "for_of_statement", "template_literal",
-                "new_expression", "binary_expression", "assignment_expression"
+                "for_in_statement",
+                "for_of_statement",
+                "template_literal",
+                "new_expression",
+                "binary_expression",
+                "assignment_expression",
             ];
-            assert!(valid_families.contains(&feature_family.as_str()),
-                "{:?} has unexpected feature family: {}", site_id, feature_family);
+            assert!(
+                valid_families.contains(&feature_family.as_str()),
+                "{:?} has unexpected feature family: {}",
+                site_id,
+                feature_family
+            );
         }
     }
 

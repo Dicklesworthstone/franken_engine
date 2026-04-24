@@ -10,25 +10,25 @@ use std::path::Path;
 
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::resource_certificate_governance::{
-    CertificateEvidence, GovernanceReceipt, GovernanceVerdict, ResourceDimension,
-    RegressionEntry, TailRiskEntry, SCHEMA_VERSION as RCG_SCHEMA_VERSION,
-    COMPONENT as RCG_COMPONENT, BEAD_ID as RCG_BEAD_ID, FIXED_ONE,
+    BEAD_ID as RCG_BEAD_ID, COMPONENT as RCG_COMPONENT, CertificateEvidence, FIXED_ONE,
+    GovernanceReceipt, GovernanceVerdict, RegressionEntry, ResourceDimension,
+    SCHEMA_VERSION as RCG_SCHEMA_VERSION, TailRiskEntry,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
 use frankenengine_engine::timescale_separation_certificate::{
-    TimescaleSeparationCertificate, CertificateBundle, ControllerPairId, TimescaleRatio,
-    SeparationVerdict, ControllerTimescaleProfile, RatioBasis,
-    TIMESCALE_CERTIFICATE_SCHEMA_VERSION, TIMESCALE_CERTIFICATE_BEAD_ID,
-    CERTIFICATE_BUNDLE_SCHEMA_VERSION, DEFAULT_SUFFICIENT_RATIO_MILLIONTHS,
-    DEFAULT_MARGINAL_RATIO_MILLIONTHS,
+    CERTIFICATE_BUNDLE_SCHEMA_VERSION, CertificateBundle, ControllerPairId,
+    ControllerTimescaleProfile, DEFAULT_MARGINAL_RATIO_MILLIONTHS,
+    DEFAULT_SUFFICIENT_RATIO_MILLIONTHS, RatioBasis, SeparationVerdict,
+    TIMESCALE_CERTIFICATE_BEAD_ID, TIMESCALE_CERTIFICATE_SCHEMA_VERSION, TimescaleRatio,
+    TimescaleSeparationCertificate,
 };
 
-use std::collections::{BTreeSet, BTreeMap};
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Test helper: assert golden file matches actual serialization.
 fn assert_golden(test_name: &str, actual: &str) {
-    let golden_path = Path::new("tests/goldens/certificates")
-        .join(format!("{}.golden.json", test_name));
+    let golden_path =
+        Path::new("tests/goldens/certificates").join(format!("{}.golden.json", test_name));
 
     if std::env::var("UPDATE_GOLDENS").is_ok() {
         fs::create_dir_all(golden_path.parent().unwrap()).unwrap();
@@ -37,12 +37,13 @@ fn assert_golden(test_name: &str, actual: &str) {
         return;
     }
 
-    let expected = fs::read_to_string(&golden_path)
-        .unwrap_or_else(|_| panic!(
+    let expected = fs::read_to_string(&golden_path).unwrap_or_else(|_| {
+        panic!(
             "Golden file not found: {}\n\
              Run with UPDATE_GOLDENS=1 to create it",
             golden_path.display()
-        ));
+        )
+    });
 
     if actual.trim() != expected.trim() {
         let actual_path = golden_path.with_extension("actual.json");
@@ -71,8 +72,8 @@ fn certificate_evidence_basic() {
     let evidence = CertificateEvidence {
         dimension: ResourceDimension::CpuTime,
         workload_id: "test_workload_1".to_string(),
-        certified_budget: 5_000_000, // 5 seconds in microseconds
-        measured_usage: 3_200_000,   // 3.2 seconds in microseconds
+        certified_budget: 5_000_000,     // 5 seconds in microseconds
+        measured_usage: 3_200_000,       // 3.2 seconds in microseconds
         utilisation_millionths: 640_000, // 64% utilization
         within_budget: true,
         sample_count: 1000,
@@ -105,8 +106,8 @@ fn certificate_evidence_network_io() {
     let evidence = CertificateEvidence {
         dimension: ResourceDimension::NetworkBandwidth,
         workload_id: "network_heavy_service".to_string(),
-        certified_budget: 100_000_000, // 100MB bandwidth budget
-        measured_usage: 42_000_000,    // 42MB actual usage
+        certified_budget: 100_000_000,   // 100MB bandwidth budget
+        measured_usage: 42_000_000,      // 42MB actual usage
         utilisation_millionths: 420_000, // 42% utilization
         within_budget: true,
         sample_count: 750,
@@ -132,7 +133,7 @@ fn timescale_separation_certificate_sufficient() {
                 fast_controller: "gc_controller".to_string(),
                 slow_controller: "batch_processor".to_string(),
             },
-            ratio_millionths: 50_000_000,   // 50x ratio
+            ratio_millionths: 50_000_000, // 50x ratio
             ratio_basis: RatioBasis::Observation,
         },
         verdict: SeparationVerdict::Sufficient,
@@ -172,7 +173,7 @@ fn timescale_separation_certificate_marginal() {
         },
         ratio: TimescaleRatio {
             fast_interval_micros: 50_000,  // 50ms
-            slow_interval_micros: 200_000,  // 200ms
+            slow_interval_micros: 200_000, // 200ms
             ratio_millionths: 4_000_000,   // 4x ratio (between marginal and sufficient)
         },
         verdict: SeparationVerdict::Marginal,
@@ -196,9 +197,9 @@ fn timescale_separation_certificate_insufficient() {
             slow_controller: "low_freq_trader".to_string(),
         },
         ratio: TimescaleRatio {
-            fast_interval_micros: 1_000,   // 1ms
-            slow_interval_micros: 2_000,   // 2ms
-            ratio_millionths: 2_000_000,  // 2x ratio (below marginal threshold)
+            fast_interval_micros: 1_000, // 1ms
+            slow_interval_micros: 2_000, // 2ms
+            ratio_millionths: 2_000_000, // 2x ratio (below marginal threshold)
         },
         verdict: SeparationVerdict::Insufficient,
         sufficient_threshold_millionths: DEFAULT_SUFFICIENT_RATIO_MILLIONTHS,
@@ -289,36 +290,32 @@ fn governance_receipt_comprehensive() {
         CertificateEvidence {
             dimension: ResourceDimension::Memory,
             workload_id: "web_server".to_string(),
-            certified_budget: 500_000_000, // 500MB
-            measured_usage: 320_000_000,   // 320MB
+            certified_budget: 500_000_000,   // 500MB
+            measured_usage: 320_000_000,     // 320MB
             utilisation_millionths: 640_000, // 64%
             content_hash: ContentHash::compute(b"memory_evidence"),
         },
     ];
 
-    let regressions = vec![
-        RegressionEntry {
-            dimension: ResourceDimension::CpuTime,
-            workload_id: "web_server".to_string(),
-            previous_usage: 1_400_000,
-            current_usage: 1_500_000,
-            regression_millionths: 71_429, // ~7.14% regression
-            baseline_hash: ContentHash::compute(b"cpu_baseline"),
-            current_hash: ContentHash::compute(b"cpu_current"),
-        }
-    ];
+    let regressions = vec![RegressionEntry {
+        dimension: ResourceDimension::CpuTime,
+        workload_id: "web_server".to_string(),
+        previous_usage: 1_400_000,
+        current_usage: 1_500_000,
+        regression_millionths: 71_429, // ~7.14% regression
+        baseline_hash: ContentHash::compute(b"cpu_baseline"),
+        current_hash: ContentHash::compute(b"cpu_current"),
+    }];
 
-    let tail_risks = vec![
-        TailRiskEntry {
-            dimension: ResourceDimension::Memory,
-            workload_id: "web_server".to_string(),
-            tail_ratio_millionths: 2_500_000, // p99/p50 = 2.5x
-            baseline_ratio_millionths: 2_000_000, // baseline = 2.0x
-            drift_millionths: 250_000, // 25% worse tail behavior
-            baseline_hash: ContentHash::compute(b"tail_baseline"),
-            current_hash: ContentHash::compute(b"tail_current"),
-        }
-    ];
+    let tail_risks = vec![TailRiskEntry {
+        dimension: ResourceDimension::Memory,
+        workload_id: "web_server".to_string(),
+        tail_ratio_millionths: 2_500_000,     // p99/p50 = 2.5x
+        baseline_ratio_millionths: 2_000_000, // baseline = 2.0x
+        drift_millionths: 250_000,            // 25% worse tail behavior
+        baseline_hash: ContentHash::compute(b"tail_baseline"),
+        current_hash: ContentHash::compute(b"tail_current"),
+    }];
 
     let receipt = GovernanceReceipt {
         verdict: GovernanceVerdict::Approved,
@@ -349,28 +346,24 @@ fn governance_receipt_denial() {
     let mut dimensions_evaluated = BTreeSet::new();
     dimensions_evaluated.insert(ResourceDimension::CpuTime);
 
-    let certificates = vec![
-        CertificateEvidence {
-            dimension: ResourceDimension::CpuTime,
-            workload_id: "overloaded_service".to_string(),
-            certified_budget: 1_000_000,
-            measured_usage: 1_200_000, // Over budget!
-            utilisation_millionths: 1_200_000, // 120% utilization
-            content_hash: ContentHash::compute(b"overloaded_evidence"),
-        }
-    ];
+    let certificates = vec![CertificateEvidence {
+        dimension: ResourceDimension::CpuTime,
+        workload_id: "overloaded_service".to_string(),
+        certified_budget: 1_000_000,
+        measured_usage: 1_200_000,         // Over budget!
+        utilisation_millionths: 1_200_000, // 120% utilization
+        content_hash: ContentHash::compute(b"overloaded_evidence"),
+    }];
 
-    let regressions = vec![
-        RegressionEntry {
-            dimension: ResourceDimension::CpuTime,
-            workload_id: "overloaded_service".to_string(),
-            previous_usage: 800_000,
-            current_usage: 1_200_000,
-            regression_millionths: 500_000, // 50% regression - way over limit!
-            baseline_hash: ContentHash::compute(b"regression_baseline"),
-            current_hash: ContentHash::compute(b"regression_current"),
-        }
-    ];
+    let regressions = vec![RegressionEntry {
+        dimension: ResourceDimension::CpuTime,
+        workload_id: "overloaded_service".to_string(),
+        previous_usage: 800_000,
+        current_usage: 1_200_000,
+        regression_millionths: 500_000, // 50% regression - way over limit!
+        baseline_hash: ContentHash::compute(b"regression_baseline"),
+        current_hash: ContentHash::compute(b"regression_current"),
+    }];
 
     let receipt = GovernanceReceipt {
         verdict: GovernanceVerdict::Denied,
@@ -381,8 +374,8 @@ fn governance_receipt_denial() {
         regressions,
         tail_risks: Vec::new(),
         publication_gate: false, // Failed due to over-budget
-        regression_gate: false, // Failed due to high regression
-        tail_risk_gate: true,   // No tail risk data
+        regression_gate: false,  // Failed due to high regression
+        tail_risk_gate: true,    // No tail risk data
         policy_snapshot: PublicationPolicy {
             max_regression_millionths: 100_000, // 10% max regression
             max_tail_drift_millionths: 500_000,

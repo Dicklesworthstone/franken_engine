@@ -2026,12 +2026,12 @@ mod tests {
     // This catches non-deterministic serialization bugs that break consensus protocols.
 
     use crate::object_model::{
-        ObjectHeap, OrdinaryObject, PropertyDescriptor, PropertyKey, SymbolId, JsValue, SymbolRegistry,
-        ProxyObject, ManagedObject, ObjectHandle, WellKnownSymbol
+        JsValue, ManagedObject, ObjectHandle, ObjectHeap, OrdinaryObject, PropertyDescriptor,
+        PropertyKey, ProxyObject, SymbolId, SymbolRegistry, WellKnownSymbol,
     };
     use crate::recovery_artifact::{
-        RecoveryArtifact, ArtifactType, RecoveryTrigger, ProofElement, OperatorAction,
-        RecoveryVerdict, VerificationError, RecoveryEvent
+        ArtifactType, OperatorAction, ProofElement, RecoveryArtifact, RecoveryEvent,
+        RecoveryTrigger, RecoveryVerdict, VerificationError,
     };
 
     /// Helper function to test metamorphic round-trip determinism property for serde types.
@@ -2044,12 +2044,10 @@ mod tests {
         let serialized1 = serde_json::to_vec(value).expect("First serialization failed");
 
         // Deserialize
-        let deserialized: T = serde_json::from_slice(&serialized1)
-            .expect("Deserialization failed");
+        let deserialized: T = serde_json::from_slice(&serialized1).expect("Deserialization failed");
 
         // Second serialization (after round-trip)
-        let serialized2 = serde_json::to_vec(&deserialized)
-            .expect("Second serialization failed");
+        let serialized2 = serde_json::to_vec(&deserialized).expect("Second serialization failed");
 
         // Metamorphic property: serialize(deserialize(serialize(X))) == serialize(X)
         assert_eq!(
@@ -2064,9 +2062,9 @@ mod tests {
     fn metamorphic_property_key_determinism() {
         let fixtures = [
             PropertyKey::String("test_property".to_string()),
-            PropertyKey::String("".to_string()),  // Empty string
+            PropertyKey::String("".to_string()), // Empty string
             PropertyKey::Symbol(SymbolId(42)),
-            PropertyKey::Symbol(SymbolId(0)),      // Zero ID
+            PropertyKey::Symbol(SymbolId(0)),        // Zero ID
             PropertyKey::Symbol(SymbolId(u32::MAX)), // Max ID
             PropertyKey::WellKnown(WellKnownSymbol::Iterator),
             PropertyKey::WellKnown(WellKnownSymbol::ToPrimitive),
@@ -2222,7 +2220,7 @@ mod tests {
                 ProofElement::RegisterDump(vec![0x42, 0x43, 0x44]),
             ],
             operator_action: OperatorAction::RestartProcess,
-            timestamp_ns: 1640995200000000000_u64,  // Fixed timestamp for determinism
+            timestamp_ns: 1640995200000000000_u64, // Fixed timestamp for determinism
             recovery_id: "rec_12345".to_string(),
             metadata: {
                 let mut map = BTreeMap::new();
@@ -2297,15 +2295,21 @@ mod tests {
             objects: {
                 let mut objects = BTreeMap::new();
                 objects.insert(ObjectHandle(3), ManagedObject::Ordinary(ordinary_obj));
-                objects.insert(ObjectHandle(1), ManagedObject::Ordinary(OrdinaryObject {
-                    properties: BTreeMap::new(),
-                    prototype: None,
-                    extensible: false,
-                }));
-                objects.insert(ObjectHandle(2), ManagedObject::Proxy(ProxyObject {
-                    target: ObjectHandle(1),
-                    handler: ObjectHandle(3),
-                }));
+                objects.insert(
+                    ObjectHandle(1),
+                    ManagedObject::Ordinary(OrdinaryObject {
+                        properties: BTreeMap::new(),
+                        prototype: None,
+                        extensible: false,
+                    }),
+                );
+                objects.insert(
+                    ObjectHandle(2),
+                    ManagedObject::Proxy(ProxyObject {
+                        target: ObjectHandle(1),
+                        handler: ObjectHandle(3),
+                    }),
+                );
                 objects
             },
             next_handle: ObjectHandle(4),

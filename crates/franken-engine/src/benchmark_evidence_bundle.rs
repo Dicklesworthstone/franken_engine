@@ -1875,8 +1875,8 @@ mod tests {
         let golden_file = evidence_golden_path(test_name);
 
         // Serialize to deterministic JSON
-        let actual_json = serde_json::to_string_pretty(bundle)
-            .expect("Evidence bundle should serialize to JSON");
+        let actual_json =
+            serde_json::to_string_pretty(bundle).expect("Evidence bundle should serialize to JSON");
 
         if should_update_evidence_goldens() {
             // Update mode: write new golden file
@@ -1891,13 +1891,14 @@ mod tests {
         }
 
         // Compare mode: check against existing golden
-        let expected_json = fs::read_to_string(&golden_file)
-            .unwrap_or_else(|_| panic!(
+        let expected_json = fs::read_to_string(&golden_file).unwrap_or_else(|_| {
+            panic!(
                 "Evidence golden file missing: {}\n\
                  Run with UPDATE_GOLDENS=1 to create it\n\
                  Then review and commit: git diff tests/goldens/",
                 golden_file.display()
-            ));
+            )
+        });
 
         if actual_json != expected_json {
             // Write actual for easy diffing
@@ -1955,7 +1956,7 @@ mod tests {
         bundle.runs.push(BenchmarkRun {
             run_id: "run-fib-001".to_string(),
             workload_id: "workload-fibonacci".to_string(),
-            duration_us: 15_000, // 15ms
+            duration_us: 15_000,          // 15ms
             peak_memory_bytes: 1_048_576, // 1MB
             gc_pause_us: 200,
             environment: BenchmarkEnvironment {
@@ -1974,7 +1975,7 @@ mod tests {
         bundle.runs.push(BenchmarkRun {
             run_id: "run-fib-002".to_string(),
             workload_id: "workload-fibonacci".to_string(),
-            duration_us: 14_800, // 14.8ms
+            duration_us: 14_800,          // 14.8ms
             peak_memory_bytes: 1_048_576, // 1MB
             gc_pause_us: 180,
             environment: BenchmarkEnvironment {
@@ -1993,7 +1994,7 @@ mod tests {
         bundle.runs.push(BenchmarkRun {
             run_id: "run-sort-001".to_string(),
             workload_id: "workload-sorting".to_string(),
-            duration_us: 8_500, // 8.5ms
+            duration_us: 8_500,           // 8.5ms
             peak_memory_bytes: 2_097_152, // 2MB
             gc_pause_us: 350,
             environment: BenchmarkEnvironment {
@@ -2055,9 +2056,9 @@ mod tests {
         bundle.runs.push(BenchmarkRun {
             run_id: "run-regr-001".to_string(),
             workload_id: "workload-regression".to_string(),
-            duration_us: 45_000, // 45ms (slow)
+            duration_us: 45_000,          // 45ms (slow)
             peak_memory_bytes: 4_194_304, // 4MB (high memory usage)
-            gc_pause_us: 2_000, // 2ms GC pause (high)
+            gc_pause_us: 2_000,           // 2ms GC pause (high)
             environment: BenchmarkEnvironment {
                 cpu_model: "Intel i7-10700K".to_string(),
                 core_count: 8,
@@ -2135,7 +2136,7 @@ mod tests {
         bundle.runs.push(BenchmarkRun {
             run_id: "run-mixed-001".to_string(),
             workload_id: "workload-mixed".to_string(),
-            duration_us: 25_500, // 25.5ms
+            duration_us: 25_500,          // 25.5ms
             peak_memory_bytes: 3_145_728, // 3MB
             gc_pause_us: 500,
             environment: BenchmarkEnvironment {
@@ -2171,18 +2172,21 @@ mod tests {
         // Test that multiple serializations of the same bundle produce identical output
         let bundle = create_passing_evidence_bundle();
 
-        let json1 = serde_json::to_string_pretty(&bundle)
-            .expect("First serialization should succeed");
-        let json2 = serde_json::to_string_pretty(&bundle)
-            .expect("Second serialization should succeed");
+        let json1 =
+            serde_json::to_string_pretty(&bundle).expect("First serialization should succeed");
+        let json2 =
+            serde_json::to_string_pretty(&bundle).expect("Second serialization should succeed");
 
-        assert_eq!(json1, json2, "Evidence bundle serialization must be deterministic");
+        assert_eq!(
+            json1, json2,
+            "Evidence bundle serialization must be deterministic"
+        );
 
         // Also test round-trip stability
-        let deserialized: EvidenceBundle = serde_json::from_str(&json1)
-            .expect("Deserialization should succeed");
-        let json3 = serde_json::to_string_pretty(&deserialized)
-            .expect("Re-serialization should succeed");
+        let deserialized: EvidenceBundle =
+            serde_json::from_str(&json1).expect("Deserialization should succeed");
+        let json3 =
+            serde_json::to_string_pretty(&deserialized).expect("Re-serialization should succeed");
 
         assert_eq!(json1, json3, "Evidence bundle round-trip must be stable");
     }

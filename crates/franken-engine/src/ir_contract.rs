@@ -6021,7 +6021,10 @@ mod tests {
 
         // Canonicalization of already-canonical data should be stable
         let re_encoded = deterministic_serde::encode_value(&canonical_val);
-        assert_eq!(encoded_once, re_encoded, "Canonical encoding must be idempotent");
+        assert_eq!(
+            encoded_once, re_encoded,
+            "Canonical encoding must be idempotent"
+        );
     }
 
     #[test]
@@ -6039,33 +6042,51 @@ mod tests {
         let encoded_once = deterministic_serde::encode_value(&canonical_val);
         let re_encoded = deterministic_serde::encode_value(&canonical_val);
 
-        assert_eq!(encoded_once, re_encoded, "BTreeMap canonical encoding must be idempotent");
+        assert_eq!(
+            encoded_once, re_encoded,
+            "BTreeMap canonical encoding must be idempotent"
+        );
     }
 
     #[test]
     fn canonical_value_encoding_is_idempotent_nested_structure() {
         // Complex nested fixture: arrays of maps with mixed types
         let mut complex_map = BTreeMap::new();
-        complex_map.insert("numbers".to_string(), CanonicalValue::Array(vec![
-            CanonicalValue::U64(1),
-            CanonicalValue::I64(-42),
-            CanonicalValue::U64(999),
-        ]));
-        complex_map.insert("metadata".to_string(), CanonicalValue::Map({
-            let mut meta = BTreeMap::new();
-            meta.insert("version".to_string(), CanonicalValue::String("1.0".to_string()));
-            meta.insert("flags".to_string(), CanonicalValue::Array(vec![
-                CanonicalValue::Bool(true),
-                CanonicalValue::Bool(false),
-            ]));
-            meta
-        }));
+        complex_map.insert(
+            "numbers".to_string(),
+            CanonicalValue::Array(vec![
+                CanonicalValue::U64(1),
+                CanonicalValue::I64(-42),
+                CanonicalValue::U64(999),
+            ]),
+        );
+        complex_map.insert(
+            "metadata".to_string(),
+            CanonicalValue::Map({
+                let mut meta = BTreeMap::new();
+                meta.insert(
+                    "version".to_string(),
+                    CanonicalValue::String("1.0".to_string()),
+                );
+                meta.insert(
+                    "flags".to_string(),
+                    CanonicalValue::Array(vec![
+                        CanonicalValue::Bool(true),
+                        CanonicalValue::Bool(false),
+                    ]),
+                );
+                meta
+            }),
+        );
 
         let canonical_val = CanonicalValue::Map(complex_map);
         let encoded_once = deterministic_serde::encode_value(&canonical_val);
         let re_encoded = deterministic_serde::encode_value(&canonical_val);
 
-        assert_eq!(encoded_once, re_encoded, "Complex nested canonical encoding must be idempotent");
+        assert_eq!(
+            encoded_once, re_encoded,
+            "Complex nested canonical encoding must be idempotent"
+        );
     }
 
     #[test]
@@ -6123,19 +6144,29 @@ mod tests {
         });
 
         // Same ops (order matters for ops, so keep identical)
-        module_a.ops.push(Ir1Op::LoadLiteral { value: Ir1Literal::Integer(42) });
+        module_a.ops.push(Ir1Op::LoadLiteral {
+            value: Ir1Literal::Integer(42),
+        });
         module_a.ops.push(Ir1Op::Return);
-        module_b.ops.push(Ir1Op::LoadLiteral { value: Ir1Literal::Integer(42) });
+        module_b.ops.push(Ir1Op::LoadLiteral {
+            value: Ir1Literal::Integer(42),
+        });
         module_b.ops.push(Ir1Op::Return);
 
         // Canonicalization should normalize the different binding orderings
         let canonical_a = module_a.canonical_value();
         let canonical_b = module_b.canonical_value();
-        assert_eq!(canonical_a, canonical_b, "IR1 modules with equivalent content but different binding order must canonicalize identically");
+        assert_eq!(
+            canonical_a, canonical_b,
+            "IR1 modules with equivalent content but different binding order must canonicalize identically"
+        );
 
         let bytes_a = module_a.canonical_bytes();
         let bytes_b = module_b.canonical_bytes();
-        assert_eq!(bytes_a, bytes_b, "IR1 canonical bytes must be identical for equivalent modules");
+        assert_eq!(
+            bytes_a, bytes_b,
+            "IR1 canonical bytes must be identical for equivalent modules"
+        );
     }
 
     #[test]
@@ -6149,17 +6180,17 @@ mod tests {
             scope_id: ScopeId { depth: 0, index: 0 },
             parent: None,
             kind: ScopeKind::Global,
-            bindings: vec![
-                ResolvedBinding {
-                    name: "globalVar".to_string(),
-                    binding_id: 100,
-                    scope: ScopeId { depth: 0, index: 0 },
-                    kind: BindingKind::Var,
-                },
-            ],
+            bindings: vec![ResolvedBinding {
+                name: "globalVar".to_string(),
+                binding_id: 100,
+                scope: ScopeId { depth: 0, index: 0 },
+                kind: BindingKind::Var,
+            }],
         });
 
-        module.ops.push(Ir1Op::LoadLiteral { value: Ir1Literal::String("test".to_string()) });
+        module.ops.push(Ir1Op::LoadLiteral {
+            value: Ir1Literal::String("test".to_string()),
+        });
         module.ops.push(Ir1Op::StoreLocal { binding_id: 100 });
         module.ops.push(Ir1Op::Return);
 
@@ -6171,21 +6202,36 @@ mod tests {
         let canonical_second = module.canonical_value();
         let bytes_second = deterministic_serde::encode_value(&canonical_second);
 
-        assert_eq!(canonical_first, canonical_second, "canonical_value must be idempotent");
-        assert_eq!(bytes_first, bytes_second, "canonical_bytes must be idempotent");
+        assert_eq!(
+            canonical_first, canonical_second,
+            "canonical_value must be idempotent"
+        );
+        assert_eq!(
+            bytes_first, bytes_second,
+            "canonical_bytes must be idempotent"
+        );
 
         // Third application to verify stability
         let canonical_third = module.canonical_value();
         let bytes_third = deterministic_serde::encode_value(&canonical_third);
 
-        assert_eq!(canonical_first, canonical_third, "canonicalization must stabilize after first application");
-        assert_eq!(bytes_first, bytes_third, "canonical byte encoding must stabilize");
+        assert_eq!(
+            canonical_first, canonical_third,
+            "canonicalization must stabilize after first application"
+        );
+        assert_eq!(
+            bytes_first, bytes_third,
+            "canonical byte encoding must stabilize"
+        );
     }
 
     #[test]
     fn ir0_module_canonicalization_idempotency() {
         // Test IR0 (simpler structure) canonicalization idempotency
-        use crate::ast::{Statement, VariableDeclaration, VariableDeclarator, Expression, BindingPattern, SyntaxTree, SourceSpan, ParseGoal};
+        use crate::ast::{
+            BindingPattern, Expression, ParseGoal, SourceSpan, Statement, SyntaxTree,
+            VariableDeclaration, VariableDeclarator,
+        };
 
         let tree = SyntaxTree {
             goal: ParseGoal::Script,
@@ -6198,25 +6244,21 @@ mod tests {
                 end_line: 1,
                 end_column: 14,
             },
-            body: vec![
-                Statement::VariableDeclaration(VariableDeclaration {
-                    kind: crate::ast::VariableDeclarationKind::Const,
-                    declarations: vec![
-                        VariableDeclarator {
-                            id: BindingPattern::Identifier("x".to_string()),
-                            initializer: Some(Expression::NumericLiteral(42)),
-                        },
-                    ],
-                    span: SourceSpan {
-                        start_offset: 0,
-                        end_offset: 13,
-                        start_line: 1,
-                        start_column: 1,
-                        end_line: 1,
-                        end_column: 14,
-                    },
-                }),
-            ],
+            body: vec![Statement::VariableDeclaration(VariableDeclaration {
+                kind: crate::ast::VariableDeclarationKind::Const,
+                declarations: vec![VariableDeclarator {
+                    id: BindingPattern::Identifier("x".to_string()),
+                    initializer: Some(Expression::NumericLiteral(42)),
+                }],
+                span: SourceSpan {
+                    start_offset: 0,
+                    end_offset: 13,
+                    start_line: 1,
+                    start_column: 1,
+                    end_line: 1,
+                    end_column: 14,
+                },
+            })],
         };
 
         let module = Ir0Module::from_syntax_tree(tree, "simple.js");
@@ -6226,12 +6268,21 @@ mod tests {
         let canonical_second = module.canonical_value();
         let canonical_third = module.canonical_value();
 
-        assert_eq!(canonical_first, canonical_second, "IR0 canonical_value must be idempotent");
-        assert_eq!(canonical_first, canonical_third, "IR0 canonicalization must stabilize");
+        assert_eq!(
+            canonical_first, canonical_second,
+            "IR0 canonical_value must be idempotent"
+        );
+        assert_eq!(
+            canonical_first, canonical_third,
+            "IR0 canonicalization must stabilize"
+        );
 
         let bytes_first = module.canonical_bytes();
         let bytes_second = module.canonical_bytes();
 
-        assert_eq!(bytes_first, bytes_second, "IR0 canonical_bytes must be idempotent");
+        assert_eq!(
+            bytes_first, bytes_second,
+            "IR0 canonical_bytes must be idempotent"
+        );
     }
 }

@@ -1141,11 +1141,20 @@ fn reserve_root_scope_bindings(
             Statement::Export(_) => {
                 // Export statements re-export existing bindings but don't create new ones
             }
-            Statement::Expression(_) | Statement::Block(_) | Statement::If(_)
-            | Statement::For(_) | Statement::While(_) | Statement::DoWhile(_)
-            | Statement::Return(_) | Statement::Throw(_) | Statement::TryCatch(_)
-            | Statement::Switch(_) | Statement::Break(_) | Statement::Continue(_)
-            | Statement::ForIn(_) | Statement::ForOf(_) => {
+            Statement::Expression(_)
+            | Statement::Block(_)
+            | Statement::If(_)
+            | Statement::For(_)
+            | Statement::While(_)
+            | Statement::DoWhile(_)
+            | Statement::Return(_)
+            | Statement::Throw(_)
+            | Statement::TryCatch(_)
+            | Statement::Switch(_)
+            | Statement::Break(_)
+            | Statement::Continue(_)
+            | Statement::ForIn(_)
+            | Statement::ForOf(_) => {
                 // These statements don't introduce bindings at root scope
             }
         }
@@ -4618,7 +4627,9 @@ pub fn lower_ir2_to_ir3(
                     is_generator: inner_gen,
                 } => {
                     if inner_body.is_empty() {
-                        unreachable!("Empty DeclareFunction should not reach function body lowering");
+                        unreachable!(
+                            "Empty DeclareFunction should not reach function body lowering"
+                        );
                     }
                     let dst = *fn_binding_regs
                         .entry(*inner_bid)
@@ -4696,10 +4707,14 @@ pub fn lower_ir2_to_ir3(
                 }
                 // Operations that should not appear in function bodies
                 Ir1Op::ImportModule { .. } => {
-                    unreachable!("ImportModule operations should only appear at module level, not in function bodies");
+                    unreachable!(
+                        "ImportModule operations should only appear at module level, not in function bodies"
+                    );
                 }
                 Ir1Op::ExportBinding { .. } => {
-                    unreachable!("ExportBinding operations should only appear at module level, not in function bodies");
+                    unreachable!(
+                        "ExportBinding operations should only appear at module level, not in function bodies"
+                    );
                 }
                 // Control flow operations not yet supported in function bodies
                 Ir1Op::JumpIfNullish { .. } => {
@@ -4748,7 +4763,9 @@ pub fn lower_ir2_to_ir3(
                 }
                 // Hostcall operations should be handled at module level, not function level
                 Ir1Op::HostCall { .. } => {
-                    unreachable!("HostCall operations should be handled at module level, not in function bodies");
+                    unreachable!(
+                        "HostCall operations should be handled at module level, not in function bodies"
+                    );
                 }
             }
         }
@@ -12339,7 +12356,10 @@ mod tests {
 
         // This should successfully lower through all IR levels without hitting unreachable!() paths
         let ir1_result = lower_ir0_to_ir1(&ir0);
-        assert!(ir1_result.is_ok(), "IR0->IR1 lowering should succeed with explicit match arms");
+        assert!(
+            ir1_result.is_ok(),
+            "IR0->IR1 lowering should succeed with explicit match arms"
+        );
 
         let ir1 = ir1_result.unwrap().module;
         let ir2_result = lower_ir1_to_ir2(&ir1);
@@ -12347,15 +12367,23 @@ mod tests {
 
         let ir2 = ir2_result.unwrap().module;
         let ir3_result = lower_ir2_to_ir3(&ir2);
-        assert!(ir3_result.is_ok(), "IR2->IR3 lowering should succeed without hitting unreachable!() for handled operations");
+        assert!(
+            ir3_result.is_ok(),
+            "IR2->IR3 lowering should succeed without hitting unreachable!() for handled operations"
+        );
 
         // Verify that IR3 contains proper instructions for the literal and return
         let ir3 = ir3_result.unwrap().module;
-        assert!(!ir3.instructions.is_empty(), "IR3 should contain lowered instructions");
+        assert!(
+            !ir3.instructions.is_empty(),
+            "IR3 should contain lowered instructions"
+        );
 
         // Should contain at least a LoadInt instruction for the literal 42
         assert!(
-            ir3.instructions.iter().any(|instr| matches!(instr, Ir3Instruction::LoadInt { value: 42, .. })),
+            ir3.instructions
+                .iter()
+                .any(|instr| matches!(instr, Ir3Instruction::LoadInt { value: 42, .. })),
             "IR3 should contain LoadInt instruction for literal 42"
         );
     }
@@ -12365,7 +12393,7 @@ mod tests {
     #[test]
     fn statement_reordering_equivalence_independent_variable_declarations() {
         // Test that reordering independent statements produces IR that differs only in explicit order
-        use crate::ast::{VariableDeclaration, VariableDeclarator, BindingPattern, Expression};
+        use crate::ast::{BindingPattern, Expression, VariableDeclaration, VariableDeclarator};
 
         // Create fixture with independent variable declarations (no data dependencies)
         let stmt_a = Statement::VariableDeclaration(VariableDeclaration {
@@ -12397,11 +12425,13 @@ mod tests {
 
         // Original order: [a, b, c]
         let ir0_original = stmt_ir0(vec![stmt_a.clone(), stmt_b.clone(), stmt_c.clone()]);
-        let result_original = lower_ir0_to_ir1(&ir0_original).expect("original order should lower successfully");
+        let result_original =
+            lower_ir0_to_ir1(&ir0_original).expect("original order should lower successfully");
 
         // Permuted order: [c, a, b]
         let ir0_permuted = stmt_ir0(vec![stmt_c.clone(), stmt_a.clone(), stmt_b.clone()]);
-        let result_permuted = lower_ir0_to_ir1(&ir0_permuted).expect("permuted order should lower successfully");
+        let result_permuted =
+            lower_ir0_to_ir1(&ir0_permuted).expect("permuted order should lower successfully");
 
         // Both should have the same number of bindings (variables declared)
         assert_eq!(
@@ -12411,29 +12441,39 @@ mod tests {
         );
 
         // Collect binding names from both results
-        let original_binding_names: std::collections::BTreeSet<String> = result_original.module.scopes[0]
-            .bindings
-            .iter()
-            .map(|binding| binding.name.clone())
-            .collect();
+        let original_binding_names: std::collections::BTreeSet<String> =
+            result_original.module.scopes[0]
+                .bindings
+                .iter()
+                .map(|binding| binding.name.clone())
+                .collect();
 
-        let permuted_binding_names: std::collections::BTreeSet<String> = result_permuted.module.scopes[0]
-            .bindings
-            .iter()
-            .map(|binding| binding.name.clone())
-            .collect();
+        let permuted_binding_names: std::collections::BTreeSet<String> =
+            result_permuted.module.scopes[0]
+                .bindings
+                .iter()
+                .map(|binding| binding.name.clone())
+                .collect();
 
         // The same bindings should be declared in both orderings
         assert_eq!(
-            original_binding_names,
-            permuted_binding_names,
+            original_binding_names, permuted_binding_names,
             "Both orderings should declare the same binding names"
         );
 
         // Verify specific expected bindings are present
-        assert!(original_binding_names.contains("a"), "Binding 'a' should be declared");
-        assert!(original_binding_names.contains("b"), "Binding 'b' should be declared");
-        assert!(original_binding_names.contains("c"), "Binding 'c' should be declared");
+        assert!(
+            original_binding_names.contains("a"),
+            "Binding 'a' should be declared"
+        );
+        assert!(
+            original_binding_names.contains("b"),
+            "Binding 'b' should be declared"
+        );
+        assert!(
+            original_binding_names.contains("c"),
+            "Binding 'c' should be declared"
+        );
 
         // Both should have the same number of ops (excluding order-dependent details)
         assert_eq!(
@@ -12448,8 +12488,7 @@ mod tests {
 
         // The canonical forms should be identical (canonicalization sorts bindings deterministically)
         assert_eq!(
-            original_canonical,
-            permuted_canonical,
+            original_canonical, permuted_canonical,
             "Canonical forms should be identical for equivalent statement orderings"
         );
     }
@@ -12457,7 +12496,10 @@ mod tests {
     #[test]
     fn statement_reordering_equivalence_mixed_independent_statements() {
         // Test with mixed statement types (variables and expressions) that are independent
-        use crate::ast::{VariableDeclaration, VariableDeclarator, BindingPattern, Expression, ExpressionStatement};
+        use crate::ast::{
+            BindingPattern, Expression, ExpressionStatement, VariableDeclaration,
+            VariableDeclarator,
+        };
 
         let var_stmt = Statement::VariableDeclaration(VariableDeclaration {
             kind: VariableDeclarationKind::Const,
@@ -12479,12 +12521,22 @@ mod tests {
         });
 
         // Original order: [var, expr1, expr2]
-        let ir0_original = stmt_ir0(vec![var_stmt.clone(), expr_stmt1.clone(), expr_stmt2.clone()]);
-        let result_original = lower_ir0_to_ir1(&ir0_original).expect("original mixed order should lower successfully");
+        let ir0_original = stmt_ir0(vec![
+            var_stmt.clone(),
+            expr_stmt1.clone(),
+            expr_stmt2.clone(),
+        ]);
+        let result_original = lower_ir0_to_ir1(&ir0_original)
+            .expect("original mixed order should lower successfully");
 
         // Permuted order: [expr2, var, expr1]
-        let ir0_permuted = stmt_ir0(vec![expr_stmt2.clone(), var_stmt.clone(), expr_stmt1.clone()]);
-        let result_permuted = lower_ir0_to_ir1(&ir0_permuted).expect("permuted mixed order should lower successfully");
+        let ir0_permuted = stmt_ir0(vec![
+            expr_stmt2.clone(),
+            var_stmt.clone(),
+            expr_stmt1.clone(),
+        ]);
+        let result_permuted = lower_ir0_to_ir1(&ir0_permuted)
+            .expect("permuted mixed order should lower successfully");
 
         // Should have same binding structure
         assert_eq!(
@@ -12503,15 +12555,17 @@ mod tests {
             .iter()
             .any(|binding| binding.name == "x");
 
-        assert!(original_has_x && permuted_has_x, "Variable 'x' should be declared in both orderings");
+        assert!(
+            original_has_x && permuted_has_x,
+            "Variable 'x' should be declared in both orderings"
+        );
 
         // Canonical forms should be equivalent for semantic independence
         let original_canonical = result_original.module.canonical_value();
         let permuted_canonical = result_permuted.module.canonical_value();
 
         assert_eq!(
-            original_canonical,
-            permuted_canonical,
+            original_canonical, permuted_canonical,
             "Mixed independent statements should have equivalent canonical forms regardless of order"
         );
     }
@@ -12519,7 +12573,7 @@ mod tests {
     #[test]
     fn statement_reordering_preserves_operation_count() {
         // Test that reordering doesn't change the total operation count
-        use crate::ast::{VariableDeclaration, VariableDeclarator, BindingPattern, Expression};
+        use crate::ast::{BindingPattern, Expression, VariableDeclaration, VariableDeclarator};
 
         let stmts: Vec<Statement> = (0..5)
             .map(|i| {
@@ -12536,13 +12590,15 @@ mod tests {
 
         // Original order: [0, 1, 2, 3, 4]
         let ir0_original = stmt_ir0(stmts.clone());
-        let result_original = lower_ir0_to_ir1(&ir0_original).expect("original order should lower successfully");
+        let result_original =
+            lower_ir0_to_ir1(&ir0_original).expect("original order should lower successfully");
 
         // Reverse order: [4, 3, 2, 1, 0]
         let mut stmts_reversed = stmts.clone();
         stmts_reversed.reverse();
         let ir0_reversed = stmt_ir0(stmts_reversed);
-        let result_reversed = lower_ir0_to_ir1(&ir0_reversed).expect("reversed order should lower successfully");
+        let result_reversed =
+            lower_ir0_to_ir1(&ir0_reversed).expect("reversed order should lower successfully");
 
         // Operation counts should be identical
         assert_eq!(
@@ -12572,8 +12628,7 @@ mod tests {
             .collect();
 
         assert_eq!(
-            original_names,
-            reversed_names,
+            original_names, reversed_names,
             "Statement reordering should preserve all declared variable names"
         );
 
@@ -12582,11 +12637,13 @@ mod tests {
             let var_name = format!("var_{}", i);
             assert!(
                 original_names.contains(&var_name),
-                "Variable '{}' should be declared in original order", var_name
+                "Variable '{}' should be declared in original order",
+                var_name
             );
             assert!(
                 reversed_names.contains(&var_name),
-                "Variable '{}' should be declared in reversed order", var_name
+                "Variable '{}' should be declared in reversed order",
+                var_name
             );
         }
     }
@@ -12614,7 +12671,10 @@ mod tests {
     }
 
     /// Helper to run full lowering pipeline and serialize output deterministically
-    fn run_lowering_pipeline_for_golden(ir0: &Ir0Module, test_name: &str) -> LoweringPipelineOutput {
+    fn run_lowering_pipeline_for_golden(
+        ir0: &Ir0Module,
+        test_name: &str,
+    ) -> LoweringPipelineOutput {
         let context = LoweringContext {
             trace_id: format!("golden_test_{}", test_name),
             decision_id: format!("decision_{}", test_name),
@@ -12624,8 +12684,7 @@ mod tests {
             start_time_epoch_ms: 1640995200000, // Fixed timestamp for determinism
         };
 
-        lower_ir0_to_ir3(ir0, &context)
-            .expect("Lowering pipeline should succeed for golden test")
+        lower_ir0_to_ir3(ir0, &context).expect("Lowering pipeline should succeed for golden test")
     }
 
     /// Assert golden file matches current pipeline output
@@ -12636,35 +12695,33 @@ mod tests {
         let output = run_lowering_pipeline_for_golden(ir0, test_name);
 
         // Serialize to deterministic JSON
-        let actual_json = serde_json::to_string_pretty(&output)
-            .expect("IR output should serialize to JSON");
+        let actual_json =
+            serde_json::to_string_pretty(&output).expect("IR output should serialize to JSON");
 
         if should_update_goldens() {
             // Update mode: write new golden file
             if let Some(parent) = golden_file.parent() {
-                fs::create_dir_all(parent)
-                    .expect("Should be able to create golden directory");
+                fs::create_dir_all(parent).expect("Should be able to create golden directory");
             }
-            fs::write(&golden_file, &actual_json)
-                .expect("Should be able to write golden file");
+            fs::write(&golden_file, &actual_json).expect("Should be able to write golden file");
             eprintln!("[GOLDEN] Updated: {}", golden_file.display());
             return;
         }
 
         // Compare mode: check against existing golden
-        let expected_json = fs::read_to_string(&golden_file)
-            .unwrap_or_else(|_| panic!(
+        let expected_json = fs::read_to_string(&golden_file).unwrap_or_else(|_| {
+            panic!(
                 "Golden file missing: {}\n\
                  Run with UPDATE_GOLDENS=1 to create it\n\
                  Then review and commit: git diff tests/goldens/",
                 golden_file.display()
-            ));
+            )
+        });
 
         if actual_json != expected_json {
             // Write actual for easy diffing
             let actual_path = golden_file.with_extension("actual.json");
-            fs::write(&actual_path, &actual_json)
-                .expect("Should be able to write actual output");
+            fs::write(&actual_path, &actual_json).expect("Should be able to write actual output");
 
             panic!(
                 "GOLDEN MISMATCH: {test_name}\n\n\
@@ -12857,10 +12914,12 @@ mod tests {
                             name: "console".to_string(),
                             span: span(),
                         })),
-                        arguments: vec![CallArgument::Expression(Expression::Identifier(Identifier {
-                            name: "i".to_string(),
-                            span: span(),
-                        }))],
+                        arguments: vec![CallArgument::Expression(Expression::Identifier(
+                            Identifier {
+                                name: "i".to_string(),
+                                span: span(),
+                            },
+                        ))],
                         span: span(),
                     }),
                     span: span(),

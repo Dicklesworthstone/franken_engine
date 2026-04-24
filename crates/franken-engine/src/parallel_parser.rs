@@ -4535,7 +4535,9 @@ mod tests {
     fn extract_partition_info(output: &ParseOutput) -> Vec<(u64, u64)> {
         // Extract partition boundaries from tokens if available
         // For this test, we'll use token start positions as boundaries
-        output.tokens.iter()
+        output
+            .tokens
+            .iter()
             .enumerate()
             .filter(|(i, _)| i % 10 == 0) // Sample every 10th token to get boundaries
             .map(|(_, token)| (token.start, token.end))
@@ -4561,16 +4563,24 @@ mod tests {
         let partitions2 = extract_partition_info(&output2);
         let partitions3 = extract_partition_info(&output3);
 
-        assert_eq!(partitions1, partitions2,
-            "Repeated partitioning must yield identical boundaries (run 1 vs 2)");
-        assert_eq!(partitions1, partitions3,
-            "Repeated partitioning must yield identical boundaries (run 1 vs 3)");
+        assert_eq!(
+            partitions1, partitions2,
+            "Repeated partitioning must yield identical boundaries (run 1 vs 2)"
+        );
+        assert_eq!(
+            partitions1, partitions3,
+            "Repeated partitioning must yield identical boundaries (run 1 vs 3)"
+        );
 
         // Token output should be identical
-        assert_eq!(output1.tokens, output2.tokens,
-            "Repeated parsing must yield identical tokens (run 1 vs 2)");
-        assert_eq!(output1.tokens, output3.tokens,
-            "Repeated parsing must yield identical tokens (run 1 vs 3)");
+        assert_eq!(
+            output1.tokens, output2.tokens,
+            "Repeated parsing must yield identical tokens (run 1 vs 2)"
+        );
+        assert_eq!(
+            output1.tokens, output3.tokens,
+            "Repeated parsing must yield identical tokens (run 1 vs 3)"
+        );
     }
 
     #[test]
@@ -4586,8 +4596,10 @@ mod tests {
         let output2 = parse(&input).expect("Second single-worker parse should succeed");
 
         // Even with single worker, outputs should be identical
-        assert_eq!(output1.tokens, output2.tokens,
-            "Single worker parsing must be deterministic");
+        assert_eq!(
+            output1.tokens, output2.tokens,
+            "Single worker parsing must be deterministic"
+        );
     }
 
     #[test]
@@ -4603,8 +4615,10 @@ mod tests {
         let output2 = parse(&input).expect("Second many-worker parse should succeed");
 
         // Many workers should still produce deterministic results
-        assert_eq!(output1.tokens, output2.tokens,
-            "Many worker parsing must be deterministic");
+        assert_eq!(
+            output1.tokens, output2.tokens,
+            "Many worker parsing must be deterministic"
+        );
     }
 
     #[test]
@@ -4620,15 +4634,21 @@ mod tests {
             let mut config = base_config.clone();
             config.max_workers = worker_count;
             let input = make_input(&source, &config);
-            let output = parse(&input).expect(&format!("Parse with {} workers should succeed", worker_count));
+            let output = parse(&input).expect(&format!(
+                "Parse with {} workers should succeed",
+                worker_count
+            ));
             outputs.push(output);
         }
 
         // All outputs should have identical tokens regardless of worker count
         let reference_tokens = &outputs[0].tokens;
         for (i, output) in outputs.iter().enumerate() {
-            assert_eq!(reference_tokens, &output.tokens,
-                "Worker count {} should produce identical tokens to reference", worker_counts[i]);
+            assert_eq!(
+                reference_tokens, &output.tokens,
+                "Worker count {} should produce identical tokens to reference",
+                worker_counts[i]
+            );
         }
     }
 
@@ -4645,8 +4665,10 @@ mod tests {
         let output2 = parse(&input).expect("Second small-input parse should succeed");
 
         // Small input with many workers should still be deterministic
-        assert_eq!(output1.tokens, output2.tokens,
-            "Small input with many workers must be deterministic");
+        assert_eq!(
+            output1.tokens, output2.tokens,
+            "Small input with many workers must be deterministic"
+        );
     }
 
     #[test]
@@ -4664,19 +4686,31 @@ mod tests {
 
             // Verify tokens are in order and non-overlapping
             for (i, window) in output.tokens.windows(2).enumerate() {
-                assert!(window[0].end <= window[1].start,
+                assert!(
+                    window[0].end <= window[1].start,
                     "Run {}: Token {} (end={}) should not overlap with token {} (start={})",
-                    run, i, window[0].end, i+1, window[1].start);
+                    run,
+                    i,
+                    window[0].end,
+                    i + 1,
+                    window[1].start
+                );
             }
 
             // Verify complete coverage of input
             if !output.tokens.is_empty() {
                 let first_token = &output.tokens[0];
                 let last_token = &output.tokens[output.tokens.len() - 1];
-                assert_eq!(first_token.start, 0,
-                    "Run {}: First token should start at position 0", run);
-                assert!(last_token.end <= source.len() as u64,
-                    "Run {}: Last token should not exceed input length", run);
+                assert_eq!(
+                    first_token.start, 0,
+                    "Run {}: First token should start at position 0",
+                    run
+                );
+                assert!(
+                    last_token.end <= source.len() as u64,
+                    "Run {}: Last token should not exceed input length",
+                    run
+                );
             }
         }
     }
@@ -4719,8 +4753,11 @@ mod tests {
         // All configurations should produce identical token sequences
         let reference = &token_sequences[0];
         for (i, tokens) in token_sequences.iter().enumerate() {
-            assert_eq!(reference, tokens,
-                "Configuration {} should produce identical tokens to reference", i);
+            assert_eq!(
+                reference, tokens,
+                "Configuration {} should produce identical tokens to reference",
+                i
+            );
         }
     }
 }

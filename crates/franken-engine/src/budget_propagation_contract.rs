@@ -694,8 +694,11 @@ impl BudgetPropagationValidator {
 
     /// Build a summary report.
     pub fn build_report(&self) -> BudgetPropagationReport {
-        let successful = self.events.iter().filter(|e| e.success).count();
-        let failed = self.events.iter().filter(|e| !e.success).count();
+        let total_events = u64::try_from(self.events.len()).unwrap_or(u64::MAX);
+        let successful_derivations =
+            u64::try_from(self.events.iter().filter(|e| e.success).count()).unwrap_or(u64::MAX);
+        let failed_derivations =
+            u64::try_from(self.events.iter().filter(|e| !e.success).count()).unwrap_or(u64::MAX);
 
         let mut boundary_counts: BTreeMap<String, u64> = BTreeMap::new();
         for event in &self.events {
@@ -714,17 +717,14 @@ impl BudgetPropagationValidator {
 
         let content = format!(
             "propagation_events={},success={},failed={},total_derived_ms={}",
-            self.events.len(),
-            successful,
-            failed,
-            total_derived,
+            total_events, successful_derivations, failed_derivations, total_derived,
         );
         let content_hash = ContentHash::compute(content.as_bytes());
 
         BudgetPropagationReport {
-            total_events: self.events.len() as u64,
-            successful_derivations: successful as u64,
-            failed_derivations: failed as u64,
+            total_events,
+            successful_derivations,
+            failed_derivations,
             total_budget_derived_ms: total_derived,
             boundary_event_counts: boundary_counts,
             violations: self.violations.clone(),

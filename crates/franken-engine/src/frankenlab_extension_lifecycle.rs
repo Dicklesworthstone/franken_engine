@@ -548,13 +548,21 @@ fn scenario_multi_extension<C: ContextAdapter>(seed: u64, cx: &mut C) -> Scenari
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::control_plane::mocks::{MockBudget, MockCx};
+    use crate::control_plane::mocks::trace_id_from_seed;
+    use crate::control_plane::{ControlPlaneCx, BudgetController, BudgetConfig};
+    use crate::security_epoch::SecurityEpoch;
 
-    fn mock_cx(budget_ms: u64) -> MockCx {
-        MockCx::new(
-            crate::control_plane::mocks::trace_id_from_seed(42),
-            MockBudget::new(budget_ms),
-        )
+    fn real_cx(budget_ms: u64) -> ControlPlaneCx {
+        let budget_config = BudgetConfig {
+            compute_budget_us: budget_ms * 1000, // Convert ms to microseconds
+            memory_budget_bytes: 10_000_000, // 10MB
+            warning_threshold_millionths: 800_000, // 80%
+            deterministic_fallback_on_exhaust: true,
+        };
+        let budget_controller = BudgetController::new(budget_config, SecurityEpoch::from_raw(42));
+        let trace_id = trace_id_from_seed(42);
+
+        ControlPlaneCx::new(trace_id, budget_controller)
     }
 
     // -----------------------------------------------------------------------
@@ -563,7 +571,7 @@ mod tests {
 
     #[test]
     fn scenario_startup_passes() {
-        let mut cx = mock_cx(5000);
+        let mut cx = real_cx(5000);
         let result = run_scenario(ScenarioKind::Startup, 1, &mut cx);
         assert!(result.passed, "startup scenario failed: {result:#?}");
         assert!(result.assertions.len() >= 6);
@@ -571,7 +579,7 @@ mod tests {
 
     #[test]
     fn scenario_normal_shutdown_passes() {
-        let mut cx = mock_cx(20000);
+        let mut cx = real_cx(20000);
         let result = run_scenario(ScenarioKind::NormalShutdown, 2, &mut cx);
         assert!(
             result.passed,
@@ -582,35 +590,35 @@ mod tests {
 
     #[test]
     fn scenario_forced_cancel_passes() {
-        let mut cx = mock_cx(10000);
+        let mut cx = real_cx(10000);
         let result = run_scenario(ScenarioKind::ForcedCancel, 3, &mut cx);
         assert!(result.passed, "forced_cancel scenario failed: {result:#?}");
     }
 
     #[test]
     fn scenario_quarantine_passes() {
-        let mut cx = mock_cx(10000);
+        let mut cx = real_cx(10000);
         let result = run_scenario(ScenarioKind::Quarantine, 4, &mut cx);
         assert!(result.passed, "quarantine scenario failed: {result:#?}");
     }
 
     #[test]
     fn scenario_revocation_passes() {
-        let mut cx = mock_cx(10000);
+        let mut cx = real_cx(10000);
         let result = run_scenario(ScenarioKind::Revocation, 5, &mut cx);
         assert!(result.passed, "revocation scenario failed: {result:#?}");
     }
 
     #[test]
     fn scenario_degraded_mode_passes() {
-        let mut cx = mock_cx(20000);
+        let mut cx = real_cx(20000);
         let result = run_scenario(ScenarioKind::DegradedMode, 6, &mut cx);
         assert!(result.passed, "degraded_mode scenario failed: {result:#?}");
     }
 
     #[test]
     fn scenario_multi_extension_passes() {
-        let mut cx = mock_cx(50000);
+        let mut cx = real_cx(50000);
         let result = run_scenario(ScenarioKind::MultiExtension, 7, &mut cx);
         assert!(
             result.passed,
@@ -624,7 +632,7 @@ mod tests {
 
     #[test]
     fn full_suite_passes() {
-        let mut cx = mock_cx(100000);
+        let mut cx = real_cx(100000);
         let suite = run_all_scenarios(42, &mut cx);
         assert_eq!(suite.verdict, Verdict::Pass);
         assert_eq!(suite.scenarios.len(), 7);
@@ -637,10 +645,10 @@ mod tests {
 
     #[test]
     fn scenarios_deterministic_across_runs() {
-        let mut cx1 = mock_cx(100000);
+        let mut cx1 = real_cx(100000);
         let suite1 = run_all_scenarios(99, &mut cx1);
 
-        let mut cx2 = mock_cx(100000);
+        let mut cx2 = real_cx(100000);
         let suite2 = run_all_scenarios(99, &mut cx2);
 
         assert_eq!(suite1.total_assertions, suite2.total_assertions);
@@ -682,7 +690,7 @@ mod tests {
 
     #[test]
     fn scenario_result_serde_roundtrip() {
-        let mut cx = mock_cx(5000);
+        let mut cx = real_cx(5000);
         let result = run_scenario(ScenarioKind::Startup, 1, &mut cx);
         let json = serde_json::to_string(&result).unwrap();
         let back: ScenarioResult = serde_json::from_str(&json).unwrap();
@@ -691,7 +699,7 @@ mod tests {
 
     #[test]
     fn scenario_suite_result_serde_roundtrip() {
-        let mut cx = mock_cx(100000);
+        let mut cx = real_cx(100000);
         let suite = run_all_scenarios(42, &mut cx);
         let json = serde_json::to_string(&suite).unwrap();
         let back: ScenarioSuiteResult = serde_json::from_str(&json).unwrap();
@@ -733,7 +741,7 @@ mod tests {
 
     #[test]
     fn startup_captures_lifecycle_events() {
-        let mut cx = mock_cx(5000);
+        let mut cx = real_cx(5000);
         let result = run_scenario(ScenarioKind::Startup, 1, &mut cx);
         assert!(!result.lifecycle_events.is_empty());
         assert!(
@@ -746,7 +754,7 @@ mod tests {
 
     #[test]
     fn normal_shutdown_captures_complete_trail() {
-        let mut cx = mock_cx(20000);
+        let mut cx = real_cx(20000);
         let result = run_scenario(ScenarioKind::NormalShutdown, 2, &mut cx);
         let event_names: Vec<&str> = result
             .lifecycle_events
@@ -760,7 +768,7 @@ mod tests {
 
     #[test]
     fn multi_extension_final_states_correct() {
-        let mut cx = mock_cx(50000);
+        let mut cx = real_cx(50000);
         let result = run_scenario(ScenarioKind::MultiExtension, 7, &mut cx);
         // ext-m-3 should be the only one still running.
         assert_eq!(result.final_states.get("ext-m-3"), Some(&true));
@@ -775,7 +783,7 @@ mod tests {
     fn determinism_full_suite_100_times() {
         let mut first_suite = None;
         for _ in 0..100 {
-            let mut cx = mock_cx(100000);
+            let mut cx = real_cx(100000);
             let suite = run_all_scenarios(77, &mut cx);
             assert_eq!(suite.verdict, Verdict::Pass);
 
@@ -798,7 +806,7 @@ mod tests {
 
     #[test]
     fn every_scenario_emits_at_least_one_lifecycle_event() {
-        let mut cx = mock_cx(100000);
+        let mut cx = real_cx(100000);
         let suite = run_all_scenarios(42, &mut cx);
         for scenario in &suite.scenarios {
             assert!(
@@ -811,7 +819,7 @@ mod tests {
 
     #[test]
     fn every_scenario_records_extensions_loaded() {
-        let mut cx = mock_cx(100000);
+        let mut cx = real_cx(100000);
         let suite = run_all_scenarios(42, &mut cx);
         for scenario in &suite.scenarios {
             assert!(
@@ -824,7 +832,7 @@ mod tests {
 
     #[test]
     fn forced_cancel_evidence_includes_terminate() {
-        let mut cx = mock_cx(10000);
+        let mut cx = real_cx(10000);
         let result = run_scenario(ScenarioKind::ForcedCancel, 3, &mut cx);
         let events: Vec<&str> = result
             .lifecycle_events
@@ -839,7 +847,7 @@ mod tests {
 
     #[test]
     fn revocation_leaves_zero_sessions() {
-        let mut cx = mock_cx(10000);
+        let mut cx = real_cx(10000);
         let result = run_scenario(ScenarioKind::Revocation, 5, &mut cx);
         // Verify through assertions that session count = 0
         let session_check = result
@@ -854,7 +862,7 @@ mod tests {
 
     #[test]
     fn degraded_mode_all_assertions_pass() {
-        let mut cx = mock_cx(20000);
+        let mut cx = real_cx(20000);
         let result = run_scenario(ScenarioKind::DegradedMode, 6, &mut cx);
         for assertion in &result.assertions {
             assert!(
@@ -867,7 +875,7 @@ mod tests {
 
     #[test]
     fn quarantine_events_have_trace_id() {
-        let mut cx = mock_cx(10000);
+        let mut cx = real_cx(10000);
         let result = run_scenario(ScenarioKind::Quarantine, 4, &mut cx);
         for event in &result.lifecycle_events {
             assert!(
@@ -880,7 +888,7 @@ mod tests {
 
     #[test]
     fn suite_result_machine_readable_for_release_gating() {
-        let mut cx = mock_cx(100000);
+        let mut cx = real_cx(100000);
         let suite = run_all_scenarios(42, &mut cx);
 
         // Verify it serializes to JSON for bd-24bu release gating
@@ -895,7 +903,7 @@ mod tests {
     #[test]
     fn different_seeds_produce_same_verdict() {
         for seed in [1, 42, 99, 255, 1000] {
-            let mut cx = mock_cx(100000);
+            let mut cx = real_cx(100000);
             let suite = run_all_scenarios(seed, &mut cx);
             assert_eq!(
                 suite.verdict,
@@ -963,7 +971,7 @@ mod tests {
 
     #[test]
     fn suite_total_assertions_matches_sum_of_scenarios() {
-        let mut cx = mock_cx(100000);
+        let mut cx = real_cx(100000);
         let suite = run_all_scenarios(42, &mut cx);
         let sum: usize = suite.scenarios.iter().map(|s| s.assertions.len()).sum();
         assert_eq!(suite.total_assertions, sum);
@@ -973,7 +981,7 @@ mod tests {
 
     #[test]
     fn each_scenario_result_has_matching_kind() {
-        let mut cx = mock_cx(100000);
+        let mut cx = real_cx(100000);
         let suite = run_all_scenarios(42, &mut cx);
         let expected_kinds = [
             ScenarioKind::Startup,
@@ -993,7 +1001,7 @@ mod tests {
 
     #[test]
     fn suite_always_runs_seven_scenarios() {
-        let mut cx = mock_cx(100000);
+        let mut cx = real_cx(100000);
         let suite = run_all_scenarios(1, &mut cx);
         assert_eq!(suite.scenarios.len(), 7);
     }
@@ -1024,7 +1032,7 @@ mod tests {
 
     #[test]
     fn scenario_result_seed_propagated() {
-        let mut cx = mock_cx(5000);
+        let mut cx = real_cx(5000);
         let result = run_scenario(ScenarioKind::Startup, 12345, &mut cx);
         assert_eq!(result.seed, 12345);
     }
@@ -1033,7 +1041,7 @@ mod tests {
 
     #[test]
     fn multi_extension_loads_four_extensions() {
-        let mut cx = mock_cx(50000);
+        let mut cx = real_cx(50000);
         let result = run_scenario(ScenarioKind::MultiExtension, 7, &mut cx);
         assert_eq!(result.extensions_loaded.len(), 4);
     }
@@ -1094,7 +1102,7 @@ mod tests {
 
     #[test]
     fn suite_seed_zero_still_passes() {
-        let mut cx = mock_cx(100_000);
+        let mut cx = real_cx(100_000);
         let suite = run_all_scenarios(0, &mut cx);
         assert_eq!(suite.verdict, Verdict::Pass);
         assert_eq!(suite.seed, 0);
@@ -1102,7 +1110,7 @@ mod tests {
 
     #[test]
     fn suite_max_seed_still_passes() {
-        let mut cx = mock_cx(100_000);
+        let mut cx = real_cx(100_000);
         let suite = run_all_scenarios(u64::MAX, &mut cx);
         assert_eq!(suite.verdict, Verdict::Pass);
         assert_eq!(suite.seed, u64::MAX);
@@ -1121,7 +1129,7 @@ mod tests {
 
     #[test]
     fn scenario_suite_result_json_scenarios_array() {
-        let mut cx = mock_cx(100_000);
+        let mut cx = real_cx(100_000);
         let suite = run_all_scenarios(42, &mut cx);
         let json = serde_json::to_string(&suite).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -1136,7 +1144,7 @@ mod tests {
 
     #[test]
     fn scenario_result_clone_preserves_all_fields() {
-        let mut cx = mock_cx(50000);
+        let mut cx = real_cx(50000);
         let result = run_scenario(ScenarioKind::MultiExtension, 7, &mut cx);
         let cloned = result.clone();
         assert_eq!(result, cloned);
@@ -1183,7 +1191,7 @@ mod tests {
 
     #[test]
     fn final_states_btreemap_ordering_deterministic() {
-        let mut cx = mock_cx(50000);
+        let mut cx = real_cx(50000);
         let result = run_scenario(ScenarioKind::MultiExtension, 7, &mut cx);
         let keys: Vec<&String> = result.final_states.keys().collect();
         // BTreeMap keys are sorted lexicographically
@@ -1194,9 +1202,9 @@ mod tests {
 
     #[test]
     fn lifecycle_events_order_preserved_across_runs() {
-        let mut cx1 = mock_cx(20000);
+        let mut cx1 = real_cx(20000);
         let r1 = run_scenario(ScenarioKind::NormalShutdown, 2, &mut cx1);
-        let mut cx2 = mock_cx(20000);
+        let mut cx2 = real_cx(20000);
         let r2 = run_scenario(ScenarioKind::NormalShutdown, 2, &mut cx2);
         let events1: Vec<&str> = r1
             .lifecycle_events
@@ -1213,7 +1221,7 @@ mod tests {
 
     #[test]
     fn suite_passed_equals_total_when_all_pass() {
-        let mut cx = mock_cx(100_000);
+        let mut cx = real_cx(100_000);
         let suite = run_all_scenarios(42, &mut cx);
         assert_eq!(suite.passed_assertions, suite.total_assertions);
         assert!(suite.total_assertions > 0);
@@ -1245,7 +1253,7 @@ mod tests {
 
     #[test]
     fn suite_result_json_field_presence() {
-        let mut cx = mock_cx(100_000);
+        let mut cx = real_cx(100_000);
         let suite = run_all_scenarios(42, &mut cx);
         let json = serde_json::to_string(&suite).unwrap();
         assert!(json.contains("\"seed\""));
@@ -1257,7 +1265,7 @@ mod tests {
 
     #[test]
     fn multi_extension_has_most_assertions() {
-        let mut cx = mock_cx(100_000);
+        let mut cx = real_cx(100_000);
         let suite = run_all_scenarios(42, &mut cx);
         let multi = suite
             .scenarios
@@ -1296,14 +1304,14 @@ mod tests {
 
     #[test]
     fn startup_extensions_loaded_list() {
-        let mut cx = mock_cx(5000);
+        let mut cx = real_cx(5000);
         let result = run_scenario(ScenarioKind::Startup, 1, &mut cx);
         assert_eq!(result.extensions_loaded, vec!["ext-startup-1"]);
     }
 
     #[test]
     fn degraded_mode_extensions_loaded_list() {
-        let mut cx = mock_cx(20000);
+        let mut cx = real_cx(20000);
         let result = run_scenario(ScenarioKind::DegradedMode, 6, &mut cx);
         assert_eq!(result.extensions_loaded, vec!["ext-d-1", "ext-d-2"]);
     }
@@ -1413,7 +1421,7 @@ mod tests {
 
     #[test]
     fn scenario_suite_result_debug_nonempty() {
-        let mut cx = mock_cx(100_000);
+        let mut cx = real_cx(100_000);
         let suite = run_all_scenarios(42, &mut cx);
         assert!(!format!("{suite:?}").is_empty());
     }
@@ -1495,7 +1503,7 @@ mod tests {
 
     #[test]
     fn scenario_suite_result_clone_is_independent() {
-        let mut cx = mock_cx(100_000);
+        let mut cx = real_cx(100_000);
         let suite = run_all_scenarios(42, &mut cx);
         let mut cloned = suite.clone();
         cloned
@@ -1538,7 +1546,7 @@ mod tests {
 
     #[test]
     fn scenario_suite_result_json_field_names_stable() {
-        let mut cx = mock_cx(20_000);
+        let mut cx = real_cx(20_000);
         let suite = run_all_scenarios(1, &mut cx);
         let json = serde_json::to_string(&suite).unwrap();
         assert!(json.contains("\"seed\""));
@@ -1703,7 +1711,7 @@ mod tests {
 
     #[test]
     fn run_scenario_startup_with_large_seed() {
-        let mut cx = mock_cx(5000);
+        let mut cx = real_cx(5000);
         let r = run_scenario(ScenarioKind::Startup, u64::MAX / 2, &mut cx);
         assert!(r.passed);
         assert_eq!(r.seed, u64::MAX / 2);
@@ -1711,7 +1719,7 @@ mod tests {
 
     #[test]
     fn run_all_scenarios_with_seed_one() {
-        let mut cx = mock_cx(100_000);
+        let mut cx = real_cx(100_000);
         let suite = run_all_scenarios(1, &mut cx);
         assert_eq!(suite.verdict, Verdict::Pass);
         assert_eq!(suite.seed, 1);
@@ -1768,7 +1776,7 @@ mod tests {
 
     #[test]
     fn suite_result_with_full_run_roundtrip() {
-        let mut cx = mock_cx(100_000);
+        let mut cx = real_cx(100_000);
         let suite = run_all_scenarios(77, &mut cx);
         let json = serde_json::to_string_pretty(&suite).unwrap();
         let back: ScenarioSuiteResult = serde_json::from_str(&json).unwrap();
@@ -1814,7 +1822,7 @@ mod tests {
 
     #[test]
     fn scenario_suite_debug_contains_scenario_count() {
-        let mut cx = mock_cx(100_000);
+        let mut cx = real_cx(100_000);
         let suite = run_all_scenarios(42, &mut cx);
         let debug = format!("{suite:?}");
         // Debug output should be non-trivial
@@ -1844,7 +1852,7 @@ mod tests {
     #[test]
     fn suite_seed_stored_correctly() {
         for seed in [0_u64, 1, 42, 999, u64::MAX] {
-            let mut cx = mock_cx(100_000);
+            let mut cx = real_cx(100_000);
             let suite = run_all_scenarios(seed, &mut cx);
             assert_eq!(suite.seed, seed, "suite.seed should match input seed");
         }
@@ -1853,7 +1861,7 @@ mod tests {
     #[test]
     fn each_scenario_result_seed_matches_suite_seed() {
         let seed = 333_u64;
-        let mut cx = mock_cx(100_000);
+        let mut cx = real_cx(100_000);
         let suite = run_all_scenarios(seed, &mut cx);
         for s in &suite.scenarios {
             assert_eq!(
@@ -1866,7 +1874,7 @@ mod tests {
 
     #[test]
     fn startup_scenario_has_non_empty_final_states() {
-        let mut cx = mock_cx(5000);
+        let mut cx = real_cx(5000);
         let result = run_scenario(ScenarioKind::Startup, 1, &mut cx);
         // After finalize, final_states should record the extension
         assert!(!result.final_states.is_empty());
@@ -1874,7 +1882,7 @@ mod tests {
 
     #[test]
     fn normal_shutdown_final_states_all_not_running() {
-        let mut cx = mock_cx(20000);
+        let mut cx = real_cx(20000);
         let result = run_scenario(ScenarioKind::NormalShutdown, 2, &mut cx);
         for (ext_id, running) in &result.final_states {
             assert!(
@@ -1886,7 +1894,7 @@ mod tests {
 
     #[test]
     fn forced_cancel_final_states_all_not_running() {
-        let mut cx = mock_cx(10000);
+        let mut cx = real_cx(10000);
         let result = run_scenario(ScenarioKind::ForcedCancel, 3, &mut cx);
         for (ext_id, running) in &result.final_states {
             assert!(
@@ -1898,7 +1906,7 @@ mod tests {
 
     #[test]
     fn quarantine_final_states_all_not_running() {
-        let mut cx = mock_cx(10000);
+        let mut cx = real_cx(10000);
         let result = run_scenario(ScenarioKind::Quarantine, 4, &mut cx);
         for (ext_id, running) in &result.final_states {
             assert!(
@@ -1910,7 +1918,7 @@ mod tests {
 
     #[test]
     fn revocation_final_states_all_not_running() {
-        let mut cx = mock_cx(10000);
+        let mut cx = real_cx(10000);
         let result = run_scenario(ScenarioKind::Revocation, 5, &mut cx);
         for (ext_id, running) in &result.final_states {
             assert!(
@@ -1922,7 +1930,7 @@ mod tests {
 
     #[test]
     fn scenario_result_total_events_matches_lifecycle_events_len() {
-        let mut cx = mock_cx(100_000);
+        let mut cx = real_cx(100_000);
         let suite = run_all_scenarios(42, &mut cx);
         for s in &suite.scenarios {
             assert_eq!(
@@ -1936,7 +1944,7 @@ mod tests {
 
     #[test]
     fn startup_scenario_all_assertions_pass() {
-        let mut cx = mock_cx(5000);
+        let mut cx = real_cx(5000);
         let result = run_scenario(ScenarioKind::Startup, 1, &mut cx);
         for a in &result.assertions {
             assert!(
@@ -1949,7 +1957,7 @@ mod tests {
 
     #[test]
     fn normal_shutdown_scenario_all_assertions_pass() {
-        let mut cx = mock_cx(20000);
+        let mut cx = real_cx(20000);
         let result = run_scenario(ScenarioKind::NormalShutdown, 2, &mut cx);
         for a in &result.assertions {
             assert!(
@@ -1962,7 +1970,7 @@ mod tests {
 
     #[test]
     fn forced_cancel_all_assertions_pass() {
-        let mut cx = mock_cx(10000);
+        let mut cx = real_cx(10000);
         let result = run_scenario(ScenarioKind::ForcedCancel, 3, &mut cx);
         for a in &result.assertions {
             assert!(
@@ -1975,7 +1983,7 @@ mod tests {
 
     #[test]
     fn quarantine_all_assertions_pass() {
-        let mut cx = mock_cx(10000);
+        let mut cx = real_cx(10000);
         let result = run_scenario(ScenarioKind::Quarantine, 4, &mut cx);
         for a in &result.assertions {
             assert!(
@@ -1988,7 +1996,7 @@ mod tests {
 
     #[test]
     fn revocation_all_assertions_pass() {
-        let mut cx = mock_cx(10000);
+        let mut cx = real_cx(10000);
         let result = run_scenario(ScenarioKind::Revocation, 5, &mut cx);
         for a in &result.assertions {
             assert!(
@@ -2001,7 +2009,7 @@ mod tests {
 
     #[test]
     fn multi_extension_all_assertions_pass() {
-        let mut cx = mock_cx(50000);
+        let mut cx = real_cx(50000);
         let result = run_scenario(ScenarioKind::MultiExtension, 7, &mut cx);
         for a in &result.assertions {
             assert!(

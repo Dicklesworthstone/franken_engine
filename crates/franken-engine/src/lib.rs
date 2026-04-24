@@ -1272,6 +1272,7 @@ fn route_reason_for_source(source: &str) -> RouteReason {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum EvalRouteKeyword {
     Import,
+    Export,
     Await,
 }
 
@@ -1296,6 +1297,7 @@ impl<'a> EvalRouteKeywordScanner<'a> {
         while let EvalRouteScan::Keyword(keyword) = self.scan_code(false) {
             match keyword {
                 EvalRouteKeyword::Import => return RouteReason::ContainsImportKeyword,
+                EvalRouteKeyword::Export => return RouteReason::ContainsImportKeyword,
                 EvalRouteKeyword::Await => saw_await = true,
             }
         }
@@ -1356,6 +1358,7 @@ impl<'a> EvalRouteKeywordScanner<'a> {
                 let identifier = self.consume_identifier();
                 match identifier {
                     "import" => return EvalRouteScan::Keyword(EvalRouteKeyword::Import),
+                    "export" => return EvalRouteScan::Keyword(EvalRouteKeyword::Export),
                     "await" => return EvalRouteScan::Keyword(EvalRouteKeyword::Await),
                     _ => {
                         can_start_regex = false;
@@ -1858,6 +1861,13 @@ mod tests {
         let route_reason = route_reason_for_source("import x from 'y'");
         assert_eq!(route_reason, RouteReason::ContainsImportKeyword);
         assert_eq!(infer_parse_goal("import x from 'y'"), ParseGoal::Module);
+    }
+
+    #[test]
+    fn hybrid_routes_export_to_v8() {
+        let route_reason = route_reason_for_source("export default value");
+        assert_eq!(route_reason, RouteReason::ContainsImportKeyword);
+        assert_eq!(infer_parse_goal("export default value"), ParseGoal::Module);
     }
 
     #[test]
@@ -2482,7 +2492,7 @@ mod tests {
         });
 
         let required_sections = [
-            "## Canonical Imported Types",
+            "## Exact Imported Control-Plane Surface",
             "## Version Policy",
             "## Escalation Path for Missing APIs",
         ];

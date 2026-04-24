@@ -141,9 +141,37 @@ fn comment_keywords_do_not_affect_routing() {
 }
 
 #[test]
+fn export_statements_route_to_v8() {
+    // SECURITY CRITICAL: export statements are module syntax and must route to V8
+    let test_cases = [
+        // Basic export statements
+        "export default value",
+        "export const x = 1",
+        "export { name }",
+        "export { name as alias }",
+        "export * from 'module'",
+        "export { default } from 'module'",
+        // Export with expressions
+        "export default function() {}",
+        "export const fn = () => {}",
+        // Complex export statements
+        "export { a, b, c } from './module'",
+    ];
+
+    for source in test_cases {
+        let route_reason = HybridRouter::classify_source_route(source);
+        assert_eq!(
+            route_reason,
+            RouteReason::ContainsImportKeyword,
+            "Export statement failed to route to V8: {source:?}"
+        );
+    }
+}
+
+#[test]
 fn malicious_route_manipulation_attempts_fail() {
     // SECURITY TEST: Attempt to manipulate routing through edge cases
-    let manipulation_attempts = [
+    let _manipulation_attempts = [
         // Try to hide import in complex template nesting
         "`${(() => { return import('evil') })()}`",
         // Try to hide await in complex expression
@@ -199,6 +227,8 @@ fn engine_routing_security_invariants() {
         "import x from 'y'",
         "await promise",
         "export default value",
+        "export const x = 1",
+        "export { name }",
         "`Template ${import('dynamic')}`",
         "`Async ${await fetch()}`",
     ];

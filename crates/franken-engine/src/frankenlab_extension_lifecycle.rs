@@ -292,11 +292,14 @@ fn scenario_normal_shutdown<C: ContextAdapter>(seed: u64, cx: &mut C) -> Scenari
 
     // Load and create sessions.
     // SAFETY: Test scenario with valid extension ID and context. Load operation should succeed.
-    mgr.load_extension("ext-ns-1", cx).expect("serde deserialization should succeed");
+    mgr.load_extension("ext-ns-1", cx)
+        .expect("serde deserialization should succeed");
     // SAFETY: Extension just loaded successfully, session creation should succeed.
-    mgr.create_session("ext-ns-1", "sess-1", cx).expect("serde deserialization should succeed");
+    mgr.create_session("ext-ns-1", "sess-1", cx)
+        .expect("serde deserialization should succeed");
     // SAFETY: Extension loaded, first session created, second session creation should succeed.
-    mgr.create_session("ext-ns-1", "sess-2", cx).expect("serde deserialization should succeed");
+    mgr.create_session("ext-ns-1", "sess-2", cx)
+        .expect("serde deserialization should succeed");
     result.assert_eq("session count is 2", mgr.session_count("ext-ns-1"), 2);
 
     // Close one session explicitly.
@@ -347,9 +350,11 @@ fn scenario_forced_cancel<C: ContextAdapter>(seed: u64, cx: &mut C) -> ScenarioR
 
     // Load extension and session.
     // SAFETY: Test scenario with valid extension ID and context. Load operation should succeed.
-    mgr.load_extension("ext-fc-1", cx).expect("serde deserialization should succeed");
+    mgr.load_extension("ext-fc-1", cx)
+        .expect("serde deserialization should succeed");
     // SAFETY: Extension just loaded successfully, session creation should succeed.
-    mgr.create_session("ext-fc-1", "sess-1", cx).expect("serde deserialization should succeed");
+    mgr.create_session("ext-fc-1", "sess-1", cx)
+        .expect("serde deserialization should succeed");
 
     // Force-cancel with Terminate (zero drain budget).
     let cancel_result = mgr.cancel_extension("ext-fc-1", cx, LifecycleEvent::Terminate);
@@ -380,8 +385,10 @@ fn scenario_quarantine<C: ContextAdapter>(seed: u64, cx: &mut C) -> ScenarioResu
     let mut result = ScenarioResult::new(ScenarioKind::Quarantine, seed);
     let mut mgr = ExtensionHostLifecycleManager::new();
 
-    mgr.load_extension("ext-q-1", cx).expect("serde deserialization should succeed");
-    mgr.create_session("ext-q-1", "sess-1", cx).expect("serde deserialization should succeed");
+    mgr.load_extension("ext-q-1", cx)
+        .expect("serde deserialization should succeed");
+    mgr.create_session("ext-q-1", "sess-1", cx)
+        .expect("serde deserialization should succeed");
 
     // Quarantine the extension.
     let quarantine_result = mgr.cancel_extension("ext-q-1", cx, LifecycleEvent::Quarantine);
@@ -413,8 +420,10 @@ fn scenario_revocation<C: ContextAdapter>(seed: u64, cx: &mut C) -> ScenarioResu
     let mut result = ScenarioResult::new(ScenarioKind::Revocation, seed);
     let mut mgr = ExtensionHostLifecycleManager::new();
 
-    mgr.load_extension("ext-r-1", cx).expect("serde deserialization should succeed");
-    mgr.create_session("ext-r-1", "sess-active", cx).expect("serde deserialization should succeed");
+    mgr.load_extension("ext-r-1", cx)
+        .expect("serde deserialization should succeed");
+    mgr.create_session("ext-r-1", "sess-active", cx)
+        .expect("serde deserialization should succeed");
 
     // Revoke via Revocation lifecycle event.
     let revoke_result = mgr.cancel_extension("ext-r-1", cx, LifecycleEvent::Revocation);
@@ -442,8 +451,10 @@ fn scenario_degraded_mode<C: ContextAdapter>(seed: u64, cx: &mut C) -> ScenarioR
     let mut mgr = ExtensionHostLifecycleManager::new();
 
     // Load some extensions normally.
-    mgr.load_extension("ext-d-1", cx).expect("serde deserialization should succeed");
-    mgr.load_extension("ext-d-2", cx).expect("serde deserialization should succeed");
+    mgr.load_extension("ext-d-1", cx)
+        .expect("serde deserialization should succeed");
+    mgr.load_extension("ext-d-2", cx)
+        .expect("serde deserialization should succeed");
 
     // Initiate shutdown (simulates control-plane entering degraded mode).
     let shutdown_results = mgr.shutdown(cx);
@@ -484,15 +495,20 @@ fn scenario_multi_extension<C: ContextAdapter>(seed: u64, cx: &mut C) -> Scenari
 
     // Load 4 extensions.
     for i in 0..4 {
-        mgr.load_extension(&format!("ext-m-{i}"), cx).expect("serde deserialization should succeed");
+        mgr.load_extension(&format!("ext-m-{i}"), cx)
+            .expect("serde deserialization should succeed");
     }
     result.assert_eq("4 extensions loaded", mgr.loaded_extension_count(), 4);
 
     // Create sessions in different extensions.
-    mgr.create_session("ext-m-0", "s0a", cx).expect("serde deserialization should succeed");
-    mgr.create_session("ext-m-0", "s0b", cx).expect("serde deserialization should succeed");
-    mgr.create_session("ext-m-1", "s1a", cx).expect("serde deserialization should succeed");
-    mgr.create_session("ext-m-2", "s2a", cx).expect("serde deserialization should succeed");
+    mgr.create_session("ext-m-0", "s0a", cx)
+        .expect("serde deserialization should succeed");
+    mgr.create_session("ext-m-0", "s0b", cx)
+        .expect("serde deserialization should succeed");
+    mgr.create_session("ext-m-1", "s1a", cx)
+        .expect("serde deserialization should succeed");
+    mgr.create_session("ext-m-2", "s2a", cx)
+        .expect("serde deserialization should succeed");
 
     // Cancel ext-m-1 (terminate).
     let cancel_result = mgr.cancel_extension("ext-m-1", cx, LifecycleEvent::Terminate);
@@ -686,7 +702,8 @@ mod tests {
         let mut cx = real_cx(5000);
         let result = run_scenario(ScenarioKind::Startup, 1, &mut cx);
         let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
-        let back: ScenarioResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ScenarioResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, back);
     }
 
@@ -695,7 +712,8 @@ mod tests {
         let mut cx = real_cx(100000);
         let suite = run_all_scenarios(42, &mut cx);
         let json = serde_json::to_string(&suite).expect("serde deserialization should succeed");
-        let back: ScenarioSuiteResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ScenarioSuiteResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(suite, back);
     }
 
@@ -711,7 +729,8 @@ mod tests {
             ScenarioKind::MultiExtension,
         ] {
             let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
-            let back: ScenarioKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ScenarioKind =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(kind, back);
         }
     }
@@ -724,7 +743,8 @@ mod tests {
             detail: String::new(),
         };
         let json = serde_json::to_string(&assertion).expect("serde deserialization should succeed");
-        let back: ScenarioAssertion = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ScenarioAssertion =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(assertion, back);
     }
 
@@ -886,10 +906,16 @@ mod tests {
 
         // Verify it serializes to JSON for bd-24bu release gating
         let json = serde_json::to_string(&suite).expect("serde deserialization should succeed");
-        let parsed: serde_json::Value = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(parsed["verdict"], "Pass");
         // SAFETY: test suite JSON has total_assertions field as u64; as_u64() returns Some
-        assert!(parsed["total_assertions"].as_u64().expect("serde deserialization should succeed") > 0);
+        assert!(
+            parsed["total_assertions"]
+                .as_u64()
+                .expect("serde deserialization should succeed")
+                > 0
+        );
         assert_eq!(parsed["total_assertions"], parsed["passed_assertions"]);
     }
 
@@ -1125,11 +1151,18 @@ mod tests {
         let mut cx = real_cx(100_000);
         let suite = run_all_scenarios(42, &mut cx);
         let json = serde_json::to_string(&suite).expect("serde deserialization should succeed");
-        let parsed: serde_json::Value = serde_json::from_str(&json).expect("serde deserialization should succeed");
-        let scenarios = parsed["scenarios"].as_array().expect("serde deserialization should succeed");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let scenarios = parsed["scenarios"]
+            .as_array()
+            .expect("serde deserialization should succeed");
         assert_eq!(scenarios.len(), 7);
         for s in scenarios {
-            assert!(s["passed"].as_bool().expect("serde deserialization should succeed"));
+            assert!(
+                s["passed"]
+                    .as_bool()
+                    .expect("serde deserialization should succeed")
+            );
         }
     }
 
@@ -1289,7 +1322,8 @@ mod tests {
         result.assert_true("deliberate failure", false);
         assert!(!result.passed);
         let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
-        let restored: ScenarioResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: ScenarioResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, restored);
         assert!(!restored.passed);
         assert!(!restored.assertions[0].passed);
@@ -1443,13 +1477,15 @@ mod tests {
 
     #[test]
     fn scenario_kind_startup_serde_token() {
-        let json = serde_json::to_string(&ScenarioKind::Startup).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ScenarioKind::Startup)
+            .expect("serde deserialization should succeed");
         assert!(json.contains("Startup"), "expected 'Startup' in {json}");
     }
 
     #[test]
     fn scenario_kind_quarantine_serde_token() {
-        let json = serde_json::to_string(&ScenarioKind::Quarantine).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ScenarioKind::Quarantine)
+            .expect("serde deserialization should succeed");
         assert!(
             json.contains("Quarantine"),
             "expected 'Quarantine' in {json}"
@@ -1458,7 +1494,8 @@ mod tests {
 
     #[test]
     fn scenario_kind_multi_extension_serde_token() {
-        let json = serde_json::to_string(&ScenarioKind::MultiExtension).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ScenarioKind::MultiExtension)
+            .expect("serde deserialization should succeed");
         assert!(
             json.contains("MultiExtension"),
             "expected 'MultiExtension' in {json}"
@@ -1735,7 +1772,8 @@ mod tests {
         ] {
             let r = ScenarioResult::new(kind, 42);
             let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
-            let back: ScenarioResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ScenarioResult =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(r, back);
             assert_eq!(back.kind, kind);
         }
@@ -1749,7 +1787,8 @@ mod tests {
             detail: "42 != 99".to_string(),
         };
         let json = serde_json::to_string(&a).expect("serde deserialization should succeed");
-        let back: ScenarioAssertion = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ScenarioAssertion =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(a, back);
         assert!(!back.passed);
         assert_eq!(back.detail, "42 != 99");
@@ -1761,7 +1800,8 @@ mod tests {
         r.assert_true("pass", true);
         r.assert_true("fail", false);
         let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
-        let back: ScenarioResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ScenarioResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
         assert!(!back.passed);
         assert_eq!(back.assertions.len(), 2);
@@ -1771,8 +1811,10 @@ mod tests {
     fn suite_result_with_full_run_roundtrip() {
         let mut cx = real_cx(100_000);
         let suite = run_all_scenarios(77, &mut cx);
-        let json = serde_json::to_string_pretty(&suite).expect("serde deserialization should succeed");
-        let back: ScenarioSuiteResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json =
+            serde_json::to_string_pretty(&suite).expect("serde deserialization should succeed");
+        let back: ScenarioSuiteResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(suite.seed, back.seed);
         assert_eq!(suite.total_assertions, back.total_assertions);
         assert_eq!(suite.passed_assertions, back.passed_assertions);

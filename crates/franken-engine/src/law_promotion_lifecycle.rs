@@ -194,11 +194,19 @@ impl LifecycleEvent {
         let mut data = Vec::new();
         data.extend_from_slice(self.event_id.as_bytes());
         data.extend_from_slice(self.law_id.as_bytes());
-        data.extend_from_slice(serde_json::to_string(&self.kind).expect("serde deserialization should succeed").as_bytes());
+        data.extend_from_slice(
+            serde_json::to_string(&self.kind)
+                .expect("serde deserialization should succeed")
+                .as_bytes(),
+        );
         let mut sorted_targets = self.affected_targets.clone();
         sorted_targets.sort();
         for target in &sorted_targets {
-            data.extend_from_slice(serde_json::to_string(target).expect("serde deserialization should succeed").as_bytes());
+            data.extend_from_slice(
+                serde_json::to_string(target)
+                    .expect("serde deserialization should succeed")
+                    .as_bytes(),
+            );
         }
         data.extend_from_slice(self.rationale.as_bytes());
         if let Some(ref sid) = self.superseding_law_id {
@@ -287,7 +295,11 @@ impl RoutingDecision {
         let mut sorted_selected = self.selected_targets.clone();
         sorted_selected.sort();
         for target in &sorted_selected {
-            data.extend_from_slice(serde_json::to_string(target).expect("serde deserialization should succeed").as_bytes());
+            data.extend_from_slice(
+                serde_json::to_string(target)
+                    .expect("serde deserialization should succeed")
+                    .as_bytes(),
+            );
         }
         data.extend_from_slice(&self.priority_millionths.to_le_bytes());
         self.decision_hash = ContentHash::compute(&data);
@@ -1081,7 +1093,8 @@ mod tests {
         ];
         for r in &reasons {
             let json = serde_json::to_string(r).expect("serde deserialization should succeed");
-            let back: RefusalReason = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: RefusalReason =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*r, back);
         }
     }
@@ -1128,7 +1141,8 @@ mod tests {
             },
         ] {
             let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
-            let back: LifecycleError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: LifecycleError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(err, back);
         }
     }
@@ -1223,7 +1237,8 @@ mod tests {
     fn config_serde_roundtrip() {
         let config = LifecycleConfig::default();
         let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
-        let back: LifecycleConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: LifecycleConfig =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, back);
     }
 
@@ -1458,7 +1473,8 @@ mod tests {
         p.promote_law(&c, &r);
 
         let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
-        let back: LifecyclePipeline = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: LifecyclePipeline =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(p.pipeline_hash, back.pipeline_hash);
     }
 

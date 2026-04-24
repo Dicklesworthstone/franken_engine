@@ -2212,7 +2212,10 @@ mod tests {
         plane.record_exact("e3", "dom", 200, b"c");
 
         // SAFETY: Test recorded events with "dom" domain; windows map contains this key.
-        let windows = plane.windows.get("dom").expect("serde deserialization should succeed");
+        let windows = plane
+            .windows
+            .get("dom")
+            .expect("serde deserialization should succeed");
         assert_eq!(windows.len(), 2);
         assert_eq!(windows[0].event_count(), 2);
         assert_eq!(windows[1].event_count(), 1);

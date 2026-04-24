@@ -755,7 +755,8 @@ mod tests {
             ClaimDomain::Security,
         ] {
             let json = serde_json::to_string(d).expect("serde deserialization should succeed");
-            let deser: ClaimDomain = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let deser: ClaimDomain =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*d, deser);
         }
     }
@@ -764,7 +765,8 @@ mod tests {
     fn atom_serde_round_trip() {
         let atom = test_atom("compat", ClaimDomain::Compatibility, ClaimTier::ShippedFact);
         let json = serde_json::to_string(&atom).expect("serde deserialization should succeed");
-        let deser: ClaimAtom = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let deser: ClaimAtom =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(atom, deser);
     }
 
@@ -772,7 +774,8 @@ mod tests {
     fn morphism_serde_round_trip() {
         let m = test_morphism("morph-1", "compat", "test262_pass");
         let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
-        let deser: EvidenceMorphism = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let deser: EvidenceMorphism =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(m, deser);
     }
 
@@ -799,7 +802,8 @@ mod tests {
             }],
         };
         let json = serde_json::to_string(&lattice).expect("serde deserialization should succeed");
-        let deser: ConstraintLattice = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let deser: ConstraintLattice =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(lattice, deser);
     }
 
@@ -983,7 +987,8 @@ mod tests {
         let evidence = vec![test_evidence("test262_pass")];
         let result = evaluate_claims(&atoms, &morphisms, &[], &evidence, 42);
         let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
-        let deser: EntitlementResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let deser: EntitlementResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, deser);
     }
 
@@ -1059,7 +1064,8 @@ mod tests {
             ClaimTier::UnsupportedSurface,
         ] {
             let json = serde_json::to_string(tier).expect("serde deserialization should succeed");
-            let deser: ClaimTier = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let deser: ClaimTier =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*tier, deser);
         }
     }
@@ -1073,7 +1079,8 @@ mod tests {
             ClaimState::Invalidated,
         ] {
             let json = serde_json::to_string(state).expect("serde deserialization should succeed");
-            let deser: ClaimState = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let deser: ClaimState =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*state, deser);
         }
     }
@@ -1085,8 +1092,10 @@ mod tests {
             DisqualifierVerdict::DowngradeToScoped,
             DisqualifierVerdict::RequireOperatorGuidance,
         ] {
-            let json = serde_json::to_string(verdict).expect("serde deserialization should succeed");
-            let deser: DisqualifierVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(verdict).expect("serde deserialization should succeed");
+            let deser: DisqualifierVerdict =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*verdict, deser);
         }
     }
@@ -1099,7 +1108,8 @@ mod tests {
             MorphismEffect::Disqualifies,
         ] {
             let json = serde_json::to_string(effect).expect("serde deserialization should succeed");
-            let deser: MorphismEffect = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let deser: MorphismEffect =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*effect, deser);
         }
     }
@@ -1112,7 +1122,8 @@ mod tests {
             triggered_rules: vec!["rule-1".to_string(), "rule-2".to_string()],
         };
         let json = serde_json::to_string(&snap).expect("serde deserialization should succeed");
-        let deser: EvidenceSnapshot = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let deser: EvidenceSnapshot =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(snap, deser);
     }
 
@@ -1128,7 +1139,8 @@ mod tests {
             remediation: "Profile and fix hotspots".to_string(),
         };
         let json = serde_json::to_string(&rule).expect("serde deserialization should succeed");
-        let deser: DisqualifierRule = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let deser: DisqualifierRule =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(rule, deser);
     }
 
@@ -1142,7 +1154,8 @@ mod tests {
             active_disqualifiers: vec!["rule-a".to_string()],
         };
         let json = serde_json::to_string(&eval).expect("serde deserialization should succeed");
-        let deser: ClaimAtomEvaluation = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let deser: ClaimAtomEvaluation =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(eval, deser);
     }
 
@@ -1153,7 +1166,8 @@ mod tests {
             higher: "strict".to_string(),
         };
         let json = serde_json::to_string(&cr).expect("serde deserialization should succeed");
-        let deser: CoverRelation = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let deser: CoverRelation =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cr, deser);
     }
 

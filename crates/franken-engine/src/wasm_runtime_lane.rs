@@ -816,7 +816,12 @@ mod tests {
             .expect("serde deserialization should succeed");
         assert_eq!(g.active_count(), 1);
         // SAFETY: get cannot fail for ID we just registered
-        assert_eq!(g.get(id).expect("serde deserialization should succeed").depth, 0);
+        assert_eq!(
+            g.get(id)
+                .expect("serde deserialization should succeed")
+                .depth,
+            0
+        );
     }
 
     #[test]
@@ -830,9 +835,15 @@ mod tests {
         let mut deps = BTreeSet::new();
         deps.insert(s);
         // SAFETY: register cannot fail with valid test inputs and registered dependencies
-        g.register(d, WasmSignalKind::Derived, deps).expect("serde deserialization should succeed");
+        g.register(d, WasmSignalKind::Derived, deps)
+            .expect("serde deserialization should succeed");
         // SAFETY: get cannot fail for ID we just registered
-        assert_eq!(g.get(d).expect("serde deserialization should succeed").depth, 1);
+        assert_eq!(
+            g.get(d)
+                .expect("serde deserialization should succeed")
+                .depth,
+            1
+        );
     }
 
     #[test]
@@ -846,12 +857,14 @@ mod tests {
         let mut deps = BTreeSet::new();
         deps.insert(s);
         // SAFETY: register cannot fail with valid test inputs and registered dependencies
-        g.register(d1, WasmSignalKind::Derived, deps).expect("serde deserialization should succeed");
+        g.register(d1, WasmSignalKind::Derived, deps)
+            .expect("serde deserialization should succeed");
         let d2 = g.next_id();
         let mut deps2 = BTreeSet::new();
         deps2.insert(d1);
         // SAFETY: register cannot fail with valid test inputs and registered dependencies
-        g.register(d2, WasmSignalKind::Derived, deps2).expect("serde deserialization should succeed");
+        g.register(d2, WasmSignalKind::Derived, deps2)
+            .expect("serde deserialization should succeed");
         // depth 3 exceeds max_depth=2
         let d3 = g.next_id();
         let mut deps3 = BTreeSet::new();
@@ -897,24 +910,31 @@ mod tests {
         g.register(s, WasmSignalKind::Source, BTreeSet::new())
             .expect("serde deserialization should succeed");
         // SAFETY: mark_clean cannot fail for registered ID
-        g.mark_clean(s).expect("serde deserialization should succeed");
+        g.mark_clean(s)
+            .expect("serde deserialization should succeed");
         let d = g.next_id();
         let mut deps = BTreeSet::new();
         deps.insert(s);
         // SAFETY: register cannot fail with valid test inputs and registered dependencies
-        g.register(d, WasmSignalKind::Derived, deps).expect("serde deserialization should succeed");
+        g.register(d, WasmSignalKind::Derived, deps)
+            .expect("serde deserialization should succeed");
         // SAFETY: mark_clean cannot fail for registered ID
-        g.mark_clean(d).expect("serde deserialization should succeed");
+        g.mark_clean(d)
+            .expect("serde deserialization should succeed");
         let e = g.next_id();
         let mut deps2 = BTreeSet::new();
         deps2.insert(d);
         // SAFETY: register cannot fail with valid test inputs and registered dependencies
-        g.register(e, WasmSignalKind::Effect, deps2).expect("serde deserialization should succeed");
+        g.register(e, WasmSignalKind::Effect, deps2)
+            .expect("serde deserialization should succeed");
         // SAFETY: mark_clean cannot fail for registered ID
-        g.mark_clean(e).expect("serde deserialization should succeed");
+        g.mark_clean(e)
+            .expect("serde deserialization should succeed");
 
         // SAFETY: propagate_dirty cannot fail for registered ID
-        let dirty = g.propagate_dirty(s).expect("serde deserialization should succeed");
+        let dirty = g
+            .propagate_dirty(s)
+            .expect("serde deserialization should succeed");
         assert_eq!(dirty.len(), 3);
         assert_eq!(dirty[0], s);
         assert_eq!(dirty[1], d);
@@ -931,7 +951,8 @@ mod tests {
         let mut deps = BTreeSet::new();
         deps.insert(s);
         // SAFETY: register cannot fail with valid test inputs and registered dependencies
-        g.register(d, WasmSignalKind::Derived, deps).expect("serde deserialization should succeed");
+        g.register(d, WasmSignalKind::Derived, deps)
+            .expect("serde deserialization should succeed");
         // SAFETY: dispose cannot fail for registered ID
         g.dispose(d).expect("serde deserialization should succeed");
         assert_eq!(g.active_count(), 1);
@@ -946,7 +967,8 @@ mod tests {
         // SAFETY: WasmSignalGraph derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&g).expect("serde deserialization should succeed");
         // SAFETY: JSON was just generated from WasmSignalGraph, deserialization guaranteed to succeed
-        let g2: WasmSignalGraph = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let g2: WasmSignalGraph =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(g, g2);
     }
 
@@ -982,7 +1004,8 @@ mod tests {
         // SAFETY: AbiDomBatch derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&b).expect("serde deserialization should succeed");
         // SAFETY: JSON was just generated from AbiDomBatch, deserialization guaranteed to succeed
-        let b2: AbiDomBatch = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let b2: AbiDomBatch =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(b, b2);
     }
 
@@ -996,7 +1019,8 @@ mod tests {
         // SAFETY: AbiStateUpdate derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&u).expect("serde deserialization should succeed");
         // SAFETY: JSON was just generated from AbiStateUpdate, deserialization guaranteed to succeed
-        let u2: AbiStateUpdate = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let u2: AbiStateUpdate =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(u, u2);
     }
 
@@ -1048,7 +1072,9 @@ mod tests {
         lane.graph
             .register(s, WasmSignalKind::Source, BTreeSet::new())
             .expect("serde deserialization should succeed");
-        lane.graph.mark_clean(s).expect("serde deserialization should succeed");
+        lane.graph
+            .mark_clean(s)
+            .expect("serde deserialization should succeed");
 
         let d = lane.graph.next_id();
         let mut deps = BTreeSet::new();
@@ -1056,7 +1082,9 @@ mod tests {
         lane.graph
             .register(d, WasmSignalKind::Derived, deps)
             .expect("serde deserialization should succeed");
-        lane.graph.mark_clean(d).expect("serde deserialization should succeed");
+        lane.graph
+            .mark_clean(d)
+            .expect("serde deserialization should succeed");
 
         lane.enqueue_update(AbiStateUpdate {
             signal_id: s,
@@ -1080,7 +1108,9 @@ mod tests {
         lane.graph
             .register(s, WasmSignalKind::Source, BTreeSet::new())
             .expect("serde deserialization should succeed");
-        lane.graph.mark_clean(s).expect("serde deserialization should succeed");
+        lane.graph
+            .mark_clean(s)
+            .expect("serde deserialization should succeed");
 
         let e = lane.graph.next_id();
         let mut deps = BTreeSet::new();
@@ -1088,7 +1118,9 @@ mod tests {
         lane.graph
             .register(e, WasmSignalKind::Effect, deps)
             .expect("serde deserialization should succeed");
-        lane.graph.mark_clean(e).expect("serde deserialization should succeed");
+        lane.graph
+            .mark_clean(e)
+            .expect("serde deserialization should succeed");
 
         lane.enqueue_update(AbiStateUpdate {
             signal_id: s,
@@ -1111,7 +1143,9 @@ mod tests {
         lane.graph
             .register(s, WasmSignalKind::Source, BTreeSet::new())
             .expect("serde deserialization should succeed");
-        lane.graph.mark_clean(s).expect("serde deserialization should succeed");
+        lane.graph
+            .mark_clean(s)
+            .expect("serde deserialization should succeed");
 
         let d = lane.graph.next_id();
         let mut deps = BTreeSet::new();
@@ -1119,7 +1153,9 @@ mod tests {
         lane.graph
             .register(d, WasmSignalKind::Derived, deps)
             .expect("serde deserialization should succeed");
-        lane.graph.mark_clean(d).expect("serde deserialization should succeed");
+        lane.graph
+            .mark_clean(d)
+            .expect("serde deserialization should succeed");
 
         lane.enqueue_update(AbiStateUpdate {
             signal_id: s,
@@ -1143,7 +1179,9 @@ mod tests {
         lane.graph
             .register(s, WasmSignalKind::Source, BTreeSet::new())
             .expect("serde deserialization should succeed");
-        lane.graph.mark_clean(s).expect("serde deserialization should succeed");
+        lane.graph
+            .mark_clean(s)
+            .expect("serde deserialization should succeed");
 
         let e1 = lane.graph.next_id();
         let mut deps1 = BTreeSet::new();
@@ -1151,7 +1189,9 @@ mod tests {
         lane.graph
             .register(e1, WasmSignalKind::Effect, deps1)
             .expect("serde deserialization should succeed");
-        lane.graph.mark_clean(e1).expect("serde deserialization should succeed");
+        lane.graph
+            .mark_clean(e1)
+            .expect("serde deserialization should succeed");
 
         let e2 = lane.graph.next_id();
         let mut deps2 = BTreeSet::new();
@@ -1159,7 +1199,9 @@ mod tests {
         lane.graph
             .register(e2, WasmSignalKind::Effect, deps2)
             .expect("serde deserialization should succeed");
-        lane.graph.mark_clean(e2).expect("serde deserialization should succeed");
+        lane.graph
+            .mark_clean(e2)
+            .expect("serde deserialization should succeed");
 
         lane.enqueue_update(AbiStateUpdate {
             signal_id: s,
@@ -1188,7 +1230,9 @@ mod tests {
             .expect("serde deserialization should succeed");
         let mut deps = BTreeSet::new();
         deps.insert(s);
-        let d = lane.register_signal(WasmSignalKind::Derived, deps).expect("serde deserialization should succeed");
+        let d = lane
+            .register_signal(WasmSignalKind::Derived, deps)
+            .expect("serde deserialization should succeed");
         let mut deps2 = BTreeSet::new();
         deps2.insert(d);
 
@@ -1276,7 +1320,8 @@ mod tests {
         // SAFETY: WasmRuntimeLane derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&lane).expect("serde deserialization should succeed");
         // SAFETY: JSON was just generated from WasmRuntimeLane, deserialization guaranteed to succeed
-        let l2: WasmRuntimeLane = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let l2: WasmRuntimeLane =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(lane, l2);
     }
 
@@ -1307,7 +1352,9 @@ mod tests {
             lane.graph
                 .register(s, WasmSignalKind::Source, BTreeSet::new())
                 .expect("serde deserialization should succeed");
-            lane.graph.mark_clean(s).expect("serde deserialization should succeed");
+            lane.graph
+                .mark_clean(s)
+                .expect("serde deserialization should succeed");
         }
 
         // Derived that depends on s1+s2
@@ -1318,7 +1365,9 @@ mod tests {
         lane.graph
             .register(d, WasmSignalKind::Derived, deps)
             .expect("serde deserialization should succeed");
-        lane.graph.mark_clean(d).expect("serde deserialization should succeed");
+        lane.graph
+            .mark_clean(d)
+            .expect("serde deserialization should succeed");
 
         // Effect on derived
         let e = lane.graph.next_id();
@@ -1327,7 +1376,9 @@ mod tests {
         lane.graph
             .register(e, WasmSignalKind::Effect, edeps)
             .expect("serde deserialization should succeed");
-        lane.graph.mark_clean(e).expect("serde deserialization should succeed");
+        lane.graph
+            .mark_clean(e)
+            .expect("serde deserialization should succeed");
 
         // Enqueue updates for s1 and s3
         lane.enqueue_update(AbiStateUpdate {
@@ -1365,11 +1416,16 @@ mod tests {
             .expect("serde deserialization should succeed");
 
         // SAFETY: dispose cannot fail for registered ID
-        lane.graph.dispose(d).expect("serde deserialization should succeed");
+        lane.graph
+            .dispose(d)
+            .expect("serde deserialization should succeed");
         assert_eq!(lane.graph.active_count(), 1);
 
         // SAFETY: propagate_dirty cannot fail for registered ID
-        let dirty = lane.graph.propagate_dirty(s).expect("serde deserialization should succeed");
+        let dirty = lane
+            .graph
+            .propagate_dirty(s)
+            .expect("serde deserialization should succeed");
         assert_eq!(dirty.len(), 1);
     }
 
@@ -1400,36 +1456,50 @@ mod tests {
         let js_s = js.next_signal_id();
         js.register(js_s, JsSignalKind::Source, BTreeSet::new())
             .expect("serde deserialization should succeed");
-        js.mark_clean(js_s).expect("serde deserialization should succeed");
+        js.mark_clean(js_s)
+            .expect("serde deserialization should succeed");
         let js_d = js.next_signal_id();
         let mut js_deps = BTreeSet::new();
         js_deps.insert(js_s);
-        js.register(js_d, JsSignalKind::Derived, js_deps).expect("serde deserialization should succeed");
-        js.mark_clean(js_d).expect("serde deserialization should succeed");
+        js.register(js_d, JsSignalKind::Derived, js_deps)
+            .expect("serde deserialization should succeed");
+        js.mark_clean(js_d)
+            .expect("serde deserialization should succeed");
         let js_e = js.next_signal_id();
         let mut js_deps2 = BTreeSet::new();
         js_deps2.insert(js_d);
-        js.register(js_e, JsSignalKind::Effect, js_deps2).expect("serde deserialization should succeed");
-        js.mark_clean(js_e).expect("serde deserialization should succeed");
+        js.register(js_e, JsSignalKind::Effect, js_deps2)
+            .expect("serde deserialization should succeed");
+        js.mark_clean(js_e)
+            .expect("serde deserialization should succeed");
 
         let mut wasm = WasmSignalGraph::new(64, 100);
         let ws = wasm.next_id();
         wasm.register(ws, WasmSignalKind::Source, BTreeSet::new())
             .expect("serde deserialization should succeed");
-        wasm.mark_clean(ws).expect("serde deserialization should succeed");
+        wasm.mark_clean(ws)
+            .expect("serde deserialization should succeed");
         let wd = wasm.next_id();
         let mut wdeps = BTreeSet::new();
         wdeps.insert(ws);
-        wasm.register(wd, WasmSignalKind::Derived, wdeps).expect("serde deserialization should succeed");
-        wasm.mark_clean(wd).expect("serde deserialization should succeed");
+        wasm.register(wd, WasmSignalKind::Derived, wdeps)
+            .expect("serde deserialization should succeed");
+        wasm.mark_clean(wd)
+            .expect("serde deserialization should succeed");
         let we = wasm.next_id();
         let mut wdeps2 = BTreeSet::new();
         wdeps2.insert(wd);
-        wasm.register(we, WasmSignalKind::Effect, wdeps2).expect("serde deserialization should succeed");
-        wasm.mark_clean(we).expect("serde deserialization should succeed");
+        wasm.register(we, WasmSignalKind::Effect, wdeps2)
+            .expect("serde deserialization should succeed");
+        wasm.mark_clean(we)
+            .expect("serde deserialization should succeed");
 
-        let js_dirty = js.mark_dirty(js_s).expect("serde deserialization should succeed");
-        let wasm_dirty = wasm.propagate_dirty(ws).expect("serde deserialization should succeed");
+        let js_dirty = js
+            .mark_dirty(js_s)
+            .expect("serde deserialization should succeed");
+        let wasm_dirty = wasm
+            .propagate_dirty(ws)
+            .expect("serde deserialization should succeed");
         let js_ids: Vec<u32> = js_dirty.into_iter().map(|id| id.0 as u32).collect();
         let wasm_ids: Vec<u32> = wasm_dirty.into_iter().map(|id| id.0).collect();
         assert_eq!(js_ids, wasm_ids);
@@ -1444,10 +1514,14 @@ mod tests {
         let js_d = js.next_signal_id();
         let mut js_deps = BTreeSet::new();
         js_deps.insert(js_s);
-        js.register(js_d, JsSignalKind::Derived, js_deps).expect("serde deserialization should succeed");
+        js.register(js_d, JsSignalKind::Derived, js_deps)
+            .expect("serde deserialization should succeed");
         // SAFETY: dispose cannot fail for registered ID
-        js.dispose(js_d).expect("serde deserialization should succeed");
-        let js_dirty = js.mark_dirty(js_s).expect("serde deserialization should succeed");
+        js.dispose(js_d)
+            .expect("serde deserialization should succeed");
+        let js_dirty = js
+            .mark_dirty(js_s)
+            .expect("serde deserialization should succeed");
         let js_ids: Vec<JsSignalId> = js_dirty;
 
         let mut wasm = WasmSignalGraph::new(64, 100);
@@ -1457,9 +1531,13 @@ mod tests {
         let wd = wasm.next_id();
         let mut wdeps = BTreeSet::new();
         wdeps.insert(ws);
-        wasm.register(wd, WasmSignalKind::Derived, wdeps).expect("serde deserialization should succeed");
-        wasm.dispose(wd).expect("serde deserialization should succeed");
-        let wasm_dirty = wasm.propagate_dirty(ws).expect("serde deserialization should succeed");
+        wasm.register(wd, WasmSignalKind::Derived, wdeps)
+            .expect("serde deserialization should succeed");
+        wasm.dispose(wd)
+            .expect("serde deserialization should succeed");
+        let wasm_dirty = wasm
+            .propagate_dirty(ws)
+            .expect("serde deserialization should succeed");
         let wasm_ids: Vec<WasmSignalId> = wasm_dirty;
 
         assert_eq!(js_ids.len(), wasm_ids.len());
@@ -1478,7 +1556,8 @@ mod tests {
             // SAFETY: WasmSignalKind derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
             // SAFETY: JSON was just generated from WasmSignalKind, deserialization guaranteed to succeed
-            let restored: WasmSignalKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: WasmSignalKind =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(kind, restored);
         }
     }
@@ -1494,9 +1573,11 @@ mod tests {
             WasmSignalStatus::Disposed,
         ] {
             // SAFETY: WasmSignalStatus derives Serialize and has no non-serializable fields
-            let json = serde_json::to_string(&status).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&status).expect("serde deserialization should succeed");
             // SAFETY: JSON was just generated from WasmSignalStatus, deserialization guaranteed to succeed
-            let restored: WasmSignalStatus = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: WasmSignalStatus =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(status, restored);
         }
     }
@@ -1514,7 +1595,8 @@ mod tests {
             // SAFETY: WasmLaneMode derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(&mode).expect("serde deserialization should succeed");
             // SAFETY: JSON was just generated from WasmLaneMode, deserialization guaranteed to succeed
-            let restored: WasmLaneMode = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: WasmLaneMode =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(mode, restored);
         }
     }
@@ -1556,7 +1638,8 @@ mod tests {
             // SAFETY: SafeModeReason derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(reason).expect("serde deserialization should succeed");
             // SAFETY: JSON was just generated from SafeModeReason, deserialization guaranteed to succeed
-            let restored: SafeModeReason = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: SafeModeReason =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*reason, restored);
         }
     }
@@ -1569,7 +1652,8 @@ mod tests {
         // SAFETY: WasmBudget derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&budget).expect("serde deserialization should succeed");
         // SAFETY: JSON was just generated from WasmBudget, deserialization guaranteed to succeed
-        let restored: WasmBudget = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: WasmBudget =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(budget, restored);
     }
 
@@ -1601,7 +1685,8 @@ mod tests {
             safe_mode_triggers: vec![],
         };
         let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
-        let restored: WasmFlushResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: WasmFlushResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, restored);
     }
 
@@ -1674,7 +1759,9 @@ mod tests {
         lane.graph
             .register(s, WasmSignalKind::Source, BTreeSet::new())
             .expect("serde deserialization should succeed");
-        lane.graph.mark_clean(s).expect("serde deserialization should succeed");
+        lane.graph
+            .mark_clean(s)
+            .expect("serde deserialization should succeed");
 
         for i in 0..3u64 {
             lane.enqueue_update(AbiStateUpdate {
@@ -1790,7 +1877,9 @@ mod tests {
             .register(id, WasmSignalKind::Source, BTreeSet::new())
             .expect("serde deserialization should succeed");
         // SAFETY: dispose cannot fail for registered ID
-        graph.dispose(id).expect("serde deserialization should succeed");
+        graph
+            .dispose(id)
+            .expect("serde deserialization should succeed");
         // SAFETY: get cannot fail for ID we just registered and disposed
         let node = graph.get(id).expect("serde deserialization should succeed");
         assert_eq!(node.status, WasmSignalStatus::Disposed);
@@ -1803,7 +1892,9 @@ mod tests {
         graph
             .register(id, WasmSignalKind::Source, BTreeSet::new())
             .expect("serde deserialization should succeed");
-        graph.dispose(id).expect("serde deserialization should succeed");
+        graph
+            .dispose(id)
+            .expect("serde deserialization should succeed");
         let err = graph.propagate_dirty(id).unwrap_err();
         assert!(matches!(err, WasmGraphError::Disposed(_)));
     }
@@ -1819,17 +1910,29 @@ mod tests {
             .expect("serde deserialization should succeed");
         let mut deps_b = BTreeSet::new();
         deps_b.insert(a);
-        graph.register(b, WasmSignalKind::Derived, deps_b).expect("serde deserialization should succeed");
+        graph
+            .register(b, WasmSignalKind::Derived, deps_b)
+            .expect("serde deserialization should succeed");
         let mut deps_c = BTreeSet::new();
         deps_c.insert(b);
-        graph.register(c, WasmSignalKind::Effect, deps_c).expect("serde deserialization should succeed");
+        graph
+            .register(c, WasmSignalKind::Effect, deps_c)
+            .expect("serde deserialization should succeed");
 
-        graph.mark_clean(a).expect("serde deserialization should succeed");
-        graph.mark_clean(b).expect("serde deserialization should succeed");
-        graph.mark_clean(c).expect("serde deserialization should succeed");
+        graph
+            .mark_clean(a)
+            .expect("serde deserialization should succeed");
+        graph
+            .mark_clean(b)
+            .expect("serde deserialization should succeed");
+        graph
+            .mark_clean(c)
+            .expect("serde deserialization should succeed");
 
         // SAFETY: propagate_dirty cannot fail for registered ID
-        let dirty = graph.propagate_dirty(a).expect("serde deserialization should succeed");
+        let dirty = graph
+            .propagate_dirty(a)
+            .expect("serde deserialization should succeed");
         // a(depth=0), b(depth=1), c(depth=2)
         assert_eq!(dirty.len(), 3);
         assert_eq!(dirty[0], a);
@@ -1846,7 +1949,8 @@ mod tests {
         ];
         for kind in &kinds {
             let json = serde_json::to_string(kind).expect("serde deserialization should succeed");
-            let back: WasmSignalKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: WasmSignalKind =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*kind, back);
         }
     }
@@ -1861,7 +1965,8 @@ mod tests {
         ];
         for s in &statuses {
             let json = serde_json::to_string(s).expect("serde deserialization should succeed");
-            let back: WasmSignalStatus = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: WasmSignalStatus =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*s, back);
         }
     }
@@ -1901,12 +2006,14 @@ mod tests {
     fn queue_error_serde_roundtrip() {
         let full = QueueError::Full { capacity: 42 };
         let json = serde_json::to_string(&full).expect("serde deserialization should succeed");
-        let back: QueueError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: QueueError =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(full, back);
 
         let empty = QueueError::Empty;
         let json2 = serde_json::to_string(&empty).expect("serde deserialization should succeed");
-        let back2: QueueError = serde_json::from_str(&json2).expect("serde deserialization should succeed");
+        let back2: QueueError =
+            serde_json::from_str(&json2).expect("serde deserialization should succeed");
         assert_eq!(empty, back2);
     }
 
@@ -1918,7 +2025,8 @@ mod tests {
             max: 16,
         };
         let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
-        let back: WasmGraphError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: WasmGraphError =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, back);
     }
 
@@ -2044,7 +2152,8 @@ mod tests {
         })
         .expect("serde deserialization should succeed");
         let json = serde_json::to_string(&lane).expect("serde deserialization should succeed");
-        let restored: WasmRuntimeLane = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: WasmRuntimeLane =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(lane, restored);
     }
 

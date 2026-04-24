@@ -810,7 +810,8 @@ mod tests {
             VerbosityLevel::GalaxyBrain,
         ] {
             let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
-            let back: VerbosityLevel = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: VerbosityLevel =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(v, back);
         }
     }
@@ -843,7 +844,8 @@ mod tests {
             DecisionDomain::Governance,
         ] {
             let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
-            let back: DecisionDomain = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: DecisionDomain =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(d, back);
         }
     }
@@ -905,7 +907,8 @@ mod tests {
             threshold_exceeded: false,
         };
         let json = serde_json::to_string(&eq).expect("serde deserialization should succeed");
-        let back: GoverningEquation = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GoverningEquation =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(eq, back);
     }
 
@@ -935,7 +938,8 @@ mod tests {
             RejectionReason::PolicyForbidden,
         ] {
             let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
-            let back: RejectionReason = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: RejectionReason =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(r, back);
         }
     }
@@ -1114,7 +1118,8 @@ mod tests {
         .expect("serde deserialization should succeed");
 
         let json = serde_json::to_string(&expl).expect("serde deserialization should succeed");
-        let back: DecisionExplanation = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DecisionExplanation =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(expl, back);
     }
 
@@ -1383,7 +1388,8 @@ mod tests {
 
         let report = generate_report(&idx, &test_epoch());
         let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
-        let back: ExplainabilityReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ExplainabilityReport =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report, back);
     }
 
@@ -1508,7 +1514,8 @@ mod tests {
             slack_millionths: 0,
         };
         let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
-        let back: ConstraintInteraction = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ConstraintInteraction =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c, back);
     }
 
@@ -1523,7 +1530,8 @@ mod tests {
             contribution_millionths: 210_000,
         };
         let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
-        let back: RiskBreakdown = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: RiskBreakdown =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 
@@ -1539,7 +1547,8 @@ mod tests {
             narrative: "safe mode would avoid all risk".to_string(),
         };
         let json = serde_json::to_string(&cf).expect("serde deserialization should succeed");
-        let back: CounterfactualOutcome = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: CounterfactualOutcome =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cf, back);
     }
 
@@ -1554,7 +1563,8 @@ mod tests {
             detail: "wasm lane has higher loss".to_string(),
         };
         let json = serde_json::to_string(&alt).expect("serde deserialization should succeed");
-        let back: ExplainedAlternative = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ExplainedAlternative =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(alt, back);
     }
 
@@ -1597,7 +1607,9 @@ mod tests {
             });
         }
 
-        let expl = builder.build().expect("serde deserialization should succeed");
+        let expl = builder
+            .build()
+            .expect("serde deserialization should succeed");
         assert_eq!(expl.candidates_considered(), 6);
     }
 
@@ -1699,7 +1711,8 @@ mod tests {
             threshold_exceeded: false,
         };
         let json = serde_json::to_string(&eq).expect("serde deserialization should succeed");
-        let back: GoverningEquation = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GoverningEquation =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(eq, back);
     }
 
@@ -1795,7 +1808,8 @@ mod tests {
         .confidence(750_000)
         .posterior("factor_a".to_string(), 400_000);
         let json = serde_json::to_string(&builder).expect("serde deserialization should succeed");
-        let back: ExplanationBuilder = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ExplanationBuilder =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         // Build both and compare: chosen_action not set so both return None.
         assert!(back.build().is_none());
     }
@@ -1815,7 +1829,8 @@ mod tests {
         idx.insert(expl);
 
         let json = serde_json::to_string(&idx).expect("serde deserialization should succeed");
-        let back: ExplanationIndex = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ExplanationIndex =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.len(), 1);
         assert!(back.get_by_decision("d-idx-ser").is_some());
     }
@@ -1861,7 +1876,8 @@ mod tests {
         };
         assert!(cf.would_trigger_guardrail);
         let json = serde_json::to_string(&cf).expect("serde deserialization should succeed");
-        let back: CounterfactualOutcome = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: CounterfactualOutcome =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert!(back.would_trigger_guardrail);
     }
 
@@ -1876,7 +1892,8 @@ mod tests {
         assert!(!c.binding);
         assert_eq!(c.slack_millionths, 250_000);
         let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
-        let back: ConstraintInteraction = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ConstraintInteraction =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c, back);
     }
 
@@ -1951,7 +1968,9 @@ mod tests {
         idx.insert(expl2);
         // Same decision_id + epoch + domain → same explanation_id → overwrite.
         assert_eq!(idx.len(), 1);
-        let retrieved = idx.get_by_decision("d-ow").expect("serde deserialization should succeed");
+        let retrieved = idx
+            .get_by_decision("d-ow")
+            .expect("serde deserialization should succeed");
         assert_eq!(retrieved.rationale, "second");
     }
 
@@ -2175,7 +2194,8 @@ mod tests {
         ];
         for r in &reasons {
             let json = serde_json::to_string(r).expect("serde deserialization should succeed");
-            let back: RejectionReason = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: RejectionReason =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*r, back);
         }
         // Ordering: HigherLoss < GuardrailViolation < ... < PolicyForbidden
@@ -2202,7 +2222,8 @@ mod tests {
                 detail: format!("rejected for {reason}"),
             };
             let json = serde_json::to_string(&alt).expect("serde deserialization should succeed");
-            let back: ExplainedAlternative = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ExplainedAlternative =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(alt, back);
         }
     }
@@ -2294,8 +2315,10 @@ mod tests {
         .build()
         .expect("serde deserialization should succeed");
 
-        let json = serde_json::to_string_pretty(&expl).expect("serde deserialization should succeed");
-        let back: DecisionExplanation = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json =
+            serde_json::to_string_pretty(&expl).expect("serde deserialization should succeed");
+        let back: DecisionExplanation =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(expl, back);
     }
 
@@ -2315,7 +2338,8 @@ mod tests {
         };
         assert_eq!(eq.parameters.len(), 10);
         let json = serde_json::to_string(&eq).expect("serde deserialization should succeed");
-        let back: GoverningEquation = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GoverningEquation =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(eq, back);
     }
 

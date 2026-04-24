@@ -937,7 +937,8 @@ mod tests {
             let json = serde_json::to_string(s).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by to_string of a valid BlockerSurface,
             // so from_str back to BlockerSurface cannot fail (valid format + matching schema).
-            let back: BlockerSurface = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: BlockerSurface =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*s, back);
         }
     }
@@ -971,7 +972,8 @@ mod tests {
         let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid BlockerSeverity,
         // so from_str back to BlockerSeverity cannot fail (valid format + matching schema).
-        let back: BlockerSeverity = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: BlockerSeverity =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(s, back);
     }
 
@@ -992,7 +994,8 @@ mod tests {
         let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid RemediationStatus,
         // so from_str back to RemediationStatus cannot fail (valid format + matching schema).
-        let back: RemediationStatus = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: RemediationStatus =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 
@@ -1077,7 +1080,9 @@ mod tests {
         let mut b = make_blocker("b1", BlockerSurface::Parser, BlockerSeverity::Blocking);
         b.remediation = RemediationStatus::Verified;
         // SAFETY: Test adding unique resolved blocker to empty ledger should succeed
-        ledger.add_blocker(b).expect("serde deserialization should succeed");
+        ledger
+            .add_blocker(b)
+            .expect("serde deserialization should succeed");
         assert!(ledger.release_blockers().is_empty());
     }
 
@@ -1106,8 +1111,18 @@ mod tests {
             ))
             .expect("serde deserialization should succeed");
         let dist = ledger.blockers_by_surface();
-        assert_eq!(*dist.get(&BlockerSurface::Parser).expect("serde deserialization should succeed"), 2);
-        assert_eq!(*dist.get(&BlockerSurface::Runtime).expect("serde deserialization should succeed"), 1);
+        assert_eq!(
+            *dist
+                .get(&BlockerSurface::Parser)
+                .expect("serde deserialization should succeed"),
+            2
+        );
+        assert_eq!(
+            *dist
+                .get(&BlockerSurface::Runtime)
+                .expect("serde deserialization should succeed"),
+            1
+        );
     }
 
     #[test]
@@ -1160,7 +1175,8 @@ mod tests {
     fn ledger_serde_roundtrip() {
         let ledger = build_seed_ledger();
         let json = serde_json::to_string(&ledger).expect("serde deserialization should succeed");
-        let back: BlockerLedger = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: BlockerLedger =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ledger.blocker_count(), back.blocker_count());
         assert_eq!(ledger.content_hash(), back.content_hash());
     }
@@ -1208,7 +1224,9 @@ mod tests {
         let mut ledger = BlockerLedger::new();
         let mut b = make_blocker("b1", BlockerSurface::Parser, BlockerSeverity::Blocking);
         b.remediation = RemediationStatus::Verified;
-        ledger.add_blocker(b).expect("serde deserialization should succeed");
+        ledger
+            .add_blocker(b)
+            .expect("serde deserialization should succeed");
         let _ = ledger.add_cohort_rollup(CohortRollup {
             cohort_name: "test".to_string(),
             readiness: CohortReadiness::Ready,
@@ -1230,7 +1248,8 @@ mod tests {
         let ledger = build_seed_ledger();
         let report = gate.evaluate(&ledger);
         let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
-        let back: GateReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GateReport =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report.total_blockers, back.total_blockers);
     }
 
@@ -1238,7 +1257,8 @@ mod tests {
     fn config_serde_roundtrip() {
         let config = GateConfig::default();
         let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
-        let back: GateConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GateConfig =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, back);
     }
 

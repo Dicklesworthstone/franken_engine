@@ -899,7 +899,10 @@ mod tests {
         assert!(result.evidence_hash.is_none());
         // SAFETY: Test verifies error_message is Some when status is Error
         assert_eq!(
-            result.error_message.as_ref().expect("serde deserialization should succeed"),
+            result
+                .error_message
+                .as_ref()
+                .expect("serde deserialization should succeed"),
             "Evidence validation failed"
         );
     }
@@ -1189,9 +1192,11 @@ mod tests {
     fn moonshot_gate_id_serde_roundtrip() {
         for gate_id in MoonshotGateId::all() {
             // SAFETY: MoonshotGateId derives Serialize and has no non-serializable fields
-            let json = serde_json::to_string(gate_id).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(gate_id).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by valid MoonshotGateId serialization
-            let back: MoonshotGateId = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: MoonshotGateId =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*gate_id, back);
         }
     }
@@ -1209,7 +1214,8 @@ mod tests {
             // SAFETY: MoonshotGateStatus derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(status).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by valid MoonshotGateStatus serialization
-            let back: MoonshotGateStatus = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: MoonshotGateStatus =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*status, back);
         }
     }
@@ -1220,7 +1226,8 @@ mod tests {
         // SAFETY: MoonshotGateResult derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid MoonshotGateResult serialization
-        let back: MoonshotGateResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: MoonshotGateResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, back);
     }
 
@@ -1239,7 +1246,8 @@ mod tests {
         // SAFETY: DisruptionTrackExecution derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&execution).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid DisruptionTrackExecution serialization
-        let back: DisruptionTrackExecution = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DisruptionTrackExecution =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(execution, back);
     }
 
@@ -1252,7 +1260,8 @@ mod tests {
         // SAFETY: DisruptionTrackError derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&error).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid DisruptionTrackError serialization
-        let back: DisruptionTrackError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DisruptionTrackError =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(error, back);
     }
 
@@ -1270,7 +1279,8 @@ mod tests {
         // SAFETY: DisruptionTrackLogEntry derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid DisruptionTrackLogEntry serialization
-        let back: DisruptionTrackLogEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DisruptionTrackLogEntry =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, back);
     }
 

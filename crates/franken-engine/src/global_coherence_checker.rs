@@ -1413,7 +1413,9 @@ mod tests {
     ) -> CompositionGraph {
         let mut graph = CompositionGraph::new();
         for c in components {
-            graph.add_component(c.to_string()).expect("serde deserialization should succeed");
+            graph
+                .add_component(c.to_string())
+                .expect("serde deserialization should succeed");
         }
         for (from, to, kind) in edges {
             graph
@@ -1499,8 +1501,10 @@ mod tests {
     #[test]
     fn add_component_and_edge() {
         let mut g = CompositionGraph::new();
-        g.add_component("A".to_string()).expect("serde deserialization should succeed");
-        g.add_component("B".to_string()).expect("serde deserialization should succeed");
+        g.add_component("A".to_string())
+            .expect("serde deserialization should succeed");
+        g.add_component("B".to_string())
+            .expect("serde deserialization should succeed");
         g.add_edge(CompositionEdge {
             from_component: "A".to_string(),
             to_component: "B".to_string(),
@@ -1515,7 +1519,8 @@ mod tests {
     #[test]
     fn edge_to_unknown_component_fails() {
         let mut g = CompositionGraph::new();
-        g.add_component("A".to_string()).expect("serde deserialization should succeed");
+        g.add_component("A".to_string())
+            .expect("serde deserialization should succeed");
         let result = g.add_edge(CompositionEdge {
             from_component: "A".to_string(),
             to_component: "Z".to_string(),
@@ -1564,9 +1569,21 @@ mod tests {
             ],
         );
         let parent_adj = g.adjacency_for_kind(&CompositionEdgeKind::ParentChild);
-        assert_eq!(parent_adj.get("A").expect("serde deserialization should succeed").len(), 1);
+        assert_eq!(
+            parent_adj
+                .get("A")
+                .expect("serde deserialization should succeed")
+                .len(),
+            1
+        );
         let ctx_adj = g.adjacency_for_kind(&CompositionEdgeKind::ContextFlow);
-        assert_eq!(ctx_adj.get("A").expect("serde deserialization should succeed").len(), 1);
+        assert_eq!(
+            ctx_adj
+                .get("A")
+                .expect("serde deserialization should succeed")
+                .len(),
+            1
+        );
     }
 
     #[test]
@@ -1674,7 +1691,9 @@ mod tests {
             vec!["Provider", "Consumer"],
             vec![("Provider", "Consumer", CompositionEdgeKind::ParentChild)],
         );
-        let result = checker.check(&input).expect("serde deserialization should succeed");
+        let result = checker
+            .check(&input)
+            .expect("serde deserialization should succeed");
         assert_eq!(result.outcome, CoherenceOutcome::Coherent);
         assert!(result.violations.is_empty());
     }
@@ -1683,7 +1702,9 @@ mod tests {
     fn coherent_result_is_coherent() {
         let checker = GlobalCoherenceChecker::new();
         let input = make_input(vec![test_entry("A")], vec!["A"], vec![]);
-        let result = checker.check(&input).expect("serde deserialization should succeed");
+        let result = checker
+            .check(&input)
+            .expect("serde deserialization should succeed");
         assert!(result.is_coherent());
     }
 
@@ -1691,7 +1712,9 @@ mod tests {
     fn coherent_summary_line() {
         let checker = GlobalCoherenceChecker::new();
         let input = make_input(vec![test_entry("A")], vec!["A"], vec![]);
-        let result = checker.check(&input).expect("serde deserialization should succeed");
+        let result = checker
+            .check(&input)
+            .expect("serde deserialization should succeed");
         assert!(result.summary_line().contains("coherent"));
         assert!(result.summary_line().contains("0 violations"));
     }
@@ -1712,7 +1735,9 @@ mod tests {
             vec!["Orphan"],
             vec![],
         );
-        let result = checker.check(&input).expect("serde deserialization should succeed");
+        let result = checker
+            .check(&input)
+            .expect("serde deserialization should succeed");
         assert_eq!(result.outcome, CoherenceOutcome::Incoherent);
         assert!(result.violations.iter().any(|v| matches!(
             &v.kind,
@@ -1733,7 +1758,9 @@ mod tests {
             vec!["Provider"],
             vec![],
         );
-        let result = checker.check(&input).expect("serde deserialization should succeed");
+        let result = checker
+            .check(&input)
+            .expect("serde deserialization should succeed");
         assert!(result.violations.iter().any(|v| matches!(
             &v.kind,
             CoherenceViolationKind::OrphanedProvider { context_key, .. }
@@ -1756,7 +1783,9 @@ mod tests {
                 ("Provider", "ConsumerB", CompositionEdgeKind::ParentChild),
             ],
         );
-        let result = checker.check(&input).expect("serde deserialization should succeed");
+        let result = checker
+            .check(&input)
+            .expect("serde deserialization should succeed");
         assert!(result.is_coherent());
     }
 
@@ -1771,7 +1800,9 @@ mod tests {
             vec!["Parent", "Child"],
             vec![("Parent", "Child", CompositionEdgeKind::ParentChild)],
         );
-        let result = checker.check(&input).expect("serde deserialization should succeed");
+        let result = checker
+            .check(&input)
+            .expect("serde deserialization should succeed");
         assert!(result.violations.iter().any(|v| matches!(
             &v.kind,
             CoherenceViolationKind::DuplicateProvider { context_key, .. }
@@ -1790,7 +1821,9 @@ mod tests {
             vec!["P", "C"],
             vec![("P", "C", CompositionEdgeKind::ParentChild)],
         );
-        let result = checker.check(&input).expect("serde deserialization should succeed");
+        let result = checker
+            .check(&input)
+            .expect("serde deserialization should succeed");
         assert_eq!(result.context_pairs_checked, 2);
     }
 
@@ -1814,7 +1847,9 @@ mod tests {
         input
             .capability_boundary_components
             .insert("Boundary".to_string());
-        let result = checker.check(&input).expect("serde deserialization should succeed");
+        let result = checker
+            .check(&input)
+            .expect("serde deserialization should succeed");
         assert!(result.violations.iter().any(|v| matches!(
             &v.kind,
             CoherenceViolationKind::CapabilityGap {
@@ -1839,7 +1874,9 @@ mod tests {
         input
             .capability_boundary_components
             .insert("Boundary".to_string());
-        let result = checker.check(&input).expect("serde deserialization should succeed");
+        let result = checker
+            .check(&input)
+            .expect("serde deserialization should succeed");
         assert!(result.violations.iter().any(|v| matches!(
             &v.kind,
             CoherenceViolationKind::BoundaryCapabilityLeak {
@@ -1864,7 +1901,9 @@ mod tests {
         input
             .capability_boundary_components
             .insert("Boundary".to_string());
-        let result = checker.check(&input).expect("serde deserialization should succeed");
+        let result = checker
+            .check(&input)
+            .expect("serde deserialization should succeed");
         assert!(result.violations.iter().all(|v| !matches!(
             &v.kind,
             CoherenceViolationKind::BoundaryCapabilityLeak { .. }
@@ -1885,7 +1924,9 @@ mod tests {
         input
             .capability_boundary_components
             .insert("B2".to_string());
-        let result = checker.check(&input).expect("serde deserialization should succeed");
+        let result = checker
+            .check(&input)
+            .expect("serde deserialization should succeed");
         assert_eq!(result.capability_boundaries_checked, 2);
     }
 
@@ -1905,7 +1946,9 @@ mod tests {
                 ("C", "A", CompositionEdgeKind::EffectDependency),
             ],
         );
-        let result = checker.check(&input).expect("serde deserialization should succeed");
+        let result = checker
+            .check(&input)
+            .expect("serde deserialization should succeed");
         assert!(
             result
                 .violations
@@ -1925,7 +1968,9 @@ mod tests {
                 ("B", "C", CompositionEdgeKind::EffectDependency),
             ],
         );
-        let result = checker.check(&input).expect("serde deserialization should succeed");
+        let result = checker
+            .check(&input)
+            .expect("serde deserialization should succeed");
         assert!(
             result
                 .violations
@@ -1952,7 +1997,9 @@ mod tests {
             vec!["Parent", "Child"],
             vec![("Parent", "Child", CompositionEdgeKind::ParentChild)],
         );
-        let result = checker.check(&input).expect("serde deserialization should succeed");
+        let result = checker
+            .check(&input)
+            .expect("serde deserialization should succeed");
         assert!(
             result
                 .violations
@@ -1979,7 +2026,9 @@ mod tests {
             vec!["Parent", "Child"],
             vec![("Parent", "Child", CompositionEdgeKind::ParentChild)],
         );
-        let result = checker.check(&input).expect("serde deserialization should succeed");
+        let result = checker
+            .check(&input)
+            .expect("serde deserialization should succeed");
         assert!(
             result
                 .violations
@@ -2025,7 +2074,9 @@ mod tests {
         input
             .suspense_components
             .insert("SuspenseBoundary".to_string());
-        let result = checker.check(&input).expect("serde deserialization should succeed");
+        let result = checker
+            .check(&input)
+            .expect("serde deserialization should succeed");
         assert!(result.violations.iter().any(|v| matches!(
             &v.kind,
             CoherenceViolationKind::SuspenseBoundaryConflict { .. }
@@ -2059,7 +2110,9 @@ mod tests {
         input
             .suspense_components
             .insert("SuspenseBoundary".to_string());
-        let result = checker.check(&input).expect("serde deserialization should succeed");
+        let result = checker
+            .check(&input)
+            .expect("serde deserialization should succeed");
         assert!(result.violations.iter().all(|v| !matches!(
             &v.kind,
             CoherenceViolationKind::SuspenseBoundaryConflict { .. }
@@ -2073,7 +2126,9 @@ mod tests {
         let mut input = make_input(entries, vec!["S1", "S2"], vec![]);
         input.suspense_components.insert("S1".to_string());
         input.suspense_components.insert("S2".to_string());
-        let result = checker.check(&input).expect("serde deserialization should succeed");
+        let result = checker
+            .check(&input)
+            .expect("serde deserialization should succeed");
         assert_eq!(result.suspense_boundaries_checked, 2);
     }
 
@@ -2103,7 +2158,9 @@ mod tests {
         input
             .hydration_components
             .insert("HydrationBoundary".to_string());
-        let result = checker.check(&input).expect("serde deserialization should succeed");
+        let result = checker
+            .check(&input)
+            .expect("serde deserialization should succeed");
         assert!(result.violations.iter().any(|v| matches!(
             &v.kind,
             CoherenceViolationKind::HydrationBoundaryConflict { .. }
@@ -2128,7 +2185,9 @@ mod tests {
         input
             .hydration_components
             .insert("HydrationBoundary".to_string());
-        let result = checker.check(&input).expect("serde deserialization should succeed");
+        let result = checker
+            .check(&input)
+            .expect("serde deserialization should succeed");
         assert!(result.violations.iter().all(|v| !matches!(
             &v.kind,
             CoherenceViolationKind::HydrationBoundaryConflict { .. }
@@ -2142,7 +2201,9 @@ mod tests {
         let mut input = make_input(entries, vec!["H1", "H2"], vec![]);
         input.hydration_components.insert("H1".to_string());
         input.hydration_components.insert("H2".to_string());
-        let result = checker.check(&input).expect("serde deserialization should succeed");
+        let result = checker
+            .check(&input)
+            .expect("serde deserialization should succeed");
         assert_eq!(result.hydration_boundaries_checked, 2);
     }
 
@@ -2164,7 +2225,9 @@ mod tests {
             ),
         ];
         let input = make_input(entries, vec!["CompA", "CompB"], vec![]);
-        let result = checker.check(&input).expect("serde deserialization should succeed");
+        let result = checker
+            .check(&input)
+            .expect("serde deserialization should succeed");
         assert!(result.violations.iter().any(|v| matches!(
             &v.kind,
             CoherenceViolationKind::HookCleanupMismatch { hook_label, .. }
@@ -2186,7 +2249,9 @@ mod tests {
             ),
         ];
         let input = make_input(entries, vec!["CompA", "CompB"], vec![]);
-        let result = checker.check(&input).expect("serde deserialization should succeed");
+        let result = checker
+            .check(&input)
+            .expect("serde deserialization should succeed");
         assert!(
             result
                 .violations
@@ -2208,7 +2273,9 @@ mod tests {
             test_entry_with_contexts("C3", vec!["missing3"], vec![]),
         ];
         let input = make_input(entries, vec!["C1", "C2", "C3"], vec![]);
-        let result = checker.check(&input).expect("serde deserialization should succeed");
+        let result = checker
+            .check(&input)
+            .expect("serde deserialization should succeed");
         assert_eq!(result.outcome, CoherenceOutcome::BudgetExhausted);
         assert!(result.violations.len() <= 2);
     }
@@ -2228,7 +2295,9 @@ mod tests {
             vec!["C1", "P1"],
             vec![],
         );
-        let result = checker.check(&input).expect("serde deserialization should succeed");
+        let result = checker
+            .check(&input)
+            .expect("serde deserialization should succeed");
         let blocking = result.blocking_violations();
         assert!(!blocking.is_empty());
         for v in &blocking {
@@ -2244,7 +2313,9 @@ mod tests {
             vec!["C1"],
             vec![],
         );
-        let result = checker.check(&input).expect("serde deserialization should succeed");
+        let result = checker
+            .check(&input)
+            .expect("serde deserialization should succeed");
         let by_code = result.violations_by_debt_code();
         assert!(by_code.contains_key(DEBT_UNRESOLVED_CONTEXT));
     }
@@ -2257,8 +2328,12 @@ mod tests {
             vec!["C1"],
             vec![],
         );
-        let r1 = checker.check(&input).expect("serde deserialization should succeed");
-        let r2 = checker.check(&input).expect("serde deserialization should succeed");
+        let r1 = checker
+            .check(&input)
+            .expect("serde deserialization should succeed");
+        let r2 = checker
+            .check(&input)
+            .expect("serde deserialization should succeed");
         assert_eq!(r1.result_hash, r2.result_hash);
     }
 
@@ -2524,7 +2599,8 @@ mod tests {
     fn severity_score_serde_roundtrip() {
         let score = SeverityScore::high();
         let json = serde_json::to_string(&score).expect("serde deserialization should succeed");
-        let back: SeverityScore = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SeverityScore =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(score, back);
     }
 
@@ -2537,7 +2613,8 @@ mod tests {
             label: "test".to_string(),
         };
         let json = serde_json::to_string(&edge).expect("serde deserialization should succeed");
-        let back: CompositionEdge = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: CompositionEdge =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(edge, back);
     }
 
@@ -2549,8 +2626,10 @@ mod tests {
             CoherenceOutcome::Incoherent,
             CoherenceOutcome::BudgetExhausted,
         ] {
-            let json = serde_json::to_string(&outcome).expect("serde deserialization should succeed");
-            let back: CoherenceOutcome = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&outcome).expect("serde deserialization should succeed");
+            let back: CoherenceOutcome =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(outcome, back);
         }
     }
@@ -2562,7 +2641,8 @@ mod tests {
             limit: 42,
         };
         let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
-        let back: CoherenceError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: CoherenceError =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, back);
     }
 
@@ -2573,7 +2653,8 @@ mod tests {
             vec![("A", "B", CompositionEdgeKind::ParentChild)],
         );
         let json = serde_json::to_string(&g).expect("serde deserialization should succeed");
-        let back: CompositionGraph = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: CompositionGraph =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(g, back);
     }
 
@@ -2581,9 +2662,12 @@ mod tests {
     fn coherence_check_result_serde_roundtrip() {
         let checker = GlobalCoherenceChecker::new();
         let input = make_input(vec![test_entry("A")], vec!["A"], vec![]);
-        let result = checker.check(&input).expect("serde deserialization should succeed");
+        let result = checker
+            .check(&input)
+            .expect("serde deserialization should succeed");
         let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
-        let back: CoherenceCheckResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: CoherenceCheckResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, back);
     }
 
@@ -2609,7 +2693,9 @@ mod tests {
                 ("App", "Footer", CompositionEdgeKind::ParentChild),
             ],
         );
-        let result = checker.check(&input).expect("serde deserialization should succeed");
+        let result = checker
+            .check(&input)
+            .expect("serde deserialization should succeed");
         // Body requires "data" which nobody provides
         assert!(result.violations.iter().any(|v| matches!(
             &v.kind,
@@ -2634,7 +2720,9 @@ mod tests {
                 ("L1", "L2", CompositionEdgeKind::ParentChild),
             ],
         );
-        let result = checker.check(&input).expect("serde deserialization should succeed");
+        let result = checker
+            .check(&input)
+            .expect("serde deserialization should succeed");
         assert!(result.is_coherent());
     }
 
@@ -2649,7 +2737,9 @@ mod tests {
     fn check_epoch_propagated() {
         let checker = GlobalCoherenceChecker::new();
         let input = make_input(vec![test_entry("A")], vec!["A"], vec![]);
-        let result = checker.check(&input).expect("serde deserialization should succeed");
+        let result = checker
+            .check(&input)
+            .expect("serde deserialization should succeed");
         assert_eq!(result.check_epoch, 42);
     }
 
@@ -2661,7 +2751,9 @@ mod tests {
             vec!["A", "B"],
             vec![("A", "B", CompositionEdgeKind::ParentChild)],
         );
-        let result = checker.check(&input).expect("serde deserialization should succeed");
+        let result = checker
+            .check(&input)
+            .expect("serde deserialization should succeed");
         assert_eq!(result.component_count, 2);
         assert_eq!(result.edge_count, 1);
     }
@@ -2787,7 +2879,9 @@ mod tests {
             vec!["Provider"],
             vec![],
         );
-        let result = checker.check(&input).expect("serde deserialization should succeed");
+        let result = checker
+            .check(&input)
+            .expect("serde deserialization should succeed");
         assert_eq!(result.outcome, CoherenceOutcome::CoherentWithWarnings);
         assert!(result.is_coherent());
     }
@@ -2800,7 +2894,9 @@ mod tests {
             vec!["C"],
             vec![],
         );
-        let result = checker.check(&input).expect("serde deserialization should succeed");
+        let result = checker
+            .check(&input)
+            .expect("serde deserialization should succeed");
         assert_eq!(result.outcome, CoherenceOutcome::Incoherent);
         assert!(!result.is_coherent());
     }
@@ -2817,7 +2913,9 @@ mod tests {
             vec!["C"],
             vec![],
         );
-        let result = checker.check(&input).expect("serde deserialization should succeed");
+        let result = checker
+            .check(&input)
+            .expect("serde deserialization should succeed");
         let line = result.summary_line();
         assert!(line.contains("incoherent"));
         assert!(line.contains("1 violations"));
@@ -2832,7 +2930,9 @@ mod tests {
     fn result_schema_version_propagated() {
         let checker = GlobalCoherenceChecker::new();
         let input = make_input(vec![test_entry("A")], vec!["A"], vec![]);
-        let result = checker.check(&input).expect("serde deserialization should succeed");
+        let result = checker
+            .check(&input)
+            .expect("serde deserialization should succeed");
         assert_eq!(result.schema_version, GLOBAL_COHERENCE_SCHEMA_VERSION);
     }
 
@@ -2840,7 +2940,9 @@ mod tests {
     fn result_bead_id_propagated() {
         let checker = GlobalCoherenceChecker::new();
         let input = make_input(vec![test_entry("A")], vec!["A"], vec![]);
-        let result = checker.check(&input).expect("serde deserialization should succeed");
+        let result = checker
+            .check(&input)
+            .expect("serde deserialization should succeed");
         assert_eq!(result.bead_id, GLOBAL_COHERENCE_BEAD_ID);
     }
 
@@ -2861,7 +2963,9 @@ mod tests {
             vec!["C"],
             vec![],
         );
-        let result = checker.check(&input).expect("serde deserialization should succeed");
+        let result = checker
+            .check(&input)
+            .expect("serde deserialization should succeed");
         assert!(result.total_severity_millionths >= 2_000_000);
     }
 
@@ -2885,7 +2989,9 @@ mod tests {
             vec![("HB", "NonComm", CompositionEdgeKind::ParentChild)],
         );
         input.hydration_components.insert("HB".to_string());
-        let result = checker.check(&input).expect("serde deserialization should succeed");
+        let result = checker
+            .check(&input)
+            .expect("serde deserialization should succeed");
         assert!(result.violations.iter().any(|v| matches!(
             &v.kind,
             CoherenceViolationKind::HydrationBoundaryConflict { .. }
@@ -2907,7 +3013,8 @@ mod tests {
         input.hydration_components.insert("B".to_string());
         input.capability_boundary_components.insert("A".to_string());
         let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
-        let back: CoherenceCheckInput = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: CoherenceCheckInput =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(input, back);
     }
 
@@ -2932,7 +3039,8 @@ mod tests {
         ];
         for err in &variants {
             let json = serde_json::to_string(err).expect("serde deserialization should succeed");
-            let back: CoherenceError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: CoherenceError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, back);
         }
     }
@@ -2953,7 +3061,8 @@ mod tests {
         ];
         for kind in &variants {
             let json = serde_json::to_string(kind).expect("serde deserialization should succeed");
-            let back: CompositionEdgeKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: CompositionEdgeKind =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*kind, back);
         }
     }
@@ -2995,7 +3104,8 @@ mod tests {
     #[test]
     fn edge_from_unknown_source_fails() {
         let mut g = CompositionGraph::new();
-        g.add_component("B".to_string()).expect("serde deserialization should succeed");
+        g.add_component("B".to_string())
+            .expect("serde deserialization should succeed");
         let result = g.add_edge(CompositionEdge {
             from_component: "Z".to_string(),
             to_component: "B".to_string(),
@@ -3052,7 +3162,9 @@ mod tests {
             ),
         ];
         let input = make_input(entries, vec!["CompA", "CompB"], vec![]);
-        let result = checker.check(&input).expect("serde deserialization should succeed");
+        let result = checker
+            .check(&input)
+            .expect("serde deserialization should succeed");
         // Different labels → no mismatch
         assert!(
             result
@@ -3089,7 +3201,9 @@ mod tests {
             ],
         );
         input.suspense_components.insert("SB".to_string());
-        let result = checker.check(&input).expect("serde deserialization should succeed");
+        let result = checker
+            .check(&input)
+            .expect("serde deserialization should succeed");
         // Async2 is missing "auth" that Async1 has → info-level violation
         assert!(result.violations.iter().any(|v| matches!(
             &v.kind,
@@ -3111,8 +3225,12 @@ mod tests {
             vec!["A"],
             vec![],
         );
-        let r1 = checker.check(&input1).expect("serde deserialization should succeed");
-        let r2 = checker.check(&input2).expect("serde deserialization should succeed");
+        let r1 = checker
+            .check(&input1)
+            .expect("serde deserialization should succeed");
+        let r2 = checker
+            .check(&input2)
+            .expect("serde deserialization should succeed");
         assert_ne!(r1.result_hash, r2.result_hash);
     }
 

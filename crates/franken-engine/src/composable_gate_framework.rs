@@ -739,8 +739,10 @@ mod tests {
         ];
 
         for verdict in verdicts {
-            let json = serde_json::to_string(&verdict).expect("serde deserialization should succeed");
-            let deserialized: GateVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&verdict).expect("serde deserialization should succeed");
+            let deserialized: GateVerdict =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(verdict, deserialized);
         }
     }
@@ -755,8 +757,10 @@ mod tests {
         ];
 
         for severity in severities {
-            let json = serde_json::to_string(&severity).expect("serde deserialization should succeed");
-            let deserialized: GateSeverity = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&severity).expect("serde deserialization should succeed");
+            let deserialized: GateSeverity =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(severity, deserialized);
         }
     }

@@ -1377,7 +1377,8 @@ mod tests {
             // SAFETY: WorkloadFamily derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(family).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by valid WorkloadFamily serialization
-            let back: WorkloadFamily = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: WorkloadFamily =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*family, back);
         }
     }
@@ -1459,7 +1460,8 @@ mod tests {
         // SAFETY: DivergenceClass derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&class).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid DivergenceClass serialization
-        let back: DivergenceClass = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DivergenceClass =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(class, back);
     }
 
@@ -1553,7 +1555,9 @@ mod tests {
         specimen
             .secondary_families
             .insert(WorkloadFamily::ModuleHeavy);
-        corpus.add_specimen(specimen).expect("serde deserialization should succeed");
+        corpus
+            .add_specimen(specimen)
+            .expect("serde deserialization should succeed");
         assert_eq!(corpus.covered_family_count(), 3);
         assert_eq!(
             corpus.specimens_by_family(WorkloadFamily::AsyncHeavy).len(),
@@ -1647,7 +1651,9 @@ mod tests {
         let mut corpus = WorkloadCorpus::new();
         let mut spec = make_specimen("s1", WorkloadFamily::ParseHeavy, InputLanguage::JavaScript);
         spec.provenance.license = LicenseStatus::Copyleft;
-        corpus.add_specimen(spec).expect("serde deserialization should succeed");
+        corpus
+            .add_specimen(spec)
+            .expect("serde deserialization should succeed");
         assert_eq!(corpus.unpublishable_specimens().len(), 1);
     }
 
@@ -1655,7 +1661,8 @@ mod tests {
     fn corpus_serde_roundtrip() {
         let corpus = build_seed_corpus();
         let json = serde_json::to_string(&corpus).expect("serde deserialization should succeed");
-        let back: WorkloadCorpus = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: WorkloadCorpus =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(corpus.specimen_count(), back.specimen_count());
         assert_eq!(corpus.content_hash(), back.content_hash());
     }
@@ -1703,7 +1710,8 @@ mod tests {
     fn config_serde_roundtrip() {
         let config = GateConfig::default();
         let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
-        let back: GateConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GateConfig =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, back);
     }
 
@@ -1914,7 +1922,8 @@ mod tests {
         let corpus = build_seed_corpus();
         let report = gate.evaluate(&corpus);
         let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
-        let back: GateReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GateReport =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report.total_specimens, back.total_specimens);
         assert_eq!(report.families_covered, back.families_covered);
     }
@@ -1924,7 +1933,9 @@ mod tests {
         let mut corpus = WorkloadCorpus::new();
         let mut spec = make_specimen("s1", WorkloadFamily::ParseHeavy, InputLanguage::JavaScript);
         spec.provenance.license = LicenseStatus::Copyleft;
-        corpus.add_specimen(spec).expect("serde deserialization should succeed");
+        corpus
+            .add_specimen(spec)
+            .expect("serde deserialization should succeed");
         corpus.record_equivalence(make_equivalence(
             "s1",
             BaselineRuntime::NodeJs,
@@ -1939,7 +1950,8 @@ mod tests {
     fn equivalence_result_serde_roundtrip() {
         let result = make_equivalence("s1", BaselineRuntime::NodeJs, DivergenceClass::Identical);
         let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
-        let back: EquivalenceResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: EquivalenceResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result.specimen_id, back.specimen_id);
         assert_eq!(result.divergence_class, back.divergence_class);
     }
@@ -1948,7 +1960,8 @@ mod tests {
     fn workload_specimen_serde_roundtrip() {
         let specimen = make_specimen("s1", WorkloadFamily::ParseHeavy, InputLanguage::JavaScript);
         let json = serde_json::to_string(&specimen).expect("serde deserialization should succeed");
-        let back: WorkloadSpecimen = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: WorkloadSpecimen =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(specimen.id, back.id);
         assert_eq!(specimen.family, back.family);
     }
@@ -1965,7 +1978,8 @@ mod tests {
             content_hash: ContentHash::compute(b"test"),
         };
         let json = serde_json::to_string(&prov).expect("serde deserialization should succeed");
-        let back: WorkloadProvenance = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: WorkloadProvenance =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(prov, back);
     }
 

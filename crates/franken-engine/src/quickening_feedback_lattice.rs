@@ -899,7 +899,8 @@ mod tests {
             QuickeningLevel::Quickened,
         ] {
             let json = serde_json::to_string(&level).expect("serde deserialization should succeed");
-            let back: QuickeningLevel = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: QuickeningLevel =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(level, back);
         }
     }
@@ -940,7 +941,8 @@ mod tests {
         let mut slot = TypeFeedbackSlot::new(5, 0);
         slot.record(ObservedType::String);
         let json = serde_json::to_string(&slot).expect("serde deserialization should succeed");
-        let back: TypeFeedbackSlot = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: TypeFeedbackSlot =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(slot, back);
     }
 
@@ -1088,7 +1090,8 @@ mod tests {
     fn superinstruction_catalog_serde() {
         let catalog = SuperInstructionCatalog::default();
         let json = serde_json::to_string(&catalog).expect("serde deserialization should succeed");
-        let back: SuperInstructionCatalog = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SuperInstructionCatalog =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(catalog, back);
     }
 
@@ -1131,17 +1134,35 @@ mod tests {
         // Evaluate: Cold → Warm
         let t1 = profile.evaluate_all(&policy);
         assert_eq!(t1.len(), 1);
-        assert_eq!(profile.get(0).expect("serde deserialization should succeed").level, QuickeningLevel::Warm);
+        assert_eq!(
+            profile
+                .get(0)
+                .expect("serde deserialization should succeed")
+                .level,
+            QuickeningLevel::Warm
+        );
 
         // Evaluate again: Warm → Hot
         let t2 = profile.evaluate_all(&policy);
         assert_eq!(t2.len(), 1);
-        assert_eq!(profile.get(0).expect("serde deserialization should succeed").level, QuickeningLevel::Hot);
+        assert_eq!(
+            profile
+                .get(0)
+                .expect("serde deserialization should succeed")
+                .level,
+            QuickeningLevel::Hot
+        );
 
         // Evaluate again: Hot → Quickened (types are monomorphic)
         let t3 = profile.evaluate_all(&policy);
         assert_eq!(t3.len(), 1);
-        assert_eq!(profile.get(0).expect("serde deserialization should succeed").level, QuickeningLevel::Quickened);
+        assert_eq!(
+            profile
+                .get(0)
+                .expect("serde deserialization should succeed")
+                .level,
+            QuickeningLevel::Quickened
+        );
         assert_eq!(profile.total_quickened, 1);
     }
 
@@ -1158,10 +1179,22 @@ mod tests {
         }
         profile.evaluate_all(&policy);
         profile.evaluate_all(&policy);
-        assert_eq!(profile.get(0).expect("serde deserialization should succeed").level, QuickeningLevel::Hot);
+        assert_eq!(
+            profile
+                .get(0)
+                .expect("serde deserialization should succeed")
+                .level,
+            QuickeningLevel::Hot
+        );
 
         profile.record_deopt(0, &policy);
-        assert_eq!(profile.get(0).expect("serde deserialization should succeed").level, QuickeningLevel::Cold);
+        assert_eq!(
+            profile
+                .get(0)
+                .expect("serde deserialization should succeed")
+                .level,
+            QuickeningLevel::Cold
+        );
         assert_eq!(profile.total_deopts, 1);
     }
 
@@ -1239,7 +1272,8 @@ mod tests {
         profile.record_execution(0, "add");
         profile.record_type(0, "add", 0, ObservedType::Integer);
         let json = serde_json::to_string(&profile).expect("serde deserialization should succeed");
-        let back: QuickeningProfile = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: QuickeningProfile =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(profile.function_id, back.function_id);
         assert_eq!(profile.total_executions, back.total_executions);
     }
@@ -1259,7 +1293,8 @@ mod tests {
         let profile = QuickeningProfile::new("fn_decision_serde");
         let decision = QuickeningDecision::build(&profile, &policy, vec![], vec![]);
         let json = serde_json::to_string(&decision).expect("serde deserialization should succeed");
-        let back: QuickeningDecision = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: QuickeningDecision =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(decision, back);
     }
 
@@ -1300,8 +1335,10 @@ mod tests {
             ObservedType::BigInt,
         ];
         for variant in &all {
-            let json = serde_json::to_string(variant).expect("serde deserialization should succeed");
-            let back: ObservedType = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(variant).expect("serde deserialization should succeed");
+            let back: ObservedType =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*variant, back, "roundtrip failed for {variant}");
         }
     }
@@ -1420,7 +1457,8 @@ mod tests {
     fn quickening_policy_serde_roundtrip() {
         let policy = QuickeningPolicy::default();
         let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
-        let back: QuickeningPolicy = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: QuickeningPolicy =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(policy, back);
     }
 
@@ -1624,7 +1662,8 @@ mod tests {
         fb.deopt_count = 3;
 
         let json = serde_json::to_string(&fb).expect("serde deserialization should succeed");
-        let back: InstructionFeedback = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: InstructionFeedback =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(fb, back);
     }
 
@@ -1676,7 +1715,8 @@ mod tests {
             estimated_speedup_millionths: 1_600_000,
         };
         let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
-        let back: SuperInstructionPattern = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SuperInstructionPattern =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(p, back);
     }
 
@@ -1861,12 +1901,30 @@ mod tests {
 
         let t2 = profile.evaluate_all(&policy);
         assert_eq!(t2.len(), 1);
-        assert_eq!(profile.get(4).expect("serde deserialization should succeed").level, QuickeningLevel::Hot);
-        assert_eq!(profile.get(0).expect("serde deserialization should succeed").level, QuickeningLevel::Warm);
+        assert_eq!(
+            profile
+                .get(4)
+                .expect("serde deserialization should succeed")
+                .level,
+            QuickeningLevel::Hot
+        );
+        assert_eq!(
+            profile
+                .get(0)
+                .expect("serde deserialization should succeed")
+                .level,
+            QuickeningLevel::Warm
+        );
 
         let t3 = profile.evaluate_all(&policy);
         assert_eq!(t3.len(), 1);
-        assert_eq!(profile.get(4).expect("serde deserialization should succeed").level, QuickeningLevel::Quickened);
+        assert_eq!(
+            profile
+                .get(4)
+                .expect("serde deserialization should succeed")
+                .level,
+            QuickeningLevel::Quickened
+        );
         assert_eq!(profile.total_quickened, 1);
 
         let summary = profile.summary();
@@ -2015,7 +2073,8 @@ mod tests {
             advanced: true,
         };
         let json = serde_json::to_string(&t).expect("serde deserialization should succeed");
-        let back: QuickeningTransition = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: QuickeningTransition =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(t, back);
     }
 
@@ -2028,7 +2087,8 @@ mod tests {
             estimated_speedup_millionths: 1_300_000,
         };
         let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
-        let back: SuperInstructionCandidate = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SuperInstructionCandidate =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c, back);
     }
 
@@ -2045,7 +2105,8 @@ mod tests {
             evaluation_epoch: 7,
         };
         let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
-        let back: QuickeningSummary = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: QuickeningSummary =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(s, back);
     }
 
@@ -2203,7 +2264,9 @@ mod tests {
             QuickeningLevel::Hot,
         ];
         for level in levels {
-            let next = level.advance().expect("serde deserialization should succeed");
+            let next = level
+                .advance()
+                .expect("serde deserialization should succeed");
             assert!(
                 next.rank() > level.rank(),
                 "advance from {level} should produce a strictly higher rank"
@@ -2286,7 +2349,8 @@ mod tests {
         assert_eq!(slot.observation_count, 4);
         assert_eq!(slot.observed_types.len(), 3);
         let json = serde_json::to_string(&slot).expect("serde deserialization should succeed");
-        let back: TypeFeedbackSlot = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: TypeFeedbackSlot =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(slot, back);
         assert_eq!(back.observation_count, 4);
         assert_eq!(back.observed_types.len(), 3);
@@ -2478,7 +2542,8 @@ mod tests {
         fb.deopt_count = 7;
         fb.level = QuickeningLevel::Quickened;
         let json = serde_json::to_string(&fb).expect("serde deserialization should succeed");
-        let back: InstructionFeedback = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: InstructionFeedback =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(fb, back);
         assert_eq!(back.type_slots.len(), 2);
         assert_eq!(back.type_slots[0].observed_types.len(), 1);
@@ -2635,7 +2700,8 @@ mod tests {
         profile.evaluate_all(&policy);
         profile.record_deopt(4, &policy);
         let json = serde_json::to_string(&profile).expect("serde deserialization should succeed");
-        let back: QuickeningProfile = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: QuickeningProfile =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(profile.function_id, back.function_id);
         assert_eq!(profile.total_executions, back.total_executions);
         assert_eq!(profile.total_deopts, back.total_deopts);
@@ -2692,7 +2758,8 @@ mod tests {
         }];
         let decision = QuickeningDecision::build(&profile, &policy, transitions, candidates);
         let json = serde_json::to_string(&decision).expect("serde deserialization should succeed");
-        let back: QuickeningDecision = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: QuickeningDecision =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(decision, back);
         assert_eq!(back.transitions.len(), 2);
         assert_eq!(back.superinstruction_candidates.len(), 1);
@@ -2819,9 +2886,21 @@ mod tests {
         profile.evaluate_all(&policy);
         profile.evaluate_all(&policy);
         profile.evaluate_all(&policy);
-        assert_eq!(profile.get(0).expect("serde deserialization should succeed").level, QuickeningLevel::Quickened);
+        assert_eq!(
+            profile
+                .get(0)
+                .expect("serde deserialization should succeed")
+                .level,
+            QuickeningLevel::Quickened
+        );
         profile.record_deopt(0, &policy);
-        assert_eq!(profile.get(0).expect("serde deserialization should succeed").level, QuickeningLevel::Warm);
+        assert_eq!(
+            profile
+                .get(0)
+                .expect("serde deserialization should succeed")
+                .level,
+            QuickeningLevel::Warm
+        );
     }
 
     #[test]
@@ -2837,7 +2916,8 @@ mod tests {
             evaluation_epoch: 0,
         };
         let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
-        let back: QuickeningSummary = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: QuickeningSummary =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(s, back);
     }
 

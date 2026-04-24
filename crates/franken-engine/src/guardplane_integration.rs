@@ -990,7 +990,9 @@ mod tests {
         };
 
         // SAFETY: Test setup with valid context should allow pre_property_access to succeed
-        let action = adapter.pre_property_access(&context).expect("serde deserialization should succeed");
+        let action = adapter
+            .pre_property_access(&context)
+            .expect("serde deserialization should succeed");
         assert_eq!(action, HookAction::Allow);
         assert!(
             adapter.decision_history.is_empty(),
@@ -1013,7 +1015,9 @@ mod tests {
         };
 
         // SAFETY: Test setup with valid context should allow pre_property_access to succeed
-        let action = adapter.pre_property_access(&context).expect("serde deserialization should succeed");
+        let action = adapter
+            .pre_property_access(&context)
+            .expect("serde deserialization should succeed");
         assert_ne!(action, HookAction::Allow); // Should be challenged or sandboxed
         assert!(
             !adapter.decision_history.is_empty(),
@@ -1046,9 +1050,13 @@ mod tests {
         });
 
         // SAFETY: Test setup with valid context should allow assess_risk to succeed
-        let delete_risk = adapter.assess_risk(&delete_ctx).expect("serde deserialization should succeed");
+        let delete_risk = adapter
+            .assess_risk(&delete_ctx)
+            .expect("serde deserialization should succeed");
         // SAFETY: Test setup with valid context should allow assess_risk to succeed
-        let get_risk = adapter.assess_risk(&get_ctx).expect("serde deserialization should succeed");
+        let get_risk = adapter
+            .assess_risk(&get_ctx)
+            .expect("serde deserialization should succeed");
 
         assert!(delete_risk.risk_score > get_risk.risk_score);
     }
@@ -1076,9 +1084,13 @@ mod tests {
         });
 
         // SAFETY: Test setup with valid contexts should allow assess_risk to succeed
-        let attributed_risk = adapter.assess_risk(&attributed_ctx).expect("serde deserialization should succeed");
+        let attributed_risk = adapter
+            .assess_risk(&attributed_ctx)
+            .expect("serde deserialization should succeed");
         // SAFETY: Test setup with valid contexts should allow assess_risk to succeed
-        let sparse_risk = adapter.assess_risk(&sparse_ctx).expect("serde deserialization should succeed");
+        let sparse_risk = adapter
+            .assess_risk(&sparse_ctx)
+            .expect("serde deserialization should succeed");
 
         assert!(
             attributed_risk.confidence > sparse_risk.confidence,
@@ -1114,9 +1126,13 @@ mod tests {
         });
 
         // SAFETY: Test setup with valid contexts should allow assess_risk to succeed
-        let normal_risk = adapter.assess_risk(&normal_ctx).expect("serde deserialization should succeed");
+        let normal_risk = adapter
+            .assess_risk(&normal_ctx)
+            .expect("serde deserialization should succeed");
         // SAFETY: Test setup with valid contexts should allow assess_risk to succeed
-        let invalid_risk = adapter.assess_risk(&invalid_ctx).expect("serde deserialization should succeed");
+        let invalid_risk = adapter
+            .assess_risk(&invalid_ctx)
+            .expect("serde deserialization should succeed");
 
         assert!(
             invalid_risk
@@ -1219,7 +1235,9 @@ mod tests {
             "decision evidence must carry a keyed authenticity signature"
         );
         assert!(
-            evidence.verify_signature_with_key(&signing_key).expect("serde deserialization should succeed"),
+            evidence
+                .verify_signature_with_key(&signing_key)
+                .expect("serde deserialization should succeed"),
             "decision evidence signature must verify with the configured key"
         );
     }

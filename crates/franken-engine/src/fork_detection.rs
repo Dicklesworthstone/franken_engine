@@ -1162,7 +1162,9 @@ mod tests {
         });
 
         assert!(detector.is_safe_mode("zone-a"));
-        let sm = detector.safe_mode_state("zone-a").expect("serde deserialization should succeed");
+        let sm = detector
+            .safe_mode_state("zone-a")
+            .expect("serde deserialization should succeed");
         assert!(sm.active);
         assert_eq!(sm.trigger_seq, Some(1));
         assert_eq!(sm.unacknowledged_count, 1);
@@ -1313,7 +1315,9 @@ mod tests {
         assert!(detector.acknowledge_incident("zone-a", &report.incident_id));
 
         // Now exit should work.
-        let acked = detector.exit_safe_mode("zone-a", "t-exit").expect("serde deserialization should succeed");
+        let acked = detector
+            .exit_safe_mode("zone-a", "t-exit")
+            .expect("serde deserialization should succeed");
         assert_eq!(acked, 1);
         assert!(!detector.is_safe_mode("zone-a"));
     }
@@ -1736,7 +1740,8 @@ mod tests {
         ];
         for err in &errors {
             let json = serde_json::to_string(err).expect("serde deserialization should succeed");
-            let restored: ForkError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: ForkError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, restored);
         }
     }
@@ -1759,7 +1764,8 @@ mod tests {
             acknowledged: false,
         };
         let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
-        let restored: ForkIncidentReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: ForkIncidentReport =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report, restored);
     }
 
@@ -1773,7 +1779,8 @@ mod tests {
             trace_id: "t-1".to_string(),
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let restored: ForkEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: ForkEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, restored);
     }
 
@@ -1785,7 +1792,8 @@ mod tests {
             unacknowledged_count: 2,
         };
         let json = serde_json::to_string(&state).expect("serde deserialization should succeed");
-        let restored: SafeModeState = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: SafeModeState =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(state, restored);
     }
 
@@ -2117,7 +2125,8 @@ mod tests {
             resolution_seq: 5,
         };
         let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
-        let restored: ForkError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: ForkError =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, restored);
     }
 
@@ -2227,7 +2236,8 @@ mod tests {
             cli_safe_mode: false,
             environment: BTreeMap::new(),
         };
-        let artifact = evaluate_safe_mode_startup(&input).expect("serde deserialization should succeed");
+        let artifact =
+            evaluate_safe_mode_startup(&input).expect("serde deserialization should succeed");
         assert!(!artifact.safe_mode_active);
         assert_eq!(artifact.source, SafeModeStartupSource::NotRequested);
         assert!(!artifact.restrictions.all_extensions_sandboxed);
@@ -2300,7 +2310,8 @@ mod tests {
                 cli_safe_mode: false,
                 environment: env,
             };
-            let artifact = evaluate_safe_mode_startup(&input).expect("serde deserialization should succeed");
+            let artifact =
+                evaluate_safe_mode_startup(&input).expect("serde deserialization should succeed");
             assert!(
                 artifact.safe_mode_active,
                 "env value '{val}' should activate safe mode"
@@ -2320,7 +2331,8 @@ mod tests {
                 cli_safe_mode: false,
                 environment: env,
             };
-            let artifact = evaluate_safe_mode_startup(&input).expect("serde deserialization should succeed");
+            let artifact =
+                evaluate_safe_mode_startup(&input).expect("serde deserialization should succeed");
             assert!(
                 !artifact.safe_mode_active,
                 "env value '{val}' should NOT activate safe mode"
@@ -2415,7 +2427,8 @@ mod tests {
             accepted: true,
         };
         let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
-        let restored: CheckpointHistoryEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: CheckpointHistoryEntry =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, restored);
     }
 
@@ -2426,8 +2439,10 @@ mod tests {
             SafeModeStartupSource::CliFlag,
             SafeModeStartupSource::EnvironmentVariable,
         ] {
-            let json = serde_json::to_string(&source).expect("serde deserialization should succeed");
-            let restored: SafeModeStartupSource = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&source).expect("serde deserialization should succeed");
+            let restored: SafeModeStartupSource =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(source, restored);
         }
     }
@@ -2435,8 +2450,10 @@ mod tests {
     #[test]
     fn safe_mode_restrictions_serde_roundtrip() {
         let restrictions = SafeModeRestrictions::conservative();
-        let json = serde_json::to_string(&restrictions).expect("serde deserialization should succeed");
-        let restored: SafeModeRestrictions = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json =
+            serde_json::to_string(&restrictions).expect("serde deserialization should succeed");
+        let restored: SafeModeRestrictions =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(restrictions, restored);
     }
 
@@ -2446,7 +2463,8 @@ mod tests {
             field: "trace_id".to_string(),
         };
         let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
-        let restored: SafeModeStartupError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: SafeModeStartupError =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, restored);
     }
 
@@ -2516,7 +2534,9 @@ mod tests {
             })
             .expect("serde deserialization should succeed");
 
-        let count = detector.exit_safe_mode("zone-a", "t").expect("serde deserialization should succeed");
+        let count = detector
+            .exit_safe_mode("zone-a", "t")
+            .expect("serde deserialization should succeed");
         assert_eq!(count, 0);
     }
 
@@ -2545,7 +2565,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: ForkError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ForkError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -2657,7 +2678,8 @@ mod tests {
             checkpoint_seq: 42,
         };
         let json = serde_json::to_string(&evt).expect("serde deserialization should succeed");
-        let back: ForkEventType = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ForkEventType =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(evt, back);
     }
 
@@ -2673,7 +2695,8 @@ mod tests {
             trace_id: "t-42".to_string(),
         };
         let json = serde_json::to_string(&evt).expect("serde deserialization should succeed");
-        let back: ForkEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ForkEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(evt, back);
     }
 
@@ -2697,7 +2720,8 @@ mod tests {
             acknowledged: false,
         };
         let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
-        let back: ForkIncidentReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ForkIncidentReport =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report, back);
     }
 
@@ -2721,7 +2745,8 @@ mod tests {
             unacknowledged_count: 3,
         };
         let json = serde_json::to_string(&state).expect("serde deserialization should succeed");
-        let back: SafeModeState = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SafeModeState =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(state, back);
     }
 
@@ -2773,7 +2798,8 @@ mod tests {
             cli_safe_mode: false,
             environment: BTreeMap::new(),
         };
-        let artifact = evaluate_safe_mode_startup(&input).expect("serde deserialization should succeed");
+        let artifact =
+            evaluate_safe_mode_startup(&input).expect("serde deserialization should succeed");
         assert!(!artifact.safe_mode_active);
         assert_eq!(artifact.source, SafeModeStartupSource::NotRequested);
         assert!(artifact.restricted_features.is_empty());
@@ -2788,7 +2814,8 @@ mod tests {
             cli_safe_mode: true,
             environment: BTreeMap::new(),
         };
-        let artifact = evaluate_safe_mode_startup(&input).expect("serde deserialization should succeed");
+        let artifact =
+            evaluate_safe_mode_startup(&input).expect("serde deserialization should succeed");
         assert!(artifact.safe_mode_active);
         assert_eq!(artifact.source, SafeModeStartupSource::CliFlag);
         assert!(!artifact.restricted_features.is_empty());
@@ -2805,7 +2832,8 @@ mod tests {
             cli_safe_mode: false,
             environment: env,
         };
-        let artifact = evaluate_safe_mode_startup(&input).expect("serde deserialization should succeed");
+        let artifact =
+            evaluate_safe_mode_startup(&input).expect("serde deserialization should succeed");
         assert!(artifact.safe_mode_active);
         assert_eq!(artifact.source, SafeModeStartupSource::EnvironmentVariable);
     }
@@ -2835,7 +2863,8 @@ mod tests {
             pending_quarantines: 0,
             evidence_ledger_flushed: true,
         };
-        let artifact = evaluate_safe_mode_exit(&input).expect("serde deserialization should succeed");
+        let artifact =
+            evaluate_safe_mode_exit(&input).expect("serde deserialization should succeed");
         assert!(artifact.can_exit);
         assert!(artifact.blocking_reasons.is_empty());
     }
@@ -2850,7 +2879,8 @@ mod tests {
             pending_quarantines: 0,
             evidence_ledger_flushed: true,
         };
-        let artifact = evaluate_safe_mode_exit(&input).expect("serde deserialization should succeed");
+        let artifact =
+            evaluate_safe_mode_exit(&input).expect("serde deserialization should succeed");
         assert!(!artifact.can_exit);
         assert!(
             artifact
@@ -2870,7 +2900,8 @@ mod tests {
             pending_quarantines: 0,
             evidence_ledger_flushed: false,
         };
-        let artifact = evaluate_safe_mode_exit(&input).expect("serde deserialization should succeed");
+        let artifact =
+            evaluate_safe_mode_exit(&input).expect("serde deserialization should succeed");
         assert!(!artifact.can_exit);
         assert!(
             artifact
@@ -2938,7 +2969,8 @@ mod tests {
                 cli_safe_mode: false,
                 environment: env,
             };
-            let artifact = evaluate_safe_mode_startup(&input).expect("serde deserialization should succeed");
+            let artifact =
+                evaluate_safe_mode_startup(&input).expect("serde deserialization should succeed");
             assert!(
                 artifact.safe_mode_active,
                 "'{val}' should activate safe mode"
@@ -2958,7 +2990,8 @@ mod tests {
                 cli_safe_mode: false,
                 environment: env,
             };
-            let artifact = evaluate_safe_mode_startup(&input).expect("serde deserialization should succeed");
+            let artifact =
+                evaluate_safe_mode_startup(&input).expect("serde deserialization should succeed");
             assert!(
                 !artifact.safe_mode_active,
                 "'{val}' should NOT activate safe mode"
@@ -3125,7 +3158,9 @@ mod tests {
 
         assert_eq!(detector.incidents("zone-a").len(), 2);
         assert_eq!(detector.unacknowledged_incidents("zone-a").len(), 2);
-        let sm = detector.safe_mode_state("zone-a").expect("serde deserialization should succeed");
+        let sm = detector
+            .safe_mode_state("zone-a")
+            .expect("serde deserialization should succeed");
         assert_eq!(sm.unacknowledged_count, 2);
     }
 
@@ -3276,7 +3311,9 @@ mod tests {
         // Clear prior events, acknowledge, and exit.
         detector.drain_events();
         detector.acknowledge_incident("zone-a", &report.incident_id);
-        detector.exit_safe_mode("zone-a", "t-exit").expect("serde deserialization should succeed");
+        detector
+            .exit_safe_mode("zone-a", "t-exit")
+            .expect("serde deserialization should succeed");
 
         let counts = detector.event_counts();
         assert_eq!(counts.get("safe_mode_exited"), Some(&1));
@@ -3319,7 +3356,9 @@ mod tests {
             })
             .expect("serde deserialization should succeed");
 
-        let hist = detector.history("zone-a").expect("serde deserialization should succeed");
+        let hist = detector
+            .history("zone-a")
+            .expect("serde deserialization should succeed");
         assert_eq!(hist.len(), 2);
         assert!(hist.contains_key(&0));
         assert!(hist.contains_key(&1));
@@ -3353,9 +3392,11 @@ mod tests {
             cli_safe_mode: true,
             environment: BTreeMap::new(),
         };
-        let artifact = evaluate_safe_mode_startup(&input).expect("serde deserialization should succeed");
+        let artifact =
+            evaluate_safe_mode_startup(&input).expect("serde deserialization should succeed");
         let json = serde_json::to_string(&artifact).expect("serde deserialization should succeed");
-        let back: SafeModeStartupArtifact = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SafeModeStartupArtifact =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(artifact, back);
     }
 
@@ -3369,9 +3410,11 @@ mod tests {
             pending_quarantines: 0,
             evidence_ledger_flushed: false,
         };
-        let artifact = evaluate_safe_mode_exit(&input).expect("serde deserialization should succeed");
+        let artifact =
+            evaluate_safe_mode_exit(&input).expect("serde deserialization should succeed");
         let json = serde_json::to_string(&artifact).expect("serde deserialization should succeed");
-        let back: SafeModeExitCheckArtifact = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SafeModeExitCheckArtifact =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(artifact, back);
     }
 
@@ -3387,7 +3430,8 @@ mod tests {
             error_code: Some("FE-TEST".to_string()),
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let back: SafeModeStartupEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SafeModeStartupEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
     }
 
@@ -3403,7 +3447,8 @@ mod tests {
             environment: env,
         };
         let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
-        let back: SafeModeStartupInput = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SafeModeStartupInput =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(input, back);
     }
 
@@ -3418,7 +3463,8 @@ mod tests {
             evidence_ledger_flushed: false,
         };
         let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
-        let back: SafeModeExitCheckInput = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SafeModeExitCheckInput =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(input, back);
     }
 
@@ -3431,7 +3477,8 @@ mod tests {
             cli_safe_mode: false,
             environment: BTreeMap::new(),
         };
-        let artifact = evaluate_safe_mode_startup(&input).expect("serde deserialization should succeed");
+        let artifact =
+            evaluate_safe_mode_startup(&input).expect("serde deserialization should succeed");
         assert!(artifact.evidence_preserved);
         assert!(artifact.logs_preserved);
         assert!(artifact.state_preserved);
@@ -3500,7 +3547,8 @@ mod tests {
             pending_quarantines: 5,
             evidence_ledger_flushed: true,
         };
-        let artifact = evaluate_safe_mode_exit(&input).expect("serde deserialization should succeed");
+        let artifact =
+            evaluate_safe_mode_exit(&input).expect("serde deserialization should succeed");
         assert!(!artifact.can_exit);
         assert!(
             artifact
@@ -3516,7 +3564,8 @@ mod tests {
     fn safe_mode_state_serde_roundtrip_default() {
         let state = SafeModeState::default();
         let json = serde_json::to_string(&state).expect("serde deserialization should succeed");
-        let back: SafeModeState = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SafeModeState =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, state);
         assert!(!back.active);
         assert!(back.trigger_seq.is_none());
@@ -3530,7 +3579,8 @@ mod tests {
             unacknowledged_count: 3,
         };
         let json = serde_json::to_string(&state).expect("serde deserialization should succeed");
-        let back: SafeModeState = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SafeModeState =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, state);
     }
 
@@ -3564,7 +3614,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: ForkEventType = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ForkEventType =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, v);
         }
     }
@@ -3579,7 +3630,8 @@ mod tests {
             trace_id: "trace-abc".to_string(),
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let back: ForkEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ForkEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, event);
     }
 
@@ -3818,7 +3870,9 @@ mod tests {
             trace_id: "t-1b",
         });
 
-        let state = detector.safe_mode_state("zone-s").expect("serde deserialization should succeed");
+        let state = detector
+            .safe_mode_state("zone-s")
+            .expect("serde deserialization should succeed");
         assert!(state.active);
         assert_eq!(state.trigger_seq, Some(1));
         assert_eq!(state.unacknowledged_count, 1);
@@ -3837,7 +3891,8 @@ mod tests {
             pending_quarantines: 3,
             evidence_ledger_flushed: false,
         };
-        let artifact = evaluate_safe_mode_exit(&input).expect("serde deserialization should succeed");
+        let artifact =
+            evaluate_safe_mode_exit(&input).expect("serde deserialization should succeed");
         assert!(!artifact.can_exit);
         assert_eq!(artifact.blocking_reasons.len(), 3);
         assert!(
@@ -3872,7 +3927,8 @@ mod tests {
                 cli_safe_mode: false,
                 environment: env,
             };
-            let artifact = evaluate_safe_mode_startup(&input).expect("serde deserialization should succeed");
+            let artifact =
+                evaluate_safe_mode_startup(&input).expect("serde deserialization should succeed");
             assert!(
                 artifact.safe_mode_active,
                 "env value '{val}' should activate safe mode"
@@ -3951,7 +4007,9 @@ mod tests {
 
         // Acknowledge and exit.
         assert!(detector.acknowledge_incident("zone-exit", &report.incident_id));
-        let acked = detector.exit_safe_mode("zone-exit", "trace-exit").expect("serde deserialization should succeed");
+        let acked = detector
+            .exit_safe_mode("zone-exit", "trace-exit")
+            .expect("serde deserialization should succeed");
         assert_eq!(acked, 1);
         assert!(!detector.is_safe_mode("zone-exit"));
 
@@ -4354,7 +4412,8 @@ mod tests {
             cli_safe_mode: true,
             environment: BTreeMap::new(),
         };
-        let artifact = evaluate_safe_mode_startup(&input).expect("serde deserialization should succeed");
+        let artifact =
+            evaluate_safe_mode_startup(&input).expect("serde deserialization should succeed");
         assert_eq!(
             artifact.events.len(),
             2,
@@ -4377,7 +4436,8 @@ mod tests {
             cli_safe_mode: true,
             environment: env,
         };
-        let artifact = evaluate_safe_mode_startup(&input).expect("serde deserialization should succeed");
+        let artifact =
+            evaluate_safe_mode_startup(&input).expect("serde deserialization should succeed");
         assert!(artifact.safe_mode_active);
         assert_eq!(
             artifact.source,
@@ -4390,7 +4450,8 @@ mod tests {
     fn safe_mode_restrictions_normal_serde_roundtrip() {
         let r = SafeModeRestrictions::normal();
         let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
-        let back: SafeModeRestrictions = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SafeModeRestrictions =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
         assert!(!back.all_extensions_sandboxed);
     }
@@ -4461,7 +4522,8 @@ mod tests {
 
         let exported = detector.export_state();
         let json = serde_json::to_string(exported).expect("serde deserialization should succeed");
-        let back: BTreeMap<String, ZoneState> = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: BTreeMap<String, ZoneState> =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.len(), 2);
         assert!(back.contains_key("zone-j1"));
         assert!(back.contains_key("zone-j2"));
@@ -4486,7 +4548,8 @@ mod tests {
             error_code: None,
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let back: SafeModeStartupEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SafeModeStartupEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
         assert!(back.error_code.is_none());
     }
@@ -4500,7 +4563,8 @@ mod tests {
             accepted: false,
         };
         let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
-        let back: CheckpointHistoryEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: CheckpointHistoryEntry =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, back);
         assert!(!back.accepted);
     }
@@ -4523,7 +4587,8 @@ mod tests {
             acknowledged: true,
         };
         let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
-        let back: ForkIncidentReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ForkIncidentReport =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report, back);
         assert!(back.acknowledged);
         assert!(!back.existing_was_accepted);
@@ -4588,7 +4653,9 @@ mod tests {
             .expect("serde deserialization should succeed");
 
         assert_eq!(detector.history_size("zone-h1"), 1);
-        let hist = detector.history("zone-h1").expect("serde deserialization should succeed");
+        let hist = detector
+            .history("zone-h1")
+            .expect("serde deserialization should succeed");
         assert!(hist.contains_key(&2), "only the latest seq should remain");
     }
 
@@ -4710,12 +4777,16 @@ mod tests {
             .unwrap_err();
 
         detector.acknowledge_incident("zone-idem", &report.incident_id);
-        let first_exit = detector.exit_safe_mode("zone-idem", "t-exit1").expect("serde deserialization should succeed");
+        let first_exit = detector
+            .exit_safe_mode("zone-idem", "t-exit1")
+            .expect("serde deserialization should succeed");
         assert_eq!(first_exit, 1);
         assert!(!detector.is_safe_mode("zone-idem"));
 
         // Calling exit again should return 0 (already exited).
-        let second_exit = detector.exit_safe_mode("zone-idem", "t-exit2").expect("serde deserialization should succeed");
+        let second_exit = detector
+            .exit_safe_mode("zone-idem", "t-exit2")
+            .expect("serde deserialization should succeed");
         assert_eq!(second_exit, 0);
     }
 
@@ -4728,7 +4799,8 @@ mod tests {
             cli_safe_mode: false,
             environment: BTreeMap::new(),
         };
-        let artifact = evaluate_safe_mode_startup(&input).expect("serde deserialization should succeed");
+        let artifact =
+            evaluate_safe_mode_startup(&input).expect("serde deserialization should succeed");
         for event in &artifact.events {
             assert!(
                 event.error_code.is_none(),
@@ -4804,7 +4876,8 @@ mod tests {
             cli_safe_mode: true,
             environment: BTreeMap::new(),
         };
-        let artifact = evaluate_safe_mode_startup(&input).expect("serde deserialization should succeed");
+        let artifact =
+            evaluate_safe_mode_startup(&input).expect("serde deserialization should succeed");
         assert!(
             artifact.exit_procedure.len() >= 3,
             "safe mode exit_procedure should have verification steps"

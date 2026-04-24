@@ -1047,7 +1047,8 @@ mod tests {
         ];
         for id in &ids {
             let json = serde_json::to_string(id).expect("serde deserialization should succeed");
-            let restored: GateId = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: GateId =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*id, restored);
         }
     }
@@ -1066,7 +1067,8 @@ mod tests {
         ];
         for s in &statuses {
             let json = serde_json::to_string(s).expect("serde deserialization should succeed");
-            let restored: GateStatus = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: GateStatus =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*s, restored);
         }
     }
@@ -1085,15 +1087,18 @@ mod tests {
             1000,
         );
         let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
-        let restored: GateReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: GateReport =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report, restored);
     }
 
     #[test]
     fn gate_thresholds_serialization_round_trip() {
         let thresholds = GateThresholds::default();
-        let json = serde_json::to_string(&thresholds).expect("serde deserialization should succeed");
-        let restored: GateThresholds = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json =
+            serde_json::to_string(&thresholds).expect("serde deserialization should succeed");
+        let restored: GateThresholds =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(thresholds, restored);
     }
 
@@ -1107,7 +1112,8 @@ mod tests {
             event: "gate_evaluated".to_string(),
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let restored: GateEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: GateEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, restored);
     }
 
@@ -1121,7 +1127,8 @@ mod tests {
             .with("latency_p99", "42ms")
             .with("throughput", "1000rps");
         let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
-        let restored: GateMetrics = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: GateMetrics =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(m, restored);
     }
 
@@ -1133,7 +1140,8 @@ mod tests {
             event_count: 512,
         };
         let json = serde_json::to_string(&ri).expect("serde deserialization should succeed");
-        let restored: ReplayInput = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: ReplayInput =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ri, restored);
     }
 
@@ -1146,7 +1154,8 @@ mod tests {
             regression_transcripts: 1,
         };
         let json = serde_json::to_string(&ii).expect("serde deserialization should succeed");
-        let restored: InterleavingInput = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: InterleavingInput =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ii, restored);
     }
 
@@ -1159,7 +1168,8 @@ mod tests {
             categories: vec!["syntax".to_string(), "semantics".to_string()],
         };
         let json = serde_json::to_string(&ci).expect("serde deserialization should succeed");
-        let restored: ConformanceInput = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: ConformanceInput =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ci, restored);
     }
 
@@ -1173,7 +1183,8 @@ mod tests {
             targets: vec!["parser".to_string(), "interpreter".to_string()],
         };
         let json = serde_json::to_string(&fi).expect("serde deserialization should succeed");
-        let restored: FuzzInput = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: FuzzInput =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(fi, restored);
     }
 
@@ -1299,7 +1310,9 @@ mod tests {
         assert!(r2.status.is_passed());
 
         // Latest report should be the overwrite
-        let stored = eval.report(GateId::DeterministicReplay).expect("serde deserialization should succeed");
+        let stored = eval
+            .report(GateId::DeterministicReplay)
+            .expect("serde deserialization should succeed");
         assert!(stored.status.is_passed());
         assert_eq!(stored.ci_run_id, "ci-2");
     }
@@ -1933,7 +1946,9 @@ mod tests {
             "t2",
             200,
         );
-        let report = eval.report(GateId::DeterministicReplay).expect("serde deserialization should succeed");
+        let report = eval
+            .report(GateId::DeterministicReplay)
+            .expect("serde deserialization should succeed");
         assert!(report.status.is_passed());
         assert_eq!(report.ci_run_id, "ci2");
     }

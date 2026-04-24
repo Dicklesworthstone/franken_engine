@@ -768,7 +768,8 @@ mod tests {
     // -- Helper ---------------------------------------------------------
 
     fn make_witness(surface: SupportSurface, kind: ObstructionKind) -> ObstructionWitness {
-        emit_witness(surface, kind, "let x = 1;", "test failure", "test-seam").expect("serde deserialization should succeed")
+        emit_witness(surface, kind, "let x = 1;", "test failure", "test-seam")
+            .expect("serde deserialization should succeed")
     }
 
     // -- Constants ------------------------------------------------------
@@ -1012,8 +1013,8 @@ mod tests {
             ObstructionKind::UnsupportedFeature,
         ];
         for k in kinds {
-            let w =
-                emit_witness(SupportSurface::Runtime, k.clone(), "code", "fail", "seam").expect("serde deserialization should succeed");
+            let w = emit_witness(SupportSurface::Runtime, k.clone(), "code", "fail", "seam")
+                .expect("serde deserialization should succeed");
             assert_eq!(w.kind, k);
         }
     }
@@ -1273,7 +1274,8 @@ mod tests {
 
     #[test]
     fn test_build_report_empty() {
-        let report = build_report(SecurityEpoch::from_raw(1), vec![], vec![], vec![]).expect("serde deserialization should succeed");
+        let report = build_report(SecurityEpoch::from_raw(1), vec![], vec![], vec![])
+            .expect("serde deserialization should succeed");
         assert_eq!(report.total_obstructions, 0);
         assert!(report.report_id.contains("obstruction_witness_emitter"));
     }
@@ -1281,7 +1283,8 @@ mod tests {
     #[test]
     fn test_build_report_with_witnesses() {
         let w = make_witness(SupportSurface::Parser, ObstructionKind::TypeMismatch);
-        let report = build_report(SecurityEpoch::from_raw(5), vec![w], vec![], vec![]).expect("serde deserialization should succeed");
+        let report = build_report(SecurityEpoch::from_raw(5), vec![w], vec![], vec![])
+            .expect("serde deserialization should succeed");
         assert_eq!(report.total_obstructions, 1);
         assert_eq!(report.witnesses.len(), 1);
     }
@@ -1289,15 +1292,18 @@ mod tests {
     #[test]
     fn test_build_report_deterministic() {
         let w = make_witness(SupportSurface::Runtime, ObstructionKind::ResourceViolation);
-        let r1 = build_report(SecurityEpoch::from_raw(2), vec![w.clone()], vec![], vec![]).expect("serde deserialization should succeed");
-        let r2 = build_report(SecurityEpoch::from_raw(2), vec![w], vec![], vec![]).expect("serde deserialization should succeed");
+        let r1 = build_report(SecurityEpoch::from_raw(2), vec![w.clone()], vec![], vec![])
+            .expect("serde deserialization should succeed");
+        let r2 = build_report(SecurityEpoch::from_raw(2), vec![w], vec![], vec![])
+            .expect("serde deserialization should succeed");
         assert_eq!(r1.content_hash, r2.content_hash);
     }
 
     #[test]
     fn test_build_report_epoch_preserved() {
         let epoch = SecurityEpoch::from_raw(42);
-        let report = build_report(epoch, vec![], vec![], vec![]).expect("serde deserialization should succeed");
+        let report = build_report(epoch, vec![], vec![], vec![])
+            .expect("serde deserialization should succeed");
         assert_eq!(report.epoch, epoch);
     }
 
@@ -1311,7 +1317,8 @@ mod tests {
             "b",
         );
         let d = diagnose_seam(&[], SupportSurface::Parser, SupportSurface::Lowering);
-        let report = build_report(SecurityEpoch::from_raw(1), vec![], vec![ng], vec![d]).expect("serde deserialization should succeed");
+        let report = build_report(SecurityEpoch::from_raw(1), vec![], vec![ng], vec![d])
+            .expect("serde deserialization should succeed");
         assert_eq!(report.nongluable_programs.len(), 1);
         assert_eq!(report.seam_diagnoses.len(), 1);
     }
@@ -1369,7 +1376,8 @@ mod tests {
     fn test_serde_roundtrip_witness() {
         let w = make_witness(SupportSurface::Parser, ObstructionKind::SemanticGap);
         let json = serde_json::to_string(&w).expect("serde deserialization should succeed");
-        let deserialized: ObstructionWitness = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let deserialized: ObstructionWitness =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(w, deserialized);
     }
 
@@ -1383,7 +1391,8 @@ mod tests {
             "untyped",
         );
         let json = serde_json::to_string(&ng).expect("serde deserialization should succeed");
-        let deserialized: NongluableProgram = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let deserialized: NongluableProgram =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ng, deserialized);
     }
 
@@ -1391,7 +1400,8 @@ mod tests {
     fn test_serde_roundtrip_seam_diagnosis() {
         let d = diagnose_seam(&[], SupportSurface::Parser, SupportSurface::Lowering);
         let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
-        let deserialized: SeamDiagnosis = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let deserialized: SeamDiagnosis =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(d, deserialized);
     }
 
@@ -1408,7 +1418,8 @@ mod tests {
         )
         .expect("serde deserialization should succeed");
         let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
-        let deserialized: ObstructionReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let deserialized: ObstructionReport =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report, deserialized);
     }
 
@@ -1423,7 +1434,8 @@ mod tests {
         ];
         for e in errors {
             let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
-            let deserialized: ObstructionError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let deserialized: ObstructionError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(e, deserialized);
         }
     }
@@ -1470,7 +1482,8 @@ mod tests {
 
     #[test]
     fn test_report_id_contains_epoch() {
-        let report = build_report(SecurityEpoch::from_raw(99), vec![], vec![], vec![]).expect("serde deserialization should succeed");
+        let report = build_report(SecurityEpoch::from_raw(99), vec![], vec![], vec![])
+            .expect("serde deserialization should succeed");
         assert!(report.report_id.contains("99"));
     }
 }

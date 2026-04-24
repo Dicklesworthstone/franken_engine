@@ -492,7 +492,8 @@ mod tests {
     #[test]
     fn gate_fails_closed_over_missing_children() {
         // After bd-2yez8 fix: gate should fail closed when child artifacts are missing
-        let gate = build_asupersync_leverage_adoption_gate().expect("serde deserialization should succeed");
+        let gate = build_asupersync_leverage_adoption_gate()
+            .expect("serde deserialization should succeed");
         assert_eq!(gate.verdict, AdoptionGateVerdict::Stop);
         assert!(!gate.is_go());
         assert!(gate.has_outstanding_child_artifacts());
@@ -512,8 +513,10 @@ mod tests {
 
     #[test]
     fn content_hash_and_summary_are_stable() {
-        let first = build_asupersync_leverage_adoption_gate().expect("serde deserialization should succeed");
-        let second = build_asupersync_leverage_adoption_gate().expect("serde deserialization should succeed");
+        let first = build_asupersync_leverage_adoption_gate()
+            .expect("serde deserialization should succeed");
+        let second = build_asupersync_leverage_adoption_gate()
+            .expect("serde deserialization should succeed");
         assert_eq!(first.content_hash, second.content_hash);
         assert!(first.content_hash.starts_with("sha256:"));
         let summary = render_operator_summary(&first);

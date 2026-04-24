@@ -2341,7 +2341,10 @@ mod tests {
 
         assert!(ev.reset_rollback_counter("site-s"));
         // SAFETY: test just reset rollback counter for "site-s", state guaranteed to exist
-        let state = ev.site_states().get("site-s").expect("serde deserialization should succeed");
+        let state = ev
+            .site_states()
+            .get("site-s")
+            .expect("serde deserialization should succeed");
         assert_eq!(state.consecutive_rollbacks, 0);
         assert!(!state.permanently_denied);
     }

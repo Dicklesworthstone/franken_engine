@@ -1744,14 +1744,16 @@ impl BundleFileArtifact {
     fn json<T: Serialize>(path: &str, value: &T) -> Self {
         Self {
             path: path.to_string(),
-            contents: serde_json::to_vec_pretty(value).expect("serde deserialization should succeed"),
+            contents: serde_json::to_vec_pretty(value)
+                .expect("serde deserialization should succeed"),
         }
     }
 
     fn jsonl<T: Serialize>(path: &str, records: &[T]) -> Self {
         let mut contents = Vec::new();
         for record in records {
-            let mut line = serde_json::to_vec(record).expect("serde deserialization should succeed");
+            let mut line =
+                serde_json::to_vec(record).expect("serde deserialization should succeed");
             line.push(b'\n');
             contents.extend_from_slice(&line);
         }
@@ -2041,7 +2043,8 @@ mod tests {
     fn evidence_entry_serialization_round_trip() {
         let entry = sample_entry();
         let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
-        let restored: EvidenceEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: EvidenceEntry =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, restored);
     }
 
@@ -2070,7 +2073,8 @@ mod tests {
         ];
         for err in &errors {
             let json = serde_json::to_string(err).expect("serde deserialization should succeed");
-            let restored: LedgerError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: LedgerError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, restored);
         }
     }
@@ -2079,7 +2083,8 @@ mod tests {
     fn candidate_action_serialization_round_trip() {
         let c = CandidateAction::filtered("sandbox", 100_000, "max-loss");
         let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
-        let restored: CandidateAction = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: CandidateAction =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c, restored);
     }
 
@@ -2087,7 +2092,8 @@ mod tests {
     fn schema_version_serialization_round_trip() {
         let v = current_schema_version();
         let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
-        let restored: SchemaVersion = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: SchemaVersion =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, restored);
     }
 
@@ -2137,7 +2143,8 @@ mod tests {
             DecisionType::RemoteAuthorization,
         ] {
             let json = serde_json::to_string(&dt).expect("serde deserialization should succeed");
-            let restored: DecisionType = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: DecisionType =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(dt, restored);
         }
     }
@@ -2150,7 +2157,8 @@ mod tests {
             active: true,
         };
         let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
-        let restored: Constraint = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: Constraint =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c, restored);
     }
 
@@ -2162,7 +2170,8 @@ mod tests {
             value: "proof-hash".to_string(),
         };
         let json = serde_json::to_string(&w).expect("serde deserialization should succeed");
-        let restored: Witness = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: Witness =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(w, restored);
     }
 
@@ -2174,7 +2183,8 @@ mod tests {
             rationale: "lowest loss".to_string(),
         };
         let json = serde_json::to_string(&ca).expect("serde deserialization should succeed");
-        let restored: ChosenAction = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: ChosenAction =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ca, restored);
     }
 
@@ -2256,7 +2266,9 @@ mod tests {
     #[test]
     fn ledger_entries_accessor() {
         let mut ledger = InMemoryLedger::new();
-        ledger.emit(sample_entry()).expect("serde deserialization should succeed");
+        ledger
+            .emit(sample_entry())
+            .expect("serde deserialization should succeed");
         assert_eq!(ledger.entries().len(), 1);
         assert_eq!(ledger.entries()[0].trace_id, "trace-001");
     }
@@ -2325,7 +2337,8 @@ mod tests {
         let c = CandidateAction::new("action", -999_999);
         assert_eq!(c.expected_loss_millionths, -999_999);
         let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
-        let restored: CandidateAction = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: CandidateAction =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c, restored);
     }
 
@@ -2447,7 +2460,9 @@ mod tests {
             })
             .build()
             .expect("serde deserialization should succeed");
-            ledger.emit(entry).expect("serde deserialization should succeed");
+            ledger
+                .emit(entry)
+                .expect("serde deserialization should succeed");
         }
         assert_eq!(ledger.len(), 3);
         assert_eq!(ledger.by_epoch(SecurityEpoch::from_raw(2)).len(), 1);
@@ -2480,7 +2495,9 @@ mod tests {
             })
             .build()
             .expect("serde deserialization should succeed");
-            ledger.emit(entry).expect("serde deserialization should succeed");
+            ledger
+                .emit(entry)
+                .expect("serde deserialization should succeed");
         }
         assert_eq!(ledger.by_decision_type(DecisionType::PolicyUpdate).len(), 2);
         assert_eq!(
@@ -2780,7 +2797,8 @@ mod tests {
             value: String::new(),
         };
         let json = serde_json::to_string(&w).expect("serde deserialization should succeed");
-        let restored: Witness = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: Witness =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(w, restored);
         assert!(restored.value.is_empty());
     }
@@ -2793,7 +2811,8 @@ mod tests {
             active: false,
         };
         let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
-        let restored: Constraint = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: Constraint =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c, restored);
         assert!(!restored.active);
     }
@@ -2822,7 +2841,11 @@ mod tests {
         let reasons: Vec<_> = entry
             .candidates
             .iter()
-            .map(|c| c.filter_reason.as_deref().expect("serde deserialization should succeed"))
+            .map(|c| {
+                c.filter_reason
+                    .as_deref()
+                    .expect("serde deserialization should succeed")
+            })
             .collect();
         assert_eq!(reasons, vec!["reason-1", "reason-2", "reason-3"]);
     }
@@ -2846,7 +2869,9 @@ mod tests {
             })
             .build()
             .expect("serde deserialization should succeed");
-            ledger.emit(entry).expect("serde deserialization should succeed");
+            ledger
+                .emit(entry)
+                .expect("serde deserialization should succeed");
         }
         let stored_traces: Vec<&str> = ledger
             .entries()
@@ -2874,7 +2899,9 @@ mod tests {
         .build()
         .expect("serde deserialization should succeed");
         let expected_id = entry.entry_id.clone();
-        ledger.emit(entry).expect("serde deserialization should succeed");
+        ledger
+            .emit(entry)
+            .expect("serde deserialization should succeed");
 
         let results = ledger.by_epoch(SecurityEpoch::from_raw(42));
         assert_eq!(results.len(), 1);
@@ -2967,7 +2994,9 @@ mod tests {
             })
             .build()
             .expect("serde deserialization should succeed");
-            ledger.emit(entry).expect("serde deserialization should succeed");
+            ledger
+                .emit(entry)
+                .expect("serde deserialization should succeed");
         }
         assert_eq!(ledger.len(), 100);
     }
@@ -3004,7 +3033,8 @@ mod tests {
             rationale: "net gain".to_string(),
         };
         let json = serde_json::to_string(&ca).expect("serde deserialization should succeed");
-        let restored: ChosenAction = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: ChosenAction =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ca, restored);
         assert_eq!(restored.expected_loss_millionths, -500_000);
     }
@@ -3077,7 +3107,9 @@ mod tests {
         let mut ledger = InMemoryLedger::new();
         let entry = sample_entry();
         let entry_id = entry.entry_id.clone();
-        ledger.emit(entry.clone()).expect("serde deserialization should succeed");
+        ledger
+            .emit(entry.clone())
+            .expect("serde deserialization should succeed");
 
         let err = ledger.emit(entry).unwrap_err();
         match err {

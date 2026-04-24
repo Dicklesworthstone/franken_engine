@@ -1,0 +1,498 @@
+{
+  "ir1": {
+    "header": {
+      "schema_version": {
+        "major": 0,
+        "minor": 1,
+        "patch": 0
+      },
+      "level": "Ir1",
+      "source_hash": [
+        62,
+        121,
+        83,
+        227,
+        24,
+        98,
+        127,
+        163,
+        42,
+        255,
+        249,
+        117,
+        233,
+        192,
+        209,
+        103,
+        93,
+        150,
+        236,
+        190,
+        239,
+        229,
+        204,
+        179,
+        216,
+        25,
+        45,
+        84,
+        237,
+        135,
+        200,
+        162
+      ],
+      "source_label": "variables.js"
+    },
+    "scopes": [
+      {
+        "scope_id": {
+          "depth": 0,
+          "index": 0
+        },
+        "parent": null,
+        "kind": "Global",
+        "bindings": [
+          {
+            "name": "x",
+            "binding_id": 0,
+            "scope": {
+              "depth": 0,
+              "index": 0
+            },
+            "kind": "Let"
+          },
+          {
+            "name": "message",
+            "binding_id": 1,
+            "scope": {
+              "depth": 0,
+              "index": 0
+            },
+            "kind": "Const"
+          }
+        ]
+      }
+    ],
+    "ops": [
+      {
+        "LoadLiteral": {
+          "value": {
+            "Integer": 10
+          }
+        }
+      },
+      {
+        "StoreBinding": {
+          "binding_id": 0
+        }
+      },
+      "Pop",
+      {
+        "LoadLiteral": {
+          "value": {
+            "String": "Hello, world!"
+          }
+        }
+      },
+      {
+        "StoreBinding": {
+          "binding_id": 1
+        }
+      },
+      "Pop",
+      "Return"
+    ]
+  },
+  "ir2": {
+    "header": {
+      "schema_version": {
+        "major": 0,
+        "minor": 1,
+        "patch": 0
+      },
+      "level": "Ir2",
+      "source_hash": [
+        130,
+        32,
+        60,
+        34,
+        173,
+        156,
+        123,
+        100,
+        106,
+        49,
+        134,
+        240,
+        168,
+        1,
+        246,
+        98,
+        4,
+        20,
+        37,
+        212,
+        135,
+        79,
+        158,
+        160,
+        189,
+        59,
+        235,
+        114,
+        132,
+        126,
+        142,
+        203
+      ],
+      "source_label": "variables.js"
+    },
+    "scopes": [
+      {
+        "scope_id": {
+          "depth": 0,
+          "index": 0
+        },
+        "parent": null,
+        "kind": "Global",
+        "bindings": [
+          {
+            "name": "x",
+            "binding_id": 0,
+            "scope": {
+              "depth": 0,
+              "index": 0
+            },
+            "kind": "Let"
+          },
+          {
+            "name": "message",
+            "binding_id": 1,
+            "scope": {
+              "depth": 0,
+              "index": 0
+            },
+            "kind": "Const"
+          }
+        ]
+      }
+    ],
+    "ops": [
+      {
+        "inner": {
+          "LoadLiteral": {
+            "value": {
+              "Integer": 10
+            }
+          }
+        },
+        "effect": "Pure",
+        "required_capability": null,
+        "flow": null
+      },
+      {
+        "inner": {
+          "StoreBinding": {
+            "binding_id": 0
+          }
+        },
+        "effect": "Pure",
+        "required_capability": null,
+        "flow": null
+      },
+      {
+        "inner": "Pop",
+        "effect": "Pure",
+        "required_capability": null,
+        "flow": null
+      },
+      {
+        "inner": {
+          "LoadLiteral": {
+            "value": {
+              "String": "Hello, world!"
+            }
+          }
+        },
+        "effect": "Pure",
+        "required_capability": null,
+        "flow": null
+      },
+      {
+        "inner": {
+          "StoreBinding": {
+            "binding_id": 1
+          }
+        },
+        "effect": "Pure",
+        "required_capability": null,
+        "flow": null
+      },
+      {
+        "inner": "Pop",
+        "effect": "Pure",
+        "required_capability": null,
+        "flow": null
+      },
+      {
+        "inner": "Return",
+        "effect": "Pure",
+        "required_capability": null,
+        "flow": null
+      }
+    ],
+    "required_capabilities": []
+  },
+  "ir3": {
+    "header": {
+      "schema_version": {
+        "major": 0,
+        "minor": 1,
+        "patch": 0
+      },
+      "level": "Ir3",
+      "source_hash": [
+        118,
+        95,
+        199,
+        199,
+        192,
+        130,
+        180,
+        215,
+        64,
+        122,
+        15,
+        151,
+        55,
+        55,
+        169,
+        40,
+        115,
+        244,
+        13,
+        65,
+        187,
+        167,
+        17,
+        36,
+        100,
+        154,
+        133,
+        11,
+        135,
+        134,
+        121,
+        175
+      ],
+      "source_label": "variables.js"
+    },
+    "instructions": [
+      {
+        "LoadInt": {
+          "dst": 0,
+          "value": 10
+        }
+      },
+      {
+        "Move": {
+          "dst": 1,
+          "src": 0
+        }
+      },
+      {
+        "Move": {
+          "dst": 0,
+          "src": 1
+        }
+      },
+      {
+        "LoadStr": {
+          "dst": 2,
+          "pool_index": 0
+        }
+      },
+      {
+        "Move": {
+          "dst": 3,
+          "src": 2
+        }
+      },
+      {
+        "Move": {
+          "dst": 0,
+          "src": 3
+        }
+      },
+      {
+        "Return": {
+          "value": 0
+        }
+      },
+      "Halt"
+    ],
+    "constant_pool": [
+      "Hello, world!"
+    ],
+    "function_table": [
+      {
+        "entry": 0,
+        "arity": 0,
+        "frame_size": 4,
+        "name": "main",
+        "is_generator": false
+      }
+    ],
+    "specialization": null,
+    "required_capabilities": []
+  },
+  "ir2_flow_proof_artifact": {
+    "schema_version": "frankenengine.ir2_flow_proof_witness.v1",
+    "artifact_id": "sha256:e5a0fb5d04f8d2fe57e3846fd9fde9cd19469874eba840a63a452bbe2e9d52da",
+    "trace_id": "golden_test_variable_declarations",
+    "decision_id": "decision_variable_declarations",
+    "policy_id": "policy_variable_declarations",
+    "module_id": "variables.js",
+    "proved_flows": [],
+    "denied_flows": [],
+    "required_declassifications": [],
+    "runtime_checkpoints": []
+  },
+  "witnesses": [
+    {
+      "pass_id": "ir0_to_ir1",
+      "input_hash": "sha256:3e7953e318627fa32afff975e9c0d1675d96ecbeefe5ccb3d8192d54ed87c8a2",
+      "output_hash": "sha256:82203c22ad9c7b646a3186f0a801f662041425d4874f9ea0bd3beb72847e8ecb",
+      "rollback_token": "sha256:3e7953e318627fa32afff975e9c0d1675d96ecbeefe5ccb3d8192d54ed87c8a2",
+      "invariant_checks": [
+        {
+          "name": "source_hash_linkage",
+          "passed": true,
+          "detail": "IR1 source_hash references IR0 hash"
+        },
+        {
+          "name": "scope_binding_ids_unique",
+          "passed": true,
+          "detail": "All scope binding IDs are unique"
+        }
+      ]
+    },
+    {
+      "pass_id": "ir1_to_ir2",
+      "input_hash": "sha256:82203c22ad9c7b646a3186f0a801f662041425d4874f9ea0bd3beb72847e8ecb",
+      "output_hash": "sha256:765fc7c7c082b4d7407a0f973737a92873f40d41bba71124649a850b878679af",
+      "rollback_token": "sha256:82203c22ad9c7b646a3186f0a801f662041425d4874f9ea0bd3beb72847e8ecb",
+      "invariant_checks": [
+        {
+          "name": "source_hash_linkage",
+          "passed": true,
+          "detail": "IR2 source_hash references IR1 hash"
+        },
+        {
+          "name": "hostcall_capability_required",
+          "passed": true,
+          "detail": "Hostcall effects always carry capability tags"
+        },
+        {
+          "name": "ir2_flow_metrics_consistent",
+          "passed": true,
+          "detail": "flow_ops=0 static_proven=0 runtime_checks=0"
+        },
+        {
+          "name": "ir2_static_flow_coverage_ratio",
+          "passed": true,
+          "detail": "static_coverage_millionths=0 static_proven=0 total_flow_ops=0"
+        }
+      ]
+    },
+    {
+      "pass_id": "ir2_to_ir3",
+      "input_hash": "sha256:765fc7c7c082b4d7407a0f973737a92873f40d41bba71124649a850b878679af",
+      "output_hash": "sha256:70b1b97d5e4b669344e640985737e044a3dfef15480a34434aa4e7b4bf858f05",
+      "rollback_token": "sha256:765fc7c7c082b4d7407a0f973737a92873f40d41bba71124649a850b878679af",
+      "invariant_checks": [
+        {
+          "name": "source_hash_linkage",
+          "passed": true,
+          "detail": "IR3 source_hash references IR2 hash"
+        },
+        {
+          "name": "function_table_present",
+          "passed": true,
+          "detail": "IR3 function table contains a deterministic main entry"
+        },
+        {
+          "name": "terminal_halt_instruction",
+          "passed": true,
+          "detail": "IR3 instruction stream ends with HALT"
+        },
+        {
+          "name": "resolved_control_flow_targets",
+          "passed": true,
+          "detail": "IR3 jump targets resolve to concrete instruction indices"
+        }
+      ]
+    }
+  ],
+  "isomorphism_ledger": [
+    {
+      "pass_id": "ir0_to_ir1",
+      "input_hash": "sha256:3e7953e318627fa32afff975e9c0d1675d96ecbeefe5ccb3d8192d54ed87c8a2",
+      "output_hash": "sha256:82203c22ad9c7b646a3186f0a801f662041425d4874f9ea0bd3beb72847e8ecb",
+      "input_op_count": 2,
+      "output_op_count": 7
+    },
+    {
+      "pass_id": "ir1_to_ir2",
+      "input_hash": "sha256:82203c22ad9c7b646a3186f0a801f662041425d4874f9ea0bd3beb72847e8ecb",
+      "output_hash": "sha256:765fc7c7c082b4d7407a0f973737a92873f40d41bba71124649a850b878679af",
+      "input_op_count": 7,
+      "output_op_count": 7
+    },
+    {
+      "pass_id": "ir2_to_ir3",
+      "input_hash": "sha256:765fc7c7c082b4d7407a0f973737a92873f40d41bba71124649a850b878679af",
+      "output_hash": "sha256:70b1b97d5e4b669344e640985737e044a3dfef15480a34434aa4e7b4bf858f05",
+      "input_op_count": 7,
+      "output_op_count": 8
+    }
+  ],
+  "events": [
+    {
+      "trace_id": "golden_test_variable_declarations",
+      "decision_id": "decision_variable_declarations",
+      "policy_id": "policy_variable_declarations",
+      "component": "lowering_pipeline",
+      "event": "ir0_to_ir1_lowered",
+      "outcome": "pass",
+      "error_code": null
+    },
+    {
+      "trace_id": "golden_test_variable_declarations",
+      "decision_id": "decision_variable_declarations",
+      "policy_id": "policy_variable_declarations",
+      "component": "lowering_pipeline",
+      "event": "ir1_to_ir2_lowered",
+      "outcome": "pass",
+      "error_code": null
+    },
+    {
+      "trace_id": "golden_test_variable_declarations",
+      "decision_id": "decision_variable_declarations",
+      "policy_id": "policy_variable_declarations",
+      "component": "lowering_pipeline",
+      "event": "ir2_flow_check_completed",
+      "outcome": "pass",
+      "error_code": null
+    },
+    {
+      "trace_id": "golden_test_variable_declarations",
+      "decision_id": "decision_variable_declarations",
+      "policy_id": "policy_variable_declarations",
+      "component": "lowering_pipeline",
+      "event": "ir2_to_ir3_lowered",
+      "outcome": "pass",
+      "error_code": null
+    }
+  ]
+}

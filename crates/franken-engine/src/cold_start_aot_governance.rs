@@ -1029,7 +1029,8 @@ mod tests {
     fn test_startup_path_serde_roundtrip() {
         for kind in StartupPathKind::ALL {
             let j = serde_json::to_string(kind).expect("serde deserialization should succeed");
-            let back: StartupPathKind = serde_json::from_str(&j).expect("serde deserialization should succeed");
+            let back: StartupPathKind =
+                serde_json::from_str(&j).expect("serde deserialization should succeed");
             assert_eq!(*kind, back);
         }
     }
@@ -1061,7 +1062,8 @@ mod tests {
     fn test_benchmark_verdict_serde_roundtrip() {
         for v in BenchmarkVerdict::ALL {
             let j = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: BenchmarkVerdict = serde_json::from_str(&j).expect("serde deserialization should succeed");
+            let back: BenchmarkVerdict =
+                serde_json::from_str(&j).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -1093,7 +1095,8 @@ mod tests {
     fn test_parity_check_kind_serde_roundtrip() {
         for k in ParityCheckKind::ALL {
             let j = serde_json::to_string(k).expect("serde deserialization should succeed");
-            let back: ParityCheckKind = serde_json::from_str(&j).expect("serde deserialization should succeed");
+            let back: ParityCheckKind =
+                serde_json::from_str(&j).expect("serde deserialization should succeed");
             assert_eq!(*k, back);
         }
     }
@@ -1139,7 +1142,8 @@ mod tests {
     fn test_rollback_trigger_serde_roundtrip() {
         for t in RollbackTrigger::ALL {
             let j = serde_json::to_string(t).expect("serde deserialization should succeed");
-            let back: RollbackTrigger = serde_json::from_str(&j).expect("serde deserialization should succeed");
+            let back: RollbackTrigger =
+                serde_json::from_str(&j).expect("serde deserialization should succeed");
             assert_eq!(*t, back);
         }
     }
@@ -1449,7 +1453,8 @@ mod tests {
         let cfg = default_config();
         let evidence = vec![make_evidence(StartupPathKind::WarmCache, 1000, 800, 50)];
         let parity = vec![make_parity(ParityCheckKind::SemanticParity, true, 0)];
-        let verdict = evaluate_cold_start(&evidence, &parity, &cfg).expect("serde deserialization should succeed");
+        let verdict = evaluate_cold_start(&evidence, &parity, &cfg)
+            .expect("serde deserialization should succeed");
         assert_eq!(verdict, GovernanceVerdict::Approved);
     }
 
@@ -1458,7 +1463,8 @@ mod tests {
         let cfg = default_config();
         let evidence = vec![make_evidence(StartupPathKind::WarmCache, 1000, 1000, 50)];
         let parity = vec![make_parity(ParityCheckKind::SemanticParity, true, 0)];
-        let verdict = evaluate_cold_start(&evidence, &parity, &cfg).expect("serde deserialization should succeed");
+        let verdict = evaluate_cold_start(&evidence, &parity, &cfg)
+            .expect("serde deserialization should succeed");
         match verdict {
             GovernanceVerdict::Blocked { reasons } => {
                 assert!(reasons.iter().any(|r| r.contains("no evidence of speedup")));
@@ -1472,7 +1478,8 @@ mod tests {
         let cfg = default_config();
         let evidence = vec![make_evidence(StartupPathKind::WarmCache, 1000, 800, 50)];
         let parity = vec![make_parity(ParityCheckKind::SemanticParity, false, 100_000)];
-        let verdict = evaluate_cold_start(&evidence, &parity, &cfg).expect("serde deserialization should succeed");
+        let verdict = evaluate_cold_start(&evidence, &parity, &cfg)
+            .expect("serde deserialization should succeed");
         match verdict {
             GovernanceVerdict::Blocked { reasons } => {
                 assert!(reasons.iter().any(|r| r.contains("semantic parity")));
@@ -1508,7 +1515,8 @@ mod tests {
         // 80% regression => triggers rollback
         let evidence = vec![make_evidence(StartupPathKind::WarmCache, 100, 180, 50)];
         let parity = vec![make_parity(ParityCheckKind::SemanticParity, true, 0)];
-        let verdict = evaluate_cold_start(&evidence, &parity, &cfg).expect("serde deserialization should succeed");
+        let verdict = evaluate_cold_start(&evidence, &parity, &cfg)
+            .expect("serde deserialization should succeed");
         assert!(verdict.requires_rollback());
     }
 
@@ -1635,7 +1643,8 @@ mod tests {
         cfg.require_observability_proof = true;
         let evidence = vec![make_evidence(StartupPathKind::WarmCache, 1000, 800, 50)];
         let parity = vec![make_parity(ParityCheckKind::SemanticParity, true, 0)];
-        let verdict = evaluate_cold_start(&evidence, &parity, &cfg).expect("serde deserialization should succeed");
+        let verdict = evaluate_cold_start(&evidence, &parity, &cfg)
+            .expect("serde deserialization should succeed");
         match verdict {
             GovernanceVerdict::Blocked { reasons } => {
                 assert!(reasons.iter().any(|r| r.contains("observability")));
@@ -1653,7 +1662,8 @@ mod tests {
             make_parity(ParityCheckKind::SemanticParity, true, 0),
             make_parity(ParityCheckKind::BehavioralParity, true, 0),
         ];
-        let verdict = evaluate_cold_start(&evidence, &parity, &cfg).expect("serde deserialization should succeed");
+        let verdict = evaluate_cold_start(&evidence, &parity, &cfg)
+            .expect("serde deserialization should succeed");
         assert_eq!(verdict, GovernanceVerdict::Approved);
     }
 
@@ -1674,7 +1684,8 @@ mod tests {
         cfg.require_semantic_parity = false;
         let evidence = vec![make_evidence(StartupPathKind::WarmCache, 1000, 800, 50)];
         // No parity results at all — should still approve.
-        let verdict = evaluate_cold_start(&evidence, &[], &cfg).expect("serde deserialization should succeed");
+        let verdict = evaluate_cold_start(&evidence, &[], &cfg)
+            .expect("serde deserialization should succeed");
         assert_eq!(verdict, GovernanceVerdict::Approved);
     }
 
@@ -1684,7 +1695,8 @@ mod tests {
         let evidence = vec![make_evidence(StartupPathKind::WarmCache, 1000, 800, 50)];
         // Semantic parity passes but divergence exceeds max.
         let parity = vec![make_parity(ParityCheckKind::SemanticParity, true, 100_000)];
-        let verdict = evaluate_cold_start(&evidence, &parity, &cfg).expect("serde deserialization should succeed");
+        let verdict = evaluate_cold_start(&evidence, &parity, &cfg)
+            .expect("serde deserialization should succeed");
         match verdict {
             GovernanceVerdict::Blocked { reasons } => {
                 assert!(reasons.iter().any(|r| r.contains("divergence")));
@@ -1701,7 +1713,8 @@ mod tests {
         // takes priority over a simple "Blocked" verdict.
         let ev_slow = make_evidence(StartupPathKind::AotRestored, 1000, 1200, 50);
         let parity = vec![make_parity(ParityCheckKind::SemanticParity, true, 0)];
-        let verdict = evaluate_cold_start(&[ev_fast, ev_slow], &parity, &cfg).expect("serde deserialization should succeed");
+        let verdict = evaluate_cold_start(&[ev_fast, ev_slow], &parity, &cfg)
+            .expect("serde deserialization should succeed");
         match verdict {
             GovernanceVerdict::Rollback { triggers } => {
                 assert!(!triggers.is_empty());
@@ -1718,7 +1731,8 @@ mod tests {
         // -200_000 speedup: below rollback threshold (300k) but still slower
         let ev_slow = make_evidence(StartupPathKind::AotRestored, 1000, 1200, 50);
         let parity = vec![make_parity(ParityCheckKind::SemanticParity, true, 0)];
-        let verdict = evaluate_cold_start(&[ev_fast, ev_slow], &parity, &cfg).expect("serde deserialization should succeed");
+        let verdict = evaluate_cold_start(&[ev_fast, ev_slow], &parity, &cfg)
+            .expect("serde deserialization should succeed");
         match verdict {
             GovernanceVerdict::Blocked { reasons } => {
                 assert!(reasons.iter().any(|r| r.contains("slower")));
@@ -1739,7 +1753,8 @@ mod tests {
         ];
         for e in &errors {
             let j = serde_json::to_string(e).expect("serde deserialization should succeed");
-            let back: GovernanceError = serde_json::from_str(&j).expect("serde deserialization should succeed");
+            let back: GovernanceError =
+                serde_json::from_str(&j).expect("serde deserialization should succeed");
             assert_eq!(*e, back);
         }
     }
@@ -1757,7 +1772,8 @@ mod tests {
         ];
         for v in &verdicts {
             let j = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: GovernanceVerdict = serde_json::from_str(&j).expect("serde deserialization should succeed");
+            let back: GovernanceVerdict =
+                serde_json::from_str(&j).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }

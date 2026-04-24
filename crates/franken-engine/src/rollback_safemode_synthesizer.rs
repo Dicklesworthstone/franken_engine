@@ -1355,7 +1355,8 @@ mod tests {
             BundleKind::Rollback,
         )];
         let constraints = vec![make_constraint("c1", ConstraintCategory::Safety, true)];
-        RollbackSafemodeSynthesizer::new(SynthesizerConfig::default(), rules, constraints).expect("serde deserialization should succeed")
+        RollbackSafemodeSynthesizer::new(SynthesizerConfig::default(), rules, constraints)
+            .expect("serde deserialization should succeed")
     }
 
     // ── Constructor Tests ───────────────────────────────────────────
@@ -1532,7 +1533,9 @@ mod tests {
             replay_result: Some(make_replay_result(vec![rec])),
             scan_result: None,
         };
-        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
+        let result = synth
+            .synthesize(&input)
+            .expect("serde deserialization should succeed");
         assert!(result.has_bundles());
         assert_eq!(result.approved_count, 1);
         assert_eq!(result.bundles[0].kind, BundleKind::Rollback);
@@ -1548,7 +1551,9 @@ mod tests {
             replay_result: Some(make_replay_result(vec![rec])),
             scan_result: None,
         };
-        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
+        let result = synth
+            .synthesize(&input)
+            .expect("serde deserialization should succeed");
         assert!(!result.has_bundles());
         assert!(result.rules_fired.is_empty());
     }
@@ -1561,7 +1566,9 @@ mod tests {
             replay_result: Some(make_replay_result(vec![rec])),
             scan_result: None,
         };
-        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
+        let result = synth
+            .synthesize(&input)
+            .expect("serde deserialization should succeed");
         assert!(!result.has_bundles());
     }
 
@@ -1580,7 +1587,9 @@ mod tests {
             replay_result: Some(make_replay_result(vec![rec])),
             scan_result: None,
         };
-        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
+        let result = synth
+            .synthesize(&input)
+            .expect("serde deserialization should succeed");
         assert!(!result.has_bundles());
     }
 
@@ -1602,7 +1611,9 @@ mod tests {
             replay_result: None,
             scan_result: Some(scan),
         };
-        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
+        let result = synth
+            .synthesize(&input)
+            .expect("serde deserialization should succeed");
         assert!(result.has_bundles());
         assert_eq!(result.bundles[0].kind, BundleKind::SafeMode);
     }
@@ -1626,7 +1637,9 @@ mod tests {
             replay_result: None,
             scan_result: Some(scan),
         };
-        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
+        let result = synth
+            .synthesize(&input)
+            .expect("serde deserialization should succeed");
         assert!(result.has_bundles());
         assert_eq!(result.bundles[0].deltas.len(), 1);
         assert_eq!(result.bundles[0].deltas[0].delta_id, "d-r1-pa1");
@@ -1650,7 +1663,9 @@ mod tests {
             replay_result: None,
             scan_result: Some(scan),
         };
-        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
+        let result = synth
+            .synthesize(&input)
+            .expect("serde deserialization should succeed");
         assert!(!result.has_bundles());
     }
 
@@ -1677,7 +1692,9 @@ mod tests {
             replay_result: None,
             scan_result: Some(scan),
         };
-        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
+        let result = synth
+            .synthesize(&input)
+            .expect("serde deserialization should succeed");
         assert!(result.has_bundles());
         assert_eq!(
             result.bundles[0].deltas[0].expected_improvement_millionths,
@@ -1707,7 +1724,9 @@ mod tests {
             replay_result: None,
             scan_result: Some(scan),
         };
-        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
+        let result = synth
+            .synthesize(&input)
+            .expect("serde deserialization should succeed");
         assert!(!result.has_bundles());
     }
 
@@ -1731,7 +1750,9 @@ mod tests {
             replay_result: None,
             scan_result: Some(scan),
         };
-        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
+        let result = synth
+            .synthesize(&input)
+            .expect("serde deserialization should succeed");
         assert!(result.has_bundles());
         assert_eq!(result.bundles[0].deltas.len(), 2);
     }
@@ -1752,7 +1773,9 @@ mod tests {
             replay_result: None,
             scan_result: Some(scan),
         };
-        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
+        let result = synth
+            .synthesize(&input)
+            .expect("serde deserialization should succeed");
         assert!(!result.has_bundles());
     }
 
@@ -1776,7 +1799,9 @@ mod tests {
             replay_result: Some(make_replay_result(vec![rec])),
             scan_result: Some(scan),
         };
-        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
+        let result = synth
+            .synthesize(&input)
+            .expect("serde deserialization should succeed");
         assert!(result.has_bundles());
     }
 
@@ -1801,7 +1826,9 @@ mod tests {
             replay_result: Some(make_replay_result(vec![rec])),
             scan_result: Some(scan),
         };
-        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
+        let result = synth
+            .synthesize(&input)
+            .expect("serde deserialization should succeed");
         assert!(!result.has_bundles());
     }
 
@@ -1826,7 +1853,9 @@ mod tests {
             replay_result: Some(make_replay_result(vec![rec])),
             scan_result: None,
         };
-        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
+        let result = synth
+            .synthesize(&input)
+            .expect("serde deserialization should succeed");
         assert!(result.bundles[0].is_approved());
         assert!(result.bundles[0].all_hard_constraints_passed);
     }
@@ -1854,7 +1883,9 @@ mod tests {
             replay_result: Some(make_replay_result(vec![rec])),
             scan_result: None,
         };
-        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
+        let result = synth
+            .synthesize(&input)
+            .expect("serde deserialization should succeed");
         assert!(!result.bundles[0].is_approved());
         assert_eq!(result.rejected_count, 1);
     }
@@ -1867,7 +1898,9 @@ mod tests {
             replay_result: Some(make_replay_result(vec![rec])),
             scan_result: None,
         };
-        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
+        let result = synth
+            .synthesize(&input)
+            .expect("serde deserialization should succeed");
         assert!(!result.bundles[0].verification_hooks.is_empty());
         assert!(
             result.bundles[0]
@@ -1900,7 +1933,9 @@ mod tests {
             replay_result: None,
             scan_result: Some(scan),
         };
-        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
+        let result = synth
+            .synthesize(&input)
+            .expect("serde deserialization should succeed");
         assert!(
             result.bundles[0]
                 .verification_hooks
@@ -1922,14 +1957,17 @@ mod tests {
             generate_verification_hooks: false,
             ..Default::default()
         };
-        let mut synth = RollbackSafemodeSynthesizer::new(config, rules, Vec::new()).expect("serde deserialization should succeed");
+        let mut synth = RollbackSafemodeSynthesizer::new(config, rules, Vec::new())
+            .expect("serde deserialization should succeed");
 
         let rec = make_recommendation("alt1", 200_000, 950_000);
         let input = SynthesisInput {
             replay_result: Some(make_replay_result(vec![rec])),
             scan_result: None,
         };
-        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
+        let result = synth
+            .synthesize(&input)
+            .expect("serde deserialization should succeed");
         assert!(result.bundles[0].verification_hooks.is_empty());
     }
 
@@ -1941,7 +1979,9 @@ mod tests {
             replay_result: Some(make_replay_result(vec![rec])),
             scan_result: None,
         };
-        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
+        let result = synth
+            .synthesize(&input)
+            .expect("serde deserialization should succeed");
         assert_eq!(result.bundles[0].evidence_refs.len(), 1);
         assert_eq!(
             result.bundles[0].evidence_refs[0].source,
@@ -1969,7 +2009,9 @@ mod tests {
             replay_result: Some(make_replay_result(vec![rec])),
             scan_result: Some(scan),
         };
-        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
+        let result = synth
+            .synthesize(&input)
+            .expect("serde deserialization should succeed");
         assert_eq!(result.bundles[0].evidence_refs.len(), 2);
     }
 
@@ -1996,7 +2038,9 @@ mod tests {
             replay_result: Some(make_replay_result(vec![rec])),
             scan_result: Some(scan),
         };
-        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
+        let result = synth
+            .synthesize(&input)
+            .expect("serde deserialization should succeed");
         assert_eq!(result.bundles[0].kind, BundleKind::SafeMode);
     }
 
@@ -2021,7 +2065,9 @@ mod tests {
             replay_result: Some(make_replay_result(vec![rec])),
             scan_result: Some(scan),
         };
-        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
+        let result = synth
+            .synthesize(&input)
+            .expect("serde deserialization should succeed");
         assert_eq!(result.bundles[0].kind, BundleKind::Rollback);
     }
 
@@ -2054,7 +2100,9 @@ mod tests {
             replay_result: Some(make_replay_result(vec![rec])),
             scan_result: Some(scan),
         };
-        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
+        let result = synth
+            .synthesize(&input)
+            .expect("serde deserialization should succeed");
         assert_eq!(result.bundles.len(), 2);
         assert_eq!(result.rules_fired.len(), 2);
     }
@@ -2079,7 +2127,9 @@ mod tests {
             replay_result: Some(make_replay_result(vec![rec])),
             scan_result: None,
         };
-        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
+        let result = synth
+            .synthesize(&input)
+            .expect("serde deserialization should succeed");
         assert!(!result.has_bundles());
         assert_eq!(result.rules_skipped, vec!["r1"]);
     }
@@ -2112,7 +2162,9 @@ mod tests {
             replay_result: Some(make_replay_result(vec![rec])),
             scan_result: None,
         };
-        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
+        let result = synth
+            .synthesize(&input)
+            .expect("serde deserialization should succeed");
         // r2 fires first (priority 1 < 5)
         assert_eq!(result.rules_fired, vec!["r2", "r1"]);
     }
@@ -2131,7 +2183,9 @@ mod tests {
             replay_result: Some(make_replay_result(recs)),
             scan_result: None,
         };
-        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
+        let result = synth
+            .synthesize(&input)
+            .expect("serde deserialization should succeed");
         let improvements: Vec<i64> = result.bundles[0]
             .deltas
             .iter()
@@ -2169,7 +2223,9 @@ mod tests {
             replay_result: Some(make_replay_result(vec![rec])),
             scan_result: Some(scan),
         };
-        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
+        let result = synth
+            .synthesize(&input)
+            .expect("serde deserialization should succeed");
         assert!(
             result.bundles[0].total_improvement_millionths
                 >= result.bundles[1].total_improvement_millionths
@@ -2186,8 +2242,12 @@ mod tests {
             replay_result: Some(make_replay_result(vec![rec])),
             scan_result: None,
         };
-        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
-        let best = result.best_approved().expect("serde deserialization should succeed");
+        let result = synth
+            .synthesize(&input)
+            .expect("serde deserialization should succeed");
+        let best = result
+            .best_approved()
+            .expect("serde deserialization should succeed");
         assert!(best.is_approved());
     }
 
@@ -2199,7 +2259,9 @@ mod tests {
             replay_result: Some(make_replay_result(vec![rec])),
             scan_result: None,
         };
-        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
+        let result = synth
+            .synthesize(&input)
+            .expect("serde deserialization should succeed");
         let approved = result.approved_bundles();
         assert_eq!(approved.len(), result.approved_count as usize);
     }
@@ -2377,7 +2439,8 @@ mod tests {
             BundleKind::Rollback,
         );
         let json = serde_json::to_string(&rule).expect("serde deserialization should succeed");
-        let back: SynthesisRule = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SynthesisRule =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(rule, back);
     }
 
@@ -2385,7 +2448,8 @@ mod tests {
     fn serde_roundtrip_constraint() {
         let c = make_constraint("c1", ConstraintCategory::Safety, true);
         let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
-        let back: NonRegressionConstraint = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: NonRegressionConstraint =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c, back);
     }
 
@@ -2401,7 +2465,8 @@ mod tests {
             rationale: "test".to_string(),
         };
         let json = serde_json::to_string(&delta).expect("serde deserialization should succeed");
-        let back: PolicyDelta = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: PolicyDelta =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(delta, back);
     }
 
@@ -2413,10 +2478,13 @@ mod tests {
             replay_result: Some(make_replay_result(vec![rec])),
             scan_result: None,
         };
-        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
+        let result = synth
+            .synthesize(&input)
+            .expect("serde deserialization should succeed");
         let bundle = &result.bundles[0];
         let json = serde_json::to_string(bundle).expect("serde deserialization should succeed");
-        let back: SynthesizedBundle = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SynthesizedBundle =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(*bundle, back);
     }
 
@@ -2428,9 +2496,12 @@ mod tests {
             replay_result: Some(make_replay_result(vec![rec])),
             scan_result: None,
         };
-        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
+        let result = synth
+            .synthesize(&input)
+            .expect("serde deserialization should succeed");
         let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
-        let back: SynthesisResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SynthesisResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, back);
     }
 
@@ -2457,12 +2528,16 @@ mod tests {
             Vec::new(),
         )
         .expect("serde deserialization should succeed");
-        let r1 = s1.synthesize(&input).expect("serde deserialization should succeed");
+        let r1 = s1
+            .synthesize(&input)
+            .expect("serde deserialization should succeed");
 
         let mut s2 =
             RollbackSafemodeSynthesizer::new(SynthesizerConfig::default(), rules, Vec::new())
                 .expect("serde deserialization should succeed");
-        let r2 = s2.synthesize(&input).expect("serde deserialization should succeed");
+        let r2 = s2
+            .synthesize(&input)
+            .expect("serde deserialization should succeed");
 
         assert_eq!(r1.artifact_hash, r2.artifact_hash);
         assert_eq!(r1.bundles[0].artifact_hash, r2.bundles[0].artifact_hash);
@@ -2499,7 +2574,9 @@ mod tests {
             replay_result: Some(make_replay_result(recs)),
             scan_result: None,
         };
-        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
+        let result = synth
+            .synthesize(&input)
+            .expect("serde deserialization should succeed");
         assert_eq!(result.bundles[0].delta_count(), 2);
     }
 
@@ -2524,7 +2601,9 @@ mod tests {
             replay_result: Some(make_replay_result(vec![rec])),
             scan_result: None,
         };
-        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
+        let result = synth
+            .synthesize(&input)
+            .expect("serde deserialization should succeed");
         assert!(result.bundles[0].violation_count() > 0);
     }
 
@@ -2552,7 +2631,9 @@ mod tests {
             replay_result: Some(make_replay_result(vec![rec])),
             scan_result: None,
         };
-        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
+        let result = synth
+            .synthesize(&input)
+            .expect("serde deserialization should succeed");
         let bundle = &result.bundles[0];
         let safety_check = bundle
             .constraint_checks
@@ -2578,7 +2659,9 @@ mod tests {
             replay_result: Some(make_replay_result(vec![rec])),
             scan_result: None,
         };
-        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
+        let result = synth
+            .synthesize(&input)
+            .expect("serde deserialization should succeed");
         let display = format!("{}", result);
         assert!(display.contains("synthesis"));
         assert!(display.contains("approved=1"));
@@ -2592,7 +2675,9 @@ mod tests {
             replay_result: Some(make_replay_result(vec![rec])),
             scan_result: None,
         };
-        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
+        let result = synth
+            .synthesize(&input)
+            .expect("serde deserialization should succeed");
         let display = format!("{}", result.bundles[0]);
         assert!(display.contains("bundle"));
         assert!(display.contains("approved"));
@@ -2633,7 +2718,9 @@ mod tests {
             replay_result: Some(make_replay_result(vec![rec])),
             scan_result: None,
         };
-        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
+        let result = synth
+            .synthesize(&input)
+            .expect("serde deserialization should succeed");
         assert!(!result.has_bundles());
     }
 
@@ -2649,7 +2736,9 @@ mod tests {
             replay_result: Some(make_replay_result(recs)),
             scan_result: None,
         };
-        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
+        let result = synth
+            .synthesize(&input)
+            .expect("serde deserialization should succeed");
         assert_eq!(result.bundles[0].deltas.len(), 1);
         assert!(result.bundles[0].deltas[0].delta_id.contains("alt3"));
     }
@@ -2665,7 +2754,9 @@ mod tests {
             replay_result: Some(make_replay_result(recs)),
             scan_result: None,
         };
-        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
+        let result = synth
+            .synthesize(&input)
+            .expect("serde deserialization should succeed");
         assert!(
             result.bundles[0]
                 .verification_hooks
@@ -2682,7 +2773,9 @@ mod tests {
             replay_result: Some(make_replay_result(vec![rec])),
             scan_result: None,
         };
-        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
+        let result = synth
+            .synthesize(&input)
+            .expect("serde deserialization should succeed");
         assert!(
             !result.bundles[0]
                 .verification_hooks
@@ -2732,7 +2825,9 @@ mod tests {
             replay_result: None,
             scan_result: Some(scan),
         };
-        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
+        let result = synth
+            .synthesize(&input)
+            .expect("serde deserialization should succeed");
         assert!(result.has_bundles());
         // Evidence refs should only have bifurcation scan
         assert_eq!(result.bundles[0].evidence_refs.len(), 1);
@@ -2748,7 +2843,8 @@ mod tests {
     fn synthesizer_config_serde_roundtrip() {
         let config = SynthesizerConfig::default();
         let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
-        let back: SynthesizerConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SynthesizerConfig =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, back);
     }
 
@@ -2770,7 +2866,8 @@ mod tests {
             scan_result: None,
         };
         let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
-        let back: SynthesisInput = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SynthesisInput =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(input, back);
     }
 
@@ -2803,7 +2900,8 @@ mod tests {
         ];
         for err in errors {
             let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
-            let back: SynthesizerError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: SynthesizerError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(err, back);
         }
     }
@@ -2859,7 +2957,8 @@ mod tests {
             summary: "10 traces".to_string(),
         };
         let json = serde_json::to_string(&eref).expect("serde deserialization should succeed");
-        let back: EvidenceRef = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: EvidenceRef =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(eref, back);
     }
 
@@ -2873,7 +2972,8 @@ mod tests {
             tolerance_millionths: 20_000,
         };
         let json = serde_json::to_string(&hook).expect("serde deserialization should succeed");
-        let back: ReplayVerificationHook = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ReplayVerificationHook =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(hook, back);
     }
 
@@ -2886,7 +2986,8 @@ mod tests {
             detail: "ok".to_string(),
         };
         let json = serde_json::to_string(&check).expect("serde deserialization should succeed");
-        let back: ConstraintCheckResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ConstraintCheckResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(check, back);
     }
 
@@ -2898,7 +2999,8 @@ mod tests {
             BundleKind::Adaptive,
         ] {
             let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
-            let back: BundleKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: BundleKind =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(kind, back);
         }
     }
@@ -2913,7 +3015,8 @@ mod tests {
             ConstraintCategory::Compatibility,
         ] {
             let json = serde_json::to_string(&cat).expect("serde deserialization should succeed");
-            let back: ConstraintCategory = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ConstraintCategory =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(cat, back);
         }
     }
@@ -2926,7 +3029,8 @@ mod tests {
             EvidenceSource::Combined,
         ] {
             let json = serde_json::to_string(&src).expect("serde deserialization should succeed");
-            let back: EvidenceSource = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: EvidenceSource =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(src, back);
         }
     }
@@ -2940,7 +3044,8 @@ mod tests {
             VerificationKind::SafeModeReplay,
         ] {
             let json = serde_json::to_string(&vk).expect("serde deserialization should succeed");
-            let back: VerificationKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: VerificationKind =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(vk, back);
         }
     }
@@ -2966,7 +3071,9 @@ mod tests {
             replay_result: Some(make_replay_result(vec![rec])),
             scan_result: None,
         };
-        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
+        let result = synth
+            .synthesize(&input)
+            .expect("serde deserialization should succeed");
         // Soft constraint fails but bundle is still approved
         assert!(result.bundles[0].is_approved());
         assert!(result.bundles[0].soft_violations > 0);
@@ -2976,7 +3083,8 @@ mod tests {
     fn synthesizer_serde_roundtrip() {
         let synth = default_synthesizer();
         let json = serde_json::to_string(&synth).expect("serde deserialization should succeed");
-        let back: RollbackSafemodeSynthesizer = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: RollbackSafemodeSynthesizer =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.rule_count(), synth.rule_count());
         assert_eq!(back.constraint_count(), synth.constraint_count());
     }
@@ -3010,7 +3118,9 @@ mod tests {
             replay_result: Some(make_replay_result(vec![rec])),
             scan_result: None,
         };
-        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
+        let result = synth
+            .synthesize(&input)
+            .expect("serde deserialization should succeed");
         assert!(result.best_approved().is_none());
     }
 
@@ -3022,7 +3132,9 @@ mod tests {
             replay_result: Some(make_replay_result(vec![rec])),
             scan_result: None,
         };
-        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
+        let result = synth
+            .synthesize(&input)
+            .expect("serde deserialization should succeed");
         assert!(result.best_approved().is_none());
     }
 
@@ -3034,7 +3146,9 @@ mod tests {
             replay_result: Some(make_replay_result(vec![rec])),
             scan_result: None,
         };
-        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
+        let result = synth
+            .synthesize(&input)
+            .expect("serde deserialization should succeed");
         assert_eq!(result.schema_version, SYNTHESIZER_SCHEMA_VERSION);
         assert_eq!(result.bundles[0].schema_version, SYNTHESIZER_SCHEMA_VERSION);
     }
@@ -3059,7 +3173,9 @@ mod tests {
             replay_result: Some(make_replay_result(vec![rec])),
             scan_result: None,
         };
-        let result = synth.synthesize(&input).expect("serde deserialization should succeed");
+        let result = synth
+            .synthesize(&input)
+            .expect("serde deserialization should succeed");
         let check = &result.bundles[0].constraint_checks[0];
         assert_eq!(check.regression_millionths, 0);
         assert!(check.passed);
@@ -3363,7 +3479,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: EvidenceTrigger = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: EvidenceTrigger =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, v);
         }
     }
@@ -3376,7 +3493,8 @@ mod tests {
             BundleKind::Adaptive,
         ] {
             let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
-            let back: BundleKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: BundleKind =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(back, kind);
         }
     }
@@ -3392,7 +3510,8 @@ mod tests {
         ];
         for cat in &all {
             let json = serde_json::to_string(cat).expect("serde deserialization should succeed");
-            let back: ConstraintCategory = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ConstraintCategory =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, cat);
         }
     }
@@ -3407,7 +3526,8 @@ mod tests {
         ];
         for kind in &all {
             let json = serde_json::to_string(kind).expect("serde deserialization should succeed");
-            let back: VerificationKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: VerificationKind =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, kind);
         }
     }
@@ -3420,7 +3540,8 @@ mod tests {
             EvidenceSource::Combined,
         ] {
             let json = serde_json::to_string(&src).expect("serde deserialization should succeed");
-            let back: EvidenceSource = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: EvidenceSource =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(back, src);
         }
     }
@@ -3454,7 +3575,8 @@ mod tests {
         ];
         for err in &all {
             let json = serde_json::to_string(err).expect("serde deserialization should succeed");
-            let back: SynthesizerError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: SynthesizerError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, err);
         }
     }
@@ -3467,7 +3589,8 @@ mod tests {
             BundleKind::SafeMode,
         );
         let json = serde_json::to_string(&rule).expect("serde deserialization should succeed");
-        let back: SynthesisRule = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SynthesisRule =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, rule);
     }
 
@@ -3483,7 +3606,8 @@ mod tests {
             rationale: "test delta".to_string(),
         };
         let json = serde_json::to_string(&delta).expect("serde deserialization should succeed");
-        let back: PolicyDelta = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: PolicyDelta =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, delta);
     }
 
@@ -3497,7 +3621,8 @@ mod tests {
             hard: true,
         };
         let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
-        let back: NonRegressionConstraint = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: NonRegressionConstraint =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, c);
     }
 
@@ -3510,7 +3635,8 @@ mod tests {
             detail: "improved".to_string(),
         };
         let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
-        let back: ConstraintCheckResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ConstraintCheckResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, r);
     }
 
@@ -3524,7 +3650,8 @@ mod tests {
             tolerance_millionths: 10_000,
         };
         let json = serde_json::to_string(&hook).expect("serde deserialization should succeed");
-        let back: ReplayVerificationHook = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ReplayVerificationHook =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, hook);
     }
 
@@ -3536,7 +3663,8 @@ mod tests {
             summary: "replay showed improvement".to_string(),
         };
         let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
-        let back: EvidenceRef = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: EvidenceRef =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, r);
     }
 
@@ -3544,7 +3672,8 @@ mod tests {
     fn synthesizer_config_serde_default_roundtrip() {
         let cfg = SynthesizerConfig::default();
         let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
-        let back: SynthesizerConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SynthesizerConfig =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, cfg);
     }
 
@@ -3555,7 +3684,8 @@ mod tests {
             scan_result: None,
         };
         let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
-        let back: SynthesisInput = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SynthesisInput =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, input);
         assert!(!back.has_evidence());
     }

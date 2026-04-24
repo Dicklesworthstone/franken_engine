@@ -1412,7 +1412,8 @@ mod tests {
             b"bbb",
             100,
         );
-        let mm = classify_mismatch(&a, &b, DEFAULT_MAX_SIZE_DIVERGENCE).expect("serde deserialization should succeed");
+        let mm = classify_mismatch(&a, &b, DEFAULT_MAX_SIZE_DIVERGENCE)
+            .expect("serde deserialization should succeed");
         assert_eq!(mm.class, MismatchClass::ContentDivergence);
         assert_eq!(mm.severity, MismatchSeverity::Major);
     }
@@ -1436,7 +1437,8 @@ mod tests {
             b"bbb",
             90,
         );
-        let mm = classify_mismatch(&a, &b, DEFAULT_MAX_SIZE_DIVERGENCE).expect("serde deserialization should succeed");
+        let mm = classify_mismatch(&a, &b, DEFAULT_MAX_SIZE_DIVERGENCE)
+            .expect("serde deserialization should succeed");
         assert_eq!(mm.class, MismatchClass::SizeDivergence);
         assert_eq!(mm.severity, MismatchSeverity::Minor);
     }
@@ -1460,7 +1462,8 @@ mod tests {
             b"bbb",
             170,
         );
-        let mm = classify_mismatch(&a, &b, DEFAULT_MAX_SIZE_DIVERGENCE).expect("serde deserialization should succeed");
+        let mm = classify_mismatch(&a, &b, DEFAULT_MAX_SIZE_DIVERGENCE)
+            .expect("serde deserialization should succeed");
         assert_eq!(mm.class, MismatchClass::SizeDivergence);
         assert_eq!(mm.severity, MismatchSeverity::Major);
     }
@@ -1484,7 +1487,8 @@ mod tests {
             b"bbb",
             50,
         );
-        let mm = classify_mismatch(&a, &b, DEFAULT_MAX_SIZE_DIVERGENCE).expect("serde deserialization should succeed");
+        let mm = classify_mismatch(&a, &b, DEFAULT_MAX_SIZE_DIVERGENCE)
+            .expect("serde deserialization should succeed");
         assert_eq!(mm.class, MismatchClass::SizeDivergence);
         assert_eq!(mm.severity, MismatchSeverity::Critical);
     }
@@ -2168,7 +2172,8 @@ mod tests {
     fn test_serde_round_trip_workflow_kind() {
         for wk in WorkflowKind::all() {
             let json = serde_json::to_string(wk).expect("serde deserialization should succeed");
-            let back: WorkflowKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: WorkflowKind =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*wk, back);
         }
     }
@@ -2177,7 +2182,8 @@ mod tests {
     fn test_serde_round_trip_surface() {
         for s in Surface::all() {
             let json = serde_json::to_string(s).expect("serde deserialization should succeed");
-            let back: Surface = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: Surface =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*s, back);
         }
     }
@@ -2190,7 +2196,8 @@ mod tests {
             CellVerdict::Inconclusive,
         ] {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: CellVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: CellVerdict =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -2199,7 +2206,8 @@ mod tests {
     fn test_serde_round_trip_matrix_config() {
         let config = MatrixConfig::default();
         let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
-        let back: MatrixConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: MatrixConfig =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, back);
     }
 

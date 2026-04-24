@@ -982,7 +982,8 @@ mod tests {
             // SAFETY: ManifoldDimension derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(&dim).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by valid ManifoldDimension serialization
-            let back: ManifoldDimension = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ManifoldDimension =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(dim, back);
         }
     }
@@ -1108,7 +1109,8 @@ mod tests {
         // SAFETY: ManifoldSchema derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&schema).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid ManifoldSchema serialization
-        let back: ManifoldSchema = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ManifoldSchema =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(schema, back);
     }
 
@@ -1459,7 +1461,8 @@ mod tests {
         // SAFETY: ManifoldWitness derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&w).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid ManifoldWitness serialization
-        let back: ManifoldWitness = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ManifoldWitness =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(w, back);
     }
 
@@ -1498,7 +1501,8 @@ mod tests {
             // SAFETY: ManifoldOperation derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(&op).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by valid ManifoldOperation serialization
-            let back: ManifoldOperation = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ManifoldOperation =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(op, back);
         }
     }
@@ -1556,7 +1560,8 @@ mod tests {
         // SAFETY: Default ManifoldSchema derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&schema).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid ManifoldSchema serialization
-        let back: ManifoldSchema = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ManifoldSchema =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(schema, back);
     }
 
@@ -1585,7 +1590,8 @@ mod tests {
             PlacementValidity::MissingAndOutOfRange,
         ] {
             let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
-            let back: PlacementValidity = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: PlacementValidity =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(v, back);
         }
     }
@@ -1618,12 +1624,16 @@ mod tests {
 
     #[test]
     fn boundary_direction_serde_roundtrip() {
-        let above = serde_json::to_string(&BoundaryDirection::Above).expect("serde deserialization should succeed");
-        let above_back: BoundaryDirection = serde_json::from_str(&above).expect("serde deserialization should succeed");
+        let above = serde_json::to_string(&BoundaryDirection::Above)
+            .expect("serde deserialization should succeed");
+        let above_back: BoundaryDirection =
+            serde_json::from_str(&above).expect("serde deserialization should succeed");
         assert_eq!(BoundaryDirection::Above, above_back);
 
-        let below = serde_json::to_string(&BoundaryDirection::Below).expect("serde deserialization should succeed");
-        let below_back: BoundaryDirection = serde_json::from_str(&below).expect("serde deserialization should succeed");
+        let below = serde_json::to_string(&BoundaryDirection::Below)
+            .expect("serde deserialization should succeed");
+        let below_back: BoundaryDirection =
+            serde_json::from_str(&below).expect("serde deserialization should succeed");
         assert_eq!(BoundaryDirection::Below, below_back);
     }
 }

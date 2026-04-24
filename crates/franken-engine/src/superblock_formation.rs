@@ -191,7 +191,8 @@ impl SideExit {
         let mut hasher = Sha256::new();
         hasher.update(resume_offset.to_le_bytes());
         hasher.update(guard_position.to_le_bytes());
-        let reason_bytes = serde_json::to_vec(reason).expect("serde deserialization should succeed");
+        let reason_bytes =
+            serde_json::to_vec(reason).expect("serde deserialization should succeed");
         hasher.update(&reason_bytes);
         let digest = hasher.finalize();
         format!("exit-{}", &hex::encode(digest)[..16])
@@ -1306,7 +1307,8 @@ mod tests {
         ];
         for kind in kinds {
             let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
-            let back: GuardKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: GuardKind =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(kind, back);
         }
     }
@@ -1340,8 +1342,10 @@ mod tests {
             SideExitReason::PrototypeInvalidated,
             SideExitReason::UnexpectedControlFlow,
         ] {
-            let json = serde_json::to_string(&reason).expect("serde deserialization should succeed");
-            let back: SideExitReason = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&reason).expect("serde deserialization should succeed");
+            let back: SideExitReason =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(reason, back);
         }
     }
@@ -1420,7 +1424,8 @@ mod tests {
             "exit-xyz".into(),
         );
         let json = serde_json::to_string(&guard).expect("serde deserialization should succeed");
-        let back: SuperblockGuard = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SuperblockGuard =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(guard, back);
     }
 
@@ -1551,7 +1556,8 @@ mod tests {
             formation_epoch: 1,
         };
         let json = serde_json::to_string(&block).expect("serde deserialization should succeed");
-        let back: Superblock = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: Superblock =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(block, back);
     }
 
@@ -1700,7 +1706,8 @@ mod tests {
         };
         let tree = TraceTree::new("fn_ser", root);
         let json = serde_json::to_string(&tree).expect("serde deserialization should succeed");
-        let back: TraceTree = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: TraceTree =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(tree.tree_id, back.tree_id);
         assert_eq!(tree.node_count(), back.node_count());
     }
@@ -1781,7 +1788,13 @@ mod tests {
 
         let record = form_superblock(&profile, 0, &policy, 1);
         assert_eq!(record.outcome, FormationOutcome::Formed);
-        assert_eq!(record.block.expect("serde deserialization should succeed").instruction_count(), 2);
+        assert_eq!(
+            record
+                .block
+                .expect("serde deserialization should succeed")
+                .instruction_count(),
+            2
+        );
     }
 
     #[test]
@@ -1905,7 +1918,8 @@ mod tests {
         let policy = SuperblockPolicy::default();
         let decision = FormationDecision::build("fn_ser", &policy, 1, vec![], None);
         let json = serde_json::to_string(&decision).expect("serde deserialization should succeed");
-        let back: FormationDecision = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: FormationDecision =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(decision, back);
     }
 
@@ -1977,7 +1991,8 @@ mod tests {
             execution_count: 42,
         };
         let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
-        let back: SuperblockEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SuperblockEntry =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, back);
     }
 
@@ -1993,7 +2008,8 @@ mod tests {
             formation_epoch: 1,
         };
         let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
-        let back: TraceTreeSummary = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: TraceTreeSummary =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(summary, back);
     }
 

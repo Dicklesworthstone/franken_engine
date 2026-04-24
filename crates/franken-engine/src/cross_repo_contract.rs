@@ -1029,7 +1029,8 @@ mod tests {
                 UpdateKind::Snapshot,
                 payload,
             );
-            let json = serde_json::to_value(&envelope).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_value(&envelope).expect("serde deserialization should succeed");
             assert!(json["payload"].is_object(), "payload must be an object");
         }
     }
@@ -1045,7 +1046,10 @@ mod tests {
         let expected = ["running", "complete", "failed", "no_events"];
         for (status, expected_str) in statuses.iter().zip(expected.iter()) {
             let json = serde_json::to_value(status).expect("serde deserialization should succeed");
-            assert_eq!(json.as_str().expect("serde deserialization should succeed"), *expected_str);
+            assert_eq!(
+                json.as_str().expect("serde deserialization should succeed"),
+                *expected_str
+            );
         }
     }
 
@@ -1073,7 +1077,10 @@ mod tests {
         ];
         for (stream, expected_str) in streams.iter().zip(expected.iter()) {
             let json = serde_json::to_value(stream).expect("serde deserialization should succeed");
-            assert_eq!(json.as_str().expect("serde deserialization should succeed"), *expected_str);
+            assert_eq!(
+                json.as_str().expect("serde deserialization should succeed"),
+                *expected_str
+            );
         }
     }
 
@@ -1087,7 +1094,10 @@ mod tests {
         let expected = ["snapshot", "delta", "heartbeat"];
         for (kind, expected_str) in kinds.iter().zip(expected.iter()) {
             let json = serde_json::to_value(kind).expect("serde deserialization should succeed");
-            assert_eq!(json.as_str().expect("serde deserialization should succeed"), *expected_str);
+            assert_eq!(
+                json.as_str().expect("serde deserialization should succeed"),
+                *expected_str
+            );
         }
     }
 
@@ -1162,7 +1172,10 @@ mod tests {
         ];
         for (kind, expected_json) in &kinds {
             let json = serde_json::to_value(kind).expect("serde deserialization should succeed");
-            assert_eq!(json.as_str().expect("serde deserialization should succeed"), *expected_json);
+            assert_eq!(
+                json.as_str().expect("serde deserialization should succeed"),
+                *expected_json
+            );
         }
     }
 
@@ -1400,7 +1413,10 @@ mod tests {
         let expected = ["Start", "Stop", "Suspend", "Quarantine"];
         for (action, expected_str) in actions.iter().zip(expected.iter()) {
             let json = serde_json::to_value(action).expect("serde deserialization should succeed");
-            assert_eq!(json.as_str().expect("serde deserialization should succeed"), *expected_str);
+            assert_eq!(
+                json.as_str().expect("serde deserialization should succeed"),
+                *expected_str
+            );
         }
     }
 
@@ -1414,7 +1430,10 @@ mod tests {
         let expected = ["Start", "Stop", "Status"];
         for (cmd, expected_str) in commands.iter().zip(expected.iter()) {
             let json = serde_json::to_value(cmd).expect("serde deserialization should succeed");
-            assert_eq!(json.as_str().expect("serde deserialization should succeed"), *expected_str);
+            assert_eq!(
+                json.as_str().expect("serde deserialization should succeed"),
+                *expected_str
+            );
         }
     }
 
@@ -1695,8 +1714,10 @@ mod tests {
         };
 
         // Both should pass structured log verification
-        let storage_json = serde_json::to_value(&storage_event).expect("serde deserialization should succeed");
-        let service_json = serde_json::to_value(&service_log).expect("serde deserialization should succeed");
+        let storage_json =
+            serde_json::to_value(&storage_event).expect("serde deserialization should succeed");
+        let service_json =
+            serde_json::to_value(&service_log).expect("serde deserialization should succeed");
 
         let v1 = verify_structured_log(&storage_json, "frankensqlite");
         let v2 = verify_structured_log(&service_json, "fastapi_rust");
@@ -1801,7 +1822,8 @@ mod tests {
             detail: "ordering changed".to_string(),
         };
         let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
-        let back: ContractViolation = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ContractViolation =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, back);
     }
 
@@ -1841,7 +1863,8 @@ mod tests {
     fn schema_contract_serde_roundtrip() {
         let contract = frankentui_envelope_contract();
         let json = serde_json::to_string(&contract).expect("serde deserialization should succeed");
-        let back: SchemaContract = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SchemaContract =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(contract, back);
     }
 
@@ -1855,7 +1878,8 @@ mod tests {
             minimum_compatible_version: 1,
         };
         let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
-        let back: VersionCompatibilityEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: VersionCompatibilityEntry =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, entry);
     }
 
@@ -1871,7 +1895,8 @@ mod tests {
         ];
         for ft in &all {
             let json = serde_json::to_string(ft).expect("serde deserialization should succeed");
-            let back: FieldType = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: FieldType =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, ft);
         }
     }
@@ -2330,7 +2355,10 @@ mod tests {
         ];
         for (variant, expected_name) in &pairs {
             let json = serde_json::to_value(variant).expect("serde deserialization should succeed");
-            assert_eq!(json.as_str().expect("serde deserialization should succeed"), *expected_name);
+            assert_eq!(
+                json.as_str().expect("serde deserialization should succeed"),
+                *expected_name
+            );
         }
     }
 
@@ -2377,7 +2405,8 @@ mod tests {
     #[test]
     fn enrichment_verify_deterministic_serde_all_core_types() {
         // Verify every module-defined type round-trips deterministically.
-        verify_deterministic_serde(&RegressionClass::Observability).expect("serde deserialization should succeed");
+        verify_deterministic_serde(&RegressionClass::Observability)
+            .expect("serde deserialization should succeed");
         verify_deterministic_serde(&FieldType::Bool).expect("serde deserialization should succeed");
         verify_deterministic_serde(&ContractViolation {
             boundary: "b".to_string(),
@@ -2386,7 +2415,8 @@ mod tests {
             detail: "d".to_string(),
         })
         .expect("serde deserialization should succeed");
-        verify_deterministic_serde(&frankentui_envelope_contract()).expect("serde deserialization should succeed");
+        verify_deterministic_serde(&frankentui_envelope_contract())
+            .expect("serde deserialization should succeed");
         verify_deterministic_serde(&VersionCompatibilityEntry {
             boundary: "x".to_string(),
             current_version: 1,

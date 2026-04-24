@@ -831,7 +831,8 @@ mod tests {
     fn inference_config_serde_roundtrip() {
         let config = InferenceConfig::default();
         let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
-        let back: InferenceConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: InferenceConfig =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, back);
     }
 
@@ -877,7 +878,8 @@ mod tests {
     fn shape_stability_serde_roundtrip() {
         let s = ShapeStabilityAssessment::from_transitions(3, 8);
         let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
-        let back: ShapeStabilityAssessment = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ShapeStabilityAssessment =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(s, back);
     }
 
@@ -914,7 +916,8 @@ mod tests {
     fn blocking_reason_serde_roundtrip() {
         let reason = InferenceBlockingReason::MegamorphicShape;
         let json = serde_json::to_string(&reason).expect("serde deserialization should succeed");
-        let back: InferenceBlockingReason = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: InferenceBlockingReason =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(reason, back);
     }
 
@@ -1154,7 +1157,8 @@ mod tests {
         let el = make_element("div");
         p.infer_component("Comp", &el, None, None);
         let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
-        let back: ReactLaneInferencePipeline = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ReactLaneInferencePipeline =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(p.total_processed, back.total_processed);
         assert_eq!(p.total_eligible, back.total_eligible);
     }
@@ -1217,7 +1221,8 @@ mod tests {
             compile_receipt_hash: None,
         };
         let json = serde_json::to_string(&evidence).expect("serde deserialization should succeed");
-        let back: ComponentEvidence = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ComponentEvidence =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(evidence, back);
     }
 
@@ -1239,7 +1244,8 @@ mod tests {
             evidence_hash: "abc123".into(),
         };
         let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
-        let back: ComponentInferenceResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ComponentInferenceResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, back);
     }
 
@@ -1264,7 +1270,8 @@ mod tests {
         p.infer_component("Comp", &el, None, None);
         let summary = p.summary();
         let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
-        let back: InferenceSummary = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: InferenceSummary =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(summary, back);
     }
 

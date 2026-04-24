@@ -1052,7 +1052,8 @@ mod tests {
             subsystem: "compiler".into(),
         };
         let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
-        let restored: MechanismError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: MechanismError =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(e, restored);
     }
 
@@ -1096,7 +1097,8 @@ mod tests {
     fn ic_class_serde_roundtrip() {
         let c = IncentiveCompatibilityClass::BayesNash;
         let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
-        let restored: IncentiveCompatibilityClass = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: IncentiveCompatibilityClass =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c, restored);
     }
 
@@ -1221,7 +1223,8 @@ mod tests {
             submitted_at: test_ts(3000),
             resolved_at: None,
         };
-        mech.submit_challenge(challenge).expect("serde deserialization should succeed");
+        mech.submit_challenge(challenge)
+            .expect("serde deserialization should succeed");
         assert!(
             mech.resolve_challenge("ch1", ChallengeOutcome::Upheld, test_ts(4000))
                 .is_ok()
@@ -1306,8 +1309,10 @@ mod tests {
             submitted_at: test_ts(5000),
             approved: None,
         };
-        mech.request_reinstate(req).expect("serde deserialization should succeed");
-        mech.approve_reinstate("req1", test_ts(6000)).expect("serde deserialization should succeed");
+        mech.request_reinstate(req)
+            .expect("serde deserialization should succeed");
+        mech.approve_reinstate("req1", test_ts(6000))
+            .expect("serde deserialization should succeed");
 
         assert_eq!(mech.quarantines()[0].status, QuarantineStatus::Lifted);
         assert_eq!(mech.active_quarantine_count(), 0);
@@ -1342,7 +1347,8 @@ mod tests {
         let model = make_game_model(Subsystem::Runtime);
         let analysis = mech.analyze_incentive_compatibility(&model, test_ts(1000));
         let json = serde_json::to_string(&analysis).expect("serde deserialization should succeed");
-        let restored: IncentiveAnalysis = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: IncentiveAnalysis =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(analysis, restored);
     }
 
@@ -1397,7 +1403,8 @@ mod tests {
             .compile_enforcement_policy(Subsystem::EvidencePipeline, "pol-2", test_ts(2000))
             .expect("serde deserialization should succeed");
         let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
-        let restored: EnforcementPolicy = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: EnforcementPolicy =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(policy, restored);
     }
 
@@ -1437,7 +1444,8 @@ mod tests {
         let mech = GovernanceMechanism::new(test_epoch());
         let report = mech.generate_report();
         let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
-        let restored: MechanismReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: MechanismReport =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report, restored);
     }
 
@@ -1482,7 +1490,8 @@ mod tests {
             submitted_at: test_ts(3000),
             resolved_at: None,
         };
-        mech.submit_challenge(ch).expect("serde deserialization should succeed");
+        mech.submit_challenge(ch)
+            .expect("serde deserialization should succeed");
 
         // Resolve challenge (upheld → quarantine stays).
         mech.resolve_challenge("ch1", ChallengeOutcome::Upheld, test_ts(4000))
@@ -1497,10 +1506,12 @@ mod tests {
             submitted_at: test_ts(5000),
             approved: None,
         };
-        mech.request_reinstate(req).expect("serde deserialization should succeed");
+        mech.request_reinstate(req)
+            .expect("serde deserialization should succeed");
 
         // Approve reinstatement.
-        mech.approve_reinstate("req1", test_ts(6000)).expect("serde deserialization should succeed");
+        mech.approve_reinstate("req1", test_ts(6000))
+            .expect("serde deserialization should succeed");
         assert_eq!(mech.active_quarantine_count(), 0);
 
         // Resolve report.
@@ -1581,7 +1592,8 @@ mod tests {
             .expect("serde deserialization should succeed");
 
         let json = serde_json::to_string(&mech).expect("serde deserialization should succeed");
-        let restored: GovernanceMechanism = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: GovernanceMechanism =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(mech.reports().len(), restored.reports().len());
         assert_eq!(mech.epoch(), restored.epoch());
     }
@@ -1605,8 +1617,10 @@ mod tests {
             submitted_at: test_ts(5000),
             approved: None,
         };
-        mech.request_reinstate(req).expect("serde deserialization should succeed");
-        mech.approve_reinstate("req1", test_ts(6000)).expect("serde deserialization should succeed");
+        mech.request_reinstate(req)
+            .expect("serde deserialization should succeed");
+        mech.approve_reinstate("req1", test_ts(6000))
+            .expect("serde deserialization should succeed");
 
         // Try to reinstate again — quarantine is Lifted, not Active.
         let req2 = ReinstateRequest {
@@ -1678,7 +1692,8 @@ mod tests {
             timestamp: test_ts(1000),
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let restored: MechanismEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: MechanismEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, restored);
     }
 
@@ -1770,7 +1785,8 @@ mod tests {
         ];
         for err in &errors {
             let json = serde_json::to_string(err).expect("serde deserialization should succeed");
-            let restored: MechanismError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: MechanismError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, restored);
         }
     }
@@ -1803,9 +1819,11 @@ mod tests {
         let mut mech = GovernanceMechanism::new(test_epoch());
         assert_eq!(mech.active_quarantine_count(), 0);
         let report = make_report("r1", "pkg-a", 500_000);
-        mech.submit_report(report).expect("serde deserialization should succeed");
+        mech.submit_report(report)
+            .expect("serde deserialization should succeed");
         let q = make_quarantine("q1", "pkg-a", "r1");
-        mech.impose_quarantine(q).expect("serde deserialization should succeed");
+        mech.impose_quarantine(q)
+            .expect("serde deserialization should succeed");
         assert_eq!(mech.active_quarantine_count(), 1);
     }
 
@@ -1841,7 +1859,8 @@ mod tests {
             submitted_at: test_ts(2000),
             resolved_at: None,
         };
-        mech.submit_challenge(challenge).expect("serde deserialization should succeed");
+        mech.submit_challenge(challenge)
+            .expect("serde deserialization should succeed");
         assert_eq!(mech.challenges().len(), 1);
         assert_eq!(mech.challenges()[0].challenge_id, "c1");
     }
@@ -1850,7 +1869,8 @@ mod tests {
     fn extension_report_serde_roundtrip() {
         let report = make_report("r1", "pkg-a", 750_000);
         let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
-        let back: ExtensionReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ExtensionReport =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report, back);
     }
 
@@ -1858,7 +1878,8 @@ mod tests {
     fn quarantine_record_serde_roundtrip() {
         let q = make_quarantine("q1", "pkg-a", "r1");
         let json = serde_json::to_string(&q).expect("serde deserialization should succeed");
-        let back: QuarantineRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: QuarantineRecord =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(q, back);
     }
 
@@ -1876,7 +1897,8 @@ mod tests {
             resolved_at: Some(test_ts(4000)),
         };
         let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
-        let back: ChallengeRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ChallengeRecord =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c, back);
     }
 
@@ -1891,7 +1913,8 @@ mod tests {
             approved: Some(true),
         };
         let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
-        let back: ReinstateRequest = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ReinstateRequest =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 
@@ -1919,7 +1942,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: QuarantineStatus = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: QuarantineStatus =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -1933,7 +1957,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: ChallengeOutcome = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ChallengeOutcome =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -1948,7 +1973,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: ReportPhase = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ReportPhase =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -2035,7 +2061,8 @@ mod tests {
         ];
         for c in &classes {
             let json = serde_json::to_string(c).expect("serde deserialization should succeed");
-            let back: IncentiveCompatibilityClass = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: IncentiveCompatibilityClass =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*c, back);
         }
     }
@@ -2053,7 +2080,8 @@ mod tests {
             timestamp: test_ts(4000),
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let back: MechanismEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: MechanismEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
         assert_eq!(back.attributes.len(), 2);
     }
@@ -2108,7 +2136,8 @@ mod tests {
             submitted_at: test_ts(5000),
             approved: None,
         };
-        mech.request_reinstate(req).expect("serde deserialization should succeed");
+        mech.request_reinstate(req)
+            .expect("serde deserialization should succeed");
         assert_eq!(mech.reinstate_requests().len(), 1);
         assert_eq!(mech.reinstate_requests()[0].request_id, "req1");
     }

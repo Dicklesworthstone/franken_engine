@@ -690,7 +690,8 @@ mod tests {
     fn milestone_serde_roundtrip() {
         for ms in [Milestone::Alpha, Milestone::Beta, Milestone::Ga] {
             let json = serde_json::to_string(&ms).expect("serde deserialization should succeed");
-            let back: Milestone = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: Milestone =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(ms, back);
         }
     }
@@ -735,7 +736,8 @@ mod tests {
     fn metric_kind_serde_roundtrip() {
         for kind in &MetricKind::ALL {
             let json = serde_json::to_string(kind).expect("serde deserialization should succeed");
-            let back: MetricKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: MetricKind =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*kind, back);
         }
     }
@@ -756,8 +758,10 @@ mod tests {
     #[test]
     fn default_thresholds_serde_roundtrip() {
         let thresholds = default_thresholds();
-        let json = serde_json::to_string(&thresholds).expect("serde deserialization should succeed");
-        let back: Vec<Threshold> = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json =
+            serde_json::to_string(&thresholds).expect("serde deserialization should succeed");
+        let back: Vec<Threshold> =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(thresholds.len(), back.len());
     }
 
@@ -798,7 +802,9 @@ mod tests {
         for i in 0..100 {
             sc.record(sample(MetricKind::RenderLatencyP50Us, i * 100, 1));
         }
-        let summary = sc.summary(MetricKind::RenderLatencyP50Us).expect("serde deserialization should succeed");
+        let summary = sc
+            .summary(MetricKind::RenderLatencyP50Us)
+            .expect("serde deserialization should succeed");
         assert_eq!(summary.count, 100);
         assert_eq!(summary.min, 0);
         assert_eq!(summary.max, 9900);
@@ -951,7 +957,8 @@ mod tests {
         ];
         for result in &results {
             let json = serde_json::to_string(result).expect("serde deserialization should succeed");
-            let back: ThresholdResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ThresholdResult =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*result, back);
         }
     }
@@ -972,7 +979,8 @@ mod tests {
             pass_rate_millionths: 0,
         };
         let json = serde_json::to_string(&eval).expect("serde deserialization should succeed");
-        let back: ScorecardEvaluation = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ScorecardEvaluation =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(eval, back);
     }
 
@@ -1016,7 +1024,8 @@ mod tests {
         let mut sc = Scorecard::new(epoch(1));
         sc.record(sample(MetricKind::BundleSizeBytes, 1000, 1));
         let json = serde_json::to_string(&sc).expect("serde deserialization should succeed");
-        let back: Scorecard = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: Scorecard =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(sc.total_observations(), back.total_observations());
     }
 
@@ -1028,7 +1037,8 @@ mod tests {
     fn metric_sample_serde_roundtrip() {
         let s = sample(MetricKind::CompatibilityPassRate, 950_000, 42);
         let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
-        let back: MetricSample = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: MetricSample =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(s, back);
     }
 
@@ -1049,7 +1059,8 @@ mod tests {
             p99: 4900,
         };
         let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
-        let back: MetricSummary = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: MetricSummary =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(summary, back);
     }
 
@@ -1090,7 +1101,9 @@ mod tests {
     fn single_observation_summary() {
         let mut sc = Scorecard::new(epoch(1));
         sc.record(sample(MetricKind::RenderLatencyP50Us, 42, 1));
-        let summary = sc.summary(MetricKind::RenderLatencyP50Us).expect("serde deserialization should succeed");
+        let summary = sc
+            .summary(MetricKind::RenderLatencyP50Us)
+            .expect("serde deserialization should succeed");
         assert_eq!(summary.count, 1);
         assert_eq!(summary.min, 42);
         assert_eq!(summary.max, 42);
@@ -1105,14 +1118,18 @@ mod tests {
             sc.record(sample(MetricKind::RenderLatencyP50Us, i, 1));
         }
         // p50 for RenderLatencyP50Us.
-        let val = sc.current_value(MetricKind::RenderLatencyP50Us).expect("serde deserialization should succeed");
+        let val = sc
+            .current_value(MetricKind::RenderLatencyP50Us)
+            .expect("serde deserialization should succeed");
         assert_eq!(val, 50); // p50 of 0..99
 
         for i in 0..100 {
             sc.record(sample(MetricKind::RenderLatencyP99Us, i, 1));
         }
         // p99 for RenderLatencyP99Us.
-        let val99 = sc.current_value(MetricKind::RenderLatencyP99Us).expect("serde deserialization should succeed");
+        let val99 = sc
+            .current_value(MetricKind::RenderLatencyP99Us)
+            .expect("serde deserialization should succeed");
         assert_eq!(val99, 99); // p99 of 0..99
     }
 
@@ -1191,7 +1208,8 @@ mod tests {
             boundary: 5_000_000,
         };
         let json = serde_json::to_string(&t).expect("serde deserialization should succeed");
-        let back: Threshold = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: Threshold =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(t, back);
     }
 
@@ -1250,7 +1268,9 @@ mod tests {
             sc.record(sample(MetricKind::RenderLatencyP95Us, i * 10, 1));
         }
         // p95 of [0, 10, 20, ..., 990]
-        let val = sc.current_value(MetricKind::RenderLatencyP95Us).expect("serde deserialization should succeed");
+        let val = sc
+            .current_value(MetricKind::RenderLatencyP95Us)
+            .expect("serde deserialization should succeed");
         assert_eq!(val, 950); // index 95 in sorted 0..99
     }
 
@@ -1352,7 +1372,8 @@ mod tests {
             milestone: Milestone::Ga,
         };
         let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
-        let back: ThresholdResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ThresholdResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, back);
     }
 
@@ -1368,7 +1389,8 @@ mod tests {
     fn milestone_serde_roundtrip_all_variants() {
         for ms in [Milestone::Alpha, Milestone::Beta, Milestone::Ga] {
             let json = serde_json::to_string(&ms).expect("serde deserialization should succeed");
-            let back: Milestone = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: Milestone =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(ms, back);
         }
     }
@@ -1378,7 +1400,9 @@ mod tests {
         let mut sc = Scorecard::new(epoch(1));
         sc.record(sample(MetricKind::BundleSizeBytes, 100, 1));
         sc.record(sample(MetricKind::BundleSizeBytes, 200, 1));
-        let summary = sc.summary(MetricKind::BundleSizeBytes).expect("serde deserialization should succeed");
+        let summary = sc
+            .summary(MetricKind::BundleSizeBytes)
+            .expect("serde deserialization should succeed");
         assert_eq!(summary.count, 2);
         assert_eq!(summary.min, 100);
         assert_eq!(summary.max, 200);
@@ -1403,7 +1427,9 @@ mod tests {
         for i in 0..100 {
             sc.record(sample(MetricKind::ResponsivenessP99Us, i * 100, 1));
         }
-        let val = sc.current_value(MetricKind::ResponsivenessP99Us).expect("serde deserialization should succeed");
+        let val = sc
+            .current_value(MetricKind::ResponsivenessP99Us)
+            .expect("serde deserialization should succeed");
         assert_eq!(val, 9900); // p99 of [0, 100, 200, ..., 9900]
     }
 
@@ -1498,7 +1524,9 @@ mod tests {
         for i in 0..100 {
             sc.record(sample(MetricKind::RollbackLatencyP99Us, i * 1000, 1));
         }
-        let val = sc.current_value(MetricKind::RollbackLatencyP99Us).expect("serde deserialization should succeed");
+        let val = sc
+            .current_value(MetricKind::RollbackLatencyP99Us)
+            .expect("serde deserialization should succeed");
         assert_eq!(val, 99_000); // p99
     }
 
@@ -1988,7 +2016,8 @@ mod tests {
     fn metric_sample_zero_value() {
         let s = sample(MetricKind::CompatibilityPassRate, 0, 1);
         let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
-        let back: MetricSample = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: MetricSample =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.value, 0);
     }
 
@@ -1996,7 +2025,8 @@ mod tests {
     fn metric_sample_negative_value() {
         let s = sample(MetricKind::CompatibilityPassRate, -1, 1);
         let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
-        let back: MetricSample = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: MetricSample =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.value, -1);
     }
 
@@ -2004,7 +2034,8 @@ mod tests {
     fn metric_sample_i64_max() {
         let s = sample(MetricKind::BundleSizeBytes, i64::MAX, 1);
         let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
-        let back: MetricSample = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: MetricSample =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.value, i64::MAX);
     }
 
@@ -2012,7 +2043,8 @@ mod tests {
     fn metric_sample_i64_min() {
         let s = sample(MetricKind::BundleSizeBytes, i64::MIN, 1);
         let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
-        let back: MetricSample = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: MetricSample =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.value, i64::MIN);
     }
 
@@ -2030,7 +2062,8 @@ mod tests {
             p99: 0,
         };
         let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
-        let back: MetricSummary = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: MetricSummary =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(summary, back);
     }
 
@@ -2047,7 +2080,8 @@ mod tests {
             p99: 0,
         };
         let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
-        let back: MetricSummary = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: MetricSummary =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(summary.count, back.count);
         assert_eq!(summary.min, back.min);
         assert_eq!(summary.max, back.max);
@@ -2061,7 +2095,8 @@ mod tests {
             boundary: 0,
         };
         let json = serde_json::to_string(&t).expect("serde deserialization should succeed");
-        let back: Threshold = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: Threshold =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.boundary, 0);
     }
 
@@ -2073,7 +2108,8 @@ mod tests {
             boundary: -1,
         };
         let json = serde_json::to_string(&t).expect("serde deserialization should succeed");
-        let back: Threshold = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: Threshold =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.boundary, -1);
     }
 
@@ -2103,7 +2139,8 @@ mod tests {
             pass_rate_millionths: 0,
         };
         let json = serde_json::to_string(&eval).expect("serde deserialization should succeed");
-        let back: ScorecardEvaluation = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ScorecardEvaluation =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(eval, back);
     }
 
@@ -2119,7 +2156,8 @@ mod tests {
             pass_rate_millionths: i64::MAX,
         };
         let json = serde_json::to_string(&eval).expect("serde deserialization should succeed");
-        let back: ScorecardEvaluation = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ScorecardEvaluation =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(eval, back);
     }
 
@@ -2224,7 +2262,8 @@ mod tests {
             sc.record(sample(MetricKind::FallbackFrequency, 50_000 + i, 42));
         }
         let json = serde_json::to_string(&sc).expect("serde deserialization should succeed");
-        let back: Scorecard = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: Scorecard =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(sc.total_observations(), back.total_observations());
         assert_eq!(
             sc.observation_count(MetricKind::CompatibilityPassRate),
@@ -2258,7 +2297,8 @@ mod tests {
         }
         let eval = sc.evaluate(Milestone::Alpha);
         let json = serde_json::to_string(&eval).expect("serde deserialization should succeed");
-        let back: ScorecardEvaluation = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ScorecardEvaluation =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(eval, back);
         assert!(back.overall_pass);
         assert_eq!(back.pass_count, 10);
@@ -2274,7 +2314,8 @@ mod tests {
             headroom: 5_000,
         };
         let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
-        let back: ThresholdResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ThresholdResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         if let ThresholdResult::Pass {
             metric,
             milestone,
@@ -2303,7 +2344,8 @@ mod tests {
             shortfall: 50_000,
         };
         let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
-        let back: ThresholdResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ThresholdResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         if let ThresholdResult::Fail {
             metric,
             milestone,
@@ -2435,7 +2477,9 @@ mod tests {
         sc.record(sample(MetricKind::BundleSizeBytes, 5_000, 1));
         sc.record(sample(MetricKind::BundleSizeBytes, 1_000, 1));
         sc.record(sample(MetricKind::BundleSizeBytes, 3_000, 1));
-        let summary = sc.summary(MetricKind::BundleSizeBytes).expect("serde deserialization should succeed");
+        let summary = sc
+            .summary(MetricKind::BundleSizeBytes)
+            .expect("serde deserialization should succeed");
         assert_eq!(summary.min, 1_000);
         assert_eq!(summary.max, 5_000);
     }
@@ -2497,7 +2541,8 @@ mod tests {
             pass_rate_millionths: 333_333,
         };
         let json = serde_json::to_string(&eval).expect("serde deserialization should succeed");
-        let back: ScorecardEvaluation = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ScorecardEvaluation =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(eval, back);
         assert_eq!(back.results.len(), 3);
     }

@@ -1389,7 +1389,8 @@ mod tests {
             ],
         );
         let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
-        let m2: HookManifest = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let m2: HookManifest =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(m, m2);
     }
 
@@ -1444,7 +1445,8 @@ mod tests {
             RenderPhase::Unmounting,
         ] {
             let json = serde_json::to_string(phase).expect("serde deserialization should succeed");
-            let p2: RenderPhase = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let p2: RenderPhase =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*phase, p2);
         }
     }
@@ -1783,7 +1785,8 @@ mod tests {
             reason: "adjacent setState".into(),
         };
         let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
-        let r2: TransformationReceipt = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let r2: TransformationReceipt =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, r2);
     }
 
@@ -1870,7 +1873,8 @@ mod tests {
     #[test]
     fn tracker_unmount_is_terminal() {
         let mut t = ComponentPhaseTracker::new("App");
-        t.transition_to(RenderPhase::Unmounting).expect("serde deserialization should succeed");
+        t.transition_to(RenderPhase::Unmounting)
+            .expect("serde deserialization should succeed");
         assert!(t.transition_to(RenderPhase::Idle).is_err());
         assert!(t.transition_to(RenderPhase::Rendering).is_err());
     }
@@ -1878,9 +1882,11 @@ mod tests {
     #[test]
     fn tracker_serde_roundtrip() {
         let mut t = ComponentPhaseTracker::new("Counter");
-        t.run_full_cycle().expect("serde deserialization should succeed");
+        t.run_full_cycle()
+            .expect("serde deserialization should succeed");
         let json = serde_json::to_string(&t).expect("serde deserialization should succeed");
-        let t2: ComponentPhaseTracker = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let t2: ComponentPhaseTracker =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(t, t2);
     }
 
@@ -1935,7 +1941,8 @@ mod tests {
     fn scheduling_boundary_serde_roundtrip() {
         let bounds = SchedulingBoundary::canonical_boundaries();
         let json = serde_json::to_string(&bounds).expect("serde deserialization should succeed");
-        let b2: Vec<SchedulingBoundary> = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let b2: Vec<SchedulingBoundary> =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(bounds, b2);
     }
 
@@ -2032,7 +2039,8 @@ mod tests {
         ));
         c.approve_transformation(LegalTransformation::MemoConstantFold);
         let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
-        let c2: HookEffectContract = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let c2: HookEffectContract =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c, c2);
     }
 
@@ -2087,7 +2095,8 @@ mod tests {
     fn pending_effect_serde_roundtrip() {
         let e = make_effect("Counter", 2, EffectTiming::Layout, 42, true);
         let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
-        let e2: PendingEffect = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let e2: PendingEffect =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(e, e2);
     }
 
@@ -2120,7 +2129,9 @@ mod tests {
 
         // 4. Run phase tracker
         let mut tracker = ComponentPhaseTracker::new("App");
-        tracker.transition_to(RenderPhase::Rendering).expect("serde deserialization should succeed");
+        tracker
+            .transition_to(RenderPhase::Rendering)
+            .expect("serde deserialization should succeed");
         tracker
             .transition_to(RenderPhase::InsertionEffectsPending)
             .expect("serde deserialization should succeed");
@@ -2135,14 +2146,18 @@ mod tests {
         let (c, r) = scheduler.drain_for_timing(EffectTiming::Layout);
         assert_eq!(c.len() + r.len(), 1);
 
-        tracker.transition_to(RenderPhase::PaintPending).expect("serde deserialization should succeed");
+        tracker
+            .transition_to(RenderPhase::PaintPending)
+            .expect("serde deserialization should succeed");
         tracker
             .transition_to(RenderPhase::PassiveEffectsPending)
             .expect("serde deserialization should succeed");
         let (c, r) = scheduler.drain_for_timing(EffectTiming::Passive);
         assert_eq!(c.len() + r.len(), 1);
 
-        tracker.transition_to(RenderPhase::Idle).expect("serde deserialization should succeed");
+        tracker
+            .transition_to(RenderPhase::Idle)
+            .expect("serde deserialization should succeed");
         assert_eq!(tracker.render_count, 1);
         assert_eq!(scheduler.pending_count(), 0);
     }
@@ -2327,7 +2342,8 @@ mod tests {
     fn hook_kind_serde_all_variants() {
         for kind in HookKind::ALL {
             let json = serde_json::to_string(kind).expect("serde deserialization should succeed");
-            let back: HookKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: HookKind =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*kind, back);
         }
     }
@@ -2350,7 +2366,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: RenderPhase = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: RenderPhase =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -2364,7 +2381,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: EffectTiming = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: EffectTiming =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -2381,7 +2399,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: UnsupportedSemanticsTrigger = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: UnsupportedSemanticsTrigger =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }

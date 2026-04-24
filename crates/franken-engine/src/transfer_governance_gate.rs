@@ -869,7 +869,11 @@ mod tests {
     fn test_domain_serde() {
         for d in TransferDomain::ALL {
             let j = serde_json::to_string(d).expect("serde deserialization should succeed");
-            assert_eq!(*d, serde_json::from_str::<TransferDomain>(&j).expect("serde deserialization should succeed"));
+            assert_eq!(
+                *d,
+                serde_json::from_str::<TransferDomain>(&j)
+                    .expect("serde deserialization should succeed")
+            );
         }
     }
 
@@ -892,7 +896,11 @@ mod tests {
             TransferVerdict::InsufficientEvidence,
         ] {
             let j = serde_json::to_string(&v).expect("serde deserialization should succeed");
-            assert_eq!(v, serde_json::from_str::<TransferVerdict>(&j).expect("serde deserialization should succeed"));
+            assert_eq!(
+                v,
+                serde_json::from_str::<TransferVerdict>(&j)
+                    .expect("serde deserialization should succeed")
+            );
         }
     }
     #[test]
@@ -916,7 +924,11 @@ mod tests {
             CoverageLevel::Uncovered,
         ] {
             let j = serde_json::to_string(&l).expect("serde deserialization should succeed");
-            assert_eq!(l, serde_json::from_str::<CoverageLevel>(&j).expect("serde deserialization should succeed"));
+            assert_eq!(
+                l,
+                serde_json::from_str::<CoverageLevel>(&j)
+                    .expect("serde deserialization should succeed")
+            );
         }
     }
     #[test]
@@ -945,7 +957,11 @@ mod tests {
             GovernanceAction::DowngradeSupremacy,
         ] {
             let j = serde_json::to_string(&a).expect("serde deserialization should succeed");
-            assert_eq!(a, serde_json::from_str::<GovernanceAction>(&j).expect("serde deserialization should succeed"));
+            assert_eq!(
+                a,
+                serde_json::from_str::<GovernanceAction>(&j)
+                    .expect("serde deserialization should succeed")
+            );
         }
     }
 
@@ -977,7 +993,11 @@ mod tests {
     fn test_evidence_serde() {
         let e = ev(TransferDomain::InliningDecision, 750_000, 100_000, 60);
         let j = serde_json::to_string(&e).expect("serde deserialization should succeed");
-        assert_eq!(e, serde_json::from_str::<TransferEvidence>(&j).expect("serde deserialization should succeed"));
+        assert_eq!(
+            e,
+            serde_json::from_str::<TransferEvidence>(&j)
+                .expect("serde deserialization should succeed")
+        );
     }
 
     #[test]
@@ -1138,7 +1158,10 @@ mod tests {
         assert_eq!(c.min_sample_count, 30);
         assert_eq!(c.max_batch_size, 512);
         let j = serde_json::to_string(&c).expect("serde deserialization should succeed");
-        assert_eq!(c, serde_json::from_str::<GateConfig>(&j).expect("serde deserialization should succeed"));
+        assert_eq!(
+            c,
+            serde_json::from_str::<GateConfig>(&j).expect("serde deserialization should succeed")
+        );
     }
     #[test]
     fn test_config_custom() {

@@ -578,8 +578,10 @@ mod tests {
             WorkloadFamily::MemoryPressure,
         ];
         for family in families {
-            let json = serde_json::to_string(&family).expect("serde deserialization should succeed");
-            let back: WorkloadFamily = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&family).expect("serde deserialization should succeed");
+            let back: WorkloadFamily =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(family, back);
         }
     }
@@ -594,7 +596,8 @@ mod tests {
             MeasurementFamily::TailLatency,
         ] {
             let json = serde_json::to_string(&mf).expect("serde deserialization should succeed");
-            let back: MeasurementFamily = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: MeasurementFamily =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(mf, back);
         }
     }
@@ -610,7 +613,8 @@ mod tests {
             EntryMode::MixedPackage,
         ] {
             let json = serde_json::to_string(&em).expect("serde deserialization should succeed");
-            let back: EntryMode = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: EntryMode =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(em, back);
         }
     }
@@ -619,7 +623,8 @@ mod tests {
     fn warm_state_serde_round_trip() {
         for ws in [WarmState::Cold, WarmState::Warm, WarmState::Mixed] {
             let json = serde_json::to_string(&ws).expect("serde deserialization should succeed");
-            let back: WarmState = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: WarmState =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(ws, back);
         }
     }
@@ -635,7 +640,8 @@ mod tests {
             InterferenceProfile::MemoryContention,
         ] {
             let json = serde_json::to_string(&ip).expect("serde deserialization should succeed");
-            let back: InterferenceProfile = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: InterferenceProfile =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(ip, back);
         }
     }
@@ -651,7 +657,8 @@ mod tests {
             SharedResource::WorkerThreads,
         ] {
             let json = serde_json::to_string(&sr).expect("serde deserialization should succeed");
-            let back: SharedResource = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: SharedResource =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(sr, back);
         }
     }
@@ -668,7 +675,8 @@ mod tests {
             TailAxis::GcPauseNs,
         ] {
             let json = serde_json::to_string(&ta).expect("serde deserialization should succeed");
-            let back: TailAxis = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: TailAxis =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(ta, back);
         }
     }
@@ -928,7 +936,8 @@ mod tests {
     fn artifact_serde_round_trip() {
         let art = load_fixture();
         let json = serde_json::to_string(&art).expect("serde deserialization should succeed");
-        let back: SupremacyCellMatrixArtifact = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SupremacyCellMatrixArtifact =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(art, back);
     }
 
@@ -942,7 +951,8 @@ mod tests {
             changed_at_utc: "2026-01-01T00:00:00Z".to_string(),
         };
         let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
-        let back: ChangelogEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ChangelogEntry =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, back);
     }
 

@@ -1180,7 +1180,9 @@ mod tests {
         let mut engine = test_engine();
         let proof = make_default_proof(ProofType::PlasCapabilityWitness);
         // SAFETY: Test with valid proof and budget should succeed
-        let hypotheses = engine.ingest_proof(proof, 1000).expect("serde deserialization should succeed");
+        let hypotheses = engine
+            .ingest_proof(proof, 1000)
+            .expect("serde deserialization should succeed");
 
         assert_eq!(hypotheses.len(), 2);
         assert_eq!(hypotheses[0].kind, HypothesisKind::DeadCodeElimination);
@@ -1192,7 +1194,9 @@ mod tests {
         let mut engine = test_engine();
         let proof = make_default_proof(ProofType::IfcFlowProof);
         // SAFETY: Test with valid proof and budget should succeed
-        let hypotheses = engine.ingest_proof(proof, 1000).expect("serde deserialization should succeed");
+        let hypotheses = engine
+            .ingest_proof(proof, 1000)
+            .expect("serde deserialization should succeed");
 
         assert_eq!(hypotheses.len(), 1);
         assert_eq!(hypotheses[0].kind, HypothesisKind::FlowCheckElision);
@@ -1204,7 +1208,9 @@ mod tests {
         let mut engine = test_engine();
         let proof = make_default_proof(ProofType::ReplaySequenceMotif);
         // SAFETY: Test with valid proof and budget should succeed
-        let hypotheses = engine.ingest_proof(proof, 1000).expect("serde deserialization should succeed");
+        let hypotheses = engine
+            .ingest_proof(proof, 1000)
+            .expect("serde deserialization should succeed");
 
         assert_eq!(hypotheses.len(), 1);
         assert_eq!(hypotheses[0].kind, HypothesisKind::SuperinstructionFusion);
@@ -1216,7 +1222,9 @@ mod tests {
         let proof = make_default_proof(ProofType::PlasCapabilityWitness);
         let proof_id = proof.proof_id.clone();
         // SAFETY: Test with valid proof and budget should succeed
-        engine.ingest_proof(proof, 1000).expect("serde deserialization should succeed");
+        engine
+            .ingest_proof(proof, 1000)
+            .expect("serde deserialization should succeed");
 
         assert!(engine.active_proofs().contains_key(&proof_id));
         assert_eq!(engine.active_hypotheses().len(), 2);
@@ -1228,7 +1236,9 @@ mod tests {
         let proof = make_default_proof(ProofType::PlasCapabilityWitness);
         let proof_id = proof.proof_id.clone();
         // SAFETY: Test with valid proof and budget should succeed
-        engine.ingest_proof(proof, 1000).expect("serde deserialization should succeed");
+        engine
+            .ingest_proof(proof, 1000)
+            .expect("serde deserialization should succeed");
 
         let hyps = engine.hypotheses_for_proof(&proof_id);
         assert_eq!(hyps.len(), 2);
@@ -1241,9 +1251,13 @@ mod tests {
         let p1 = make_proof(ProofType::PlasCapabilityWitness, b"plas-1", "policy-001");
         let p2 = make_proof(ProofType::IfcFlowProof, b"ifc-1", "policy-001");
         // SAFETY: Test with valid proof and budget should succeed
-        engine.ingest_proof(p1, 1000).expect("serde deserialization should succeed");
+        engine
+            .ingest_proof(p1, 1000)
+            .expect("serde deserialization should succeed");
         // SAFETY: Test with valid proof and budget should succeed
-        engine.ingest_proof(p2, 1000).expect("serde deserialization should succeed");
+        engine
+            .ingest_proof(p2, 1000)
+            .expect("serde deserialization should succeed");
 
         let dce = engine.hypotheses_by_kind(&HypothesisKind::DeadCodeElimination);
         assert_eq!(dce.len(), 1);
@@ -1258,7 +1272,9 @@ mod tests {
         let mut engine = test_engine();
         let proof = make_default_proof(ProofType::PlasCapabilityWitness);
         // SAFETY: Test with valid proof and budget should succeed on first ingestion
-        engine.ingest_proof(proof.clone(), 1000).expect("serde deserialization should succeed");
+        engine
+            .ingest_proof(proof.clone(), 1000)
+            .expect("serde deserialization should succeed");
 
         let err = engine.ingest_proof(proof, 2000).unwrap_err();
         assert!(matches!(
@@ -1408,7 +1424,9 @@ mod tests {
         let mut engine = test_engine();
         let proof = make_default_proof(ProofType::PlasCapabilityWitness);
         // SAFETY: Test with default valid proof should successfully ingest
-        engine.ingest_proof(proof, 1000).expect("serde deserialization should succeed");
+        engine
+            .ingest_proof(proof, 1000)
+            .expect("serde deserialization should succeed");
 
         assert_eq!(engine.active_proofs().len(), 1);
         assert_eq!(engine.active_hypotheses().len(), 2);
@@ -1424,7 +1442,9 @@ mod tests {
         let mut engine = test_engine();
         let proof = make_default_proof(ProofType::PlasCapabilityWitness);
         // SAFETY: Test with default valid proof should successfully ingest
-        engine.ingest_proof(proof, 1000).expect("serde deserialization should succeed");
+        engine
+            .ingest_proof(proof, 1000)
+            .expect("serde deserialization should succeed");
 
         // Advance to same epoch — nothing invalidated.
         let invalidated = engine.advance_epoch(test_epoch(), 2000);
@@ -1438,7 +1458,9 @@ mod tests {
         let proof = make_default_proof(ProofType::PlasCapabilityWitness);
         let proof_id = proof.proof_id.clone();
         // SAFETY: Test with default valid proof should successfully ingest
-        engine.ingest_proof(proof, 1000).expect("serde deserialization should succeed");
+        engine
+            .ingest_proof(proof, 1000)
+            .expect("serde deserialization should succeed");
 
         let count = engine.invalidate_proof(&proof_id, "revoked", 2000);
         assert_eq!(count, 2); // 2 hypotheses
@@ -1451,7 +1473,9 @@ mod tests {
         let mut engine = test_engine();
         let proof = make_default_proof(ProofType::PlasCapabilityWitness);
         // SAFETY: Test with default valid proof should successfully ingest
-        engine.ingest_proof(proof, 1000).expect("serde deserialization should succeed");
+        engine
+            .ingest_proof(proof, 1000)
+            .expect("serde deserialization should succeed");
 
         engine.advance_epoch(SecurityEpoch::from_raw(101), 2000);
 
@@ -1489,7 +1513,9 @@ mod tests {
             );
             let proof_id = proof.proof_id.clone();
             // SAFETY: Test with valid proof creation parameters should successfully ingest
-            engine.ingest_proof(proof, 1000 + i * 100).expect("serde deserialization should succeed");
+            engine
+                .ingest_proof(proof, 1000 + i * 100)
+                .expect("serde deserialization should succeed");
             engine.invalidate_proof(&proof_id, "test-churn", 1000 + i * 100 + 50);
         }
 
@@ -1507,13 +1533,17 @@ mod tests {
         let p1 = make_proof(ProofType::PlasCapabilityWitness, b"a", "policy-001");
         let p1_id = p1.proof_id.clone();
         // SAFETY: Test with valid proof creation parameters should successfully ingest
-        engine.ingest_proof(p1, 100).expect("serde deserialization should succeed");
+        engine
+            .ingest_proof(p1, 100)
+            .expect("serde deserialization should succeed");
         engine.invalidate_proof(&p1_id, "test", 200);
 
         let p2 = make_proof(ProofType::IfcFlowProof, b"b", "policy-001");
         let p2_id = p2.proof_id.clone();
         // SAFETY: Test with valid proof creation parameters should successfully ingest
-        engine.ingest_proof(p2, 300).expect("serde deserialization should succeed");
+        engine
+            .ingest_proof(p2, 300)
+            .expect("serde deserialization should succeed");
         engine.invalidate_proof(&p2_id, "test", 400);
 
         assert!(engine.is_conservative_mode());
@@ -1522,7 +1552,9 @@ mod tests {
         let p3 = make_proof(ProofType::ReplaySequenceMotif, b"c", "policy-001");
         let p3_id = p3.proof_id.clone();
         // SAFETY: Test with valid proof creation parameters should successfully ingest
-        engine.ingest_proof(p3, 5000).expect("serde deserialization should succeed");
+        engine
+            .ingest_proof(p3, 5000)
+            .expect("serde deserialization should succeed");
         engine.invalidate_proof(&p3_id, "test", 5100);
 
         // Window is 1000ns, so old invalidations at 200 and 400 should be pruned.
@@ -1537,7 +1569,9 @@ mod tests {
         let mut engine = test_engine();
         let proof = make_default_proof(ProofType::PlasCapabilityWitness);
         // SAFETY: Test with default valid proof should successfully ingest
-        let hypotheses = engine.ingest_proof(proof, 1000).expect("serde deserialization should succeed");
+        let hypotheses = engine
+            .ingest_proof(proof, 1000)
+            .expect("serde deserialization should succeed");
         let hyp_id = hypotheses[0].hypothesis_id.clone();
 
         let receipt = engine
@@ -1595,7 +1629,9 @@ mod tests {
         let mut engine = test_engine();
         let proof = make_default_proof(ProofType::PlasCapabilityWitness);
         // SAFETY: Test with default valid proof should successfully ingest
-        engine.ingest_proof(proof, 1000).expect("serde deserialization should succeed");
+        engine
+            .ingest_proof(proof, 1000)
+            .expect("serde deserialization should succeed");
 
         for (i, event) in engine.events().iter().enumerate() {
             assert_eq!(event.seq, i as u64);
@@ -1607,7 +1643,9 @@ mod tests {
         let mut engine = test_engine();
         let proof = make_default_proof(ProofType::PlasCapabilityWitness);
         // SAFETY: Test with default valid proof should successfully ingest
-        engine.ingest_proof(proof, 1000).expect("serde deserialization should succeed");
+        engine
+            .ingest_proof(proof, 1000)
+            .expect("serde deserialization should succeed");
 
         for event in engine.events() {
             assert_eq!(event.epoch, test_epoch());
@@ -1757,7 +1795,8 @@ mod tests {
         // SAFETY: Serialization of valid ProofInput should succeed
         let json = serde_json::to_string(&proof).expect("serde deserialization should succeed");
         // SAFETY: Deserialization of valid JSON should succeed
-        let restored: ProofInput = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: ProofInput =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(proof, restored);
     }
 
@@ -1766,12 +1805,16 @@ mod tests {
         let mut engine = test_engine();
         let proof = make_default_proof(ProofType::IfcFlowProof);
         // SAFETY: Test with default valid proof should successfully ingest
-        let hypotheses = engine.ingest_proof(proof, 1000).expect("serde deserialization should succeed");
+        let hypotheses = engine
+            .ingest_proof(proof, 1000)
+            .expect("serde deserialization should succeed");
 
         // SAFETY: Serialization of valid OptimizerHypothesis should succeed
-        let json = serde_json::to_string(&hypotheses[0]).expect("serde deserialization should succeed");
+        let json =
+            serde_json::to_string(&hypotheses[0]).expect("serde deserialization should succeed");
         // SAFETY: Deserialization of valid JSON should succeed
-        let restored: OptimizerHypothesis = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: OptimizerHypothesis =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(hypotheses[0], restored);
     }
 
@@ -1780,7 +1823,9 @@ mod tests {
         let mut engine = test_engine();
         let proof = make_default_proof(ProofType::ReplaySequenceMotif);
         // SAFETY: Test with default valid proof should successfully ingest
-        let hypotheses = engine.ingest_proof(proof, 1000).expect("serde deserialization should succeed");
+        let hypotheses = engine
+            .ingest_proof(proof, 1000)
+            .expect("serde deserialization should succeed");
 
         let receipt = engine
             .emit_receipt(
@@ -1797,7 +1842,8 @@ mod tests {
         // SAFETY: Serialization of valid SpecializationReceipt should succeed
         let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
         // SAFETY: Deserialization of valid JSON should succeed
-        let restored: SpecializationReceipt = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: SpecializationReceipt =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(receipt, restored);
     }
 
@@ -1806,13 +1852,16 @@ mod tests {
         let mut engine = test_engine();
         let proof = make_default_proof(ProofType::PlasCapabilityWitness);
         // SAFETY: Test with default valid proof should successfully ingest
-        engine.ingest_proof(proof, 1000).expect("serde deserialization should succeed");
+        engine
+            .ingest_proof(proof, 1000)
+            .expect("serde deserialization should succeed");
 
         let event = &engine.events()[0];
         // SAFETY: Serialization of valid IngestionEvent should succeed
         let json = serde_json::to_string(event).expect("serde deserialization should succeed");
         // SAFETY: Deserialization of valid JSON should succeed
-        let restored: IngestionEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: IngestionEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(*event, restored);
     }
 
@@ -1849,11 +1898,17 @@ mod tests {
         let p3 = make_proof(ProofType::ReplaySequenceMotif, b"c", "policy-001");
 
         // SAFETY: Test with valid proof should successfully ingest
-        engine.ingest_proof(p1, 1000).expect("serde deserialization should succeed");
+        engine
+            .ingest_proof(p1, 1000)
+            .expect("serde deserialization should succeed");
         // SAFETY: Test with valid proof should successfully ingest
-        engine.ingest_proof(p2, 1000).expect("serde deserialization should succeed");
+        engine
+            .ingest_proof(p2, 1000)
+            .expect("serde deserialization should succeed");
         // SAFETY: Test with valid proof should successfully ingest
-        engine.ingest_proof(p3, 1000).expect("serde deserialization should succeed");
+        engine
+            .ingest_proof(p3, 1000)
+            .expect("serde deserialization should succeed");
 
         assert_eq!(engine.active_proofs().len(), 3);
         assert_eq!(engine.active_hypotheses().len(), 4); // 2 + 1 + 1
@@ -1866,9 +1921,13 @@ mod tests {
         let p1 = make_proof(ProofType::PlasCapabilityWitness, b"a", "policy-001");
         let p2 = make_proof(ProofType::IfcFlowProof, b"b", "policy-001");
         // SAFETY: Test with valid proof should successfully ingest
-        engine.ingest_proof(p1, 1000).expect("serde deserialization should succeed");
+        engine
+            .ingest_proof(p1, 1000)
+            .expect("serde deserialization should succeed");
         // SAFETY: Test with valid proof should successfully ingest
-        engine.ingest_proof(p2, 1000).expect("serde deserialization should succeed");
+        engine
+            .ingest_proof(p2, 1000)
+            .expect("serde deserialization should succeed");
 
         let invalidated = engine.advance_epoch(SecurityEpoch::from_raw(101), 2000);
         assert_eq!(invalidated, 3); // 2 plas + 1 ifc
@@ -1890,7 +1949,8 @@ mod tests {
             // SAFETY: Serialization of valid ProofType should succeed
             let json = serde_json::to_string(&pt).expect("serde deserialization should succeed");
             // SAFETY: Deserialization of valid JSON should succeed
-            let restored: ProofType = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: ProofType =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(restored, pt);
         }
     }
@@ -1906,7 +1966,8 @@ mod tests {
             // SAFETY: to_string cannot fail on derived Serialize enum
             let json = serde_json::to_string(&hk).expect("serde deserialization should succeed");
             // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-            let restored: HypothesisKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: HypothesisKind =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(restored, hk);
         }
     }
@@ -1917,7 +1978,8 @@ mod tests {
             // SAFETY: to_string cannot fail on derived Serialize enum
             let json = serde_json::to_string(&rl).expect("serde deserialization should succeed");
             // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-            let restored: RiskLevel = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: RiskLevel =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(restored, rl);
         }
     }
@@ -1933,7 +1995,8 @@ mod tests {
             // SAFETY: Serialization of valid ActivationStageLocal should succeed
             let json = serde_json::to_string(&stage).expect("serde deserialization should succeed");
             // SAFETY: Deserialization of valid JSON should succeed
-            let restored: ActivationStageLocal = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: ActivationStageLocal =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(restored, stage);
         }
     }
@@ -1944,7 +2007,8 @@ mod tests {
         // SAFETY: Serialization of valid IngestionConfig should succeed
         let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
         // SAFETY: Deserialization of valid JSON should succeed
-        let restored: IngestionConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: IngestionConfig =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         // signing_key is excluded from serialization (security: prevent key leakage),
         // so it deserializes as the default [0; 32].
         assert_eq!(restored.active_policy_id, cfg.active_policy_id);
@@ -1988,7 +2052,8 @@ mod tests {
             // SAFETY: Serialization of valid IngestionError should succeed
             let json = serde_json::to_string(err).expect("serde deserialization should succeed");
             // SAFETY: Deserialization of valid JSON should succeed
-            let restored: IngestionError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: IngestionError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&restored, err);
         }
     }
@@ -2034,7 +2099,8 @@ mod tests {
             // SAFETY: Serialization of valid ProofValidationStatus should succeed
             let json = serde_json::to_string(s).expect("serde deserialization should succeed");
             // SAFETY: Deserialization of valid JSON should succeed
-            let restored: ProofValidationStatus = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: ProofValidationStatus =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&restored, s);
         }
     }
@@ -2148,7 +2214,9 @@ mod tests {
         let mut engine = test_engine();
         let proof = make_default_proof(ProofType::IfcFlowProof);
         // SAFETY: Test-only unwrap with valid proof and engine configuration
-        let hypotheses = engine.ingest_proof(proof, 1000).expect("serde deserialization should succeed");
+        let hypotheses = engine
+            .ingest_proof(proof, 1000)
+            .expect("serde deserialization should succeed");
 
         let bytes1 = hypotheses[0].canonical_bytes();
         let bytes2 = hypotheses[0].canonical_bytes();
@@ -2164,7 +2232,8 @@ mod tests {
         // SAFETY: Serialization of valid empty ProofIngestionEngine should succeed
         let json = serde_json::to_string(&engine).expect("serde deserialization should succeed");
         // SAFETY: Deserialization of valid JSON should succeed
-        let restored: ProofIngestionEngine = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: ProofIngestionEngine =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(restored.current_epoch(), test_epoch());
         assert!(restored.active_proofs().is_empty());
         assert!(restored.active_hypotheses().is_empty());
@@ -2263,7 +2332,9 @@ mod tests {
         let mut engine = test_engine();
         let proof = make_default_proof(ProofType::PlasCapabilityWitness);
         // SAFETY: Test with default valid proof should successfully ingest
-        let hypotheses = engine.ingest_proof(proof.clone(), 1000).expect("serde deserialization should succeed");
+        let hypotheses = engine
+            .ingest_proof(proof.clone(), 1000)
+            .expect("serde deserialization should succeed");
 
         let bytes = hypotheses[0].canonical_bytes();
         // Should include hypothesis_id bytes and source proof_id bytes.
@@ -2277,7 +2348,9 @@ mod tests {
         let mut engine = test_engine();
         let proof = make_default_proof(ProofType::PlasCapabilityWitness);
         // SAFETY: Test with default valid proof should successfully ingest
-        let hypotheses = engine.ingest_proof(proof, 1000).expect("serde deserialization should succeed");
+        let hypotheses = engine
+            .ingest_proof(proof, 1000)
+            .expect("serde deserialization should succeed");
         let hypothesis = &hypotheses[0];
 
         let mut expected = Vec::new();
@@ -2305,7 +2378,9 @@ mod tests {
         let mut engine = test_engine();
         let proof = make_default_proof(ProofType::PlasCapabilityWitness);
         // SAFETY: Test with default valid proof should successfully ingest
-        let hypotheses = engine.ingest_proof(proof, 1000).expect("serde deserialization should succeed");
+        let hypotheses = engine
+            .ingest_proof(proof, 1000)
+            .expect("serde deserialization should succeed");
 
         for h in &hypotheses {
             assert_eq!(h.expected_speedup_millionths, 1_200_000);
@@ -2317,7 +2392,9 @@ mod tests {
         let mut engine = test_engine();
         let proof = make_default_proof(ProofType::IfcFlowProof);
         // SAFETY: Test with default valid proof should successfully ingest
-        let hypotheses = engine.ingest_proof(proof, 1000).expect("serde deserialization should succeed");
+        let hypotheses = engine
+            .ingest_proof(proof, 1000)
+            .expect("serde deserialization should succeed");
 
         assert_eq!(hypotheses.len(), 1);
         assert_eq!(
@@ -2333,7 +2410,9 @@ mod tests {
         let mut engine = test_engine();
         let proof = make_default_proof(ProofType::ReplaySequenceMotif);
         // SAFETY: Test with default valid proof should successfully ingest
-        let hypotheses = engine.ingest_proof(proof, 1000).expect("serde deserialization should succeed");
+        let hypotheses = engine
+            .ingest_proof(proof, 1000)
+            .expect("serde deserialization should succeed");
 
         assert_eq!(hypotheses.len(), 1);
         assert_eq!(
@@ -2349,7 +2428,9 @@ mod tests {
         let mut engine = test_engine();
         let proof = make_default_proof(ProofType::PlasCapabilityWitness);
         // SAFETY: Test with default valid proof should successfully ingest
-        let hypotheses = engine.ingest_proof(proof, 1000).expect("serde deserialization should succeed");
+        let hypotheses = engine
+            .ingest_proof(proof, 1000)
+            .expect("serde deserialization should succeed");
 
         assert_eq!(hypotheses[0].risk, RiskLevel::Low);
         assert_eq!(
@@ -2392,7 +2473,9 @@ mod tests {
         let proof = make_default_proof(ProofType::PlasCapabilityWitness);
         let proof_id = proof.proof_id.clone();
         // SAFETY: Test with default valid proof should successfully ingest
-        let hypotheses = engine.ingest_proof(proof, 1000).expect("serde deserialization should succeed");
+        let hypotheses = engine
+            .ingest_proof(proof, 1000)
+            .expect("serde deserialization should succeed");
 
         let receipt = engine
             .emit_receipt(
@@ -2415,7 +2498,9 @@ mod tests {
         let mut engine1 = test_engine();
         let proof1 = make_default_proof(ProofType::IfcFlowProof);
         // SAFETY: Test with default valid proof should successfully ingest
-        let hyps1 = engine1.ingest_proof(proof1, 1000).expect("serde deserialization should succeed");
+        let hyps1 = engine1
+            .ingest_proof(proof1, 1000)
+            .expect("serde deserialization should succeed");
         let r1 = engine1
             .emit_receipt(
                 &hyps1[0].hypothesis_id,
@@ -2431,7 +2516,9 @@ mod tests {
         let mut engine2 = test_engine();
         let proof2 = make_default_proof(ProofType::IfcFlowProof);
         // SAFETY: Test with default valid proof should successfully ingest
-        let hyps2 = engine2.ingest_proof(proof2, 1000).expect("serde deserialization should succeed");
+        let hyps2 = engine2
+            .ingest_proof(proof2, 1000)
+            .expect("serde deserialization should succeed");
         let r2 = engine2
             .emit_receipt(
                 &hyps2[0].hypothesis_id,
@@ -2453,7 +2540,9 @@ mod tests {
         let mut engine = test_engine();
         let proof = make_default_proof(ProofType::ReplaySequenceMotif);
         // SAFETY: Test with default valid proof should successfully ingest
-        let hypotheses = engine.ingest_proof(proof, 1000).expect("serde deserialization should succeed");
+        let hypotheses = engine
+            .ingest_proof(proof, 1000)
+            .expect("serde deserialization should succeed");
         let hyp_id = hypotheses[0].hypothesis_id.clone();
 
         let r1 = engine
@@ -2494,7 +2583,9 @@ mod tests {
         let mut engine = test_engine();
         let proof = make_default_proof(ProofType::IfcFlowProof);
         // SAFETY: Test with default valid proof should successfully ingest
-        let hypotheses = engine.ingest_proof(proof, 1000).expect("serde deserialization should succeed");
+        let hypotheses = engine
+            .ingest_proof(proof, 1000)
+            .expect("serde deserialization should succeed");
         let pre_event_count = engine.events().len();
 
         let receipt = engine
@@ -2512,7 +2603,10 @@ mod tests {
         // One new event for receipt emission.
         assert_eq!(engine.events().len(), pre_event_count + 1);
         // SAFETY: Test expects events array to be non-empty after adding events
-        let last_event = engine.events().last().expect("serde deserialization should succeed");
+        let last_event = engine
+            .events()
+            .last()
+            .expect("serde deserialization should succeed");
         assert!(matches!(
             &last_event.event_type,
             IngestionEventType::SpecializationReceiptEmitted {
@@ -2594,7 +2688,8 @@ mod tests {
             // SAFETY: Serialization of valid IngestionEventType should succeed
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
             // SAFETY: Deserialization of valid JSON should succeed
-            let restored: IngestionEventType = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: IngestionEventType =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&restored, v);
         }
     }

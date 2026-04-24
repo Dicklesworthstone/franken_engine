@@ -647,7 +647,9 @@ mod tests {
         let mut meter = ConvergenceMeter::new(config);
 
         let decision = test_decision();
-        meter.start_measurement(&decision, 3).expect("serde deserialization should succeed");
+        meter
+            .start_measurement(&decision, 3)
+            .expect("serde deserialization should succeed");
 
         assert_eq!(meter.active_measurements.len(), 1);
         assert_eq!(meter.completed_measurements.len(), 0);
@@ -699,7 +701,9 @@ mod tests {
             meter.completed_measurements.push(measurement);
         }
 
-        let statistics = meter.compute_statistics().expect("serde deserialization should succeed");
+        let statistics = meter
+            .compute_statistics()
+            .expect("serde deserialization should succeed");
         assert_eq!(statistics.total_measurements, 5);
         assert_eq!(statistics.converged_count, 5);
         assert_eq!(statistics.slo_violations, 2); // 400ms and 500ms exceed 350ms threshold
@@ -770,7 +774,9 @@ mod tests {
 
         // Add some active and completed measurements
         let decision = test_decision();
-        meter.start_measurement(&decision, 3).expect("serde deserialization should succeed");
+        meter
+            .start_measurement(&decision, 3)
+            .expect("serde deserialization should succeed");
 
         let mut completed_measurement = ConvergenceMeasurement::new(&decision, 2);
         completed_measurement.convergence_duration_ms = Some(100);

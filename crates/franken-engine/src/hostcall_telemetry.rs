@@ -743,7 +743,8 @@ mod tests {
             let json = serde_json::to_string(&htype).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by to_string of a valid HostcallType,
             // so from_str back to HostcallType cannot fail (valid format + matching schema).
-            let restored: HostcallType = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: HostcallType =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(htype, restored);
         }
     }
@@ -778,10 +779,12 @@ mod tests {
         ] {
             // SAFETY: HostcallResult derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&result).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by to_string of a valid HostcallResult,
             // so from_str back to HostcallResult cannot fail (valid format + matching schema).
-            let restored: HostcallResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: HostcallResult =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(result, restored);
         }
     }
@@ -804,7 +807,8 @@ mod tests {
         let json = serde_json::to_string(&fl).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid FlowLabel,
         // so from_str back to FlowLabel cannot fail (valid format + matching schema).
-        let restored: FlowLabel = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: FlowLabel =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(fl, restored);
     }
 
@@ -828,7 +832,8 @@ mod tests {
             network_bytes: -1024,
         };
         let json = serde_json::to_string(&rd).expect("serde deserialization should succeed");
-        let restored: ResourceDelta = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: ResourceDelta =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(rd, restored);
     }
 
@@ -1008,8 +1013,10 @@ mod tests {
         let mut r2 = test_recorder();
 
         let input = test_input("ext-001", HostcallType::FsRead);
-        r1.record(1000, input.clone()).expect("serde deserialization should succeed");
-        r2.record(1000, input).expect("serde deserialization should succeed");
+        r1.record(1000, input.clone())
+            .expect("serde deserialization should succeed");
+        r2.record(1000, input)
+            .expect("serde deserialization should succeed");
 
         assert_eq!(r1.records()[0].content_hash, r2.records()[0].content_hash);
         assert_eq!(r1.rolling_hash(), r2.rolling_hash());
@@ -1040,8 +1047,10 @@ mod tests {
         let mut input2 = test_input("ext-001", HostcallType::FsRead);
         input2.flow_label = FlowLabel::new("a", "b:c");
 
-        r1.record(1000, input1).expect("serde deserialization should succeed");
-        r2.record(1000, input2).expect("serde deserialization should succeed");
+        r1.record(1000, input1)
+            .expect("serde deserialization should succeed");
+        r2.record(1000, input2)
+            .expect("serde deserialization should succeed");
 
         assert_ne!(
             r1.records()[0].content_hash,
@@ -1112,7 +1121,9 @@ mod tests {
         let mut recorder = test_recorder();
         let mut input = test_input("ext-001", HostcallType::ProcessSpawn);
         input.decision_id = Some("dec-001".to_string());
-        recorder.record(1000, input).expect("serde deserialization should succeed");
+        recorder
+            .record(1000, input)
+            .expect("serde deserialization should succeed");
         assert_eq!(
             recorder.records()[0].decision_id,
             Some("dec-001".to_string())
@@ -1130,7 +1141,9 @@ mod tests {
         input.result_status = HostcallResult::Denied {
             reason: "no write cap".to_string(),
         };
-        recorder.record(1000, input).expect("serde deserialization should succeed");
+        recorder
+            .record(1000, input)
+            .expect("serde deserialization should succeed");
         assert!(matches!(
             recorder.records()[0].result_status,
             HostcallResult::Denied { .. }
@@ -1142,7 +1155,9 @@ mod tests {
         let mut recorder = test_recorder();
         let mut input = test_input("ext-001", HostcallType::NetworkSend);
         input.result_status = HostcallResult::Error { code: 500 };
-        recorder.record(1000, input).expect("serde deserialization should succeed");
+        recorder
+            .record(1000, input)
+            .expect("serde deserialization should succeed");
         assert_eq!(
             recorder.records()[0].result_status,
             HostcallResult::Error { code: 500 }
@@ -1154,7 +1169,9 @@ mod tests {
         let mut recorder = test_recorder();
         let mut input = test_input("ext-001", HostcallType::NetworkRecv);
         input.result_status = HostcallResult::Timeout;
-        recorder.record(1000, input).expect("serde deserialization should succeed");
+        recorder
+            .record(1000, input)
+            .expect("serde deserialization should succeed");
         assert_eq!(recorder.records()[0].result_status, HostcallResult::Timeout);
     }
 
@@ -1171,7 +1188,9 @@ mod tests {
             fd_count: 0,
             network_bytes: 0,
         };
-        recorder.record(1000, input).expect("serde deserialization should succeed");
+        recorder
+            .record(1000, input)
+            .expect("serde deserialization should succeed");
         assert_eq!(recorder.records()[0].resource_delta.memory_bytes, 65536);
     }
 
@@ -1187,7 +1206,8 @@ mod tests {
             .expect("serde deserialization should succeed");
         let record = &recorder.records()[0];
         let json = serde_json::to_string(record).expect("serde deserialization should succeed");
-        let restored: HostcallTelemetryRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: HostcallTelemetryRecord =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(record.record_id, restored.record_id);
         assert_eq!(record.content_hash, restored.content_hash);
         assert_eq!(record.hostcall_type, restored.hostcall_type);
@@ -1201,7 +1221,8 @@ mod tests {
             .expect("serde deserialization should succeed");
         recorder.snapshot();
         let json = serde_json::to_string(&recorder).expect("serde deserialization should succeed");
-        let restored: TelemetryRecorder = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: TelemetryRecorder =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(recorder.len(), restored.len());
         assert_eq!(recorder.rolling_hash(), restored.rolling_hash());
         assert_eq!(recorder.snapshots().len(), restored.snapshots().len());
@@ -1215,7 +1236,8 @@ mod tests {
             .expect("serde deserialization should succeed");
         let snap = recorder.snapshot();
         let json = serde_json::to_string(&snap).expect("serde deserialization should succeed");
-        let restored: TelemetrySnapshot = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: TelemetrySnapshot =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(snap, restored);
     }
 
@@ -1236,7 +1258,9 @@ mod tests {
         denied_input.result_status = HostcallResult::Denied {
             reason: "policy".to_string(),
         };
-        recorder.record(3000, denied_input).expect("serde deserialization should succeed");
+        recorder
+            .record(3000, denied_input)
+            .expect("serde deserialization should succeed");
         recorder
             .record(4000, test_input("ext-001", HostcallType::NetworkSend))
             .expect("serde deserialization should succeed");
@@ -1246,7 +1270,9 @@ mod tests {
             .expect("serde deserialization should succeed");
         let mut err_input = test_input("ext-002", HostcallType::FsWrite);
         err_input.result_status = HostcallResult::Error { code: 13 };
-        recorder.record(6000, err_input).expect("serde deserialization should succeed");
+        recorder
+            .record(6000, err_input)
+            .expect("serde deserialization should succeed");
         recorder
     }
 
@@ -1316,11 +1342,15 @@ mod tests {
         let mut recorder = test_recorder();
         let mut input = test_input("ext-001", HostcallType::FsRead);
         input.duration_ns = 500;
-        recorder.record(1000, input).expect("serde deserialization should succeed");
+        recorder
+            .record(1000, input)
+            .expect("serde deserialization should succeed");
 
         let mut slow_input = test_input("ext-001", HostcallType::FsWrite);
         slow_input.duration_ns = 10_000;
-        recorder.record(2000, slow_input).expect("serde deserialization should succeed");
+        recorder
+            .record(2000, slow_input)
+            .expect("serde deserialization should succeed");
 
         let query = TelemetryQuery::new(recorder.records());
         let slow = query.slow_calls(5_000, 0, 10_000);
@@ -1370,7 +1400,8 @@ mod tests {
         let query = TelemetryQuery::new(recorder.records());
         let summary = query.extension_summary("ext-001", 0, 10_000);
         let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
-        let restored: ExtensionSummary = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: ExtensionSummary =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(summary, restored);
     }
 
@@ -1426,9 +1457,21 @@ mod tests {
             .expect("serde deserialization should succeed");
 
         assert!(recorder.get(0).is_some());
-        assert_eq!(recorder.get(0).expect("serde deserialization should succeed").extension_id, "ext-001");
+        assert_eq!(
+            recorder
+                .get(0)
+                .expect("serde deserialization should succeed")
+                .extension_id,
+            "ext-001"
+        );
         assert!(recorder.get(1).is_some());
-        assert_eq!(recorder.get(1).expect("serde deserialization should succeed").extension_id, "ext-002");
+        assert_eq!(
+            recorder
+                .get(1)
+                .expect("serde deserialization should succeed")
+                .extension_id,
+            "ext-002"
+        );
         assert!(recorder.get(99).is_none());
     }
 
@@ -1441,7 +1484,9 @@ mod tests {
         let mut recorder = test_recorder();
         let mut input = test_input("ext-001", HostcallType::FsWrite);
         input.capability_used = RuntimeCapability::FsWrite;
-        recorder.record(1000, input).expect("serde deserialization should succeed");
+        recorder
+            .record(1000, input)
+            .expect("serde deserialization should succeed");
         assert_eq!(
             recorder.records()[0].capability_used,
             RuntimeCapability::FsWrite
@@ -1457,7 +1502,9 @@ mod tests {
         let mut recorder = test_recorder();
         let mut input = test_input("ext-001", HostcallType::FsRead);
         input.flow_label = FlowLabel::new("secret", "top-secret");
-        recorder.record(1000, input).expect("serde deserialization should succeed");
+        recorder
+            .record(1000, input)
+            .expect("serde deserialization should succeed");
         assert_eq!(
             recorder.records()[0].flow_label,
             FlowLabel::new("secret", "top-secret")
@@ -1480,7 +1527,8 @@ mod tests {
     fn config_serde_roundtrip() {
         let config = RecorderConfig::default();
         let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
-        let restored: RecorderConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: RecorderConfig =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(restored.channel_capacity, config.channel_capacity);
     }
 
@@ -1571,7 +1619,8 @@ mod tests {
         ];
         for err in &errors {
             let json = serde_json::to_string(err).expect("serde deserialization should succeed");
-            let back: TelemetryError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: TelemetryError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, back);
         }
     }
@@ -1662,7 +1711,8 @@ mod tests {
             network_bytes: -2048,
         };
         let json = serde_json::to_string(&rd).expect("serde deserialization should succeed");
-        let back: ResourceDelta = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ResourceDelta =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(rd, back);
     }
 
@@ -1714,7 +1764,8 @@ mod tests {
         let err = HostcallResult::Error { code: 0 };
         assert_eq!(err.to_string(), "error: 0");
         let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
-        let back: HostcallResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: HostcallResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, back);
     }
 
@@ -1756,7 +1807,8 @@ mod tests {
             network_bytes: 0,
         };
         let json = serde_json::to_string(&rd).expect("serde deserialization should succeed");
-        let v: serde_json::Value = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let v: serde_json::Value =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v["memory_bytes"], 8192);
         assert_eq!(v["fd_count"], -2);
         assert_eq!(v["network_bytes"], 0);
@@ -1804,7 +1856,8 @@ mod tests {
             .record(600, test_input("ext-x", HostcallType::MemAlloc))
             .expect("serde deserialization should succeed");
         let json = serde_json::to_string(&recorder).expect("serde deserialization should succeed");
-        let restored: TelemetryRecorder = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: TelemetryRecorder =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(restored.len(), 2);
         assert_eq!(restored.rolling_hash(), recorder.rolling_hash());
     }
@@ -1870,7 +1923,9 @@ mod tests {
         let mut recorder = test_recorder();
         let mut input = test_input("ext-t", HostcallType::TimerCreate);
         input.result_status = HostcallResult::Timeout;
-        recorder.record(100, input).expect("serde deserialization should succeed");
+        recorder
+            .record(100, input)
+            .expect("serde deserialization should succeed");
         recorder
             .record(200, test_input("ext-t", HostcallType::FsRead))
             .expect("serde deserialization should succeed");
@@ -1899,8 +1954,10 @@ mod tests {
         let input1 = test_input("ext-001", HostcallType::FsRead);
         let mut input2 = test_input("ext-001", HostcallType::FsRead);
         input2.decision_id = Some("dec-999".to_string());
-        r1.record(1000, input1).expect("serde deserialization should succeed");
-        r2.record(1000, input2).expect("serde deserialization should succeed");
+        r1.record(1000, input1)
+            .expect("serde deserialization should succeed");
+        r2.record(1000, input2)
+            .expect("serde deserialization should succeed");
         // Different decision_id => different content hash
         assert_ne!(r1.records()[0].content_hash, r2.records()[0].content_hash);
     }
@@ -1912,10 +1969,14 @@ mod tests {
         let mut recorder = test_recorder();
         let mut input_exact = test_input("ext-001", HostcallType::FsRead);
         input_exact.duration_ns = 5000; // Exactly at threshold
-        recorder.record(100, input_exact).expect("serde deserialization should succeed");
+        recorder
+            .record(100, input_exact)
+            .expect("serde deserialization should succeed");
         let mut input_over = test_input("ext-001", HostcallType::FsWrite);
         input_over.duration_ns = 5001; // Over threshold
-        recorder.record(200, input_over).expect("serde deserialization should succeed");
+        recorder
+            .record(200, input_over)
+            .expect("serde deserialization should succeed");
         let query = TelemetryQuery::new(recorder.records());
         // slow_calls uses > threshold (not >=)
         let slow = query.slow_calls(5000, 0, 1000);
@@ -1933,7 +1994,9 @@ mod tests {
             .expect("serde deserialization should succeed"); // Success
         let mut timeout_input = test_input("ext-001", HostcallType::NetworkRecv);
         timeout_input.result_status = HostcallResult::Timeout;
-        recorder.record(200, timeout_input).expect("serde deserialization should succeed");
+        recorder
+            .record(200, timeout_input)
+            .expect("serde deserialization should succeed");
         let query = TelemetryQuery::new(recorder.records());
         let anomalies = query.anomaly_candidates(0, 1000);
         assert_eq!(anomalies.len(), 1);
@@ -1950,7 +2013,8 @@ mod tests {
             .expect("serde deserialization should succeed");
         let record = &recorder.records()[0];
         let json = serde_json::to_string(record).expect("serde deserialization should succeed");
-        let v: serde_json::Value = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let v: serde_json::Value =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v["record_id"], 0);
         assert_eq!(v["timestamp_ns"], 42_000);
         assert_eq!(v["extension_id"], "ext-json");

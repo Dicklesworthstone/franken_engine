@@ -849,7 +849,8 @@ mod tests {
     fn gate_kind_serde_round_trip() {
         for gate in GateKind::all() {
             let json = serde_json::to_string(gate).expect("serde deserialization should succeed");
-            let decoded: GateKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let decoded: GateKind =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*gate, decoded);
         }
     }
@@ -1216,7 +1217,8 @@ mod tests {
     fn config_serde_round_trip() {
         let config = GateRunnerConfig::standard(test_slot_id(), "candidate".to_string(), 42);
         let json = serde_json::to_vec(&config).expect("serde deserialization should succeed");
-        let decoded: GateRunnerConfig = serde_json::from_slice(&json).expect("serde deserialization should succeed");
+        let decoded: GateRunnerConfig =
+            serde_json::from_slice(&json).expect("serde deserialization should succeed");
         assert_eq!(config, decoded);
     }
 
@@ -1247,7 +1249,8 @@ mod tests {
             summary: "failed".to_string(),
         };
         let json = serde_json::to_vec(&eval).expect("serde deserialization should succeed");
-        let decoded: GateEvaluation = serde_json::from_slice(&json).expect("serde deserialization should succeed");
+        let decoded: GateEvaluation =
+            serde_json::from_slice(&json).expect("serde deserialization should succeed");
         assert_eq!(eval, decoded);
     }
 
@@ -1282,7 +1285,12 @@ mod tests {
         let event = log_gate_evaluation(&config, &eval);
         assert_eq!(event.outcome, "fail");
         assert!(event.error_code.is_some());
-        assert!(event.error_code.expect("serde deserialization should succeed").starts_with("FE-GATE-"));
+        assert!(
+            event
+                .error_code
+                .expect("serde deserialization should succeed")
+                .starts_with("FE-GATE-")
+        );
     }
 
     #[test]
@@ -1297,7 +1305,8 @@ mod tests {
         };
         let event = log_gate_evaluation(&config, &eval);
         let json = serde_json::to_vec(&event).expect("serde deserialization should succeed");
-        let decoded: GateRunnerLogEvent = serde_json::from_slice(&json).expect("serde deserialization should succeed");
+        let decoded: GateRunnerLogEvent =
+            serde_json::from_slice(&json).expect("serde deserialization should succeed");
         assert_eq!(event, decoded);
     }
 
@@ -1315,7 +1324,8 @@ mod tests {
     fn strictness_serde_round_trip() {
         let s = GateStrictness::standard(GateKind::PerformanceThreshold);
         let json = serde_json::to_vec(&s).expect("serde deserialization should succeed");
-        let decoded: GateStrictness = serde_json::from_slice(&json).expect("serde deserialization should succeed");
+        let decoded: GateStrictness =
+            serde_json::from_slice(&json).expect("serde deserialization should succeed");
         assert_eq!(s, decoded);
     }
 
@@ -1327,7 +1337,8 @@ mod tests {
         let input = all_passing_input();
         let output = run_promotion_gates(&config, &input);
         let json = serde_json::to_vec(&output).expect("serde deserialization should succeed");
-        let decoded: GateRunnerOutput = serde_json::from_slice(&json).expect("serde deserialization should succeed");
+        let decoded: GateRunnerOutput =
+            serde_json::from_slice(&json).expect("serde deserialization should succeed");
         assert_eq!(output, decoded);
     }
 
@@ -1340,7 +1351,8 @@ mod tests {
             description: "test evidence".to_string(),
         };
         let json = serde_json::to_vec(&artifact).expect("serde deserialization should succeed");
-        let decoded: EvidenceArtifact = serde_json::from_slice(&json).expect("serde deserialization should succeed");
+        let decoded: EvidenceArtifact =
+            serde_json::from_slice(&json).expect("serde deserialization should succeed");
         assert_eq!(artifact, decoded);
     }
 
@@ -1462,7 +1474,8 @@ mod tests {
             candidate_output: vec![4, 5],
         };
         let json = serde_json::to_string(&tc).expect("serde deserialization should succeed");
-        let back: EquivalenceTestCase = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: EquivalenceTestCase =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(tc, back);
         assert!(back.is_equivalent());
     }
@@ -1481,7 +1494,8 @@ mod tests {
             seed: 77,
         };
         let json = serde_json::to_string(&pm).expect("serde deserialization should succeed");
-        let back: PerformanceMeasurement = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: PerformanceMeasurement =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(pm, back);
     }
 
@@ -1498,7 +1512,8 @@ mod tests {
             evidence: "found vulnerability".to_string(),
         };
         let json = serde_json::to_string(&atr).expect("serde deserialization should succeed");
-        let back: AdversarialTestResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: AdversarialTestResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(atr, back);
     }
 
@@ -2331,7 +2346,8 @@ mod tests {
     fn gate_runner_input_serde_roundtrip() {
         let input = all_passing_input();
         let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
-        let back: GateRunnerInput = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GateRunnerInput =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(input, back);
     }
 
@@ -2351,7 +2367,8 @@ mod tests {
             adversarial_results: vec![],
         };
         let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
-        let back: GateRunnerInput = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GateRunnerInput =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(input, back);
     }
 
@@ -2377,7 +2394,8 @@ mod tests {
             total_failed: 5,
         };
         let json = serde_json::to_string(&bundle).expect("serde deserialization should succeed");
-        let back: EvidenceBundle = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: EvidenceBundle =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(bundle, back);
     }
 
@@ -2385,7 +2403,8 @@ mod tests {
     fn candidate_capability_request_serde_roundtrip() {
         let req = exceeding_capability_request();
         let json = serde_json::to_string(&req).expect("serde deserialization should succeed");
-        let back: CandidateCapabilityRequest = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: CandidateCapabilityRequest =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(req, back);
     }
 
@@ -2401,7 +2420,8 @@ mod tests {
         let output = run_promotion_gates(&config, &input);
         assert_eq!(output.verdict, GateVerdict::Denied);
         let json = serde_json::to_string(&output).expect("serde deserialization should succeed");
-        let back: GateRunnerOutput = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GateRunnerOutput =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(output, back);
     }
 

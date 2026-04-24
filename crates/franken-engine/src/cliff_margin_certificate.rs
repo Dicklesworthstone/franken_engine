@@ -1837,7 +1837,8 @@ mod tests {
     fn test_gate_domain_serde_roundtrip() {
         let domain = GateDomain::Supremacy;
         let json = serde_json::to_string(&domain).expect("serde deserialization should succeed");
-        let back: GateDomain = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GateDomain =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(domain, back);
     }
 
@@ -1850,7 +1851,8 @@ mod tests {
             Some(valid_escape_plan()),
         );
         let json = serde_json::to_string(&cert).expect("serde deserialization should succeed");
-        let back: CliffMarginCertificate = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: CliffMarginCertificate =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cert.certificate_id, back.certificate_id);
         assert_eq!(cert.certificate_hash, back.certificate_hash);
     }
@@ -1859,7 +1861,8 @@ mod tests {
     fn test_escape_plan_serde_roundtrip() {
         let plan = valid_escape_plan();
         let json = serde_json::to_string(&plan).expect("serde deserialization should succeed");
-        let back: EscapePlan = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: EscapePlan =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(plan.plan_id, back.plan_id);
         assert_eq!(plan.actions.len(), back.actions.len());
     }
@@ -1873,7 +1876,8 @@ mod tests {
             CertificateVerdict::InsufficientEvidence,
         ] {
             let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
-            let back: CertificateVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: CertificateVerdict =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(v, back);
         }
     }
@@ -1885,7 +1889,8 @@ mod tests {
         gate.evaluate(&cert);
         let receipt = &gate.receipts[0];
         let json = serde_json::to_string(receipt).expect("serde deserialization should succeed");
-        let back: DecisionReceipt = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DecisionReceipt =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(receipt.receipt_id, back.receipt_id);
         assert_eq!(receipt.verdict, back.verdict);
     }
@@ -1897,7 +1902,8 @@ mod tests {
         gate.evaluate(&cert);
         let manifest = CliffMarginManifest::from_gate(&gate);
         let json = serde_json::to_string(&manifest).expect("serde deserialization should succeed");
-        let back: CliffMarginManifest = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: CliffMarginManifest =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(manifest.schema_version, back.schema_version);
         assert_eq!(manifest.manifest_hash, back.manifest_hash);
     }
@@ -1951,7 +1957,9 @@ mod tests {
         );
         let verdict = gate.evaluate(&cert);
         assert_eq!(verdict, CertificateVerdict::Blocked);
-        let receipt = gate.last_receipt().expect("serde deserialization should succeed");
+        let receipt = gate
+            .last_receipt()
+            .expect("serde deserialization should succeed");
         // Should have multiple blocking reasons
         assert!(receipt.blocking_reasons.len() >= 3);
     }
@@ -2053,7 +2061,9 @@ mod tests {
         let verdict = gate.evaluate(&cert);
         assert_eq!(verdict, CertificateVerdict::Approved);
         assert_eq!(
-            gate.last_receipt().expect("serde deserialization should succeed").escape_plan_status,
+            gate.last_receipt()
+                .expect("serde deserialization should succeed")
+                .escape_plan_status,
             EscapePlanStatus::NotRequired,
         );
     }

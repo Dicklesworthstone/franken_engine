@@ -881,8 +881,8 @@ impl SwarmControlLoop {
             .count() as u64;
 
         // Compute artifact hash.
-        let hash_input =
-            serde_json::to_vec(&(&queue, &signals, &bottlenecks, &self.risk_budget)).expect("serde deserialization should succeed");
+        let hash_input = serde_json::to_vec(&(&queue, &signals, &bottlenecks, &self.risk_budget))
+            .expect("serde deserialization should succeed");
         let artifact_hash = ContentHash::compute(&hash_input);
 
         // Save current queue for next iteration's delta computation.
@@ -967,7 +967,8 @@ mod tests {
     }
 
     fn default_loop() -> SwarmControlLoop {
-        SwarmControlLoop::new(ControlLoopConfig::default()).expect("serde deserialization should succeed")
+        SwarmControlLoop::new(ControlLoopConfig::default())
+            .expect("serde deserialization should succeed")
     }
 
     fn add_chain(ctrl: &mut SwarmControlLoop, ids: &[&str]) {
@@ -987,7 +988,8 @@ mod tests {
             } else {
                 BTreeSet::new()
             };
-            ctrl.add_task(task).expect("serde deserialization should succeed");
+            ctrl.add_task(task)
+                .expect("serde deserialization should succeed");
         }
     }
 
@@ -1004,7 +1006,8 @@ mod tests {
     fn wave_serde_roundtrip() {
         for w in [Wave::ReadyNow, Wave::ReadyNext, Wave::Gated] {
             let json = serde_json::to_string(&w).expect("serde deserialization should succeed");
-            let back: Wave = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: Wave =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(back, w);
         }
     }
@@ -1053,7 +1056,8 @@ mod tests {
     fn signals_serde_roundtrip() {
         let s = CrossCuttingSignals::default();
         let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
-        let back: CrossCuttingSignals = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: CrossCuttingSignals =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, s);
     }
 
@@ -1090,7 +1094,8 @@ mod tests {
     fn task_node_serde_roundtrip() {
         let t = make_task("t1", &["dep1"]);
         let json = serde_json::to_string(&t).expect("serde deserialization should succeed");
-        let back: TaskNode = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: TaskNode =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.task_id, t.task_id);
         assert_eq!(back.depends_on, t.depends_on);
     }
@@ -1204,7 +1209,8 @@ mod tests {
     fn risk_budget_serde_roundtrip() {
         let b = SwarmRiskBudget::default();
         let json = serde_json::to_string(&b).expect("serde deserialization should succeed");
-        let back: SwarmRiskBudget = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SwarmRiskBudget =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, b);
     }
 
@@ -1228,7 +1234,8 @@ mod tests {
     fn config_serde_roundtrip() {
         let c = ControlLoopConfig::default();
         let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
-        let back: ControlLoopConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ControlLoopConfig =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, c);
     }
 
@@ -1287,7 +1294,8 @@ mod tests {
             max: 4096,
         };
         let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
-        let back: ControlLoopError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ControlLoopError =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, err);
     }
 
@@ -1332,14 +1340,16 @@ mod tests {
     #[test]
     fn add_task_and_count() {
         let mut ctrl = default_loop();
-        ctrl.add_task(make_task("t1", &[])).expect("serde deserialization should succeed");
+        ctrl.add_task(make_task("t1", &[]))
+            .expect("serde deserialization should succeed");
         assert_eq!(ctrl.task_count(), 1);
     }
 
     #[test]
     fn complete_task_updates_status() {
         let mut ctrl = default_loop();
-        ctrl.add_task(make_task("t1", &[])).expect("serde deserialization should succeed");
+        ctrl.add_task(make_task("t1", &[]))
+            .expect("serde deserialization should succeed");
         assert!(ctrl.complete_task("t1"));
         assert_eq!(ctrl.completed_count(), 1);
     }
@@ -1361,7 +1371,8 @@ mod tests {
     #[test]
     fn validate_unknown_dependency_fails() {
         let mut ctrl = default_loop();
-        ctrl.add_task(make_task("t1", &["unknown"])).expect("serde deserialization should succeed");
+        ctrl.add_task(make_task("t1", &["unknown"]))
+            .expect("serde deserialization should succeed");
         assert!(matches!(
             ctrl.validate(),
             Err(ControlLoopError::UnknownDependency { .. })
@@ -1375,8 +1386,10 @@ mod tests {
         let mut t2 = make_task("t2", &["t1"]);
         t1.dependents.insert("t2".to_string());
         t2.dependents.insert("t1".to_string());
-        ctrl.add_task(t1).expect("serde deserialization should succeed");
-        ctrl.add_task(t2).expect("serde deserialization should succeed");
+        ctrl.add_task(t1)
+            .expect("serde deserialization should succeed");
+        ctrl.add_task(t2)
+            .expect("serde deserialization should succeed");
         assert!(matches!(
             ctrl.validate(),
             Err(ControlLoopError::CycleDetected { .. })
@@ -1403,7 +1416,10 @@ mod tests {
     fn wave_ready_next_one_blocker() {
         let mut ctrl = default_loop();
         add_chain(&mut ctrl, &["dep1", "t1"]);
-        let t1 = ctrl.graph.get("t1").expect("serde deserialization should succeed");
+        let t1 = ctrl
+            .graph
+            .get("t1")
+            .expect("serde deserialization should succeed");
         assert_eq!(ctrl.wave_for(t1), Wave::ReadyNext);
     }
 
@@ -1411,12 +1427,19 @@ mod tests {
     fn wave_gated_many_blockers() {
         let mut ctrl = default_loop();
         let mut t = make_task("t1", &["d1", "d2", "d3"]);
-        ctrl.add_task(make_task("d1", &[])).expect("serde deserialization should succeed");
-        ctrl.add_task(make_task("d2", &[])).expect("serde deserialization should succeed");
-        ctrl.add_task(make_task("d3", &[])).expect("serde deserialization should succeed");
+        ctrl.add_task(make_task("d1", &[]))
+            .expect("serde deserialization should succeed");
+        ctrl.add_task(make_task("d2", &[]))
+            .expect("serde deserialization should succeed");
+        ctrl.add_task(make_task("d3", &[]))
+            .expect("serde deserialization should succeed");
         t.dependents = BTreeSet::new();
-        ctrl.add_task(t).expect("serde deserialization should succeed");
-        let t1 = ctrl.graph.get("t1").expect("serde deserialization should succeed");
+        ctrl.add_task(t)
+            .expect("serde deserialization should succeed");
+        let t1 = ctrl
+            .graph
+            .get("t1")
+            .expect("serde deserialization should succeed");
         assert_eq!(ctrl.wave_for(t1), Wave::Gated);
     }
 
@@ -1427,13 +1450,19 @@ mod tests {
         // Initially gated (2 blockers > ready_next_max_blockers default of 2)
         // Actually: t1 depends on d2, d2 depends on d1.
         // t1 has 1 open blocker (d2 which is open). So ReadyNext.
-        let t1 = ctrl.graph.get("t1").expect("serde deserialization should succeed");
+        let t1 = ctrl
+            .graph
+            .get("t1")
+            .expect("serde deserialization should succeed");
         assert_eq!(ctrl.wave_for(t1), Wave::ReadyNext);
 
         // Complete d2 → t1 becomes ReadyNow
         ctrl.complete_task("d1");
         ctrl.complete_task("d2");
-        let t1 = ctrl.graph.get("t1").expect("serde deserialization should succeed");
+        let t1 = ctrl
+            .graph
+            .get("t1")
+            .expect("serde deserialization should succeed");
         assert_eq!(ctrl.wave_for(t1), Wave::ReadyNow);
     }
 
@@ -1471,12 +1500,17 @@ mod tests {
         for i in 0..11 {
             let id = format!("d{i}");
             deps.insert(id.clone());
-            ctrl.add_task(make_task(&id, &["root"])).expect("serde deserialization should succeed");
+            ctrl.add_task(make_task(&id, &["root"]))
+                .expect("serde deserialization should succeed");
         }
         root.dependents = deps;
-        ctrl.add_task(root).expect("serde deserialization should succeed");
+        ctrl.add_task(root)
+            .expect("serde deserialization should succeed");
         let bottlenecks = ctrl.detect_bottlenecks();
-        let root_bn = bottlenecks.iter().find(|b| b.task_id == "root").expect("serde deserialization should succeed");
+        let root_bn = bottlenecks
+            .iter()
+            .find(|b| b.task_id == "root")
+            .expect("serde deserialization should succeed");
         assert_eq!(root_bn.severity, BottleneckSeverity::Critical);
     }
 
@@ -1504,7 +1538,8 @@ mod tests {
     #[test]
     fn recompute_increments_iteration() {
         let mut ctrl = default_loop();
-        ctrl.add_task(make_task("t1", &[])).expect("serde deserialization should succeed");
+        ctrl.add_task(make_task("t1", &[]))
+            .expect("serde deserialization should succeed");
         ctrl.recompute(
             SecurityEpoch::from_raw(1),
             1_000,
@@ -1545,7 +1580,8 @@ mod tests {
         })
         .expect("serde deserialization should succeed");
         for i in 0..5 {
-            ctrl.add_task(make_task(&format!("t{i}"), &[])).expect("serde deserialization should succeed");
+            ctrl.add_task(make_task(&format!("t{i}"), &[]))
+                .expect("serde deserialization should succeed");
         }
         let artifact = ctrl
             .recompute(
@@ -1563,7 +1599,8 @@ mod tests {
         let mut ctrl = default_loop();
         let mut root = make_task("root", &[]);
         root.dependents = ["d1", "d2", "d3"].iter().map(|s| s.to_string()).collect();
-        ctrl.add_task(root).expect("serde deserialization should succeed");
+        ctrl.add_task(root)
+            .expect("serde deserialization should succeed");
         // These tasks have 3 open blockers each — should be excluded from queue
         for i in 1..=3 {
             ctrl.add_task(make_task(&format!("d{i}"), &["root"]))
@@ -1572,7 +1609,8 @@ mod tests {
         // But they each have 1 blocker so they're ReadyNext.
         // Add a truly gated task.
         let gated = make_task("gated", &["d1", "d2", "d3"]);
-        ctrl.add_task(gated).expect("serde deserialization should succeed");
+        ctrl.add_task(gated)
+            .expect("serde deserialization should succeed");
 
         let artifact = ctrl
             .recompute(
@@ -1595,12 +1633,17 @@ mod tests {
             ..Default::default()
         })
         .expect("serde deserialization should succeed");
-        ctrl.add_task(make_task("root", &[])).expect("serde deserialization should succeed");
-        ctrl.add_task(make_task("d1", &["root"])).expect("serde deserialization should succeed");
-        ctrl.add_task(make_task("d2", &["root"])).expect("serde deserialization should succeed");
-        ctrl.add_task(make_task("d3", &["root"])).expect("serde deserialization should succeed");
+        ctrl.add_task(make_task("root", &[]))
+            .expect("serde deserialization should succeed");
+        ctrl.add_task(make_task("d1", &["root"]))
+            .expect("serde deserialization should succeed");
+        ctrl.add_task(make_task("d2", &["root"]))
+            .expect("serde deserialization should succeed");
+        ctrl.add_task(make_task("d3", &["root"]))
+            .expect("serde deserialization should succeed");
         let gated = make_task("gated", &["d1", "d2", "d3"]);
-        ctrl.add_task(gated).expect("serde deserialization should succeed");
+        ctrl.add_task(gated)
+            .expect("serde deserialization should succeed");
         let artifact = ctrl
             .recompute(
                 SecurityEpoch::from_raw(1),
@@ -1617,7 +1660,8 @@ mod tests {
     #[test]
     fn rationale_delta_on_first_run() {
         let mut ctrl = default_loop();
-        ctrl.add_task(make_task("t1", &[])).expect("serde deserialization should succeed");
+        ctrl.add_task(make_task("t1", &[]))
+            .expect("serde deserialization should succeed");
         let artifact = ctrl
             .recompute(
                 SecurityEpoch::from_raw(1),
@@ -1638,8 +1682,10 @@ mod tests {
     #[test]
     fn rationale_delta_on_completion() {
         let mut ctrl = default_loop();
-        ctrl.add_task(make_task("t1", &[])).expect("serde deserialization should succeed");
-        ctrl.add_task(make_task("t2", &[])).expect("serde deserialization should succeed");
+        ctrl.add_task(make_task("t1", &[]))
+            .expect("serde deserialization should succeed");
+        ctrl.add_task(make_task("t2", &[]))
+            .expect("serde deserialization should succeed");
         ctrl.recompute(
             SecurityEpoch::from_raw(1),
             1_000,
@@ -1660,7 +1706,12 @@ mod tests {
             .expect("serde deserialization should succeed");
         let dropped = artifact.rationale_deltas.iter().find(|d| d.task_id == "t1");
         assert!(dropped.is_some());
-        assert!(dropped.expect("serde deserialization should succeed").reason.contains("dropped"));
+        assert!(
+            dropped
+                .expect("serde deserialization should succeed")
+                .reason
+                .contains("dropped")
+        );
     }
 
     // ── Conservative mode tests ────────────────────────────────────────
@@ -1672,7 +1723,8 @@ mod tests {
             ..Default::default()
         })
         .expect("serde deserialization should succeed");
-        ctrl.add_task(make_task("t1", &[])).expect("serde deserialization should succeed");
+        ctrl.add_task(make_task("t1", &[]))
+            .expect("serde deserialization should succeed");
         let bad_signals = CrossCuttingSignals {
             observability_quality_millionths: 100_000,
             catastrophic_tail_score_millionths: 500_000,
@@ -1690,7 +1742,8 @@ mod tests {
     #[test]
     fn healthy_signals_no_conservative() {
         let mut ctrl = default_loop();
-        ctrl.add_task(make_task("t1", &[])).expect("serde deserialization should succeed");
+        ctrl.add_task(make_task("t1", &[]))
+            .expect("serde deserialization should succeed");
         let artifact = ctrl
             .recompute(
                 SecurityEpoch::from_raw(1),
@@ -1707,8 +1760,10 @@ mod tests {
     #[test]
     fn artifact_completion_millionths() {
         let mut ctrl = default_loop();
-        ctrl.add_task(make_task("t1", &[])).expect("serde deserialization should succeed");
-        ctrl.add_task(make_task("t2", &[])).expect("serde deserialization should succeed");
+        ctrl.add_task(make_task("t1", &[]))
+            .expect("serde deserialization should succeed");
+        ctrl.add_task(make_task("t2", &[]))
+            .expect("serde deserialization should succeed");
         ctrl.complete_task("t1");
         let artifact = ctrl
             .recompute(
@@ -1798,7 +1853,8 @@ mod tests {
     #[test]
     fn artifact_serde_roundtrip() {
         let mut ctrl = default_loop();
-        ctrl.add_task(make_task("t1", &[])).expect("serde deserialization should succeed");
+        ctrl.add_task(make_task("t1", &[]))
+            .expect("serde deserialization should succeed");
         let artifact = ctrl
             .recompute(
                 SecurityEpoch::from_raw(1),
@@ -1808,7 +1864,8 @@ mod tests {
             )
             .expect("serde deserialization should succeed");
         let json = serde_json::to_string(&artifact).expect("serde deserialization should succeed");
-        let back: QueueArtifact = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: QueueArtifact =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.epoch, artifact.epoch);
         assert_eq!(back.queue.len(), artifact.queue.len());
         assert_eq!(back.evidence_ids, artifact.evidence_ids);
@@ -1827,9 +1884,11 @@ mod tests {
     #[test]
     fn loop_serde_roundtrip() {
         let mut ctrl = default_loop();
-        ctrl.add_task(make_task("t1", &[])).expect("serde deserialization should succeed");
+        ctrl.add_task(make_task("t1", &[]))
+            .expect("serde deserialization should succeed");
         let json = serde_json::to_string(&ctrl).expect("serde deserialization should succeed");
-        let back: SwarmControlLoop = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SwarmControlLoop =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.task_count(), 1);
     }
 
@@ -1842,11 +1901,13 @@ mod tests {
         let mut t1 = make_task("t1", &[]);
         t1.dependents.insert("t2".to_string());
         t1.impact_millionths = 500_000; // lower EV
-        ctrl.add_task(t1).expect("serde deserialization should succeed");
+        ctrl.add_task(t1)
+            .expect("serde deserialization should succeed");
 
         let mut t2 = make_task("t2", &["t1"]);
         t2.impact_millionths = 900_000; // higher EV
-        ctrl.add_task(t2).expect("serde deserialization should succeed");
+        ctrl.add_task(t2)
+            .expect("serde deserialization should succeed");
 
         let artifact = ctrl
             .recompute(
@@ -1867,11 +1928,13 @@ mod tests {
         let mut ctrl = default_loop();
         let mut t1 = make_task("t1", &[]);
         t1.impact_millionths = 500_000;
-        ctrl.add_task(t1).expect("serde deserialization should succeed");
+        ctrl.add_task(t1)
+            .expect("serde deserialization should succeed");
 
         let mut t2 = make_task("t2", &[]);
         t2.impact_millionths = 900_000;
-        ctrl.add_task(t2).expect("serde deserialization should succeed");
+        ctrl.add_task(t2)
+            .expect("serde deserialization should succeed");
 
         let artifact = ctrl
             .recompute(
@@ -1892,7 +1955,8 @@ mod tests {
     #[test]
     fn evidence_ids_preserved() {
         let mut ctrl = default_loop();
-        ctrl.add_task(make_task("t1", &[])).expect("serde deserialization should succeed");
+        ctrl.add_task(make_task("t1", &[]))
+            .expect("serde deserialization should succeed");
         let artifact = ctrl
             .recompute(
                 SecurityEpoch::from_raw(1),
@@ -1916,17 +1980,22 @@ mod tests {
             .iter()
             .map(|s| s.to_string())
             .collect();
-        ctrl.add_task(root).expect("serde deserialization should succeed");
+        ctrl.add_task(root)
+            .expect("serde deserialization should succeed");
 
         let mut mid = make_task("mid", &["root"]);
         mid.dependents.insert("leaf".to_string());
-        ctrl.add_task(mid).expect("serde deserialization should succeed");
+        ctrl.add_task(mid)
+            .expect("serde deserialization should succeed");
 
-        ctrl.add_task(make_task("gated_dep1", &["root"])).expect("serde deserialization should succeed");
-        ctrl.add_task(make_task("gated_dep2", &["root"])).expect("serde deserialization should succeed");
+        ctrl.add_task(make_task("gated_dep1", &["root"]))
+            .expect("serde deserialization should succeed");
+        ctrl.add_task(make_task("gated_dep2", &["root"]))
+            .expect("serde deserialization should succeed");
 
         let leaf = make_task("leaf", &["mid", "gated_dep1", "gated_dep2"]);
-        ctrl.add_task(leaf).expect("serde deserialization should succeed");
+        ctrl.add_task(leaf)
+            .expect("serde deserialization should succeed");
 
         let artifact = ctrl
             .recompute(
@@ -1947,7 +2016,9 @@ mod tests {
     #[test]
     fn artifact_hash_deterministic() {
         let mut ctrl1 = default_loop();
-        ctrl1.add_task(make_task("t1", &[])).expect("serde deserialization should succeed");
+        ctrl1
+            .add_task(make_task("t1", &[]))
+            .expect("serde deserialization should succeed");
         let a1 = ctrl1
             .recompute(
                 SecurityEpoch::from_raw(1),
@@ -1958,7 +2029,9 @@ mod tests {
             .expect("serde deserialization should succeed");
 
         let mut ctrl2 = default_loop();
-        ctrl2.add_task(make_task("t1", &[])).expect("serde deserialization should succeed");
+        ctrl2
+            .add_task(make_task("t1", &[]))
+            .expect("serde deserialization should succeed");
         let a2 = ctrl2
             .recompute(
                 SecurityEpoch::from_raw(1),
@@ -1974,7 +2047,8 @@ mod tests {
     #[test]
     fn artifact_hash_changes_with_different_data() {
         let mut ctrl = default_loop();
-        ctrl.add_task(make_task("t1", &[])).expect("serde deserialization should succeed");
+        ctrl.add_task(make_task("t1", &[]))
+            .expect("serde deserialization should succeed");
         let a1 = ctrl
             .recompute(
                 SecurityEpoch::from_raw(1),
@@ -1985,7 +2059,8 @@ mod tests {
             .expect("serde deserialization should succeed");
 
         // Add another task and recompute.
-        ctrl.add_task(make_task("t2", &[])).expect("serde deserialization should succeed");
+        ctrl.add_task(make_task("t2", &[]))
+            .expect("serde deserialization should succeed");
         let a2 = ctrl
             .recompute(
                 SecurityEpoch::from_raw(2),
@@ -2021,7 +2096,8 @@ mod tests {
             open_blocker_count: 0,
         };
         let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
-        let back: QueueEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: QueueEntry =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, back);
     }
 
@@ -2034,7 +2110,8 @@ mod tests {
             reason: "dependency resolved".into(),
         };
         let json = serde_json::to_string(&delta).expect("serde deserialization should succeed");
-        let back: RationaleDelta = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: RationaleDelta =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(delta, back);
     }
 
@@ -2047,7 +2124,8 @@ mod tests {
             severity: BottleneckSeverity::Critical,
         };
         let json = serde_json::to_string(&b).expect("serde deserialization should succeed");
-        let back: Bottleneck = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: Bottleneck =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(b, back);
     }
 
@@ -2061,7 +2139,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: BottleneckSeverity = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: BottleneckSeverity =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -2087,7 +2166,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: ControlLoopError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ControlLoopError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }

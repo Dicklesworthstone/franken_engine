@@ -1140,7 +1140,8 @@ mod tests {
         let mut cat = MismatchCatalog::new(test_epoch(1));
         let e1 = test_entry("m1", MismatchDomain::CompileOutput, MismatchSeverity::Error);
         let e2 = test_entry("m1", MismatchDomain::Diagnostics, MismatchSeverity::Warning);
-        cat.add_entry(e1).expect("serde deserialization should succeed");
+        cat.add_entry(e1)
+            .expect("serde deserialization should succeed");
         let err = cat.add_entry(e2).unwrap_err();
         assert!(matches!(err, CatalogError::DuplicateEntry { .. }));
     }
@@ -1168,9 +1169,12 @@ mod tests {
     fn test_remove_entry() {
         let mut cat = MismatchCatalog::new(test_epoch(1));
         let e = test_entry("m1", MismatchDomain::CompileOutput, MismatchSeverity::Error);
-        cat.add_entry(e).expect("serde deserialization should succeed");
+        cat.add_entry(e)
+            .expect("serde deserialization should succeed");
         assert_eq!(cat.len(), 1);
-        let removed = cat.remove_entry("m1").expect("serde deserialization should succeed");
+        let removed = cat
+            .remove_entry("m1")
+            .expect("serde deserialization should succeed");
         assert_eq!(removed.entry_id, "m1");
         assert!(cat.is_empty());
     }
@@ -1186,7 +1190,8 @@ mod tests {
     fn test_update_remediation() {
         let mut cat = MismatchCatalog::new(test_epoch(1));
         let e = test_entry("m1", MismatchDomain::CompileOutput, MismatchSeverity::Error);
-        cat.add_entry(e).expect("serde deserialization should succeed");
+        cat.add_entry(e)
+            .expect("serde deserialization should succeed");
         assert_eq!(cat.open_count(), 1);
         cat.update_remediation("m1", RemediationStatus::Resolved)
             .expect("serde deserialization should succeed");
@@ -1783,7 +1788,8 @@ mod tests {
         ))
         .expect("serde deserialization should succeed");
         let h1 = cat.catalog_hash;
-        cat.remove_entry("m1").expect("serde deserialization should succeed");
+        cat.remove_entry("m1")
+            .expect("serde deserialization should succeed");
         assert_ne!(cat.catalog_hash, h1);
     }
 
@@ -1791,7 +1797,8 @@ mod tests {
     fn test_serde_roundtrip_entry() {
         let e = test_entry("m1", MismatchDomain::CompileOutput, MismatchSeverity::Error);
         let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
-        let parsed: MismatchEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let parsed: MismatchEntry =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(e, parsed);
     }
 
@@ -1805,7 +1812,8 @@ mod tests {
         ))
         .expect("serde deserialization should succeed");
         let json = serde_json::to_string(&cat).expect("serde deserialization should succeed");
-        let parsed: MismatchCatalog = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let parsed: MismatchCatalog =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cat, parsed);
     }
 
@@ -1813,7 +1821,8 @@ mod tests {
     fn test_serde_roundtrip_config() {
         let config = CatalogConfig::default();
         let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
-        let parsed: CatalogConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let parsed: CatalogConfig =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, parsed);
     }
 
@@ -1823,7 +1832,8 @@ mod tests {
             reasons: vec!["test".to_string()],
         };
         let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
-        let parsed: GateVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let parsed: GateVerdict =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, parsed);
     }
 
@@ -1838,7 +1848,8 @@ mod tests {
         .expect("serde deserialization should succeed");
         let report = cat.report();
         let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
-        let parsed: CatalogReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let parsed: CatalogReport =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report, parsed);
     }
 
@@ -1852,8 +1863,10 @@ mod tests {
         ))
         .expect("serde deserialization should succeed");
         let advisories = generate_advisories(&cat);
-        let json = serde_json::to_string(&advisories[0]).expect("serde deserialization should succeed");
-        let parsed: MismatchAdvisory = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json =
+            serde_json::to_string(&advisories[0]).expect("serde deserialization should succeed");
+        let parsed: MismatchAdvisory =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(advisories[0], parsed);
     }
 
@@ -1889,7 +1902,8 @@ mod tests {
             );
             e.verified_epoch = test_epoch(3);
             e.detected_epoch = test_epoch(1);
-            cat.add_entry(e).expect("serde deserialization should succeed");
+            cat.add_entry(e)
+                .expect("serde deserialization should succeed");
         }
         let config = CatalogConfig {
             min_verification_epoch: test_epoch(5),

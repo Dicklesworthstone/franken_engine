@@ -833,14 +833,16 @@ impl FileArtifact {
     fn json<T: Serialize>(path: &str, value: &T) -> Self {
         Self {
             path: path.to_string(),
-            contents: serde_json::to_vec_pretty(value).expect("serde deserialization should succeed"),
+            contents: serde_json::to_vec_pretty(value)
+                .expect("serde deserialization should succeed"),
         }
     }
 
     fn jsonl<T: Serialize>(path: &str, records: &[T]) -> Self {
         let mut contents = Vec::new();
         for record in records {
-            let mut line = serde_json::to_vec(record).expect("serde deserialization should succeed");
+            let mut line =
+                serde_json::to_vec(record).expect("serde deserialization should succeed");
             line.push(b'\n');
             contents.extend_from_slice(&line);
         }
@@ -1115,7 +1117,8 @@ mod tests {
             telemetry_fields: vec!["total_reads".to_string()],
         };
         let json = serde_json::to_string(&row).expect("serde deserialization should succeed");
-        let back: ContractCandidateRow = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ContractCandidateRow =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(row, back);
     }
 
@@ -1132,7 +1135,8 @@ mod tests {
             latest_read_source: "fast_path".to_string(),
         };
         let json = serde_json::to_string(&row).expect("serde deserialization should succeed");
-        let back: ObservedTelemetryRow = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ObservedTelemetryRow =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(row, back);
     }
 
@@ -1145,7 +1149,8 @@ mod tests {
             policy_id: "policy-1".to_string(),
         };
         let json = serde_json::to_string(&artifact).expect("serde deserialization should succeed");
-        let back: TraceIdsArtifact = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: TraceIdsArtifact =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(artifact, back);
     }
 
@@ -1188,7 +1193,8 @@ mod tests {
             max_writer_pressure_observations: 3,
         };
         let json = serde_json::to_string(&row).expect("serde deserialization should succeed");
-        let back: RetryBudgetPolicyRow = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: RetryBudgetPolicyRow =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(row, back);
     }
 
@@ -1213,8 +1219,10 @@ mod tests {
                 },
             ],
         };
-        let json = serde_json::to_string_pretty(&artifact).expect("serde deserialization should succeed");
-        let back: RetryBudgetPolicyArtifact = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json =
+            serde_json::to_string_pretty(&artifact).expect("serde deserialization should succeed");
+        let back: RetryBudgetPolicyArtifact =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(artifact, back);
     }
 
@@ -1229,7 +1237,8 @@ mod tests {
             ],
         };
         let json = serde_json::to_string(&row).expect("serde deserialization should succeed");
-        let back: FallbackMatrixRow = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: FallbackMatrixRow =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(row, back);
     }
 
@@ -1247,8 +1256,10 @@ mod tests {
                 exact_fallback_conditions: vec!["uninitialized".to_string()],
             }],
         };
-        let json = serde_json::to_string_pretty(&artifact).expect("serde deserialization should succeed");
-        let back: IncumbentFallbackMatrixArtifact = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json =
+            serde_json::to_string_pretty(&artifact).expect("serde deserialization should succeed");
+        let back: IncumbentFallbackMatrixArtifact =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(artifact, back);
     }
 
@@ -1266,7 +1277,8 @@ mod tests {
             detail: "read_api=ModuleCache::snapshot".to_string(),
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let back: StructuredLogEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: StructuredLogEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
     }
 
@@ -1284,7 +1296,8 @@ mod tests {
             detail: "no optional fields".to_string(),
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let back: StructuredLogEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: StructuredLogEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
         assert!(json.contains("\"error_code\":null"));
         assert!(json.contains("\"candidate_id\":null"));
@@ -1297,7 +1310,8 @@ mod tests {
             sha256: "sha256:abcdef0123456789".to_string(),
         };
         let json = serde_json::to_string(&reference).expect("serde deserialization should succeed");
-        let back: ManifestArtifactReference = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ManifestArtifactReference =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(reference, back);
     }
 
@@ -1331,16 +1345,20 @@ mod tests {
                 latest_read_source: "fast_path".to_string(),
             }],
         };
-        let json = serde_json::to_string_pretty(&artifact).expect("serde deserialization should succeed");
-        let back: ReaderWriterContractArtifact = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json =
+            serde_json::to_string_pretty(&artifact).expect("serde deserialization should succeed");
+        let back: ReaderWriterContractArtifact =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(artifact, back);
     }
 
     #[test]
     fn docs_contract_fixture_serde_round_trip() {
         let fixture = build_docs_contract_fixture();
-        let json = serde_json::to_string_pretty(&fixture).expect("serde deserialization should succeed");
-        let back: DocsContractFixture = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json =
+            serde_json::to_string_pretty(&fixture).expect("serde deserialization should succeed");
+        let back: DocsContractFixture =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(fixture, back);
     }
 
@@ -1352,7 +1370,8 @@ mod tests {
             max_writer_pressure_observations: 4,
         };
         let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
-        let back: DocsCandidatePolicy = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DocsCandidatePolicy =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(policy, back);
     }
 
@@ -1413,7 +1432,11 @@ mod tests {
     fn unique_temp_path_starts_with_dot_and_ends_with_tmp() {
         let base = Path::new("/tmp/myfile.json");
         let temp = unique_temp_path(base);
-        let file_name = temp.file_name().expect("serde deserialization should succeed").to_str().expect("serde deserialization should succeed");
+        let file_name = temp
+            .file_name()
+            .expect("serde deserialization should succeed")
+            .to_str()
+            .expect("serde deserialization should succeed");
         assert!(
             file_name.starts_with('.'),
             "temp file should start with dot: {file_name}"

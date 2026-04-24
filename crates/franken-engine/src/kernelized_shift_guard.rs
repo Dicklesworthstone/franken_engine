@@ -749,8 +749,12 @@ mod tests {
     fn test_check_increments_seq() {
         let mut guard = ShiftGuardOrchestrator::with_defaults(test_epoch());
         guard.set_baseline(stable_embeddings(4, 5, 500_000));
-        let r1 = guard.check_shift(stable_embeddings(4, 5, 500_000)).expect("serde deserialization should succeed");
-        let r2 = guard.check_shift(stable_embeddings(4, 5, 500_000)).expect("serde deserialization should succeed");
+        let r1 = guard
+            .check_shift(stable_embeddings(4, 5, 500_000))
+            .expect("serde deserialization should succeed");
+        let r2 = guard
+            .check_shift(stable_embeddings(4, 5, 500_000))
+            .expect("serde deserialization should succeed");
         assert_eq!(r1.seq, 1);
         assert_eq!(r2.seq, 2);
     }
@@ -966,7 +970,9 @@ mod tests {
     fn test_content_hash_nonempty() {
         let mut guard = ShiftGuardOrchestrator::with_defaults(test_epoch());
         guard.set_baseline(stable_embeddings(4, 5, 500_000));
-        let result = guard.check_shift(stable_embeddings(4, 5, 500_000)).expect("serde deserialization should succeed");
+        let result = guard
+            .check_shift(stable_embeddings(4, 5, 500_000))
+            .expect("serde deserialization should succeed");
         assert_ne!(result.content_hash, ContentHash::compute(b""));
     }
 
@@ -975,7 +981,9 @@ mod tests {
         let epoch = SecurityEpoch::from_raw(42);
         let mut guard = ShiftGuardOrchestrator::with_defaults(epoch);
         guard.set_baseline(stable_embeddings(4, 5, 500_000));
-        let result = guard.check_shift(stable_embeddings(4, 5, 500_000)).expect("serde deserialization should succeed");
+        let result = guard
+            .check_shift(stable_embeddings(4, 5, 500_000))
+            .expect("serde deserialization should succeed");
         assert_eq!(result.epoch, epoch);
     }
 
@@ -1059,7 +1067,9 @@ mod tests {
         guard.set_baseline(stable_embeddings(4, 5, 100_000));
         guard.set_baseline(stable_embeddings(4, 5, 900_000));
         // Should use the second baseline.
-        let result = guard.check_shift(stable_embeddings(4, 5, 900_000)).expect("serde deserialization should succeed");
+        let result = guard
+            .check_shift(stable_embeddings(4, 5, 900_000))
+            .expect("serde deserialization should succeed");
         assert_eq!(result.seq, 1);
     }
 
@@ -1077,7 +1087,9 @@ mod tests {
     fn test_single_embedding_baseline() {
         let mut guard = ShiftGuardOrchestrator::with_defaults(test_epoch());
         guard.set_baseline(stable_embeddings(4, 1, 500_000));
-        let result = guard.check_shift(stable_embeddings(4, 1, 500_000)).expect("serde deserialization should succeed");
+        let result = guard
+            .check_shift(stable_embeddings(4, 1, 500_000))
+            .expect("serde deserialization should succeed");
         assert_eq!(result.seq, 1);
     }
 }

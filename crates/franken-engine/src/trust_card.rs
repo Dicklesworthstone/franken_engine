@@ -535,7 +535,9 @@ impl TrustCardGenerator {
     /// Format a trust card in the specified format.
     pub fn format_card(card: &TrustCard, format: CardFormat) -> String {
         match format {
-            CardFormat::Json => serde_json::to_string_pretty(card).expect("serde deserialization should succeed"),
+            CardFormat::Json => {
+                serde_json::to_string_pretty(card).expect("serde deserialization should succeed")
+            }
             CardFormat::Text => card.to_string(),
             CardFormat::Compact => format!(
                 "{} v{} | {} | risk:{}/100 ({}) | {}",
@@ -1152,7 +1154,8 @@ mod tests {
             RiskTrend::Degrading,
         ] {
             let json = serde_json::to_string(&trend).expect("serde deserialization should succeed");
-            let restored: RiskTrend = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: RiskTrend =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(trend, restored);
         }
     }
@@ -1175,8 +1178,10 @@ mod tests {
             RecommendedAction::Restrict,
             RecommendedAction::Remove,
         ] {
-            let json = serde_json::to_string(&action).expect("serde deserialization should succeed");
-            let restored: RecommendedAction = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&action).expect("serde deserialization should succeed");
+            let restored: RecommendedAction =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(action, restored);
         }
     }
@@ -1187,7 +1192,8 @@ mod tests {
     fn card_format_serde_roundtrip() {
         for fmt in [CardFormat::Json, CardFormat::Text, CardFormat::Compact] {
             let json = serde_json::to_string(&fmt).expect("serde deserialization should succeed");
-            let restored: CardFormat = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: CardFormat =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(fmt, restored);
         }
     }
@@ -1229,7 +1235,8 @@ mod tests {
         ];
         for err in &errors {
             let json = serde_json::to_string(err).expect("serde deserialization should succeed");
-            let restored: TrustCardError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: TrustCardError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, restored);
         }
     }
@@ -1349,7 +1356,9 @@ mod tests {
         graph.register_publisher(test_publisher("pub-1"));
         let mut ext = test_extension("ext-1", "pub-1");
         ext.current_trust_level = TrustLevel::Revoked;
-        graph.register_extension(ext).expect("serde deserialization should succeed");
+        graph
+            .register_extension(ext)
+            .expect("serde deserialization should succeed");
         // Add many negative evidence items.
         for i in 0..20 {
             graph
@@ -1674,7 +1683,8 @@ mod tests {
             .expect("serde deserialization should succeed");
 
         let json_str = TrustCardGenerator::format_card(&card, CardFormat::Json);
-        let parsed: serde_json::Value = serde_json::from_str(&json_str).expect("serde deserialization should succeed");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&json_str).expect("serde deserialization should succeed");
         assert!(parsed.is_object());
     }
 
@@ -1718,7 +1728,8 @@ mod tests {
             .expect("serde deserialization should succeed");
 
         let json = serde_json::to_string(&card).expect("serde deserialization should succeed");
-        let restored: TrustCard = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: TrustCard =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(card, restored);
     }
 
@@ -1777,7 +1788,8 @@ mod tests {
             change_summary: "trust degraded".into(),
         };
         let json = serde_json::to_string(&diff).expect("serde deserialization should succeed");
-        let restored: TrustCardDiff = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: TrustCardDiff =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(diff, restored);
     }
 
@@ -1809,7 +1821,8 @@ mod tests {
             timestamp_ns: 5_000_000_000,
         };
         let json = serde_json::to_string(&notif).expect("serde deserialization should succeed");
-        let restored: UpdateNotification = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: UpdateNotification =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(notif, restored);
     }
 
@@ -2013,10 +2026,14 @@ mod tests {
         graph.register_publisher(test_publisher("pub-1"));
 
         let dep = test_extension("dep-1", "pub-1");
-        graph.register_extension(dep).expect("serde deserialization should succeed");
+        graph
+            .register_extension(dep)
+            .expect("serde deserialization should succeed");
 
         let ext = test_extension_with_deps("ext-1", "pub-1", &["dep-1"]);
-        graph.register_extension(ext).expect("serde deserialization should succeed");
+        graph
+            .register_extension(ext)
+            .expect("serde deserialization should succeed");
 
         let generator = TrustCardGenerator::new();
         let card = generator
@@ -2179,7 +2196,8 @@ mod tests {
     fn generator_config_serde_roundtrip() {
         let config = GeneratorConfig::default();
         let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
-        let restored: GeneratorConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: GeneratorConfig =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, restored);
     }
 
@@ -2229,7 +2247,8 @@ mod tests {
             contribution: 20,
         };
         let json = serde_json::to_string(&driver).expect("serde deserialization should succeed");
-        let back: RiskDriver = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: RiskDriver =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(driver, back);
     }
 
@@ -2243,7 +2262,8 @@ mod tests {
             most_recent_description: Some("behavioral observation".into()),
         };
         let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
-        let back: EvidenceSummary = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: EvidenceSummary =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(summary, back);
     }
 
@@ -2257,7 +2277,8 @@ mod tests {
             most_recent_description: None,
         };
         let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
-        let back: EvidenceSummary = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: EvidenceSummary =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(summary, back);
     }
 
@@ -2270,7 +2291,8 @@ mod tests {
             has_provenance_gap: false,
         };
         let json = serde_json::to_string(&prov).expect("serde deserialization should succeed");
-        let back: ProvenanceSummary = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ProvenanceSummary =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(prov, back);
     }
 
@@ -2284,7 +2306,8 @@ mod tests {
             operator_override: false,
         };
         let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
-        let back: TrustHistoryEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: TrustHistoryEntry =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, back);
     }
 
@@ -2296,7 +2319,8 @@ mod tests {
             rationale: "anomalous behavior detected".into(),
         };
         let json = serde_json::to_string(&rec).expect("serde deserialization should succeed");
-        let back: Recommendation = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: Recommendation =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(rec, back);
     }
 

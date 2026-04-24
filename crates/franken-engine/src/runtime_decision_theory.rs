@@ -1577,7 +1577,8 @@ mod tests {
         assert_eq!(json, format!("\"{THROUGHPUT_PROFILE_LABEL}\""));
         // SAFETY: JSON was just produced by to_string of a valid LaneId,
         // so from_str back to LaneId cannot fail (valid format + matching schema).
-        let back: LaneId = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: LaneId =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(lane, back);
     }
 
@@ -1585,7 +1586,8 @@ mod tests {
     fn lane_id_deserialize_accepts_legacy_lineage_label() {
         // SAFETY: String literal is valid JSON format for LaneId deserialization.
         // from_str only fails on invalid JSON or schema mismatch (both impossible here).
-        let back: LaneId = serde_json::from_str("\"quickjs_inspired_native\"").expect("serde deserialization should succeed");
+        let back: LaneId = serde_json::from_str("\"quickjs_inspired_native\"")
+            .expect("serde deserialization should succeed");
         assert_eq!(back, LaneId::deterministic_profile());
     }
 
@@ -1617,7 +1619,8 @@ mod tests {
             let json = serde_json::to_string(factor).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by to_string of a valid RiskFactor,
             // so from_str back to RiskFactor cannot fail (valid format + matching schema).
-            let back: RiskFactor = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: RiskFactor =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*factor, back);
         }
     }
@@ -1648,7 +1651,8 @@ mod tests {
             let json = serde_json::to_string(label).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by to_string of a valid RegimeLabel,
             // so from_str back to RegimeLabel cannot fail (valid format + matching schema).
-            let back: RegimeLabel = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: RegimeLabel =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*label, back);
         }
     }
@@ -1695,7 +1699,8 @@ mod tests {
             let json = serde_json::to_string(action).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by to_string of a valid LaneAction,
             // so from_str back to LaneAction cannot fail (valid format + matching schema).
-            let back: LaneAction = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: LaneAction =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*action, back);
         }
     }
@@ -1819,7 +1824,8 @@ mod tests {
         let mut cvar = CvarGuardrail::new(CvarConfig::default());
         cvar.observe(42 * MILLION);
         let json = serde_json::to_string(&cvar).expect("serde deserialization should succeed");
-        let back: CvarGuardrail = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: CvarGuardrail =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cvar.observation_count(), back.observation_count());
     }
 
@@ -1906,7 +1912,8 @@ mod tests {
         let mut cal = ConformalCalibrator::new(ConformalConfig::default());
         cal.record(epoch(1), true);
         let json = serde_json::to_string(&cal).expect("serde deserialization should succeed");
-        let back: ConformalCalibrator = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ConformalCalibrator =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cal.total_predictions(), back.total_predictions());
     }
 
@@ -2004,7 +2011,8 @@ mod tests {
         let mut drift = DriftDetector::new(DriftConfig::default());
         drift.observe(42);
         let json = serde_json::to_string(&drift).expect("serde deserialization should succeed");
-        let back: DriftDetector = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DriftDetector =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(drift.observation_count(), back.observation_count());
     }
 
@@ -2183,7 +2191,8 @@ mod tests {
     fn budget_serde_roundtrip() {
         let budget = BudgetController::new(BudgetConfig::default(), epoch(1));
         let json = serde_json::to_string(&budget).expect("serde deserialization should succeed");
-        let back: BudgetController = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: BudgetController =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(
             budget.budget_remaining_millionths(),
             back.budget_remaining_millionths()
@@ -2330,7 +2339,8 @@ mod tests {
         let ctx = DecisionContext::new(config, epoch(1));
         let bundle = ctx.policy_bundle();
         let json = serde_json::to_string(&bundle).expect("serde deserialization should succeed");
-        let back: PolicyBundle = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: PolicyBundle =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(bundle.version, back.version);
         assert_eq!(bundle.lanes.len(), back.lanes.len());
     }
@@ -2363,7 +2373,8 @@ mod tests {
         let state = default_state();
         ctx.decide(&state);
         let json = serde_json::to_string(&ctx).expect("serde deserialization should succeed");
-        let back: DecisionContext = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DecisionContext =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ctx.traces().len(), back.traces().len());
     }
 
@@ -2382,7 +2393,8 @@ mod tests {
             reason: "test".into(),
         };
         let json = serde_json::to_string(&trace).expect("serde deserialization should succeed");
-        let back: DecisionTrace = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DecisionTrace =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(trace, back);
     }
 
@@ -2402,7 +2414,8 @@ mod tests {
             },
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let back: FallbackTriggerEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: FallbackTriggerEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
     }
 
@@ -2410,7 +2423,8 @@ mod tests {
     fn decision_state_serde_roundtrip() {
         let state = default_state();
         let json = serde_json::to_string(&state).expect("serde deserialization should succeed");
-        let back: DecisionState = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DecisionState =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(state, back);
     }
 
@@ -2522,7 +2536,8 @@ mod tests {
             p999_us: 5000,
         };
         let json = serde_json::to_string(&q).expect("serde deserialization should succeed");
-        let back: LatencyQuantiles = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: LatencyQuantiles =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(q, back);
     }
 
@@ -2545,7 +2560,8 @@ mod tests {
             demotion: None,
         };
         let json = serde_json::to_string(&outcome).expect("serde deserialization should succeed");
-        let back: DecisionOutcome = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DecisionOutcome =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(outcome, back);
     }
 
@@ -2634,7 +2650,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: CvarCheckResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: CvarCheckResult =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, v);
         }
     }
@@ -2658,7 +2675,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: DriftCheckResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: DriftCheckResult =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, v);
         }
     }
@@ -2681,7 +2699,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: BudgetStatus = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: BudgetStatus =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, v);
         }
     }
@@ -2697,7 +2716,8 @@ mod tests {
             // SAFETY: to_string cannot fail on derived Serialize enum
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
             // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-            let back: BudgetEventKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: BudgetEventKind =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, v);
         }
     }
@@ -2716,7 +2736,8 @@ mod tests {
             // SAFETY: to_string cannot fail on derived Serialize enum
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
             // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-            let back: DemotionReason = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: DemotionReason =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, v);
         }
         assert_eq!(variants.len(), 6);
@@ -2733,7 +2754,8 @@ mod tests {
         // SAFETY: BudgetEvent derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid BudgetEvent serialization
-        let back: BudgetEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: BudgetEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, event);
     }
 
@@ -2743,7 +2765,8 @@ mod tests {
         // SAFETY: DecisionContextConfig derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid DecisionContextConfig serialization
-        let back: DecisionContextConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DecisionContextConfig =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.lanes.len(), config.lanes.len());
         assert_eq!(back.risk_weights.len(), config.risk_weights.len());
     }
@@ -2784,7 +2807,8 @@ mod tests {
         // SAFETY: CvarConfig derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid CvarConfig serialization
-        let back: CvarConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: CvarConfig =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, back);
     }
 
@@ -2796,7 +2820,8 @@ mod tests {
             max_consecutive_violations: 10,
         };
         let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
-        let back: ConformalConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ConformalConfig =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, back);
     }
 
@@ -2809,7 +2834,8 @@ mod tests {
             min_samples: 15,
         };
         let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
-        let back: DriftConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DriftConfig =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, back);
     }
 
@@ -2822,7 +2848,8 @@ mod tests {
             deterministic_fallback_on_exhaust: false,
         };
         let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
-        let back: BudgetConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: BudgetConfig =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, back);
     }
 
@@ -2892,7 +2919,8 @@ mod tests {
             violation: true,
         };
         let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
-        let back: CalibrationLedgerEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: CalibrationLedgerEntry =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, back);
     }
 
@@ -2912,7 +2940,8 @@ mod tests {
             },
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let back: FallbackTriggerEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: FallbackTriggerEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
     }
 }

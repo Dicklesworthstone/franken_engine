@@ -1113,7 +1113,8 @@ mod tests {
     fn test_claim_kind_serde_roundtrip() {
         for k in HardwareClaimKind::ALL {
             let json = serde_json::to_string(k).expect("serde deserialization should succeed");
-            let back: HardwareClaimKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: HardwareClaimKind =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*k, back);
         }
     }
@@ -1143,7 +1144,8 @@ mod tests {
     fn test_verdict_serde_roundtrip() {
         for v in ClaimVerdict::ALL {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: ClaimVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ClaimVerdict =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -1175,7 +1177,8 @@ mod tests {
     fn test_promotion_serde_roundtrip() {
         for d in PromotionDecision::ALL {
             let json = serde_json::to_string(d).expect("serde deserialization should succeed");
-            let back: PromotionDecision = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: PromotionDecision =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*d, back);
         }
     }
@@ -1205,7 +1208,8 @@ mod tests {
     fn test_degradation_serde_roundtrip() {
         for r in DegradationReason::ALL {
             let json = serde_json::to_string(r).expect("serde deserialization should succeed");
-            let back: DegradationReason = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: DegradationReason =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*r, back);
         }
     }
@@ -1265,7 +1269,8 @@ mod tests {
     fn test_hardware_claim_serde_roundtrip() {
         let c = confirmed_claim();
         let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
-        let back: HardwareClaim = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: HardwareClaim =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c, back);
     }
 
@@ -1448,7 +1453,8 @@ mod tests {
             epoch(),
         );
         let json = serde_json::to_string(&rb).expect("serde deserialization should succeed");
-        let back: RollbackRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: RollbackRecord =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(rb, back);
     }
 
@@ -1482,7 +1488,8 @@ mod tests {
     fn test_gate_config_serde() {
         let config = GateConfig::default();
         let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
-        let back: GateConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GateConfig =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, back);
     }
 
@@ -1614,7 +1621,8 @@ mod tests {
             ContentHash::compute(b"serde-test"),
         );
         let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
-        let back: DecisionReceipt = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DecisionReceipt =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(receipt, back);
     }
 
@@ -1759,7 +1767,8 @@ mod tests {
         let config = GateConfig::default();
         let ev = evaluate(&downgraded_claim(), &config);
         let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
-        let back: ClaimEvidence = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ClaimEvidence =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ev, back);
     }
 }

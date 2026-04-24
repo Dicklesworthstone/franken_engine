@@ -1002,7 +1002,8 @@ mod tests {
     fn test_workload_family_serde_roundtrip() {
         for &f in WorkloadFamily::ALL {
             let json = serde_json::to_string(&f).expect("serde deserialization should succeed");
-            let back: WorkloadFamily = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: WorkloadFamily =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(f, back);
         }
     }
@@ -1045,7 +1046,8 @@ mod tests {
         let v = SaturationVerdict::CherryPicked;
         let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
         assert_eq!(json, "\"cherry_picked\"");
-        let back: SaturationVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SaturationVerdict =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, back);
     }
 
@@ -1081,7 +1083,8 @@ mod tests {
         let v = RepresentativenessLevel::Skewed;
         let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
         assert_eq!(json, "\"skewed\"");
-        let back: RepresentativenessLevel = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: RepresentativenessLevel =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, back);
     }
 
@@ -1118,7 +1121,8 @@ mod tests {
             GateDecision::InsufficientEvidence,
         ] {
             let json = serde_json::to_string(d).expect("serde deserialization should succeed");
-            let back: GateDecision = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: GateDecision =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*d, back);
         }
     }

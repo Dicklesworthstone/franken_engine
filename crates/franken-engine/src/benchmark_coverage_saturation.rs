@@ -1374,7 +1374,9 @@ mod tests {
                     complexity,
                     &["tag_a", "tag_b", &format!("tag_{i}")],
                 );
-                board.add_entry(entry).expect("serde deserialization should succeed");
+                board
+                    .add_entry(entry)
+                    .expect("serde deserialization should succeed");
             }
         }
         board
@@ -1454,7 +1456,8 @@ mod tests {
     fn workload_family_serde_roundtrip() {
         for f in WorkloadFamily::ALL {
             let json = serde_json::to_string(f).expect("serde deserialization should succeed");
-            let back: WorkloadFamily = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: WorkloadFamily =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*f, back);
         }
     }
@@ -1509,7 +1512,8 @@ mod tests {
     fn coverage_status_serde_roundtrip() {
         for s in CoverageStatus::ALL {
             let json = serde_json::to_string(s).expect("serde deserialization should succeed");
-            let back: CoverageStatus = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: CoverageStatus =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*s, back);
         }
     }
@@ -1534,7 +1538,8 @@ mod tests {
     fn representativeness_metric_serde_roundtrip() {
         for m in RepresentativenessMetric::ALL {
             let json = serde_json::to_string(m).expect("serde deserialization should succeed");
-            let back: RepresentativenessMetric = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: RepresentativenessMetric =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*m, back);
         }
     }
@@ -1647,7 +1652,8 @@ mod tests {
             &["ffi", "handle"],
         );
         let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
-        let back: BenchmarkEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: BenchmarkEntry =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, back);
     }
 
@@ -1786,7 +1792,8 @@ mod tests {
     fn config_serde_roundtrip() {
         let config = default_config();
         let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
-        let back: SaturationConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SaturationConfig =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, back);
     }
 
@@ -1828,7 +1835,8 @@ mod tests {
     fn verdict_serde_roundtrip() {
         for v in SaturationVerdict::ALL {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: SaturationVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: SaturationVerdict =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -1880,9 +1888,15 @@ mod tests {
         let e1 = make_entry("bh_1", WorkloadFamily::BranchHeavy, 100);
         let e2 = make_entry("bh_2", WorkloadFamily::BranchHeavy, 200);
         let e3 = make_entry("vec_1", WorkloadFamily::Vectorizable, 300);
-        board.add_entry(e1).expect("serde deserialization should succeed");
-        board.add_entry(e2).expect("serde deserialization should succeed");
-        board.add_entry(e3).expect("serde deserialization should succeed");
+        board
+            .add_entry(e1)
+            .expect("serde deserialization should succeed");
+        board
+            .add_entry(e2)
+            .expect("serde deserialization should succeed");
+        board
+            .add_entry(e3)
+            .expect("serde deserialization should succeed");
         assert_eq!(
             board.entries_for_family(WorkloadFamily::BranchHeavy).len(),
             2
@@ -1919,7 +1933,9 @@ mod tests {
                 WorkloadFamily::BranchHeavy,
                 (i + 1) * 100,
             );
-            board.add_entry(entry).expect("serde deserialization should succeed");
+            board
+                .add_entry(entry)
+                .expect("serde deserialization should succeed");
         }
         let config = default_config();
         let report = board.evaluate(&config);
@@ -1949,14 +1965,18 @@ mod tests {
             for i in 0..3 {
                 let name = format!("{}_{}", family.as_str(), i);
                 let entry = make_entry_with_tags(&name, *family, (i + 1) * 100, &["a", "b"]);
-                board.add_entry(entry).expect("serde deserialization should succeed");
+                board
+                    .add_entry(entry)
+                    .expect("serde deserialization should succeed");
             }
         }
         // Add only 1 entry to remaining families (sparse).
         for family in &WorkloadFamily::ALL[8..] {
             let name = format!("{}_sparse", family.as_str());
             let entry = make_entry(&name, *family, 50);
-            board.add_entry(entry).expect("serde deserialization should succeed");
+            board
+                .add_entry(entry)
+                .expect("serde deserialization should succeed");
         }
         let config = default_config();
         let report = board.evaluate(&config);
@@ -1972,7 +1992,9 @@ mod tests {
                 let name = format!("{}_{}", family.as_str(), i);
                 // Same complexity = no spread, so saturation will be lower.
                 let entry = make_entry_with_tags(&name, *family, 100, &["tag_a", "tag_b"]);
-                board.add_entry(entry).expect("serde deserialization should succeed");
+                board
+                    .add_entry(entry)
+                    .expect("serde deserialization should succeed");
             }
         }
         let mut config = default_config();
@@ -2061,7 +2083,9 @@ mod tests {
     fn report_uncovered_families_listed() {
         let mut board = SaturationBoard::new();
         let entry = make_entry("only_one", WorkloadFamily::BranchHeavy, 100);
-        board.add_entry(entry).expect("serde deserialization should succeed");
+        board
+            .add_entry(entry)
+            .expect("serde deserialization should succeed");
         let config = default_config();
         let report = board.evaluate(&config);
         // Should have 11 uncovered families.
@@ -2156,7 +2180,9 @@ mod tests {
     fn report_blocking_family_count() {
         let mut board = SaturationBoard::new();
         let entry = make_entry("only", WorkloadFamily::BranchHeavy, 100);
-        board.add_entry(entry).expect("serde deserialization should succeed");
+        board
+            .add_entry(entry)
+            .expect("serde deserialization should succeed");
         let config = default_config();
         let report = board.evaluate(&config);
         // 11 uncovered + the 1 sparse = some blocking families.
@@ -2310,11 +2336,15 @@ mod tests {
                 (i + 1) * 50,
                 &["mem", "gc", &format!("tag_{i}")],
             );
-            board.add_entry(entry).expect("serde deserialization should succeed");
+            board
+                .add_entry(entry)
+                .expect("serde deserialization should succeed");
         }
         let config = default_config();
         let coverages = board.compute_family_coverages(&config);
-        let rb = coverages.get(&WorkloadFamily::ResourceBounded).expect("serde deserialization should succeed");
+        let rb = coverages
+            .get(&WorkloadFamily::ResourceBounded)
+            .expect("serde deserialization should succeed");
         assert_eq!(rb.entry_count, 10);
         assert_eq!(rb.total_complexity, 2750); // sum of 50..500 step 50.
         assert_eq!(rb.min_complexity, 50);

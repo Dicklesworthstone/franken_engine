@@ -809,7 +809,9 @@ impl SpecializationRollbackGate {
         let record = RollbackRecord::new(record_id, self.epoch, envelope_id, reason, timestamp_ns);
         self.rollback_history.push(record);
         // SAFETY: We just pushed a record, so rollback_history is non-empty and last() returns Some
-        self.rollback_history.last().expect("serde deserialization should succeed")
+        self.rollback_history
+            .last()
+            .expect("serde deserialization should succeed")
     }
 
     /// Reset rollback counter.
@@ -1010,7 +1012,8 @@ mod tests {
         let json = serde_json::to_string(&k).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid SpecializationKind,
         // so from_str back to SpecializationKind cannot fail (valid format + matching schema).
-        let back: SpecializationKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SpecializationKind =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(k, back);
     }
 
@@ -1070,7 +1073,8 @@ mod tests {
         let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid BlockingReason,
         // so from_str back to BlockingReason cannot fail (valid format + matching schema).
-        let back: BlockingReason = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: BlockingReason =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 
@@ -1194,7 +1198,8 @@ mod tests {
         let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid GateConfig,
         // so from_str back to GateConfig cannot fail (valid format + matching schema).
-        let back: GateConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GateConfig =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c, back);
     }
 
@@ -1235,7 +1240,9 @@ mod tests {
         let v = g.evaluate("r-002", &ev, 100_000_000);
         assert_eq!(v, GateVerdict::Denied);
         // SAFETY: last_receipt() returns Some after evaluate() call in controlled test environment.
-        let receipt = g.last_receipt().expect("serde deserialization should succeed");
+        let receipt = g
+            .last_receipt()
+            .expect("serde deserialization should succeed");
         assert!(
             receipt
                 .blocking_reasons
@@ -1251,7 +1258,9 @@ mod tests {
         let v = g.evaluate("r-003", &ev, 100_000_000);
         assert_eq!(v, GateVerdict::Denied);
         // SAFETY: last_receipt() returns Some after evaluate() call in controlled test environment.
-        let receipt = g.last_receipt().expect("serde deserialization should succeed");
+        let receipt = g
+            .last_receipt()
+            .expect("serde deserialization should succeed");
         assert!(
             receipt
                 .blocking_reasons
@@ -1285,7 +1294,9 @@ mod tests {
         let v = g.evaluate("r-006", &ev, 100_000_000);
         assert_eq!(v, GateVerdict::Denied);
         // SAFETY: last_receipt() returns Some after evaluate() call in controlled test environment.
-        let receipt = g.last_receipt().expect("serde deserialization should succeed");
+        let receipt = g
+            .last_receipt()
+            .expect("serde deserialization should succeed");
         assert!(
             receipt
                 .blocking_reasons
@@ -1427,7 +1438,9 @@ mod tests {
         let ev = good_evidence();
         g.evaluate("r-001", &ev, 100_000_000);
         // SAFETY: last_receipt() returns Some after evaluate() call in controlled test environment.
-        let receipt = g.last_receipt().expect("serde deserialization should succeed");
+        let receipt = g
+            .last_receipt()
+            .expect("serde deserialization should succeed");
         assert!(receipt.blocking_reasons.is_empty());
         assert_eq!(receipt.verdict, GateVerdict::Approved);
     }
@@ -1438,7 +1451,9 @@ mod tests {
         let ev = bad_tail_evidence();
         g.evaluate("r-001", &ev, 100_000_000);
         // SAFETY: last_receipt() returns Some after evaluate() call in controlled test environment.
-        let receipt = g.last_receipt().expect("serde deserialization should succeed");
+        let receipt = g
+            .last_receipt()
+            .expect("serde deserialization should succeed");
         assert!(!receipt.blocking_reasons.is_empty());
     }
 
@@ -1451,8 +1466,12 @@ mod tests {
         g2.evaluate("r-001", &ev, 100_000_000);
         // SAFETY: last_receipt() returns Some after evaluate() calls in controlled test environment.
         assert_eq!(
-            g1.last_receipt().expect("serde deserialization should succeed").content_hash,
-            g2.last_receipt().expect("serde deserialization should succeed").content_hash,
+            g1.last_receipt()
+                .expect("serde deserialization should succeed")
+                .content_hash,
+            g2.last_receipt()
+                .expect("serde deserialization should succeed")
+                .content_hash,
         );
     }
 
@@ -1470,7 +1489,8 @@ mod tests {
         let json = serde_json::to_string(&g).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid SpecializationRollbackGate,
         // so from_str back to SpecializationRollbackGate cannot fail (valid format + matching schema).
-        let back: SpecializationRollbackGate = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SpecializationRollbackGate =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.evaluation_count(), 1);
     }
 

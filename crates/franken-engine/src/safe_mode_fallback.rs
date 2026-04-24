@@ -1402,7 +1402,8 @@ mod tests {
             FailureType::CancellationDeadlock,
         ] {
             let json = serde_json::to_string(&ft).expect("serde deserialization should succeed");
-            let parsed: FailureType = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let parsed: FailureType =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(ft, parsed);
         }
     }
@@ -1465,8 +1466,10 @@ mod tests {
             },
         ];
         for action in actions {
-            let json = serde_json::to_string(&action).expect("serde deserialization should succeed");
-            let parsed: SafeModeAction = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&action).expect("serde deserialization should succeed");
+            let parsed: SafeModeAction =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(action, parsed);
         }
     }
@@ -1485,7 +1488,8 @@ mod tests {
             error_code: Some("cx_corrupted".to_string()),
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let parsed: SafeModeEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let parsed: SafeModeEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, parsed);
     }
 
@@ -1558,7 +1562,8 @@ mod tests {
             sequence: 0,
         });
         let json = serde_json::to_string(&rb).expect("serde deserialization should succeed");
-        let parsed: EvidenceRingBuffer = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let parsed: EvidenceRingBuffer =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(parsed.len(), 1);
         assert_eq!(parsed.total_written(), 1);
     }
@@ -2122,8 +2127,10 @@ mod tests {
             SafeModeStatus::Active,
             SafeModeStatus::Recovering,
         ] {
-            let json = serde_json::to_string(&status).expect("serde deserialization should succeed");
-            let parsed: SafeModeStatus = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&status).expect("serde deserialization should succeed");
+            let parsed: SafeModeStatus =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(status, parsed);
         }
     }
@@ -2140,7 +2147,8 @@ mod tests {
             sequence: 42,
         };
         let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
-        let parsed: RingBufferEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let parsed: RingBufferEntry =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, parsed);
     }
 
@@ -2178,7 +2186,9 @@ mod tests {
         mgr.handle_evidence_ledger_full("t1", "full");
         mgr.handle_adapter_unavailable("t2", "gone");
         // Adapter unavailable blocks everything, not just high-impact
-        let reason = mgr.check_action_blocked(false).expect("serde deserialization should succeed");
+        let reason = mgr
+            .check_action_blocked(false)
+            .expect("serde deserialization should succeed");
         assert!(reason.contains("adapter unavailable"));
     }
 
@@ -2464,7 +2474,8 @@ mod tests {
             AttestationHealth::EvidenceUnavailable,
         ] {
             let json = serde_json::to_string(&h).expect("serde deserialization should succeed");
-            let parsed: AttestationHealth = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let parsed: AttestationHealth =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(h, parsed);
         }
     }
@@ -2492,7 +2503,8 @@ mod tests {
             ActionTier::LowImpact,
         ] {
             let json = serde_json::to_string(&tier).expect("serde deserialization should succeed");
-            let parsed: ActionTier = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let parsed: ActionTier =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(tier, parsed);
         }
     }
@@ -2577,8 +2589,10 @@ mod tests {
             AutonomousAction::EvidenceCollection,
             AutonomousAction::MetricsEmission,
         ] {
-            let json = serde_json::to_string(&action).expect("serde deserialization should succeed");
-            let parsed: AutonomousAction = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&action).expect("serde deserialization should succeed");
+            let parsed: AutonomousAction =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(action, parsed);
         }
     }
@@ -2609,7 +2623,8 @@ mod tests {
     fn attestation_action_request_serde_roundtrip() {
         let req = attestation_request(AutonomousAction::Terminate, 42);
         let json = serde_json::to_string(&req).expect("serde deserialization should succeed");
-        let parsed: AttestationActionRequest = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let parsed: AttestationActionRequest =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(req, parsed);
     }
 
@@ -2638,7 +2653,8 @@ mod tests {
             AttestationFallbackState::Restoring,
         ] {
             let json = serde_json::to_string(&state).expect("serde deserialization should succeed");
-            let parsed: AttestationFallbackState = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let parsed: AttestationFallbackState =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(state, parsed);
         }
     }
@@ -2657,7 +2673,8 @@ mod tests {
     fn attestation_fallback_config_serde_roundtrip() {
         let config = AttestationFallbackConfig::default();
         let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
-        let parsed: AttestationFallbackConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let parsed: AttestationFallbackConfig =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, parsed);
     }
 
@@ -2690,7 +2707,9 @@ mod tests {
     fn low_impact_always_allowed_when_healthy() {
         let mut mgr = AttestationFallbackManager::with_default_signing_key(Default::default());
         let req = attestation_request(AutonomousAction::MetricsEmission, 100);
-        let decision = mgr.evaluate_action(req, AttestationHealth::Valid).expect("serde deserialization should succeed");
+        let decision = mgr
+            .evaluate_action(req, AttestationHealth::Valid)
+            .expect("serde deserialization should succeed");
         assert!(matches!(
             decision,
             AttestationFallbackDecision::Execute { ref attestation_status, warning: None }
@@ -2718,7 +2737,9 @@ mod tests {
     fn standard_action_healthy_passes_without_warning() {
         let mut mgr = AttestationFallbackManager::with_default_signing_key(Default::default());
         let req = attestation_request(AutonomousAction::RoutineMonitoring, 100);
-        let decision = mgr.evaluate_action(req, AttestationHealth::Valid).expect("serde deserialization should succeed");
+        let decision = mgr
+            .evaluate_action(req, AttestationHealth::Valid)
+            .expect("serde deserialization should succeed");
         assert!(matches!(
             decision,
             AttestationFallbackDecision::Execute { ref attestation_status, warning: None }
@@ -2740,7 +2761,11 @@ mod tests {
             } => {
                 assert_eq!(attestation_status, "degraded");
                 assert!(warning.is_some());
-                assert!(warning.expect("serde deserialization should succeed").contains("expired"));
+                assert!(
+                    warning
+                        .expect("serde deserialization should succeed")
+                        .contains("expired")
+                );
             }
             other => panic!("expected Execute, got {other:?}"),
         }
@@ -2752,7 +2777,9 @@ mod tests {
     fn high_impact_healthy_normal_executes() {
         let mut mgr = AttestationFallbackManager::with_default_signing_key(Default::default());
         let req = attestation_request(AutonomousAction::Quarantine, 100);
-        let decision = mgr.evaluate_action(req, AttestationHealth::Valid).expect("serde deserialization should succeed");
+        let decision = mgr
+            .evaluate_action(req, AttestationHealth::Valid)
+            .expect("serde deserialization should succeed");
         assert!(matches!(
             decision,
             AttestationFallbackDecision::Execute { ref attestation_status, warning: None }
@@ -2823,7 +2850,8 @@ mod tests {
 
         // Restore (healthy again, with a high-impact request)
         let req2 = attestation_request(AutonomousAction::Quarantine, 200);
-        mgr.evaluate_action(req2, AttestationHealth::Valid).expect("serde deserialization should succeed");
+        mgr.evaluate_action(req2, AttestationHealth::Valid)
+            .expect("serde deserialization should succeed");
         assert_eq!(mgr.state(), AttestationFallbackState::Normal);
     }
 
@@ -2839,7 +2867,8 @@ mod tests {
 
         // Degraded → Restoring → Normal (two transitions)
         let req2 = attestation_request(AutonomousAction::MetricsEmission, 200);
-        mgr.evaluate_action(req2, AttestationHealth::Valid).expect("serde deserialization should succeed");
+        mgr.evaluate_action(req2, AttestationHealth::Valid)
+            .expect("serde deserialization should succeed");
         // Normal→Degraded (1) + Degraded→Restoring (2) + Restoring→Normal (3) = 3
         assert_eq!(mgr.transition_receipts().len(), 3);
     }
@@ -2870,7 +2899,8 @@ mod tests {
 
         // Restore
         let req2 = attestation_request(AutonomousAction::MetricsEmission, 200);
-        mgr.evaluate_action(req2, AttestationHealth::Valid).expect("serde deserialization should succeed");
+        mgr.evaluate_action(req2, AttestationHealth::Valid)
+            .expect("serde deserialization should succeed");
 
         assert!(mgr.pending_decisions().is_empty());
         let backlog = mgr.take_recovery_backlog();
@@ -2938,7 +2968,8 @@ mod tests {
 
         // Recover
         let req3 = attestation_request(AutonomousAction::MetricsEmission, 300);
-        mgr.evaluate_action(req3, AttestationHealth::Valid).expect("serde deserialization should succeed");
+        mgr.evaluate_action(req3, AttestationHealth::Valid)
+            .expect("serde deserialization should succeed");
         assert!(!mgr.operator_review_required());
     }
 
@@ -2968,7 +2999,8 @@ mod tests {
     fn attestation_fallback_emits_structured_events() {
         let mut mgr = AttestationFallbackManager::with_default_signing_key(Default::default());
         let req = attestation_request(AutonomousAction::MetricsEmission, 100);
-        mgr.evaluate_action(req, AttestationHealth::Valid).expect("serde deserialization should succeed");
+        mgr.evaluate_action(req, AttestationHealth::Valid)
+            .expect("serde deserialization should succeed");
 
         assert!(!mgr.events().is_empty());
         let event = &mgr.events()[0];
@@ -2990,7 +3022,8 @@ mod tests {
             detail: "detail".to_string(),
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let parsed: AttestationFallbackEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let parsed: AttestationFallbackEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, parsed);
     }
 
@@ -3008,7 +3041,8 @@ mod tests {
             status: "attestation-pending".to_string(),
         };
         let json = serde_json::to_string(&queued).expect("serde deserialization should succeed");
-        let parsed: QueuedAttestationDecision = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let parsed: QueuedAttestationDecision =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(queued, parsed);
     }
 
@@ -3021,7 +3055,8 @@ mod tests {
             warning: Some("test warning".to_string()),
         };
         let json = serde_json::to_string(&decision).expect("serde deserialization should succeed");
-        let parsed: AttestationFallbackDecision = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let parsed: AttestationFallbackDecision =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(decision, parsed);
     }
 
@@ -3035,7 +3070,8 @@ mod tests {
             sandbox_required: false,
         };
         let json = serde_json::to_string(&decision).expect("serde deserialization should succeed");
-        let parsed: AttestationFallbackDecision = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let parsed: AttestationFallbackDecision =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(decision, parsed);
     }
 
@@ -3050,9 +3086,12 @@ mod tests {
 
         let receipt = &mgr.transition_receipts()[0];
         let json = serde_json::to_string(receipt).expect("serde deserialization should succeed");
-        let parsed: AttestationTransitionReceipt = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let parsed: AttestationTransitionReceipt =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(receipt, &parsed);
-        parsed.verify().expect("serde deserialization should succeed");
+        parsed
+            .verify()
+            .expect("serde deserialization should succeed");
     }
 
     // -- attestation_health_from_verdict --
@@ -3215,7 +3254,9 @@ mod tests {
 
         // 1. Normal: high-impact passes
         let req1 = attestation_request(AutonomousAction::Quarantine, 100);
-        let d1 = mgr.evaluate_action(req1, AttestationHealth::Valid).expect("serde deserialization should succeed");
+        let d1 = mgr
+            .evaluate_action(req1, AttestationHealth::Valid)
+            .expect("serde deserialization should succeed");
         assert!(matches!(d1, AttestationFallbackDecision::Execute { .. }));
         assert_eq!(mgr.state(), AttestationFallbackState::Normal);
 
@@ -3248,7 +3289,8 @@ mod tests {
 
         // 5. Recovery: restoring → normal
         let req5 = attestation_request(AutonomousAction::MetricsEmission, 800);
-        mgr.evaluate_action(req5, AttestationHealth::Valid).expect("serde deserialization should succeed");
+        mgr.evaluate_action(req5, AttestationHealth::Valid)
+            .expect("serde deserialization should succeed");
         assert_eq!(mgr.state(), AttestationFallbackState::Normal);
         assert!(!mgr.operator_review_required());
 

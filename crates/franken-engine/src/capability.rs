@@ -641,7 +641,8 @@ mod tests {
     fn capability_profile_serialization_round_trip() {
         let full = CapabilityProfile::full();
         let json = serde_json::to_string(&full).expect("serde deserialization should succeed");
-        let restored: CapabilityProfile = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: CapabilityProfile =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(full, restored);
     }
 
@@ -655,8 +656,10 @@ mod tests {
             CapabilityProfile::compute_only(),
         ];
         for profile in &profiles {
-            let json1 = serde_json::to_string(profile).expect("serde deserialization should succeed");
-            let json2 = serde_json::to_string(profile).expect("serde deserialization should succeed");
+            let json1 =
+                serde_json::to_string(profile).expect("serde deserialization should succeed");
+            let json2 =
+                serde_json::to_string(profile).expect("serde deserialization should succeed");
             assert_eq!(
                 json1, json2,
                 "non-deterministic serialization for {}",
@@ -689,7 +692,8 @@ mod tests {
         ];
         for cap in &all {
             let json = serde_json::to_string(cap).expect("serde deserialization should succeed");
-            let restored: RuntimeCapability = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: RuntimeCapability =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*cap, restored);
         }
     }
@@ -705,7 +709,8 @@ mod tests {
         ];
         for kind in &all {
             let json = serde_json::to_string(kind).expect("serde deserialization should succeed");
-            let restored: ProfileKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: ProfileKind =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*kind, restored);
         }
     }
@@ -746,7 +751,8 @@ mod tests {
             component: "test".to_string(),
         };
         let json = serde_json::to_string(&denied).expect("serde deserialization should succeed");
-        let restored: CapabilityDenied = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: CapabilityDenied =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(denied, restored);
     }
 
@@ -908,7 +914,8 @@ mod tests {
             component: "fs-writer".to_string(),
         };
         let json = serde_json::to_string(&denied).expect("serde deserialization should succeed");
-        let back: CapabilityDenied = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: CapabilityDenied =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.required, RuntimeCapability::FsWrite);
         assert_eq!(back.held_profile, ProfileKind::Remote);
         assert_eq!(back.component, "fs-writer");
@@ -1184,7 +1191,8 @@ mod tests {
         ];
         for p in &profiles {
             let json = serde_json::to_string(p).expect("serde deserialization should succeed");
-            let restored: CapabilityProfile = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: CapabilityProfile =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*p, restored, "serde roundtrip failed for {}", p.kind);
         }
     }
@@ -1507,7 +1515,8 @@ mod tests {
             component: "gc-manager".to_string(),
         };
         let json = serde_json::to_string(&denied).expect("serde deserialization should succeed");
-        let back: CapabilityDenied = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: CapabilityDenied =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(denied, back);
     }
 

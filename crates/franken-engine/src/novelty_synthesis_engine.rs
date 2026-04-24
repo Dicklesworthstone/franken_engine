@@ -1294,7 +1294,8 @@ mod tests {
     fn test_strategy_serde_roundtrip() {
         for s in SynthesisStrategy::ALL {
             let json = serde_json::to_string(s).expect("serde deserialization should succeed");
-            let back: SynthesisStrategy = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: SynthesisStrategy =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*s, back);
         }
     }
@@ -1347,7 +1348,8 @@ mod tests {
     fn test_kind_serde_roundtrip() {
         for k in ProgramKind::ALL {
             let json = serde_json::to_string(k).expect("serde deserialization should succeed");
-            let back: ProgramKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ProgramKind =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*k, back);
         }
     }
@@ -1385,7 +1387,8 @@ mod tests {
     fn test_denial_reason_serde_roundtrip() {
         for r in SynthesisDenialReason::ALL {
             let json = serde_json::to_string(r).expect("serde deserialization should succeed");
-            let back: SynthesisDenialReason = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: SynthesisDenialReason =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*r, back);
         }
     }
@@ -1476,7 +1479,8 @@ mod tests {
         ];
         for e in &errors {
             let json = serde_json::to_string(e).expect("serde deserialization should succeed");
-            let back: SynthesisError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: SynthesisError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*e, back);
         }
     }
@@ -1541,7 +1545,11 @@ mod tests {
         c.forbid_pattern("document.write");
 
         assert!(c.contains_forbidden("let x = eval('1')").is_some());
-        assert_eq!(c.contains_forbidden("let x = eval('1')").expect("serde deserialization should succeed"), "eval(");
+        assert_eq!(
+            c.contains_forbidden("let x = eval('1')")
+                .expect("serde deserialization should succeed"),
+            "eval("
+        );
         assert!(c.contains_forbidden("let x = 1 + 2").is_none());
     }
 
@@ -1564,7 +1572,8 @@ mod tests {
         c.require_feature("import");
         c.forbid_pattern("eval");
         let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
-        let back: SynthesisConstraint = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SynthesisConstraint =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c, back);
     }
 
@@ -1800,7 +1809,8 @@ mod tests {
     fn test_candidate_serde() {
         let c = make_candidate("c1", ProgramKind::PlainJs, SynthesisStrategy::GrammarGuided);
         let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
-        let back: SynthesizedCandidate = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SynthesizedCandidate =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c, back);
     }
 
@@ -1844,7 +1854,8 @@ mod tests {
 
     #[test]
     fn test_build_batch_empty() {
-        let batch = build_batch(test_epoch(), Vec::new()).expect("serde deserialization should succeed");
+        let batch =
+            build_batch(test_epoch(), Vec::new()).expect("serde deserialization should succeed");
         assert!(batch.is_empty());
         assert_eq!(batch.candidate_count(), 0);
         assert_eq!(batch.total_novelty_millionths, 0);
@@ -1854,7 +1865,8 @@ mod tests {
     #[test]
     fn test_build_batch_single() {
         let c = make_candidate("c1", ProgramKind::PlainJs, SynthesisStrategy::GrammarGuided);
-        let batch = build_batch(test_epoch(), vec![c.clone()]).expect("serde deserialization should succeed");
+        let batch = build_batch(test_epoch(), vec![c.clone()])
+            .expect("serde deserialization should succeed");
         assert_eq!(batch.candidate_count(), 1);
         assert_eq!(batch.total_novelty_millionths, 500_000);
         assert_eq!(
@@ -1875,7 +1887,8 @@ mod tests {
             SynthesisStrategy::MutationBased,
         );
         let c3 = make_candidate("c3", ProgramKind::PlainJs, SynthesisStrategy::GrammarGuided);
-        let batch = build_batch(test_epoch(), vec![c1, c2, c3]).expect("serde deserialization should succeed");
+        let batch = build_batch(test_epoch(), vec![c1, c2, c3])
+            .expect("serde deserialization should succeed");
         assert_eq!(batch.candidate_count(), 3);
         assert_eq!(
             *batch
@@ -1920,30 +1933,36 @@ mod tests {
     fn test_batch_average_novelty() {
         let c1 = make_candidate_with_novelty("c1", 600_000);
         let c2 = make_candidate_with_novelty("c2", 400_000);
-        let batch = build_batch(test_epoch(), vec![c1, c2]).expect("serde deserialization should succeed");
+        let batch =
+            build_batch(test_epoch(), vec![c1, c2]).expect("serde deserialization should succeed");
         assert_eq!(batch.average_novelty_millionths(), 500_000);
     }
 
     #[test]
     fn test_batch_average_novelty_empty() {
-        let batch = build_batch(test_epoch(), Vec::new()).expect("serde deserialization should succeed");
+        let batch =
+            build_batch(test_epoch(), Vec::new()).expect("serde deserialization should succeed");
         assert_eq!(batch.average_novelty_millionths(), 0);
     }
 
     #[test]
     fn test_batch_content_hash_deterministic() {
         let c1 = make_candidate("c1", ProgramKind::PlainJs, SynthesisStrategy::GrammarGuided);
-        let batch1 = build_batch(test_epoch(), vec![c1.clone()]).expect("serde deserialization should succeed");
-        let batch2 = build_batch(test_epoch(), vec![c1]).expect("serde deserialization should succeed");
+        let batch1 = build_batch(test_epoch(), vec![c1.clone()])
+            .expect("serde deserialization should succeed");
+        let batch2 =
+            build_batch(test_epoch(), vec![c1]).expect("serde deserialization should succeed");
         assert_eq!(batch1.content_hash(), batch2.content_hash());
     }
 
     #[test]
     fn test_batch_serde() {
         let c = make_candidate("c1", ProgramKind::PlainJs, SynthesisStrategy::GrammarGuided);
-        let batch = build_batch(test_epoch(), vec![c]).expect("serde deserialization should succeed");
+        let batch =
+            build_batch(test_epoch(), vec![c]).expect("serde deserialization should succeed");
         let json = serde_json::to_string(&batch).expect("serde deserialization should succeed");
-        let back: SynthesisBatch = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SynthesisBatch =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(batch, back);
     }
 
@@ -2074,7 +2093,8 @@ mod tests {
     fn test_receipt_all_accepted() {
         let c1 = make_candidate_with_novelty("c1", 500_000);
         let c2 = make_candidate_with_novelty("c2", 400_000);
-        let batch = build_batch(test_epoch(), vec![c1, c2]).expect("serde deserialization should succeed");
+        let batch =
+            build_batch(test_epoch(), vec![c1, c2]).expect("serde deserialization should succeed");
         let receipt = build_receipt(&batch, 2);
         assert_eq!(receipt.candidates_proposed, 2);
         assert_eq!(receipt.candidates_accepted, 2);
@@ -2086,7 +2106,8 @@ mod tests {
     #[test]
     fn test_receipt_none_accepted() {
         let c1 = make_candidate_with_novelty("c1", 500_000);
-        let batch = build_batch(test_epoch(), vec![c1]).expect("serde deserialization should succeed");
+        let batch =
+            build_batch(test_epoch(), vec![c1]).expect("serde deserialization should succeed");
         let receipt = build_receipt(&batch, 0);
         assert_eq!(receipt.candidates_accepted, 0);
         assert!(receipt.none_accepted());
@@ -2098,7 +2119,8 @@ mod tests {
     fn test_receipt_partial_accepted() {
         let c1 = make_candidate_with_novelty("c1", 600_000);
         let c2 = make_candidate_with_novelty("c2", 400_000);
-        let batch = build_batch(test_epoch(), vec![c1, c2]).expect("serde deserialization should succeed");
+        let batch =
+            build_batch(test_epoch(), vec![c1, c2]).expect("serde deserialization should succeed");
         let receipt = build_receipt(&batch, 1);
         assert_eq!(receipt.candidates_proposed, 2);
         assert_eq!(receipt.candidates_accepted, 1);
@@ -2109,7 +2131,8 @@ mod tests {
     #[test]
     fn test_receipt_clamps_accepted_to_proposed() {
         let c1 = make_candidate_with_novelty("c1", 500_000);
-        let batch = build_batch(test_epoch(), vec![c1]).expect("serde deserialization should succeed");
+        let batch =
+            build_batch(test_epoch(), vec![c1]).expect("serde deserialization should succeed");
         let receipt = build_receipt(&batch, 100); // way more than proposed
         assert_eq!(receipt.candidates_accepted, 1); // clamped
     }
@@ -2117,7 +2140,8 @@ mod tests {
     #[test]
     fn test_receipt_content_hash_deterministic() {
         let c1 = make_candidate_with_novelty("c1", 500_000);
-        let batch = build_batch(test_epoch(), vec![c1]).expect("serde deserialization should succeed");
+        let batch =
+            build_batch(test_epoch(), vec![c1]).expect("serde deserialization should succeed");
         let r1 = build_receipt(&batch, 1);
         let r2 = build_receipt(&batch, 1);
         assert_eq!(r1.content_hash, r2.content_hash);
@@ -2126,17 +2150,20 @@ mod tests {
     #[test]
     fn test_receipt_serde() {
         let c1 = make_candidate_with_novelty("c1", 500_000);
-        let batch = build_batch(test_epoch(), vec![c1]).expect("serde deserialization should succeed");
+        let batch =
+            build_batch(test_epoch(), vec![c1]).expect("serde deserialization should succeed");
         let receipt = build_receipt(&batch, 1);
         let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
-        let back: SynthesisReceipt = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SynthesisReceipt =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(receipt, back);
     }
 
     #[test]
     fn test_receipt_batch_id_matches() {
         let c1 = make_candidate_with_novelty("c1", 500_000);
-        let batch = build_batch(test_epoch(), vec![c1]).expect("serde deserialization should succeed");
+        let batch =
+            build_batch(test_epoch(), vec![c1]).expect("serde deserialization should succeed");
         let receipt = build_receipt(&batch, 1);
         assert_eq!(receipt.batch_id, batch.batch_id);
     }
@@ -2258,7 +2285,8 @@ mod tests {
         let total = accepted.len() + denied.len();
         assert!(total > 0);
 
-        let batch = build_batch(test_epoch(), accepted.clone()).expect("serde deserialization should succeed");
+        let batch = build_batch(test_epoch(), accepted.clone())
+            .expect("serde deserialization should succeed");
         let receipt = build_receipt(&batch, accepted.len() as u64);
         assert_eq!(receipt.candidates_proposed, accepted.len() as u64);
         assert_eq!(receipt.candidates_accepted, accepted.len() as u64);

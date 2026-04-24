@@ -1558,7 +1558,8 @@ mod tests {
         assert_eq!(json, format!("\"{THROUGHPUT_PROFILE_LABEL}\""));
         // SAFETY: JSON was just produced by to_string of a valid LaneId,
         // so from_str back to LaneId cannot fail (valid format + matching schema).
-        let back: LaneId = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: LaneId =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(lane, back);
     }
 
@@ -1566,7 +1567,8 @@ mod tests {
     fn lane_id_deserialize_accepts_legacy_lineage_labels() {
         // SAFETY: String literal is valid JSON format for LaneId deserialization.
         // from_str only fails on invalid JSON or schema mismatch (both impossible here).
-        let back: LaneId = serde_json::from_str("\"v8_inspired_native\"").expect("serde deserialization should succeed");
+        let back: LaneId = serde_json::from_str("\"v8_inspired_native\"")
+            .expect("serde deserialization should succeed");
         assert_eq!(back, LaneId::v8_native());
         assert_eq!(back.to_string(), THROUGHPUT_PROFILE_LABEL);
     }
@@ -1616,7 +1618,8 @@ mod tests {
         let json = serde_json::to_string(&action).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid RoutingAction,
         // so from_str back to RoutingAction cannot fail (valid format + matching schema).
-        let back: RoutingAction = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: RoutingAction =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(action, back);
     }
 
@@ -1735,7 +1738,8 @@ mod tests {
     fn loss_policy_serde_roundtrip() {
         let policy = default_routing_loss_policy();
         let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
-        let back: AsymmetricLossPolicy = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: AsymmetricLossPolicy =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(policy, back);
     }
 
@@ -1806,7 +1810,8 @@ mod tests {
         cvar.observe(1_000);
         cvar.observe(2_000);
         let json = serde_json::to_string(&cvar).expect("serde deserialization should succeed");
-        let back: CVaRConstraint = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: CVaRConstraint =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cvar.samples, back.samples);
     }
 
@@ -1860,7 +1865,8 @@ mod tests {
         let mut cal = ConformalCalibrationLayer::new("test", 950_000);
         cal.observe(100_000, true);
         let json = serde_json::to_string(&cal).expect("serde deserialization should succeed");
-        let back: ConformalCalibrationLayer = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ConformalCalibrationLayer =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cal.total_count, back.total_count);
     }
 
@@ -2006,7 +2012,8 @@ mod tests {
     fn budget_serde_roundtrip() {
         let budget = AdaptiveBudget::new("test", epoch(1));
         let json = serde_json::to_string(&budget).expect("serde deserialization should succeed");
-        let back: AdaptiveBudget = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: AdaptiveBudget =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(budget.budget_id, back.budget_id);
     }
 
@@ -2030,7 +2037,9 @@ mod tests {
     fn core_normal_decision() {
         let mut core = make_core();
         let input = make_input(1_000, RegimeEstimate::Normal, 800_000, false, 1);
-        let output = core.decide(&input).expect("serde deserialization should succeed");
+        let output = core
+            .decide(&input)
+            .expect("serde deserialization should succeed");
         assert!(!output.fallback_triggered);
         assert_eq!(core.decision_count(), 1);
     }
@@ -2039,7 +2048,8 @@ mod tests {
     fn core_epoch_regression_rejected() {
         let mut core = make_core();
         let input1 = make_input(1_000, RegimeEstimate::Normal, 800_000, false, 5);
-        core.decide(&input1).expect("serde deserialization should succeed");
+        core.decide(&input1)
+            .expect("serde deserialization should succeed");
         let input2 = make_input(1_000, RegimeEstimate::Normal, 800_000, false, 3);
         let result = core.decide(&input2);
         assert!(result.is_err());
@@ -2049,7 +2059,9 @@ mod tests {
     fn core_attack_regime_triggers_fallback() {
         let mut core = make_core();
         let input = make_input(1_000, RegimeEstimate::Attack, 800_000, false, 1);
-        let output = core.decide(&input).expect("serde deserialization should succeed");
+        let output = core
+            .decide(&input)
+            .expect("serde deserialization should succeed");
         assert!(output.fallback_triggered);
         assert!(matches!(
             output.fallback_reason,
@@ -2061,7 +2073,9 @@ mod tests {
     fn core_degraded_regime_triggers_fallback() {
         let mut core = make_core();
         let input = make_input(1_000, RegimeEstimate::Degraded, 800_000, false, 1);
-        let output = core.decide(&input).expect("serde deserialization should succeed");
+        let output = core
+            .decide(&input)
+            .expect("serde deserialization should succeed");
         assert!(output.fallback_triggered);
     }
 
@@ -2069,7 +2083,9 @@ mod tests {
     fn core_low_confidence_triggers_fallback() {
         let mut core = make_core();
         let input = make_input(1_000, RegimeEstimate::Normal, 100_000, false, 1);
-        let output = core.decide(&input).expect("serde deserialization should succeed");
+        let output = core
+            .decide(&input)
+            .expect("serde deserialization should succeed");
         assert!(output.fallback_triggered);
         assert!(matches!(
             output.fallback_reason,
@@ -2082,13 +2098,16 @@ mod tests {
         let mut core = make_core();
         // First consume most of budget.
         let input1 = make_input(1_000, RegimeEstimate::Normal, 800_000, false, 1);
-        core.decide(&input1).expect("serde deserialization should succeed");
+        core.decide(&input1)
+            .expect("serde deserialization should succeed");
 
         // Force budget exhaustion.
         core.budget.record(100, 0);
 
         let input2 = make_input(1_000, RegimeEstimate::Normal, 800_000, false, 2);
-        let output = core.decide(&input2).expect("serde deserialization should succeed");
+        let output = core
+            .decide(&input2)
+            .expect("serde deserialization should succeed");
         assert!(output.fallback_triggered);
         assert!(matches!(
             output.fallback_reason,
@@ -2110,7 +2129,9 @@ mod tests {
         }
 
         let input = make_input(50_000, RegimeEstimate::Normal, 800_000, false, 1);
-        let output = core.decide(&input).expect("serde deserialization should succeed");
+        let output = core
+            .decide(&input)
+            .expect("serde deserialization should succeed");
         assert!(output.fallback_triggered);
         assert!(matches!(
             output.fallback_reason,
@@ -2125,7 +2146,9 @@ mod tests {
 
         for i in 0..3 {
             let input = make_input(1_000, RegimeEstimate::Normal, 800_000, true, i + 1);
-            let output = core.decide(&input).expect("serde deserialization should succeed");
+            let output = core
+                .decide(&input)
+                .expect("serde deserialization should succeed");
             if i < 2 {
                 assert!(!output.fallback_triggered, "should not trigger at step {i}");
             } else {
@@ -2143,7 +2166,8 @@ mod tests {
         let mut core = make_core();
         for i in 0..5 {
             let input = make_input(1_000, RegimeEstimate::Normal, 800_000, false, i + 1);
-            core.decide(&input).expect("serde deserialization should succeed");
+            core.decide(&input)
+                .expect("serde deserialization should succeed");
         }
         assert_eq!(core.trace.len(), 5);
     }
@@ -2153,7 +2177,8 @@ mod tests {
         let mut core = make_core();
         for i in 0..5 {
             let input = make_input(1_000, RegimeEstimate::Normal, 800_000, false, i + 1);
-            core.decide(&input).expect("serde deserialization should succeed");
+            core.decide(&input)
+                .expect("serde deserialization should succeed");
         }
         assert_eq!(core.calibration_ledger.len(), 5);
     }
@@ -2162,7 +2187,8 @@ mod tests {
     fn core_fallback_events_recorded() {
         let mut core = make_core();
         let input = make_input(1_000, RegimeEstimate::Attack, 800_000, false, 1);
-        core.decide(&input).expect("serde deserialization should succeed");
+        core.decide(&input)
+            .expect("serde deserialization should succeed");
         assert_eq!(core.fallback_events.len(), 1);
         assert_eq!(core.fallback_events[0].regime, RegimeEstimate::Attack);
     }
@@ -2189,9 +2215,11 @@ mod tests {
     fn core_serde_roundtrip() {
         let mut core = make_core();
         let input = make_input(1_000, RegimeEstimate::Normal, 800_000, false, 1);
-        core.decide(&input).expect("serde deserialization should succeed");
+        core.decide(&input)
+            .expect("serde deserialization should succeed");
         let json = serde_json::to_string(&core).expect("serde deserialization should succeed");
-        let back: RuntimeDecisionCore = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: RuntimeDecisionCore =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(core.decision_seq, back.decision_seq);
     }
 
@@ -2202,7 +2230,9 @@ mod tests {
         core.budget.compute_budget_ms = 10_000;
         for i in 1..=10 {
             let input = make_input(1_000, RegimeEstimate::Normal, 800_000, false, i);
-            let output = core.decide(&input).expect("serde deserialization should succeed");
+            let output = core
+                .decide(&input)
+                .expect("serde deserialization should succeed");
             assert!(!output.fallback_triggered);
         }
         assert_eq!(core.decision_count(), 10);
@@ -2214,17 +2244,23 @@ mod tests {
 
         // Normal phase.
         let input = make_input(1_000, RegimeEstimate::Normal, 800_000, false, 1);
-        let out = core.decide(&input).expect("serde deserialization should succeed");
+        let out = core
+            .decide(&input)
+            .expect("serde deserialization should succeed");
         assert!(!out.fallback_triggered);
 
         // Attack phase: triggers fallback.
         let input = make_input(1_000, RegimeEstimate::Attack, 800_000, false, 2);
-        let out = core.decide(&input).expect("serde deserialization should succeed");
+        let out = core
+            .decide(&input)
+            .expect("serde deserialization should succeed");
         assert!(out.fallback_triggered);
 
         // Recovery phase: no mandatory demotion.
         let input = make_input(1_000, RegimeEstimate::Recovery, 800_000, false, 3);
-        let out = core.decide(&input).expect("serde deserialization should succeed");
+        let out = core
+            .decide(&input)
+            .expect("serde deserialization should succeed");
         assert!(!out.fallback_triggered);
     }
 
@@ -2233,7 +2269,8 @@ mod tests {
         let core = make_core();
         let bundle = core.export_policy_bundle(999);
         let json = serde_json::to_string(&bundle).expect("serde deserialization should succeed");
-        let back: PolicyBundle = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: PolicyBundle =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(bundle.bundle_id, back.bundle_id);
     }
 
@@ -2287,7 +2324,8 @@ mod tests {
             timestamp_ns: 1_000_000,
         };
         let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
-        let back: DecisionTraceEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DecisionTraceEntry =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry.seq, back.seq);
     }
 
@@ -2304,7 +2342,8 @@ mod tests {
             timestamp_ns: 100,
         };
         let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
-        let back: CalibrationLedgerEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: CalibrationLedgerEntry =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(
             entry.empirical_coverage_millionths,
             back.empirical_coverage_millionths
@@ -2327,7 +2366,8 @@ mod tests {
             timestamp_ns: 100,
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let back: FallbackTriggerEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: FallbackTriggerEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event.seq, back.seq);
     }
 
@@ -2385,7 +2425,8 @@ mod tests {
     fn risk_dimension_serde_roundtrip() {
         for v in &RiskDimension::ALL {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: RiskDimension = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: RiskDimension =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -2401,7 +2442,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: RegimeEstimate = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: RegimeEstimate =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -2452,7 +2494,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: FallbackReason = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: FallbackReason =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -2471,7 +2514,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: DecisionCoreError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: DecisionCoreError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -2560,7 +2604,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: FallbackReason = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: FallbackReason =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -2624,7 +2669,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: RoutingAction = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: RoutingAction =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -2633,7 +2679,8 @@ mod tests {
     fn lane_routing_state_serde_roundtrip() {
         let state = LaneRoutingState::initial(LaneId::quickjs_native(), epoch(1));
         let json = serde_json::to_string(&state).expect("serde deserialization should succeed");
-        let back: LaneRoutingState = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: LaneRoutingState =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(state, back);
     }
 
@@ -2653,7 +2700,8 @@ mod tests {
             decision_seq: 0,
         };
         let json = serde_json::to_string(&output).expect("serde deserialization should succeed");
-        let back: RoutingDecisionOutput = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: RoutingDecisionOutput =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(output, back);
     }
 
@@ -2661,7 +2709,8 @@ mod tests {
     fn demotion_policy_serde_roundtrip() {
         let policy = DemotionPolicy::new("test-demotion");
         let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
-        let back: DemotionPolicy = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DemotionPolicy =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(policy, back);
     }
 
@@ -2674,7 +2723,8 @@ mod tests {
             sample_count: 100,
         };
         let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
-        let back: CVaRResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: CVaRResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, back);
     }
 
@@ -2704,11 +2754,13 @@ mod tests {
         assert!(!core.is_fallback_active());
         // Attack triggers fallback.
         let input = make_input(1_000, RegimeEstimate::Attack, 800_000, false, 1);
-        core.decide(&input).expect("serde deserialization should succeed");
+        core.decide(&input)
+            .expect("serde deserialization should succeed");
         assert!(core.is_fallback_active());
         // Recovery returns to normal.
         let input2 = make_input(1_000, RegimeEstimate::Recovery, 800_000, false, 2);
-        core.decide(&input2).expect("serde deserialization should succeed");
+        core.decide(&input2)
+            .expect("serde deserialization should succeed");
         assert!(!core.is_fallback_active());
     }
 
@@ -2720,7 +2772,8 @@ mod tests {
             loss_millionths: 400_000,
         };
         let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
-        let back: LossPolicyEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: LossPolicyEntry =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, back);
     }
 }

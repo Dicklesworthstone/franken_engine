@@ -1141,7 +1141,8 @@ mod tests {
         }];
         let report = build_report(SecurityEpoch::from_raw(1), "rc-1", evals);
         let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
-        let parsed: OracleReleaseGateReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let parsed: OracleReleaseGateReport =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report, parsed);
     }
 
@@ -1152,7 +1153,8 @@ mod tests {
         let report = build_report(SecurityEpoch::from_raw(1), "rc-1", evals);
         let bundle = build_triage_bundle(&report, &conditions);
         let json = serde_json::to_string(&bundle).expect("serde deserialization should succeed");
-        let parsed: TriageBundle = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let parsed: TriageBundle =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(bundle, parsed);
     }
 
@@ -1248,7 +1250,8 @@ mod tests {
     fn oracle_kind_serde_roundtrip() {
         for kind in OracleKind::all() {
             let json = serde_json::to_string(kind).expect("serde deserialization should succeed");
-            let parsed: OracleKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let parsed: OracleKind =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*kind, parsed);
         }
     }
@@ -1273,7 +1276,8 @@ mod tests {
             ThresholdDirection::Exactly,
         ] {
             let json = serde_json::to_string(&dir).expect("serde deserialization should succeed");
-            let parsed: ThresholdDirection = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let parsed: ThresholdDirection =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(dir, parsed);
         }
     }
@@ -1341,7 +1345,8 @@ mod tests {
             GateVerdict::Inconclusive,
         ] {
             let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
-            let restored: GateVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: GateVerdict =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(restored, v);
         }
     }
@@ -1628,7 +1633,8 @@ mod tests {
         let report = build_report(SecurityEpoch::from_raw(1), "rc-1", vec![]);
         let event = build_gate_event("t-1", "d-1", &report);
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let parsed: OracleReleaseGateEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let parsed: OracleReleaseGateEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, parsed);
     }
 
@@ -1648,7 +1654,8 @@ mod tests {
             bead_ref: Some("bd-test".to_string()),
         };
         let json = serde_json::to_string(&condition).expect("serde deserialization should succeed");
-        let parsed: OracleGateCondition = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let parsed: OracleGateCondition =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(condition, parsed);
     }
 
@@ -1660,7 +1667,8 @@ mod tests {
             TriageSeverity::Info,
         ] {
             let json = serde_json::to_string(&sev).expect("serde deserialization should succeed");
-            let parsed: TriageSeverity = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let parsed: TriageSeverity =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(sev, parsed);
         }
     }
@@ -1680,7 +1688,12 @@ mod tests {
             .into_iter()
             .find(|c| c.oracle_kind == OracleKind::Metric);
         assert!(metric.is_some());
-        assert!(!metric.expect("serde deserialization should succeed").threshold.is_hard_blocker);
+        assert!(
+            !metric
+                .expect("serde deserialization should succeed")
+                .threshold
+                .is_hard_blocker
+        );
     }
 
     #[test]

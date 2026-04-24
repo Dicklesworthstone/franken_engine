@@ -1362,7 +1362,8 @@ mod tests {
         let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid LaneWorkloadMetrics,
         // so from_str back to LaneWorkloadMetrics cannot fail (valid format + matching schema).
-        let back: LaneWorkloadMetrics = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: LaneWorkloadMetrics =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(m, back);
     }
 
@@ -1374,7 +1375,8 @@ mod tests {
         let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid ProofAttributionSample,
         // so from_str back to ProofAttributionSample cannot fail (valid format + matching schema).
-        let back: ProofAttributionSample = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ProofAttributionSample =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(s, back);
     }
 
@@ -1396,7 +1398,8 @@ mod tests {
         let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid ConstrainedAmbientEvent,
         // so from_str back to ConstrainedAmbientEvent cannot fail (valid format + matching schema).
-        let back: ConstrainedAmbientEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ConstrainedAmbientEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(e, back);
     }
 
@@ -1408,7 +1411,8 @@ mod tests {
         let json = serde_json::to_string(&decision).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid ConstrainedAmbientBenchmarkDecision,
         // so from_str back to ConstrainedAmbientBenchmarkDecision cannot fail (valid format + matching schema).
-        let back: ConstrainedAmbientBenchmarkDecision = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ConstrainedAmbientBenchmarkDecision =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(decision, back);
     }
 
@@ -1425,7 +1429,8 @@ mod tests {
             allocation_improvement_millionths: 600,
         };
         let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
-        let back: WorkloadDeltaReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: WorkloadDeltaReport =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 
@@ -1439,7 +1444,8 @@ mod tests {
             supports_uplift: true,
         };
         let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
-        let back: ProofAttributionReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ProofAttributionReport =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 
@@ -1453,7 +1459,8 @@ mod tests {
             mean_memory_improvement_millionths: 100_000,
         };
         let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
-        let back: ConstrainedAmbientSummary = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ConstrainedAmbientSummary =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(s, back);
     }
 
@@ -1674,7 +1681,8 @@ mod tests {
     fn decision_serde_roundtrip() {
         let dec = run_constrained_ambient_benchmark_lane(&valid_request());
         let json = serde_json::to_string(&dec).expect("serde deserialization should succeed");
-        let back: ConstrainedAmbientBenchmarkDecision = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ConstrainedAmbientBenchmarkDecision =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(dec, back);
     }
 
@@ -1692,7 +1700,8 @@ mod tests {
             proof_id: None,
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let back: ConstrainedAmbientEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ConstrainedAmbientEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
     }
 
@@ -1867,7 +1876,8 @@ mod tests {
             "constrained_latency_p95_ns": 500,
             "without_proof_latency_p95_ns": 1000
         }"#;
-        let sample: ProofAttributionSample = serde_json::from_str(json).expect("serde deserialization should succeed");
+        let sample: ProofAttributionSample =
+            serde_json::from_str(json).expect("serde deserialization should succeed");
         assert_eq!(sample.optimization_class, "unspecified");
         assert_eq!(sample.validated_optimization_class, "unspecified");
         assert_eq!(sample.validity_epoch, None);

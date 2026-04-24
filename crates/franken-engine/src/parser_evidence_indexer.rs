@@ -661,7 +661,8 @@ mod tests {
 
     #[test]
     fn schema_version_parse_ok() {
-        let tag = SchemaVersionTag::parse("franken-engine.parser-log-event.v12").expect("serde deserialization should succeed");
+        let tag = SchemaVersionTag::parse("franken-engine.parser-log-event.v12")
+            .expect("serde deserialization should succeed");
         assert_eq!(tag.family, "franken-engine.parser-log-event");
         assert_eq!(tag.major, 12);
     }
@@ -741,7 +742,9 @@ mod tests {
             let events = format!(
                 "{{\"schema_version\":\"franken-engine.parser-log-event.v1\",\"trace_id\":\"trace-{run_id}\",\"decision_id\":\"decision-{run_id}\",\"policy_id\":\"policy\",\"component\":\"parser_equivalence\",\"event\":\"drift_detected\",\"outcome\":\"fail\",\"error_code\":\"FE-PARSER-DRIFT\",\"replay_command\":\"replay-{run_id}\",\"scenario_id\":\"fixture-1\"}}"
             );
-            builder.add_events_jsonl(run_id, &events).expect("serde deserialization should succeed");
+            builder
+                .add_events_jsonl(run_id, &events)
+                .expect("serde deserialization should succeed");
         }
 
         let index = builder.build();
@@ -887,9 +890,11 @@ mod tests {
 
     #[test]
     fn schema_version_tag_serde_round_trip() {
-        let tag = SchemaVersionTag::parse("franken-engine.parser-log-event.v5").expect("serde deserialization should succeed");
+        let tag = SchemaVersionTag::parse("franken-engine.parser-log-event.v5")
+            .expect("serde deserialization should succeed");
         let json = serde_json::to_string(&tag).expect("serde deserialization should succeed");
-        let back: SchemaVersionTag = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SchemaVersionTag =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(tag, back);
     }
 
@@ -1030,7 +1035,8 @@ mod tests {
             "run_id": "run-1",
             "replay_command": "replay-cmd"
         });
-        let r = ParserRunArtifactRef::from_manifest_value(&val, "m", "e", "c").expect("serde deserialization should succeed");
+        let r = ParserRunArtifactRef::from_manifest_value(&val, "m", "e", "c")
+            .expect("serde deserialization should succeed");
         assert!(r.generated_at_utc.is_none());
         assert!(r.outcome.is_none());
     }
@@ -1044,7 +1050,8 @@ mod tests {
             "generated_at_utc": null,
             "outcome": null
         });
-        let r = ParserRunArtifactRef::from_manifest_value(&val, "m", "e", "c").expect("serde deserialization should succeed");
+        let r = ParserRunArtifactRef::from_manifest_value(&val, "m", "e", "c")
+            .expect("serde deserialization should succeed");
         assert!(r.generated_at_utc.is_none());
         assert!(r.outcome.is_none());
     }
@@ -1061,7 +1068,8 @@ mod tests {
             "outcome": "pass",
             "fixture_id": "fix-42"
         });
-        let event = IndexedParserEvent::from_value("run-1", 0, &val).expect("serde deserialization should succeed");
+        let event = IndexedParserEvent::from_value("run-1", 0, &val)
+            .expect("serde deserialization should succeed");
         assert_eq!(event.scenario_id.as_deref(), Some("fix-42"));
     }
 
@@ -1078,7 +1086,8 @@ mod tests {
             "scenario_id": "scen-1",
             "fixture_id": "fix-42"
         });
-        let event = IndexedParserEvent::from_value("run-1", 0, &val).expect("serde deserialization should succeed");
+        let event = IndexedParserEvent::from_value("run-1", 0, &val)
+            .expect("serde deserialization should succeed");
         assert_eq!(event.scenario_id.as_deref(), Some("scen-1"));
     }
 
@@ -1119,7 +1128,9 @@ mod tests {
             let events = format!(
                 "{{\"schema_version\":\"fam.event.v1\",\"trace_id\":\"t-{run_id}\",\"decision_id\":\"d\",\"policy_id\":\"p\",\"component\":\"gate\",\"event\":\"check\",\"outcome\":\"pass\"}}"
             );
-            builder.add_events_jsonl(run_id, &events).expect("serde deserialization should succeed");
+            builder
+                .add_events_jsonl(run_id, &events)
+                .expect("serde deserialization should succeed");
         }
         let index = builder.build();
         assert!(index.correlate_regressions().is_empty());
@@ -1217,7 +1228,9 @@ mod tests {
             )
             .expect("serde deserialization should succeed");
         let mut index = builder.build();
-        let receipts = index.migrate_event_schemas("fam.event.v2", &[]).expect("serde deserialization should succeed");
+        let receipts = index
+            .migrate_event_schemas("fam.event.v2", &[])
+            .expect("serde deserialization should succeed");
         assert!(receipts.is_empty());
     }
 
@@ -1251,7 +1264,9 @@ mod tests {
             },
         ];
         let mut index = builder.build();
-        let receipts = index.migrate_event_schemas("fam.event.v3", &steps).expect("serde deserialization should succeed");
+        let receipts = index
+            .migrate_event_schemas("fam.event.v3", &steps)
+            .expect("serde deserialization should succeed");
         assert_eq!(receipts.len(), 2);
         assert_eq!(receipts[0].migration_id, "mig-1-2");
         assert_eq!(receipts[1].migration_id, "mig-2-3");
@@ -1512,7 +1527,8 @@ mod tests {
             schema_migrations: vec![],
         };
         let json = serde_json::to_string(&index).expect("serde deserialization should succeed");
-        let back: ParserEvidenceIndex = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ParserEvidenceIndex =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(index, back);
     }
 
@@ -1534,7 +1550,8 @@ mod tests {
             severity: "high".to_string(),
         };
         let json = serde_json::to_string(&cr).expect("serde deserialization should succeed");
-        let back: CorrelatedRegression = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: CorrelatedRegression =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cr, back);
     }
 
@@ -1547,7 +1564,8 @@ mod tests {
             affected_records: 42,
         };
         let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
-        let back: AppliedSchemaMigration = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: AppliedSchemaMigration =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(m, back);
     }
 
@@ -1602,7 +1620,8 @@ mod tests {
             outcome: "fail".into(),
         };
         let json = serde_json::to_string(&key).expect("serde deserialization should succeed");
-        let back: CorrelationKey = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: CorrelationKey =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(key, back);
     }
 
@@ -1615,7 +1634,8 @@ mod tests {
             to_schema: "parser_event.v2".into(),
         };
         let json = serde_json::to_string(&boundary).expect("serde deserialization should succeed");
-        let back: SchemaMigrationBoundary = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SchemaMigrationBoundary =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(boundary, back);
     }
 
@@ -1627,7 +1647,8 @@ mod tests {
             to_schema: "parser_event.v2".into(),
         };
         let json = serde_json::to_string(&step).expect("serde deserialization should succeed");
-        let back: SchemaMigrationStep = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SchemaMigrationStep =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(step, back);
     }
 
@@ -1648,7 +1669,8 @@ mod tests {
             scenario_id: None,
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let back: IndexedParserEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: IndexedParserEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
     }
 
@@ -1665,7 +1687,8 @@ mod tests {
             outcome: Some("pass".into()),
         };
         let json = serde_json::to_string(&artifact).expect("serde deserialization should succeed");
-        let back: ParserRunArtifactRef = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ParserRunArtifactRef =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(artifact, back);
     }
 
@@ -1692,7 +1715,8 @@ mod tests {
             outcome: "ok".into(),
         };
         let json = serde_json::to_string(&key).expect("serde deserialization should succeed");
-        let back: CorrelationKey = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: CorrelationKey =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(key, back);
     }
 
@@ -1935,7 +1959,8 @@ mod tests {
 
     #[test]
     fn enrichment_schema_version_parse_large_major() {
-        let tag = SchemaVersionTag::parse("franken-engine.v999999").expect("serde deserialization should succeed");
+        let tag = SchemaVersionTag::parse("franken-engine.v999999")
+            .expect("serde deserialization should succeed");
         assert_eq!(tag.family, "franken-engine");
         assert_eq!(tag.major, 999_999);
     }
@@ -2008,8 +2033,10 @@ mod tests {
                 to_schema: "fam.event.v2".into(),
             }],
         };
-        let json = serde_json::to_string_pretty(&index).expect("serde deserialization should succeed");
-        let back: ParserEvidenceIndex = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json =
+            serde_json::to_string_pretty(&index).expect("serde deserialization should succeed");
+        let back: ParserEvidenceIndex =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(index, back);
     }
 
@@ -2074,7 +2101,8 @@ mod tests {
 
     #[test]
     fn enrichment_resolve_migration_path_same_from_to() {
-        let result = resolve_migration_path("fam.event.v3", "fam.event.v3", &[]).expect("serde deserialization should succeed");
+        let result = resolve_migration_path("fam.event.v3", "fam.event.v3", &[])
+            .expect("serde deserialization should succeed");
         assert!(result.is_empty());
     }
 
@@ -2098,13 +2126,17 @@ mod tests {
             let ev_check = format!(
                 "{{\"schema_version\":\"fam.event.v1\",\"trace_id\":\"tc-{run_id}\",\"decision_id\":\"dc-{run_id}\",\"policy_id\":\"p\",\"component\":\"gate\",\"event\":\"check\",\"outcome\":\"fail\"}}"
             );
-            builder.add_events_jsonl(run_id, &ev_check).expect("serde deserialization should succeed");
+            builder
+                .add_events_jsonl(run_id, &ev_check)
+                .expect("serde deserialization should succeed");
         }
         for run_id in ["run-a", "run-b"] {
             let ev_drift = format!(
                 "{{\"schema_version\":\"fam.event.v1\",\"trace_id\":\"td-{run_id}\",\"decision_id\":\"dd-{run_id}\",\"policy_id\":\"p\",\"component\":\"gate\",\"event\":\"drift\",\"outcome\":\"fail\"}}"
             );
-            builder.add_events_jsonl(run_id, &ev_drift).expect("serde deserialization should succeed");
+            builder
+                .add_events_jsonl(run_id, &ev_drift)
+                .expect("serde deserialization should succeed");
         }
         // Extra drift for run-a
         builder.add_events_jsonl(
@@ -2137,7 +2169,9 @@ mod tests {
             let ev = format!(
                 "{{\"schema_version\":\"fam.event.v1\",\"trace_id\":\"t-{run_id}\",\"decision_id\":\"d-{run_id}\",\"policy_id\":\"p\",\"component\":\"gate\",\"event\":\"fail_check\",\"outcome\":\"fail\",\"replay_command\":\"replay-cmd-{run_id}\"}}"
             );
-            builder.add_events_jsonl(run_id, &ev).expect("serde deserialization should succeed");
+            builder
+                .add_events_jsonl(run_id, &ev)
+                .expect("serde deserialization should succeed");
         }
         let index = builder.build();
         let clusters = index.correlate_regressions();
@@ -2171,7 +2205,9 @@ mod tests {
             let ev = format!(
                 "{{\"schema_version\":\"fam.event.v1\",\"trace_id\":\"t-{run_id}\",\"decision_id\":\"d-{run_id}\",\"policy_id\":\"p\",\"component\":\"gate\",\"event\":\"warn_check\",\"outcome\":\"warn\",\"error_code\":\"E-WARN\"}}"
             );
-            builder.add_events_jsonl(run_id, &ev).expect("serde deserialization should succeed");
+            builder
+                .add_events_jsonl(run_id, &ev)
+                .expect("serde deserialization should succeed");
         }
         let index = builder.build();
         let clusters = index.correlate_regressions();
@@ -2283,7 +2319,9 @@ mod tests {
             },
         ];
         let mut index = builder.build();
-        let receipts = index.migrate_event_schemas("fam.event.v3", &steps).expect("serde deserialization should succeed");
+        let receipts = index
+            .migrate_event_schemas("fam.event.v3", &steps)
+            .expect("serde deserialization should succeed");
 
         // Both migration steps should be applied
         assert_eq!(receipts.len(), 2);

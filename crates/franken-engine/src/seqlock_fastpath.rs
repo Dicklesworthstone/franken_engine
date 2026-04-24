@@ -411,7 +411,8 @@ mod tests {
         // SAFETY: Test-only unwrap for serde serialization of known valid struct
         let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
         // SAFETY: Test-only unwrap for serde deserialization of valid JSON roundtrip
-        let back: RetryBudgetPolicy = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: RetryBudgetPolicy =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(policy, back);
     }
 
@@ -428,9 +429,11 @@ mod tests {
     fn fast_path_read_source_serde_round_trip() {
         for source in [FastPathReadSource::FastPath, FastPathReadSource::Fallback] {
             // SAFETY: Test-only unwrap for serde serialization of known valid enum variants
-            let json = serde_json::to_string(&source).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&source).expect("serde deserialization should succeed");
             // SAFETY: Test-only unwrap for serde deserialization of valid JSON roundtrip
-            let back: FastPathReadSource = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: FastPathReadSource =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(source, back);
         }
     }
@@ -444,10 +447,12 @@ mod tests {
         ] {
             // SAFETY: FastPathFallbackReason derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json = serde_json::to_string(&reason).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&reason).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by to_string of a valid FastPathFallbackReason,
             // so from_str back to FastPathFallbackReason cannot fail (valid format + matching schema).
-            let back: FastPathFallbackReason = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: FastPathFallbackReason =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(reason, back);
         }
     }
@@ -468,7 +473,8 @@ mod tests {
         let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid FastPathReadResult,
         // so from_str back to FastPathReadResult cannot fail (valid format + matching schema).
-        let back: FastPathReadResult<u64> = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: FastPathReadResult<u64> =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, back);
     }
 
@@ -490,7 +496,8 @@ mod tests {
         // SAFETY: FastPathTelemetry derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&telemetry).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid FastPathTelemetry serialization
-        let back: FastPathTelemetry = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: FastPathTelemetry =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(telemetry, back);
     }
 
@@ -686,7 +693,10 @@ mod tests {
 
         // SAFETY: Thread handles are from test-spawned threads that should complete without panic.
         // This test controls the thread lifetime and only joins after worker completion.
-        let total_fast: u64 = handles.into_iter().map(|h| h.join().expect("serde deserialization should succeed")).sum();
+        let total_fast: u64 = handles
+            .into_iter()
+            .map(|h| h.join().expect("serde deserialization should succeed"))
+            .sum();
         // With no concurrent writer, all reads should be fast-path.
         assert_eq!(total_fast, 200);
         let telemetry = fast_path.telemetry();
@@ -974,7 +984,10 @@ mod tests {
 
         // SAFETY: Thread handles are from test-spawned threads that should complete without panic.
         // This test controls the thread lifetime and only joins after worker completion.
-        let successes: Vec<bool> = handles.into_iter().map(|h| h.join().expect("serde deserialization should succeed")).collect();
+        let successes: Vec<bool> = handles
+            .into_iter()
+            .map(|h| h.join().expect("serde deserialization should succeed"))
+            .collect();
         // Exactly one thread should succeed.
         assert_eq!(successes.iter().filter(|&&s| s).count(), 1);
         assert!(fast_path.is_initialized());

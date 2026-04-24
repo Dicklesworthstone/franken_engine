@@ -2414,7 +2414,8 @@ mod tests {
         // SAFETY: to_string cannot fail on derived Serialize enum
         let json = serde_json::to_string(&method).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let back: StdlibMethod = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: StdlibMethod =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, method);
     }
 
@@ -2424,7 +2425,8 @@ mod tests {
         // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let back: DispatchDecision = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DispatchDecision =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, d);
     }
 
@@ -2434,7 +2436,8 @@ mod tests {
         // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&trace).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let back: DispatchTrace = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DispatchTrace =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.decisions.len(), trace.decisions.len());
         assert_eq!(back.total_cost_millionths, trace.total_cost_millionths);
     }
@@ -2445,7 +2448,8 @@ mod tests {
         // SAFETY: to_string cannot fail on derived Serialize enum
         let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let back: StdlibDispatchError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: StdlibDispatchError =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, e);
     }
 
@@ -2577,7 +2581,8 @@ mod tests {
         // SAFETY: to_string cannot fail on derived Serialize enum
         let json = serde_json::to_string(&profile).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let back: CallbackArityProfile = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: CallbackArityProfile =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, profile);
     }
 
@@ -2639,7 +2644,8 @@ mod tests {
         // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&inv).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let back: CallbackInvocation = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: CallbackInvocation =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, inv);
     }
 
@@ -2807,7 +2813,8 @@ mod tests {
         // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&exec).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let back: DispatchExecution = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DispatchExecution =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(
             back.total_actual_cost_millionths,
             exec.total_actual_cost_millionths
@@ -2974,7 +2981,8 @@ mod tests {
         // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&chain).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let back: DispatchChain = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DispatchChain =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.len(), chain.len());
         assert_eq!(
             back.combined_cost_millionths,
@@ -3103,7 +3111,8 @@ mod tests {
         // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let back: DispatchRegressionReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DispatchRegressionReport =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.strategy_changes, report.strategy_changes);
         assert_eq!(back.is_regression, report.is_regression);
     }
@@ -3174,7 +3183,8 @@ mod tests {
         // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&matrix).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let back: MethodCoverageMatrix = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: MethodCoverageMatrix =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.exercised.len(), matrix.exercised.len());
     }
 
@@ -3248,7 +3258,12 @@ mod tests {
         );
         assert!(result.is_ok());
         // SAFETY: result verified to be Ok above
-        assert_eq!(result.expect("serde deserialization should succeed").strategy, DispatchStrategy::FallbackSlow);
+        assert_eq!(
+            result
+                .expect("serde deserialization should succeed")
+                .strategy,
+            DispatchStrategy::FallbackSlow
+        );
     }
 
     #[test]

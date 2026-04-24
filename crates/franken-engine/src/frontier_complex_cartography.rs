@@ -1292,7 +1292,8 @@ mod tests {
         ];
         for dim in &dims {
             let json = serde_json::to_string(dim).expect("serde deserialization should succeed");
-            let back: SimplexDimension = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: SimplexDimension =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*dim, back);
         }
     }
@@ -1373,7 +1374,8 @@ mod tests {
     fn test_simplex_serde_roundtrip() {
         let s = make_edge("e01", "x", "y", 500_000);
         let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
-        let back: Simplex = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: Simplex =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(s, back);
     }
 
@@ -1452,7 +1454,8 @@ mod tests {
 
     #[test]
     fn test_frontier_complex_count_at_dimension() {
-        let complex = build_complex(standard_complex_simplices()).expect("serde deserialization should succeed");
+        let complex = build_complex(standard_complex_simplices())
+            .expect("serde deserialization should succeed");
         assert_eq!(complex.count_at_dimension(0), 4);
         assert_eq!(complex.count_at_dimension(1), 3);
         assert_eq!(complex.count_at_dimension(2), 1);
@@ -1461,23 +1464,29 @@ mod tests {
 
     #[test]
     fn test_frontier_complex_filtration_range() {
-        let complex = build_complex(standard_complex_simplices()).expect("serde deserialization should succeed");
-        let (min, max) = complex.filtration_range().expect("serde deserialization should succeed");
+        let complex = build_complex(standard_complex_simplices())
+            .expect("serde deserialization should succeed");
+        let (min, max) = complex
+            .filtration_range()
+            .expect("serde deserialization should succeed");
         assert_eq!(min, 0);
         assert_eq!(max, 600_000);
     }
 
     #[test]
     fn test_frontier_complex_serde_roundtrip() {
-        let complex = build_complex(standard_complex_simplices()).expect("serde deserialization should succeed");
+        let complex = build_complex(standard_complex_simplices())
+            .expect("serde deserialization should succeed");
         let json = serde_json::to_string(&complex).expect("serde deserialization should succeed");
-        let back: FrontierComplex = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: FrontierComplex =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(complex, back);
     }
 
     #[test]
     fn test_frontier_complex_display() {
-        let complex = build_complex(standard_complex_simplices()).expect("serde deserialization should succeed");
+        let complex = build_complex(standard_complex_simplices())
+            .expect("serde deserialization should succeed");
         let d = complex.to_string();
         assert!(d.contains("FrontierComplex"));
         assert!(d.contains("simplices=8"));
@@ -1524,7 +1533,8 @@ mod tests {
             persistence_millionths: 400_000,
         };
         let json = serde_json::to_string(&pair).expect("serde deserialization should succeed");
-        let back: PersistencePair = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: PersistencePair =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(pair, back);
     }
 
@@ -1564,7 +1574,8 @@ mod tests {
 
     #[test]
     fn test_compute_persistence_standard_complex() {
-        let complex = build_complex(standard_complex_simplices()).expect("serde deserialization should succeed");
+        let complex = build_complex(standard_complex_simplices())
+            .expect("serde deserialization should succeed");
         let diagram = compute_persistence(&complex).expect("serde deserialization should succeed");
         assert!(!diagram.pairs.is_empty());
         // Should have pairs at dimension 0 (vertices vs edges).
@@ -1599,7 +1610,8 @@ mod tests {
 
     #[test]
     fn test_compute_persistence_total_persistence_finite() {
-        let complex = build_complex(standard_complex_simplices()).expect("serde deserialization should succeed");
+        let complex = build_complex(standard_complex_simplices())
+            .expect("serde deserialization should succeed");
         let diagram = compute_persistence(&complex).expect("serde deserialization should succeed");
         let tp = total_persistence(&diagram);
         assert_eq!(tp, diagram.total_persistence_millionths);
@@ -1607,16 +1619,19 @@ mod tests {
 
     #[test]
     fn test_persistence_diagram_serde_roundtrip() {
-        let complex = build_complex(standard_complex_simplices()).expect("serde deserialization should succeed");
+        let complex = build_complex(standard_complex_simplices())
+            .expect("serde deserialization should succeed");
         let diagram = compute_persistence(&complex).expect("serde deserialization should succeed");
         let json = serde_json::to_string(&diagram).expect("serde deserialization should succeed");
-        let back: PersistenceDiagram = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: PersistenceDiagram =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(diagram, back);
     }
 
     #[test]
     fn test_persistence_diagram_max_persistence() {
-        let complex = build_complex(standard_complex_simplices()).expect("serde deserialization should succeed");
+        let complex = build_complex(standard_complex_simplices())
+            .expect("serde deserialization should succeed");
         let diagram = compute_persistence(&complex).expect("serde deserialization should succeed");
         let max_p = diagram.max_persistence();
         // Max persistence must be <= total persistence (since it's one pair).
@@ -1634,7 +1649,8 @@ mod tests {
 
     #[test]
     fn test_persistence_diagram_display() {
-        let complex = build_complex(standard_complex_simplices()).expect("serde deserialization should succeed");
+        let complex = build_complex(standard_complex_simplices())
+            .expect("serde deserialization should succeed");
         let diagram = compute_persistence(&complex).expect("serde deserialization should succeed");
         let d = diagram.to_string();
         assert!(d.contains("PersistenceDiagram"));
@@ -1757,7 +1773,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: HoleSignificance = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: HoleSignificance =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -1813,7 +1830,8 @@ mod tests {
         };
         h.seal();
         let json = serde_json::to_string(&h).expect("serde deserialization should succeed");
-        let back: FrontierHole = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: FrontierHole =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(h, back);
     }
 
@@ -1823,7 +1841,8 @@ mod tests {
 
     #[test]
     fn test_build_hole_ledger_from_standard_complex() {
-        let complex = build_complex(standard_complex_simplices()).expect("serde deserialization should succeed");
+        let complex = build_complex(standard_complex_simplices())
+            .expect("serde deserialization should succeed");
         let diagram = compute_persistence(&complex).expect("serde deserialization should succeed");
         let ledger = build_hole_ledger(SecurityEpoch::from_raw(5), &diagram, 50_000, 100);
         assert_eq!(ledger.epoch, SecurityEpoch::from_raw(5));
@@ -1839,7 +1858,8 @@ mod tests {
 
     #[test]
     fn test_build_hole_ledger_significance_threshold_stored() {
-        let complex = build_complex(standard_complex_simplices()).expect("serde deserialization should succeed");
+        let complex = build_complex(standard_complex_simplices())
+            .expect("serde deserialization should succeed");
         let diagram = compute_persistence(&complex).expect("serde deserialization should succeed");
         let ledger = build_hole_ledger(SecurityEpoch::GENESIS, &diagram, 42_000, 50);
         assert_eq!(ledger.significance_threshold_millionths, 42_000);
@@ -1847,17 +1867,20 @@ mod tests {
 
     #[test]
     fn test_hole_ledger_serde_roundtrip() {
-        let complex = build_complex(standard_complex_simplices()).expect("serde deserialization should succeed");
+        let complex = build_complex(standard_complex_simplices())
+            .expect("serde deserialization should succeed");
         let diagram = compute_persistence(&complex).expect("serde deserialization should succeed");
         let ledger = build_hole_ledger(SecurityEpoch::from_raw(1), &diagram, 50_000, 100);
         let json = serde_json::to_string(&ledger).expect("serde deserialization should succeed");
-        let back: HoleLedger = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: HoleLedger =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ledger, back);
     }
 
     #[test]
     fn test_hole_ledger_display() {
-        let complex = build_complex(standard_complex_simplices()).expect("serde deserialization should succeed");
+        let complex = build_complex(standard_complex_simplices())
+            .expect("serde deserialization should succeed");
         let diagram = compute_persistence(&complex).expect("serde deserialization should succeed");
         let ledger = build_hole_ledger(SecurityEpoch::from_raw(1), &diagram, 50_000, 100);
         let d = ledger.to_string();
@@ -1871,7 +1894,8 @@ mod tests {
 
     #[test]
     fn test_filter_significant_holes_includes_persistent_and_structural() {
-        let complex = build_complex(standard_complex_simplices()).expect("serde deserialization should succeed");
+        let complex = build_complex(standard_complex_simplices())
+            .expect("serde deserialization should succeed");
         let diagram = compute_persistence(&complex).expect("serde deserialization should succeed");
         let ledger = build_hole_ledger(SecurityEpoch::from_raw(1), &diagram, 50_000, 100);
         let sig = filter_significant_holes(&ledger);
@@ -1882,7 +1906,8 @@ mod tests {
 
     #[test]
     fn test_filter_significant_holes_excludes_noise_and_transient() {
-        let complex = build_complex(standard_complex_simplices()).expect("serde deserialization should succeed");
+        let complex = build_complex(standard_complex_simplices())
+            .expect("serde deserialization should succeed");
         let diagram = compute_persistence(&complex).expect("serde deserialization should succeed");
         let ledger = build_hole_ledger(SecurityEpoch::from_raw(1), &diagram, 50_000, 100);
         let sig = filter_significant_holes(&ledger);
@@ -1898,7 +1923,8 @@ mod tests {
 
     #[test]
     fn test_total_persistence_matches_diagram() {
-        let complex = build_complex(standard_complex_simplices()).expect("serde deserialization should succeed");
+        let complex = build_complex(standard_complex_simplices())
+            .expect("serde deserialization should succeed");
         let diagram = compute_persistence(&complex).expect("serde deserialization should succeed");
         let tp = total_persistence(&diagram);
         assert_eq!(tp, diagram.total_persistence_millionths);
@@ -1919,7 +1945,8 @@ mod tests {
 
     #[test]
     fn test_euler_characteristic_standard_complex() {
-        let complex = build_complex(standard_complex_simplices()).expect("serde deserialization should succeed");
+        let complex = build_complex(standard_complex_simplices())
+            .expect("serde deserialization should succeed");
         // 4 vertices - 3 edges + 1 triangle = 2
         let chi = euler_characteristic(&complex);
         assert_eq!(chi, 2);
@@ -1927,7 +1954,8 @@ mod tests {
 
     #[test]
     fn test_euler_characteristic_single_vertex() {
-        let complex = build_complex(vec![make_vertex("v0", "a", 0)]).expect("serde deserialization should succeed");
+        let complex = build_complex(vec![make_vertex("v0", "a", 0)])
+            .expect("serde deserialization should succeed");
         assert_eq!(euler_characteristic(&complex), 1);
     }
 
@@ -1937,7 +1965,8 @@ mod tests {
 
     #[test]
     fn test_bottleneck_distance_same_diagram_is_zero() {
-        let complex = build_complex(standard_complex_simplices()).expect("serde deserialization should succeed");
+        let complex = build_complex(standard_complex_simplices())
+            .expect("serde deserialization should succeed");
         let diagram = compute_persistence(&complex).expect("serde deserialization should succeed");
         let dist = bottleneck_distance_approx(&diagram, &diagram);
         assert_eq!(dist, Some(0));
@@ -1945,9 +1974,11 @@ mod tests {
 
     #[test]
     fn test_bottleneck_distance_different_sizes_none() {
-        let c1 = build_complex(vec![make_vertex("v0", "a", 0)]).expect("serde deserialization should succeed");
+        let c1 = build_complex(vec![make_vertex("v0", "a", 0)])
+            .expect("serde deserialization should succeed");
         let d1 = compute_persistence(&c1).expect("serde deserialization should succeed");
-        let c2 = build_complex(standard_complex_simplices()).expect("serde deserialization should succeed");
+        let c2 = build_complex(standard_complex_simplices())
+            .expect("serde deserialization should succeed");
         let d2 = compute_persistence(&c2).expect("serde deserialization should succeed");
         assert!(bottleneck_distance_approx(&d1, &d2).is_none());
     }
@@ -1972,7 +2003,8 @@ mod tests {
 
     #[test]
     fn test_stability_score_standard_complex() {
-        let complex = build_complex(standard_complex_simplices()).expect("serde deserialization should succeed");
+        let complex = build_complex(standard_complex_simplices())
+            .expect("serde deserialization should succeed");
         let diagram = compute_persistence(&complex).expect("serde deserialization should succeed");
         let ledger = build_hole_ledger(SecurityEpoch::from_raw(1), &diagram, 50_000, 100);
         let score = stability_score(&ledger);
@@ -1986,7 +2018,8 @@ mod tests {
 
     #[test]
     fn test_ledger_summary_counts_consistent() {
-        let complex = build_complex(standard_complex_simplices()).expect("serde deserialization should succeed");
+        let complex = build_complex(standard_complex_simplices())
+            .expect("serde deserialization should succeed");
         let diagram = compute_persistence(&complex).expect("serde deserialization should succeed");
         let ledger = build_hole_ledger(SecurityEpoch::from_raw(3), &diagram, 50_000, 100);
         let summary = ledger_summary(&ledger);
@@ -2002,7 +2035,8 @@ mod tests {
 
     #[test]
     fn test_ledger_summary_display() {
-        let complex = build_complex(standard_complex_simplices()).expect("serde deserialization should succeed");
+        let complex = build_complex(standard_complex_simplices())
+            .expect("serde deserialization should succeed");
         let diagram = compute_persistence(&complex).expect("serde deserialization should succeed");
         let ledger = build_hole_ledger(SecurityEpoch::from_raw(1), &diagram, 50_000, 100);
         let summary = ledger_summary(&ledger);
@@ -2012,12 +2046,14 @@ mod tests {
 
     #[test]
     fn test_ledger_summary_serde_roundtrip() {
-        let complex = build_complex(standard_complex_simplices()).expect("serde deserialization should succeed");
+        let complex = build_complex(standard_complex_simplices())
+            .expect("serde deserialization should succeed");
         let diagram = compute_persistence(&complex).expect("serde deserialization should succeed");
         let ledger = build_hole_ledger(SecurityEpoch::from_raw(1), &diagram, 50_000, 100);
         let summary = ledger_summary(&ledger);
         let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
-        let back: LedgerSummary = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: LedgerSummary =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(summary, back);
     }
 
@@ -2080,7 +2116,8 @@ mod tests {
         ];
         for e in &errors {
             let json = serde_json::to_string(e).expect("serde deserialization should succeed");
-            let back: CartographyError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: CartographyError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*e, back);
         }
     }

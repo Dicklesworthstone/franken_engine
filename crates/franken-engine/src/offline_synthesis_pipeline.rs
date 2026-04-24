@@ -566,7 +566,9 @@ impl OfflineSynthesisPipeline {
             }
         }
 
-        let input_hash = deterministic_hash(&serde_json::to_string(spec).expect("serde deserialization should succeed"));
+        let input_hash = deterministic_hash(
+            &serde_json::to_string(spec).expect("serde deserialization should succeed"),
+        );
         let output_hash = deterministic_hash(&format!("parsed_{}", spec.spec_id));
 
         Ok(ParsedConstraints {
@@ -1409,7 +1411,9 @@ mod tests {
     fn test_full_pipeline_produces_all_artifacts() {
         let p = pipeline();
         let spec = simple_spec();
-        let output = p.synthesize(&spec).expect("serde deserialization should succeed");
+        let output = p
+            .synthesize(&spec)
+            .expect("serde deserialization should succeed");
 
         assert_eq!(output.spec_id, "test_spec");
         assert!(!output.decision_tables.is_empty());
@@ -1422,7 +1426,9 @@ mod tests {
     #[test]
     fn test_decision_table_lookup_hit() {
         let p = pipeline();
-        let output = p.synthesize(&simple_spec()).expect("serde deserialization should succeed");
+        let output = p
+            .synthesize(&simple_spec())
+            .expect("serde deserialization should succeed");
         let table = &output.decision_tables[0];
         // Look up a state in the table
         let state = ObservableState {
@@ -1435,7 +1441,9 @@ mod tests {
     #[test]
     fn test_decision_table_lookup_miss_returns_safe_default() {
         let p = pipeline();
-        let output = p.synthesize(&simple_spec()).expect("serde deserialization should succeed");
+        let output = p
+            .synthesize(&simple_spec())
+            .expect("serde deserialization should succeed");
         let table = &output.decision_tables[0];
         let state = ObservableState {
             values: BTreeMap::from([("risk".into(), 999_999_999), ("load".into(), 999_999_999)]),
@@ -1446,7 +1454,9 @@ mod tests {
     #[test]
     fn test_automaton_step_transition() {
         let p = pipeline();
-        let output = p.synthesize(&simple_spec()).expect("serde deserialization should succeed");
+        let output = p
+            .synthesize(&simple_spec())
+            .expect("serde deserialization should succeed");
         let automaton = &output.automata[0];
 
         // Start in "normal", with high risk value → should transition to "elevated"
@@ -1459,7 +1469,9 @@ mod tests {
     #[test]
     fn test_automaton_step_no_transition() {
         let p = pipeline();
-        let output = p.synthesize(&simple_spec()).expect("serde deserialization should succeed");
+        let output = p
+            .synthesize(&simple_spec())
+            .expect("serde deserialization should succeed");
         let automaton = &output.automata[0];
 
         // Low risk → stay in normal
@@ -1472,7 +1484,9 @@ mod tests {
     #[test]
     fn test_automaton_critical_transition() {
         let p = pipeline();
-        let output = p.synthesize(&simple_spec()).expect("serde deserialization should succeed");
+        let output = p
+            .synthesize(&simple_spec())
+            .expect("serde deserialization should succeed");
         let automaton = &output.automata[0];
 
         // In elevated, high load → critical
@@ -1485,7 +1499,9 @@ mod tests {
     #[test]
     fn test_automaton_recovery_to_normal() {
         let p = pipeline();
-        let output = p.synthesize(&simple_spec()).expect("serde deserialization should succeed");
+        let output = p
+            .synthesize(&simple_spec())
+            .expect("serde deserialization should succeed");
         let automaton = &output.automata[0];
 
         // In recovery with low risk → normal
@@ -1498,7 +1514,9 @@ mod tests {
     #[test]
     fn test_certificates_have_evidence() {
         let p = pipeline();
-        let output = p.synthesize(&simple_spec()).expect("serde deserialization should succeed");
+        let output = p
+            .synthesize(&simple_spec())
+            .expect("serde deserialization should succeed");
         for cert in &output.certificates {
             assert!(!cert.evidence.is_empty());
             assert!(!cert.certificate_id.is_empty());
@@ -1510,7 +1528,9 @@ mod tests {
     #[test]
     fn test_certificates_all_obligations_met() {
         let p = pipeline();
-        let output = p.synthesize(&simple_spec()).expect("serde deserialization should succeed");
+        let output = p
+            .synthesize(&simple_spec())
+            .expect("serde deserialization should succeed");
         for cert in &output.certificates {
             assert!(cert.all_obligations_met);
             assert!(!cert.satisfied_obligations.is_empty());
@@ -1520,7 +1540,9 @@ mod tests {
     #[test]
     fn test_stage_witnesses_all_completed() {
         let p = pipeline();
-        let output = p.synthesize(&simple_spec()).expect("serde deserialization should succeed");
+        let output = p
+            .synthesize(&simple_spec())
+            .expect("serde deserialization should succeed");
         for w in &output.stage_witnesses {
             assert!(matches!(w.status, StageStatus::Completed { .. }));
             assert!(!w.input_hash.is_empty());
@@ -1531,7 +1553,9 @@ mod tests {
     #[test]
     fn test_stage_witnesses_ordered() {
         let p = pipeline();
-        let output = p.synthesize(&simple_spec()).expect("serde deserialization should succeed");
+        let output = p
+            .synthesize(&simple_spec())
+            .expect("serde deserialization should succeed");
         let stages: Vec<PipelineStage> = output.stage_witnesses.iter().map(|w| w.stage).collect();
         assert_eq!(
             stages,
@@ -1548,7 +1572,9 @@ mod tests {
     #[test]
     fn test_threshold_bundle_generated() {
         let p = pipeline();
-        let output = p.synthesize(&simple_spec()).expect("serde deserialization should succeed");
+        let output = p
+            .synthesize(&simple_spec())
+            .expect("serde deserialization should succeed");
         assert_eq!(output.threshold_bundles.len(), 1);
         let bundle = &output.threshold_bundles[0];
         assert!(!bundle.thresholds.is_empty());
@@ -1565,27 +1591,38 @@ mod tests {
     #[test]
     fn test_threshold_bundle_has_objective_bound() {
         let p = pipeline();
-        let output = p.synthesize(&simple_spec()).expect("serde deserialization should succeed");
+        let output = p
+            .synthesize(&simple_spec())
+            .expect("serde deserialization should succeed");
         let bundle = &output.threshold_bundles[0];
         let conformal = bundle
             .thresholds
             .iter()
             .find(|t| t.calibration_method == CalibrationMethod::ConformalQuantile);
         assert!(conformal.is_some());
-        assert_eq!(conformal.expect("serde deserialization should succeed").value_millionths, 700_000);
+        assert_eq!(
+            conformal
+                .expect("serde deserialization should succeed")
+                .value_millionths,
+            700_000
+        );
     }
 
     #[test]
     fn test_resource_usage_tracked() {
         let p = pipeline();
-        let output = p.synthesize(&simple_spec()).expect("serde deserialization should succeed");
+        let output = p
+            .synthesize(&simple_spec())
+            .expect("serde deserialization should succeed");
         assert!(output.total_resource_usage.iterations > 0);
     }
 
     #[test]
     fn test_decision_table_entry_count() {
         let p = pipeline();
-        let output = p.synthesize(&simple_spec()).expect("serde deserialization should succeed");
+        let output = p
+            .synthesize(&simple_spec())
+            .expect("serde deserialization should succeed");
         let table = &output.decision_tables[0];
         assert!(table.entry_count() > 0);
     }
@@ -1593,7 +1630,9 @@ mod tests {
     #[test]
     fn test_automaton_state_count() {
         let p = pipeline();
-        let output = p.synthesize(&simple_spec()).expect("serde deserialization should succeed");
+        let output = p
+            .synthesize(&simple_spec())
+            .expect("serde deserialization should succeed");
         let automaton = &output.automata[0];
         assert_eq!(automaton.state_count(), 5);
     }
@@ -1601,7 +1640,9 @@ mod tests {
     #[test]
     fn test_automaton_transition_count() {
         let p = pipeline();
-        let output = p.synthesize(&simple_spec()).expect("serde deserialization should succeed");
+        let output = p
+            .synthesize(&simple_spec())
+            .expect("serde deserialization should succeed");
         let automaton = &output.automata[0];
         assert!(automaton.transition_count() > 0);
     }
@@ -1634,56 +1675,72 @@ mod tests {
     fn test_serde_roundtrip_spec() {
         let spec = simple_spec();
         let json = serde_json::to_string(&spec).expect("serde deserialization should succeed");
-        let back: SynthesisSpec = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SynthesisSpec =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(spec, back);
     }
 
     #[test]
     fn test_serde_roundtrip_output() {
         let p = pipeline();
-        let output = p.synthesize(&simple_spec()).expect("serde deserialization should succeed");
+        let output = p
+            .synthesize(&simple_spec())
+            .expect("serde deserialization should succeed");
         let json = serde_json::to_string(&output).expect("serde deserialization should succeed");
-        let back: SynthesisOutput = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SynthesisOutput =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(output, back);
     }
 
     #[test]
     fn test_serde_roundtrip_decision_table() {
         let p = pipeline();
-        let output = p.synthesize(&simple_spec()).expect("serde deserialization should succeed");
+        let output = p
+            .synthesize(&simple_spec())
+            .expect("serde deserialization should succeed");
         let table = &output.decision_tables[0];
         let json = serde_json::to_string(table).expect("serde deserialization should succeed");
-        let back: DecisionTable = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DecisionTable =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(*table, back);
     }
 
     #[test]
     fn test_serde_roundtrip_automaton() {
         let p = pipeline();
-        let output = p.synthesize(&simple_spec()).expect("serde deserialization should succeed");
+        let output = p
+            .synthesize(&simple_spec())
+            .expect("serde deserialization should succeed");
         let automaton = &output.automata[0];
         let json = serde_json::to_string(automaton).expect("serde deserialization should succeed");
-        let back: TransitionAutomaton = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: TransitionAutomaton =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(*automaton, back);
     }
 
     #[test]
     fn test_serde_roundtrip_threshold_bundle() {
         let p = pipeline();
-        let output = p.synthesize(&simple_spec()).expect("serde deserialization should succeed");
+        let output = p
+            .synthesize(&simple_spec())
+            .expect("serde deserialization should succeed");
         let bundle = &output.threshold_bundles[0];
         let json = serde_json::to_string(bundle).expect("serde deserialization should succeed");
-        let back: ThresholdBundle = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ThresholdBundle =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(*bundle, back);
     }
 
     #[test]
     fn test_serde_roundtrip_certificate() {
         let p = pipeline();
-        let output = p.synthesize(&simple_spec()).expect("serde deserialization should succeed");
+        let output = p
+            .synthesize(&simple_spec())
+            .expect("serde deserialization should succeed");
         let cert = &output.certificates[0];
         let json = serde_json::to_string(cert).expect("serde deserialization should succeed");
-        let back: ArtifactCertificate = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ArtifactCertificate =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(*cert, back);
     }
 
@@ -1693,7 +1750,8 @@ mod tests {
             constraint_ids: vec!["c1".into(), "c2".into()],
         };
         let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
-        let back: SynthesisError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SynthesisError =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, back);
     }
 
@@ -1733,7 +1791,9 @@ mod tests {
         );
         let spec = simple_spec();
         // With very low budget, table generation may be budget-limited
-        let output = p.synthesize(&spec).expect("serde deserialization should succeed");
+        let output = p
+            .synthesize(&spec)
+            .expect("serde deserialization should succeed");
         assert!(
             output.total_resource_usage.budget_limited
                 || output.decision_tables[0].entry_count() <= 10
@@ -1762,7 +1822,9 @@ mod tests {
             safety_specs: Vec::new(),
             epoch: 1,
         };
-        let output = p.synthesize(&spec).expect("serde deserialization should succeed");
+        let output = p
+            .synthesize(&spec)
+            .expect("serde deserialization should succeed");
         assert!(!output.decision_tables.is_empty());
     }
 
@@ -1788,7 +1850,9 @@ mod tests {
             safety_specs: Vec::new(),
             epoch: 1,
         };
-        let output = p.synthesize(&spec).expect("serde deserialization should succeed");
+        let output = p
+            .synthesize(&spec)
+            .expect("serde deserialization should succeed");
         assert!(!output.decision_tables.is_empty());
     }
 
@@ -1814,7 +1878,9 @@ mod tests {
             safety_specs: Vec::new(),
             epoch: 1,
         };
-        let output = p.synthesize(&spec).expect("serde deserialization should succeed");
+        let output = p
+            .synthesize(&spec)
+            .expect("serde deserialization should succeed");
         assert!(!output.decision_tables.is_empty());
     }
 
@@ -1854,7 +1920,9 @@ mod tests {
             safety_specs: Vec::new(),
             epoch: 1,
         };
-        let output = p.synthesize(&spec).expect("serde deserialization should succeed");
+        let output = p
+            .synthesize(&spec)
+            .expect("serde deserialization should succeed");
         assert_eq!(output.decision_tables.len(), 2);
     }
 
@@ -1903,7 +1971,9 @@ mod tests {
             ],
             epoch: 1,
         };
-        let output = p.synthesize(&spec).expect("serde deserialization should succeed");
+        let output = p
+            .synthesize(&spec)
+            .expect("serde deserialization should succeed");
         assert_eq!(output.automata.len(), 2);
     }
 
@@ -1963,7 +2033,9 @@ mod tests {
             safety_specs: Vec::new(),
             epoch: 1,
         };
-        let output = p.synthesize(&spec).expect("serde deserialization should succeed");
+        let output = p
+            .synthesize(&spec)
+            .expect("serde deserialization should succeed");
         let table = &output.decision_tables[0];
         // Multi-var constraint: x+y <= 1_000_000. Grid has points where x+y > 1_000_000.
         let blocked_count = table
@@ -1977,7 +2049,9 @@ mod tests {
     #[test]
     fn test_content_hashes_unique() {
         let p = pipeline();
-        let output = p.synthesize(&simple_spec()).expect("serde deserialization should succeed");
+        let output = p
+            .synthesize(&simple_spec())
+            .expect("serde deserialization should succeed");
         let mut hashes = BTreeSet::new();
         for table in &output.decision_tables {
             assert!(hashes.insert(table.content_hash.clone()));
@@ -2006,7 +2080,8 @@ mod tests {
     fn test_serde_roundtrip_pipeline() {
         let p = pipeline();
         let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
-        let back: OfflineSynthesisPipeline = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: OfflineSynthesisPipeline =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(p, back);
     }
 
@@ -2025,7 +2100,8 @@ mod tests {
             },
         };
         let json = serde_json::to_string(&w).expect("serde deserialization should succeed");
-        let back: StageWitness = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: StageWitness =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(w, back);
     }
 
@@ -2036,8 +2112,10 @@ mod tests {
             VarDomain::BoundedInt { lo: -100, hi: 100 },
             VarDomain::Enum { cardinality: 7 },
         ] {
-            let json = serde_json::to_string(&domain).expect("serde deserialization should succeed");
-            let back: VarDomain = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&domain).expect("serde deserialization should succeed");
+            let back: VarDomain =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(domain, back);
         }
     }
@@ -2050,8 +2128,10 @@ mod tests {
             CalibrationMethod::CvarEmpirical,
             CalibrationMethod::OperatorFixed,
         ] {
-            let json = serde_json::to_string(&method).expect("serde deserialization should succeed");
-            let back: CalibrationMethod = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&method).expect("serde deserialization should succeed");
+            let back: CalibrationMethod =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(method, back);
         }
     }
@@ -2066,7 +2146,8 @@ mod tests {
             EvidenceCategory::MonotonicityCheck,
         ] {
             let json = serde_json::to_string(&cat).expect("serde deserialization should succeed");
-            let back: EvidenceCategory = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: EvidenceCategory =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(cat, back);
         }
     }
@@ -2077,14 +2158,17 @@ mod tests {
             reason: "out of memory".into(),
         };
         let json = serde_json::to_string(&status).expect("serde deserialization should succeed");
-        let back: StageStatus = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: StageStatus =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(status, back);
     }
 
     #[test]
     fn test_automaton_critical_to_recovery() {
         let p = pipeline();
-        let output = p.synthesize(&simple_spec()).expect("serde deserialization should succeed");
+        let output = p
+            .synthesize(&simple_spec())
+            .expect("serde deserialization should succeed");
         let automaton = &output.automata[0];
         // Critical → Recovery (unconditional, priority 0)
         let bindings = BTreeMap::new();
@@ -2152,7 +2236,9 @@ mod tests {
     #[test]
     fn test_decision_entry_guardrail_info() {
         let p = pipeline();
-        let output = p.synthesize(&simple_spec()).expect("serde deserialization should succeed");
+        let output = p
+            .synthesize(&simple_spec())
+            .expect("serde deserialization should succeed");
         let table = &output.decision_tables[0];
         for row in &table.rows {
             if row.entry.guardrail_blocked {
@@ -2256,8 +2342,12 @@ mod tests {
     fn pipeline_deterministic_output_across_runs() {
         let p = pipeline();
         let spec = simple_spec();
-        let out1 = p.synthesize(&spec).expect("serde deserialization should succeed");
-        let out2 = p.synthesize(&spec).expect("serde deserialization should succeed");
+        let out1 = p
+            .synthesize(&spec)
+            .expect("serde deserialization should succeed");
+        let out2 = p
+            .synthesize(&spec)
+            .expect("serde deserialization should succeed");
         let json1 = serde_json::to_string(&out1).expect("serde deserialization should succeed");
         let json2 = serde_json::to_string(&out2).expect("serde deserialization should succeed");
         assert_eq!(
@@ -2275,14 +2365,17 @@ mod tests {
             budget_limited: true,
         };
         let json = serde_json::to_string(&usage).expect("serde deserialization should succeed");
-        let back: ResourceUsage = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ResourceUsage =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(usage, back);
     }
 
     #[test]
     fn automaton_step_unknown_state_stays_in_place() {
         let p = pipeline();
-        let output = p.synthesize(&simple_spec()).expect("serde deserialization should succeed");
+        let output = p
+            .synthesize(&simple_spec())
+            .expect("serde deserialization should succeed");
         let automaton = &output.automata[0];
         let bindings = BTreeMap::new();
         let (new_state, action) = automaton.step("nonexistent_state", &bindings);
@@ -2303,7 +2396,8 @@ mod tests {
         ];
         for status in &variants {
             let json = serde_json::to_string(status).expect("serde deserialization should succeed");
-            let back: StageStatus = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: StageStatus =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*status, back);
         }
     }
@@ -2328,7 +2422,8 @@ mod tests {
         let err = SynthesisError::NoSafetySpec;
         assert!(err.to_string().contains("safety"));
         let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
-        let back: SynthesisError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SynthesisError =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, back);
     }
 
@@ -2337,7 +2432,8 @@ mod tests {
         let err = SynthesisError::InternalError("something broke".into());
         assert!(err.to_string().contains("something broke"));
         let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
-        let back: SynthesisError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SynthesisError =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, back);
     }
 
@@ -2352,7 +2448,8 @@ mod tests {
             CmpOp::Ne,
         ] {
             let json = serde_json::to_string(&op).expect("serde deserialization should succeed");
-            let back: CmpOp = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: CmpOp =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(op, back);
         }
     }
@@ -2361,7 +2458,8 @@ mod tests {
     fn opt_direction_serde_roundtrip() {
         for dir in [OptDirection::Minimize, OptDirection::Maximize] {
             let json = serde_json::to_string(&dir).expect("serde deserialization should succeed");
-            let back: OptDirection = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: OptDirection =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(dir, back);
         }
     }
@@ -2373,7 +2471,8 @@ mod tests {
             coeff_millionths: 500_000,
         };
         let json = serde_json::to_string(&term).expect("serde deserialization should succeed");
-        let back: LinearTerm = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: LinearTerm =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(term, back);
     }
 
@@ -2390,7 +2489,8 @@ mod tests {
             label: "risk cap".into(),
         };
         let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
-        let back: LinearConstraint = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: LinearConstraint =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c, back);
     }
 
@@ -2406,7 +2506,8 @@ mod tests {
             bound_millionths: Some(500_000),
         };
         let json = serde_json::to_string(&obj).expect("serde deserialization should succeed");
-        let back: OptimizationObjective = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: OptimizationObjective =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(obj, back);
     }
 
@@ -2422,7 +2523,8 @@ mod tests {
             cvar_bound_millionths: 500_000,
         };
         let json = serde_json::to_string(&ss).expect("serde deserialization should succeed");
-        let back: SafetySpec = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SafetySpec =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ss, back);
     }
 
@@ -2434,14 +2536,17 @@ mod tests {
             max_memory_bytes: 50_000_000,
         };
         let json = serde_json::to_string(&budget).expect("serde deserialization should succeed");
-        let back: PipelineBudget = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: PipelineBudget =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(budget, back);
     }
 
     #[test]
     fn automaton_accepting_states() {
         let p = pipeline();
-        let output = p.synthesize(&simple_spec()).expect("serde deserialization should succeed");
+        let output = p
+            .synthesize(&simple_spec())
+            .expect("serde deserialization should succeed");
         let automaton = &output.automata[0];
         // normal, elevated, degraded should be accepting; critical, recovery should not
         assert!(automaton.states["normal"].accepting);
@@ -2454,7 +2559,9 @@ mod tests {
     #[test]
     fn decision_table_rows_sorted_by_state() {
         let p = pipeline();
-        let output = p.synthesize(&simple_spec()).expect("serde deserialization should succeed");
+        let output = p
+            .synthesize(&simple_spec())
+            .expect("serde deserialization should succeed");
         for table in &output.decision_tables {
             for pair in table.rows.windows(2) {
                 assert!(
@@ -2499,7 +2606,9 @@ mod tests {
             safety_specs: Vec::new(),
             epoch: 1,
         };
-        let output = p.synthesize(&spec).expect("serde deserialization should succeed");
+        let output = p
+            .synthesize(&spec)
+            .expect("serde deserialization should succeed");
         // With x constrained to exactly 500_000, the table should have a single row
         assert_eq!(output.decision_tables[0].entry_count(), 1);
     }
@@ -2538,7 +2647,9 @@ mod tests {
             safety_specs: Vec::new(),
             epoch: 1,
         };
-        let output = p.synthesize(&spec).expect("serde deserialization should succeed");
+        let output = p
+            .synthesize(&spec)
+            .expect("serde deserialization should succeed");
         // Ne does not tighten, so grid should have full 5 points (0, 250k, 500k, 750k, 1M)
         assert!(output.decision_tables[0].entry_count() >= 5);
     }
@@ -2547,7 +2658,9 @@ mod tests {
     fn threshold_from_variable_bounds_uses_operator_fixed() {
         let p = pipeline();
         let spec = simple_spec();
-        let output = p.synthesize(&spec).expect("serde deserialization should succeed");
+        let output = p
+            .synthesize(&spec)
+            .expect("serde deserialization should succeed");
         let bundle = &output.threshold_bundles[0];
         let fixed = bundle
             .thresholds
@@ -2568,7 +2681,8 @@ mod tests {
             domain: VarDomain::Enum { cardinality: 3 },
         };
         let json = serde_json::to_string(&var).expect("serde deserialization should succeed");
-        let back: SpecVar = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SpecVar =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(var, back);
     }
 
@@ -2648,7 +2762,8 @@ mod tests {
             pre_guardrail_action: "opt_risky".into(),
         };
         let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
-        let back: DecisionEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DecisionEntry =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, back);
     }
 
@@ -2666,7 +2781,8 @@ mod tests {
             },
         };
         let json = serde_json::to_string(&row).expect("serde deserialization should succeed");
-        let back: DecisionTableRow = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DecisionTableRow =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(row, back);
     }
 
@@ -2678,7 +2794,8 @@ mod tests {
             accepting: true,
         };
         let json = serde_json::to_string(&state).expect("serde deserialization should succeed");
-        let back: AutomatonState = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: AutomatonState =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(state, back);
     }
 
@@ -2690,7 +2807,8 @@ mod tests {
             threshold_millionths: 800_000,
         };
         let json = serde_json::to_string(&guard).expect("serde deserialization should succeed");
-        let back: TransitionGuard = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: TransitionGuard =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(guard, back);
     }
 
@@ -2708,7 +2826,8 @@ mod tests {
             emit_action: Some("escalate".into()),
         };
         let json = serde_json::to_string(&t).expect("serde deserialization should succeed");
-        let back: Transition = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: Transition =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(t, back);
     }
 
@@ -2722,7 +2841,8 @@ mod tests {
             emit_action: None,
         };
         let json = serde_json::to_string(&t).expect("serde deserialization should succeed");
-        let back: Transition = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: Transition =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(t, back);
         assert!(back.emit_action.is_none());
     }
@@ -2738,7 +2858,8 @@ mod tests {
             coverage_millionths: 950_000,
         };
         let json = serde_json::to_string(&ct).expect("serde deserialization should succeed");
-        let back: CalibratedThreshold = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: CalibratedThreshold =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ct, back);
     }
 
@@ -2751,7 +2872,8 @@ mod tests {
             artifact_hash: "abc123".into(),
         };
         let json = serde_json::to_string(&item).expect("serde deserialization should succeed");
-        let back: EvidenceItem = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: EvidenceItem =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(item, back);
     }
 
@@ -2761,7 +2883,8 @@ mod tests {
             values: BTreeMap::from([("x".into(), 100), ("y".into(), 200)]),
         };
         let json = serde_json::to_string(&state).expect("serde deserialization should succeed");
-        let back: ObservableState = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ObservableState =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(state, back);
     }
 
@@ -2877,7 +3000,9 @@ mod tests {
             }],
             epoch: 5,
         };
-        let output = p.synthesize(&spec).expect("serde deserialization should succeed");
+        let output = p
+            .synthesize(&spec)
+            .expect("serde deserialization should succeed");
         assert!(
             output.decision_tables.is_empty(),
             "no objectives => no tables"
@@ -2891,7 +3016,9 @@ mod tests {
     fn certificate_epoch_matches_spec() {
         let p = pipeline();
         let spec = simple_spec();
-        let output = p.synthesize(&spec).expect("serde deserialization should succeed");
+        let output = p
+            .synthesize(&spec)
+            .expect("serde deserialization should succeed");
         for cert in &output.certificates {
             assert_eq!(cert.epoch, spec.epoch);
         }

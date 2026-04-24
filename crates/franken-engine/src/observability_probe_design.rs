@@ -676,7 +676,8 @@ mod tests {
     fn universe_reject_duplicate() {
         let mut u = ProbeUniverse::new();
         let p = make_probe("dup", ProbeDomain::Compiler, MILLION, 10, 100, &["a"]);
-        u.add_probe(p.clone()).expect("serde deserialization should succeed");
+        u.add_probe(p.clone())
+            .expect("serde deserialization should succeed");
         assert_eq!(u.add_probe(p), Err(ProbeDesignError::DuplicateProbe));
     }
 
@@ -950,7 +951,8 @@ mod tests {
     fn serde_probe() {
         let p = make_probe("p1", ProbeDomain::Compiler, MILLION, 10, 100, &["a", "b"]);
         let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
-        let p2: CandidateProbe = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let p2: CandidateProbe =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(p, p2);
     }
 
@@ -958,7 +960,8 @@ mod tests {
     fn serde_budget() {
         let b = ObservabilityBudget::normal();
         let json = serde_json::to_string(&b).expect("serde deserialization should succeed");
-        let b2: ObservabilityBudget = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let b2: ObservabilityBudget =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(b, b2);
     }
 
@@ -967,7 +970,8 @@ mod tests {
         let u = make_universe_with_probes();
         let s = build_schedule(&u, OperatingMode::Normal, ObservabilityBudget::normal());
         let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
-        let s2: ProbeSchedule = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let s2: ProbeSchedule =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(s, s2);
     }
 
@@ -976,7 +980,8 @@ mod tests {
         let u = make_universe_with_probes();
         let result = greedy_submodular_select(&u, &ObservabilityBudget::normal());
         let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
-        let r2: OptimizationResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let r2: OptimizationResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, r2);
     }
 
@@ -986,7 +991,8 @@ mod tests {
         let result = greedy_submodular_select(&u, &ObservabilityBudget::normal());
         let cert = build_approximation_certificate(&result, &ObservabilityBudget::normal());
         let json = serde_json::to_string(&cert).expect("serde deserialization should succeed");
-        let c2: ApproximationCertificate = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let c2: ApproximationCertificate =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cert, c2);
     }
 
@@ -995,7 +1001,8 @@ mod tests {
         let u = make_universe_with_probes();
         let m = MultiModeManifest::build(&u);
         let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
-        let m2: MultiModeManifest = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let m2: MultiModeManifest =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(m, m2);
     }
 
@@ -1098,8 +1105,10 @@ mod tests {
             ProbeGranularity::Fine,
             ProbeGranularity::Trace,
         ] {
-            let json = serde_json::to_string(&granularity).expect("serde deserialization should succeed");
-            let back: ProbeGranularity = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&granularity).expect("serde deserialization should succeed");
+            let back: ProbeGranularity =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(granularity, back);
         }
     }
@@ -1160,7 +1169,8 @@ mod tests {
         let result = greedy_submodular_select(&u, &budget);
         let ledger = ProbeUtilityLedger::from_optimization(&u, &result);
         let json = serde_json::to_string(&ledger).expect("serde deserialization should succeed");
-        let back: ProbeUtilityLedger = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ProbeUtilityLedger =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ledger, back);
     }
 
@@ -1266,7 +1276,8 @@ mod tests {
         ];
         for err in &errors {
             let json = serde_json::to_string(err).expect("serde deserialization should succeed");
-            let back: ProbeDesignError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ProbeDesignError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, back);
         }
     }
@@ -1390,9 +1401,20 @@ mod tests {
             .insert("owner".to_string(), "team-obs".to_string());
         p.metadata.insert("version".to_string(), "3".to_string());
         let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
-        let p2: CandidateProbe = serde_json::from_str(&json).expect("serde deserialization should succeed");
-        assert_eq!(p2.metadata.get("owner").expect("serde deserialization should succeed"), "team-obs");
-        assert_eq!(p2.metadata.get("version").expect("serde deserialization should succeed"), "3");
+        let p2: CandidateProbe =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        assert_eq!(
+            p2.metadata
+                .get("owner")
+                .expect("serde deserialization should succeed"),
+            "team-obs"
+        );
+        assert_eq!(
+            p2.metadata
+                .get("version")
+                .expect("serde deserialization should succeed"),
+            "3"
+        );
         assert_eq!(p2.metadata.len(), 2);
     }
 
@@ -1597,7 +1619,10 @@ mod tests {
         let result = greedy_submodular_select(&u, &budget);
         let ledger = ProbeUtilityLedger::from_optimization(&u, &result);
         assert_eq!(result.selected_indices.len(), 2);
-        let last = ledger.entries.last().expect("serde deserialization should succeed");
+        let last = ledger
+            .entries
+            .last()
+            .expect("serde deserialization should succeed");
         assert_eq!(last.cumulative_coverage_millionths, MILLION);
     }
 
@@ -1613,9 +1638,12 @@ mod tests {
     #[test]
     fn enrichment_json_value_check_operating_mode_variants() {
         // Verify the JSON representation of each mode variant
-        let normal_json = serde_json::to_string(&OperatingMode::Normal).expect("serde deserialization should succeed");
-        let degraded_json = serde_json::to_string(&OperatingMode::Degraded).expect("serde deserialization should succeed");
-        let incident_json = serde_json::to_string(&OperatingMode::Incident).expect("serde deserialization should succeed");
+        let normal_json = serde_json::to_string(&OperatingMode::Normal)
+            .expect("serde deserialization should succeed");
+        let degraded_json = serde_json::to_string(&OperatingMode::Degraded)
+            .expect("serde deserialization should succeed");
+        let incident_json = serde_json::to_string(&OperatingMode::Incident)
+            .expect("serde deserialization should succeed");
         assert_eq!(normal_json, "\"Normal\"");
         assert_eq!(degraded_json, "\"Degraded\"");
         assert_eq!(incident_json, "\"Incident\"");
@@ -1627,7 +1655,8 @@ mod tests {
         let budget = ObservabilityBudget::normal();
         let result = greedy_submodular_select(&u, &budget);
         let ledger = ProbeUtilityLedger::from_optimization(&u, &result);
-        let json = serde_json::to_string(&ledger.entries[0]).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ledger.entries[0])
+            .expect("serde deserialization should succeed");
         assert!(json.contains("\"probe_id\""));
         assert!(json.contains("\"probe_name\""));
         assert!(json.contains("\"marginal_gain_millionths\""));

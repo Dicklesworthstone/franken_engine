@@ -2009,8 +2009,10 @@ mod tests {
             DecisionVerdict::Deny,
             DecisionVerdict::Timeout,
         ] {
-            let json = serde_json::to_string(&variant).expect("serde deserialization should succeed");
-            let back: DecisionVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&variant).expect("serde deserialization should succeed");
+            let back: DecisionVerdict =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(variant, back);
         }
     }
@@ -2039,7 +2041,8 @@ mod tests {
     fn decision_request_serde_round_trip() {
         let req = request(42);
         let json = serde_json::to_string(&req).expect("serde deserialization should succeed");
-        let back: DecisionRequest = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DecisionRequest =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(req, back);
     }
 
@@ -2147,7 +2150,8 @@ mod tests {
             error_code: None,
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let back: AdapterEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: AdapterEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
     }
 
@@ -2157,9 +2161,19 @@ mod tests {
     fn mock_decision_contract_defaults_to_timeout_when_exhausted() {
         let req = request(40);
         let mut decision = MockDecisionContract::new([DecisionVerdict::Allow]);
-        assert_eq!(decision.evaluate(&req).expect("serde deserialization should succeed"), DecisionVerdict::Allow);
+        assert_eq!(
+            decision
+                .evaluate(&req)
+                .expect("serde deserialization should succeed"),
+            DecisionVerdict::Allow
+        );
         // Second call exhausts the queue, should default to Timeout
-        assert_eq!(decision.evaluate(&req).expect("serde deserialization should succeed"), DecisionVerdict::Timeout);
+        assert_eq!(
+            decision
+                .evaluate(&req)
+                .expect("serde deserialization should succeed"),
+            DecisionVerdict::Timeout
+        );
     }
 
     // -- Enrichment: error trait --
@@ -2217,7 +2231,8 @@ mod tests {
             error_code: Some("DG_TIMEOUT".to_string()),
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let back: AdapterEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: AdapterEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
         assert_eq!(back.error_code.as_deref(), Some("DG_TIMEOUT"));
     }
@@ -2546,9 +2561,12 @@ mod tests {
 
     #[test]
     fn decision_verdict_json_values_are_quoted_strings() {
-        let allow_json = serde_json::to_string(&DecisionVerdict::Allow).expect("serde deserialization should succeed");
-        let deny_json = serde_json::to_string(&DecisionVerdict::Deny).expect("serde deserialization should succeed");
-        let timeout_json = serde_json::to_string(&DecisionVerdict::Timeout).expect("serde deserialization should succeed");
+        let allow_json = serde_json::to_string(&DecisionVerdict::Allow)
+            .expect("serde deserialization should succeed");
+        let deny_json = serde_json::to_string(&DecisionVerdict::Deny)
+            .expect("serde deserialization should succeed");
+        let timeout_json = serde_json::to_string(&DecisionVerdict::Timeout)
+            .expect("serde deserialization should succeed");
         assert!(allow_json.contains("Allow"));
         assert!(deny_json.contains("Deny"));
         assert!(timeout_json.contains("Timeout"));
@@ -2572,7 +2590,8 @@ mod tests {
             error_code: None,
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let back: AdapterEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: AdapterEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
         assert!(back.error_code.is_none());
     }
@@ -2741,7 +2760,8 @@ mod tests {
     fn decision_verdict_serde_roundtrip_deny() {
         let v = DecisionVerdict::Deny;
         let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
-        let back: DecisionVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DecisionVerdict =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, back);
     }
 
@@ -2749,7 +2769,8 @@ mod tests {
     fn decision_verdict_serde_roundtrip_timeout() {
         let v = DecisionVerdict::Timeout;
         let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
-        let back: DecisionVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DecisionVerdict =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, back);
     }
 
@@ -2842,8 +2863,11 @@ mod tests {
     fn decision_request_json_field_names_stable_keys() {
         let req = request(800);
         let json = serde_json::to_string(&req).expect("serde deserialization should succeed");
-        let value: serde_json::Value = serde_json::from_str(&json).expect("serde deserialization should succeed");
-        let obj = value.as_object().expect("serde deserialization should succeed");
+        let value: serde_json::Value =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let obj = value
+            .as_object()
+            .expect("serde deserialization should succeed");
         for key in &[
             "decision_id",
             "policy_id",
@@ -2904,18 +2928,24 @@ mod tests {
     #[test]
     fn decision_verdict_json_consistent_allow() {
         // Serializing the same variant twice must produce identical JSON.
-        let j1 = serde_json::to_string(&DecisionVerdict::Allow).expect("serde deserialization should succeed");
-        let j2 = serde_json::to_string(&DecisionVerdict::Allow).expect("serde deserialization should succeed");
+        let j1 = serde_json::to_string(&DecisionVerdict::Allow)
+            .expect("serde deserialization should succeed");
+        let j2 = serde_json::to_string(&DecisionVerdict::Allow)
+            .expect("serde deserialization should succeed");
         assert_eq!(j1, j2);
     }
 
     #[test]
     fn decision_verdict_json_consistent_deny_and_timeout() {
-        let j_deny_1 = serde_json::to_string(&DecisionVerdict::Deny).expect("serde deserialization should succeed");
-        let j_deny_2 = serde_json::to_string(&DecisionVerdict::Deny).expect("serde deserialization should succeed");
+        let j_deny_1 = serde_json::to_string(&DecisionVerdict::Deny)
+            .expect("serde deserialization should succeed");
+        let j_deny_2 = serde_json::to_string(&DecisionVerdict::Deny)
+            .expect("serde deserialization should succeed");
         assert_eq!(j_deny_1, j_deny_2);
-        let j_t1 = serde_json::to_string(&DecisionVerdict::Timeout).expect("serde deserialization should succeed");
-        let j_t2 = serde_json::to_string(&DecisionVerdict::Timeout).expect("serde deserialization should succeed");
+        let j_t1 = serde_json::to_string(&DecisionVerdict::Timeout)
+            .expect("serde deserialization should succeed");
+        let j_t2 = serde_json::to_string(&DecisionVerdict::Timeout)
+            .expect("serde deserialization should succeed");
         assert_eq!(j_t1, j_t2);
     }
 
@@ -2933,7 +2963,8 @@ mod tests {
             ci_width_milli: 1,
         };
         let json = serde_json::to_string(&req).expect("serde deserialization should succeed");
-        let back: DecisionRequest = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DecisionRequest =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(req, back);
     }
 
@@ -2994,7 +3025,8 @@ mod tests {
     fn decision_request_roundtrip_seed_zero() {
         let req = request(0);
         let json = serde_json::to_string(&req).expect("serde deserialization should succeed");
-        let back: DecisionRequest = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DecisionRequest =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(req, back);
     }
 
@@ -3002,7 +3034,8 @@ mod tests {
     fn decision_request_roundtrip_large_seed() {
         let req = request(u64::MAX / 2);
         let json = serde_json::to_string(&req).expect("serde deserialization should succeed");
-        let back: DecisionRequest = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DecisionRequest =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(req, back);
     }
 
@@ -3018,7 +3051,8 @@ mod tests {
             error_code: Some("rt_ec".to_string()),
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let back: AdapterEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: AdapterEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
     }
 
@@ -3055,11 +3089,17 @@ mod tests {
             DecisionVerdict::Timeout,
         ]);
         assert!(contract.events().is_empty());
-        contract.evaluate(&req).expect("serde deserialization should succeed");
+        contract
+            .evaluate(&req)
+            .expect("serde deserialization should succeed");
         assert_eq!(contract.events().len(), 1);
-        contract.evaluate(&req).expect("serde deserialization should succeed");
+        contract
+            .evaluate(&req)
+            .expect("serde deserialization should succeed");
         assert_eq!(contract.events().len(), 2);
-        contract.evaluate(&req).expect("serde deserialization should succeed");
+        contract
+            .evaluate(&req)
+            .expect("serde deserialization should succeed");
         assert_eq!(contract.events().len(), 3);
     }
 
@@ -3067,7 +3107,9 @@ mod tests {
     fn mock_decision_contract_event_outcome_matches_verdict() {
         let req = request(950);
         let mut contract = MockDecisionContract::new([DecisionVerdict::Deny]);
-        contract.evaluate(&req).expect("serde deserialization should succeed");
+        contract
+            .evaluate(&req)
+            .expect("serde deserialization should succeed");
         assert_eq!(contract.events()[0].outcome, "deny");
     }
 

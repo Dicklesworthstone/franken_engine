@@ -1713,7 +1713,8 @@ mod tests {
     fn test_serde_round_trip_policy() {
         let policy = make_policy();
         let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
-        let restored: AdmissionControlPolicy = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: AdmissionControlPolicy =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(policy, restored);
     }
 
@@ -1723,7 +1724,8 @@ mod tests {
         ctrl.check_admission(ExecutionStage::Parse, AdmissionPriority::Normal);
         let receipt = &ctrl.receipts()[0];
         let json = serde_json::to_string(receipt).expect("serde deserialization should succeed");
-        let restored: AdmissionReceipt = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: AdmissionReceipt =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(receipt, &restored);
     }
 
@@ -1732,7 +1734,8 @@ mod tests {
         let ctrl = make_controller();
         let manifest = AdmissionControlManifest::from_controller(&ctrl);
         let json = serde_json::to_string(&manifest).expect("serde deserialization should succeed");
-        let restored: AdmissionControlManifest = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: AdmissionControlManifest =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(manifest, restored);
     }
 
@@ -1740,7 +1743,8 @@ mod tests {
     fn test_serde_round_trip_token_bucket() {
         let tb = TokenBucket::new(100, 10);
         let json = serde_json::to_string(&tb).expect("serde deserialization should succeed");
-        let restored: TokenBucket = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: TokenBucket =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(tb, restored);
     }
 
@@ -1758,7 +1762,10 @@ mod tests {
         ctrl.init_partition(ExecutionStage::ModuleLoad, 1);
         ctrl.check_admission(ExecutionStage::ModuleLoad, AdmissionPriority::Normal);
         ctrl.check_admission(ExecutionStage::ModuleLoad, AdmissionPriority::Normal);
-        let partition = ctrl.partitions.get(&ExecutionStage::ModuleLoad).expect("serde deserialization should succeed");
+        let partition = ctrl
+            .partitions
+            .get(&ExecutionStage::ModuleLoad)
+            .expect("serde deserialization should succeed");
         assert_eq!(partition.total_shed, 1);
     }
 

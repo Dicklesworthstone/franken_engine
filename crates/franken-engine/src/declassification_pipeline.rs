@@ -745,7 +745,9 @@ mod tests {
         assert_eq!(receipt.sink_clearance, Label::Internal);
         assert_eq!(receipt.decision_contract_id, request.decision_contract_id);
         assert!(!receipt.signature.is_sentinel());
-        receipt.verify(&key.verification_key()).expect("serde deserialization should succeed");
+        receipt
+            .verify(&key.verification_key())
+            .expect("serde deserialization should succeed");
     }
 
     #[test]
@@ -921,7 +923,9 @@ mod tests {
 
         // Allow
         let req1 = make_request("declass-secret-internal", Label::Secret, Label::Internal);
-        pipeline.process(&req1, &policy, &low_loss(), &key).expect("serde deserialization should succeed");
+        pipeline
+            .process(&req1, &policy, &low_loss(), &key)
+            .expect("serde deserialization should succeed");
 
         // Deny (high loss)
         let mut req2 = make_request("declass-conf-public", Label::Confidential, Label::Public);
@@ -948,7 +952,9 @@ mod tests {
         let mut receipts = Vec::new();
         for _ in 0..100 {
             let mut pipeline = DeclassificationPipeline::default();
-            let receipt = pipeline.process(&request, &policy, &loss, &key).expect("serde deserialization should succeed");
+            let receipt = pipeline
+                .process(&request, &policy, &loss, &key)
+                .expect("serde deserialization should succeed");
             receipts.push(receipt);
         }
 
@@ -971,7 +977,8 @@ mod tests {
     fn request_serde_roundtrip() {
         let req = make_request("route-1", Label::Secret, Label::Internal);
         let json = serde_json::to_string(&req).expect("serde deserialization should succeed");
-        let parsed: DeclassificationRequest = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let parsed: DeclassificationRequest =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(req, parsed);
     }
 
@@ -993,7 +1000,8 @@ mod tests {
         ];
         for r in results {
             let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
-            let parsed: PolicyEvalResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let parsed: PolicyEvalResult =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(r, parsed);
         }
     }
@@ -1002,7 +1010,8 @@ mod tests {
     fn loss_assessment_serde_roundtrip() {
         let loss = low_loss();
         let json = serde_json::to_string(&loss).expect("serde deserialization should succeed");
-        let parsed: LossAssessment = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let parsed: LossAssessment =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(loss, parsed);
     }
 
@@ -1017,7 +1026,8 @@ mod tests {
             error_code: None,
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let parsed: PipelineEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let parsed: PipelineEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, parsed);
     }
 
@@ -1060,7 +1070,8 @@ mod tests {
         ];
         for err in errors {
             let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
-            let parsed: PipelineError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let parsed: PipelineError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(err, parsed);
         }
     }
@@ -1069,7 +1080,8 @@ mod tests {
     fn pipeline_config_serde_roundtrip() {
         let config = PipelineConfig::default();
         let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
-        let parsed: PipelineConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let parsed: PipelineConfig =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, parsed);
     }
 
@@ -1086,7 +1098,8 @@ mod tests {
             review_completed: false,
         };
         let json = serde_json::to_string(&grant).expect("serde deserialization should succeed");
-        let parsed: EmergencyGrant = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let parsed: EmergencyGrant =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(grant, parsed);
     }
 
@@ -1099,7 +1112,8 @@ mod tests {
             emergency_grants_active: 1,
         };
         let json = serde_json::to_string(&stats).expect("serde deserialization should succeed");
-        let parsed: PipelineStats = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let parsed: PipelineStats =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(stats, parsed);
     }
 
@@ -1161,8 +1175,12 @@ mod tests {
         let r1 = make_request("declass-secret-internal", Label::Secret, Label::Internal);
         let r2 = make_request("declass-conf-public", Label::Confidential, Label::Public);
 
-        let receipt1 = pipeline.process(&r1, &policy, &low_loss(), &key).expect("serde deserialization should succeed");
-        let receipt2 = pipeline.process(&r2, &policy, &low_loss(), &key).expect("serde deserialization should succeed");
+        let receipt1 = pipeline
+            .process(&r1, &policy, &low_loss(), &key)
+            .expect("serde deserialization should succeed");
+        let receipt2 = pipeline
+            .process(&r2, &policy, &low_loss(), &key)
+            .expect("serde deserialization should succeed");
 
         assert_eq!(
             receipt1.declassification_route_ref,
@@ -1485,7 +1503,8 @@ mod tests {
         let mut req = make_request("route-1", Label::Secret, Label::Internal);
         req.is_emergency = true;
         let json = serde_json::to_string(&req).expect("serde deserialization should succeed");
-        let parsed: DeclassificationRequest = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let parsed: DeclassificationRequest =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert!(parsed.is_emergency);
     }
 
@@ -1524,7 +1543,9 @@ mod tests {
         for i in 0..5 {
             let mut req = make_request("declass-secret-internal", Label::Secret, Label::Internal);
             req.request_id = format!("req-{i}");
-            pipeline.process(&req, &policy, &low_loss(), &key).expect("serde deserialization should succeed");
+            pipeline
+                .process(&req, &policy, &low_loss(), &key)
+                .expect("serde deserialization should succeed");
         }
         assert_eq!(pipeline.receipts().len(), 5);
     }
@@ -1552,7 +1573,8 @@ mod tests {
             .process(&request, &policy, &low_loss(), &test_key())
             .expect("serde deserialization should succeed");
         let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
-        let back: DeclassificationReceipt = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DeclassificationReceipt =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(receipt, back);
     }
 
@@ -1560,7 +1582,8 @@ mod tests {
     fn request_serde_roundtrip_enrichment() {
         let request = make_request("route-1", Label::Secret, Label::Internal);
         let json = serde_json::to_string(&request).expect("serde deserialization should succeed");
-        let back: DeclassificationRequest = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DeclassificationRequest =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(request, back);
     }
 
@@ -1622,7 +1645,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: PipelineError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: PipelineError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -1637,7 +1661,8 @@ mod tests {
         ];
         for l in &labels {
             let json = serde_json::to_string(l).expect("serde deserialization should succeed");
-            let back: Label = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: Label =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*l, back);
         }
     }
@@ -1686,7 +1711,8 @@ mod tests {
             .expect("serde deserialization should succeed");
         let stats = pipeline.stats();
         let json = serde_json::to_string(&stats).expect("serde deserialization should succeed");
-        let back: PipelineStats = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: PipelineStats =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(stats, back);
     }
 
@@ -1924,8 +1950,10 @@ mod tests {
         let cloned = original.clone();
         assert_eq!(original, cloned);
         // The Clone should produce an equal but independent value
-        let json_orig = serde_json::to_string(&original).expect("serde deserialization should succeed");
-        let json_clone = serde_json::to_string(&cloned).expect("serde deserialization should succeed");
+        let json_orig =
+            serde_json::to_string(&original).expect("serde deserialization should succeed");
+        let json_clone =
+            serde_json::to_string(&cloned).expect("serde deserialization should succeed");
         assert_eq!(json_orig, json_clone);
     }
 
@@ -2199,7 +2227,8 @@ mod tests {
         };
         assert!(!loss.below_threshold(u64::MAX)); // u64::MAX < u64::MAX is false
         let json = serde_json::to_string(&loss).expect("serde deserialization should succeed");
-        let back: LossAssessment = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: LossAssessment =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(loss, back);
     }
 
@@ -2251,7 +2280,8 @@ mod tests {
             timestamp_ms: 0,
         };
         let json = serde_json::to_string(&req).expect("serde deserialization should succeed");
-        let back: DeclassificationRequest = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DeclassificationRequest =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(req, back);
     }
 
@@ -2270,7 +2300,8 @@ mod tests {
             timestamp_ms: u64::MAX,
         };
         let json = serde_json::to_string(&req).expect("serde deserialization should succeed");
-        let back: DeclassificationRequest = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DeclassificationRequest =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(req, back);
     }
 
@@ -2285,7 +2316,8 @@ mod tests {
             error_code: None,
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let back: PipelineEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: PipelineEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
         assert!(back.error_code.is_none());
     }
@@ -2301,7 +2333,8 @@ mod tests {
             error_code: Some("ERR_99".into()),
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let back: PipelineEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: PipelineEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event.error_code, back.error_code);
     }
 
@@ -2313,7 +2346,8 @@ mod tests {
             emit_stage_events: false,
         };
         let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
-        let back: PipelineConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: PipelineConfig =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cfg, back);
     }
 
@@ -2325,7 +2359,8 @@ mod tests {
             emit_stage_events: true,
         };
         let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
-        let back: PipelineConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: PipelineConfig =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cfg, back);
     }
 
@@ -2338,7 +2373,8 @@ mod tests {
             emergency_grants_active: 0,
         };
         let json = serde_json::to_string(&stats).expect("serde deserialization should succeed");
-        let back: PipelineStats = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: PipelineStats =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(stats, back);
     }
 
@@ -2351,7 +2387,8 @@ mod tests {
             emergency_grants_active: u64::MAX,
         };
         let json = serde_json::to_string(&stats).expect("serde deserialization should succeed");
-        let back: PipelineStats = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: PipelineStats =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(stats, back);
     }
 
@@ -2373,7 +2410,8 @@ mod tests {
             timestamp_ms: 100,
         };
         let json = serde_json::to_string(&req).expect("serde deserialization should succeed");
-        let back: DeclassificationRequest = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DeclassificationRequest =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(req, back);
     }
 
@@ -2392,7 +2430,8 @@ mod tests {
             review_completed: true,
         };
         let json = serde_json::to_string(&grant).expect("serde deserialization should succeed");
-        let back: EmergencyGrant = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: EmergencyGrant =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(grant, back);
         assert!(back.review_completed);
     }
@@ -2404,7 +2443,8 @@ mod tests {
             conditions_met: vec![],
         };
         let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
-        let back: PolicyEvalResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: PolicyEvalResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 
@@ -2415,7 +2455,8 @@ mod tests {
             failed_conditions: (0..20).map(|i| format!("cond_{i}")).collect(),
         };
         let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
-        let back: PolicyEvalResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: PolicyEvalResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 
@@ -2445,7 +2486,8 @@ mod tests {
         for e in ifc_errors {
             let pe = PipelineError::ValidationError(e);
             let json = serde_json::to_string(&pe).expect("serde deserialization should succeed");
-            let back: PipelineError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: PipelineError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(pe, back);
         }
     }
@@ -2460,7 +2502,8 @@ mod tests {
             summary: "maximum exposure scenario with long description text".to_string(),
         };
         let json = serde_json::to_string(&loss).expect("serde deserialization should succeed");
-        let back: LossAssessment = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: LossAssessment =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(loss, back);
     }
 
@@ -2605,7 +2648,9 @@ mod tests {
             let mut req = make_request(&format!("bad-route-{i}"), Label::Secret, Label::Public);
             req.request_id = format!("req-emg-{i}");
             req.is_emergency = true;
-            pipeline.process(&req, &policy, &low_loss(), &key).expect("serde deserialization should succeed");
+            pipeline
+                .process(&req, &policy, &low_loss(), &key)
+                .expect("serde deserialization should succeed");
         }
 
         let stats = pipeline.stats();

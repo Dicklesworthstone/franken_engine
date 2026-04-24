@@ -829,7 +829,10 @@ mod tests {
         let rev = make_revocation(target_type, RevocationReason::Compromised, target_bytes);
         let sk = revocation_key();
         // SAFETY: Test helper uses valid revocation and signing key for chain append
-        enforcer.chain_mut().append(rev, &sk, "t-revoke").expect("serde deserialization should succeed");
+        enforcer
+            .chain_mut()
+            .append(rev, &sk, "t-revoke")
+            .expect("serde deserialization should succeed");
     }
 
     // ---------------------------------------------------------------
@@ -1357,7 +1360,8 @@ mod tests {
             let json = serde_json::to_string(p).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by to_string of a valid EnforcementPoint,
             // so from_str back to EnforcementPoint cannot fail (valid format + matching schema).
-            let restored: EnforcementPoint = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: EnforcementPoint =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*p, restored);
         }
     }
@@ -1377,7 +1381,8 @@ mod tests {
             let json = serde_json::to_string(c).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by to_string of a valid HighRiskCategory,
             // so from_str back to HighRiskCategory cannot fail (valid format + matching schema).
-            let restored: HighRiskCategory = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: HighRiskCategory =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*c, restored);
         }
     }
@@ -1392,7 +1397,8 @@ mod tests {
             enforcement_point: EnforcementPoint::TokenAcceptance,
         };
         let json = serde_json::to_string(&denial).expect("serde deserialization should succeed");
-        let restored: RevocationDenial = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: RevocationDenial =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(denial, restored);
     }
 
@@ -1403,7 +1409,8 @@ mod tests {
             checks_performed: 2,
         };
         let json = serde_json::to_string(&cleared).expect("serde deserialization should succeed");
-        let restored: EnforcementResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: EnforcementResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cleared, restored);
 
         let denial = RevocationDenial {
@@ -1415,7 +1422,8 @@ mod tests {
         };
         let denied = EnforcementResult::Denied(denial);
         let json2 = serde_json::to_string(&denied).expect("serde deserialization should succeed");
-        let restored2: EnforcementResult = serde_json::from_str(&json2).expect("serde deserialization should succeed");
+        let restored2: EnforcementResult =
+            serde_json::from_str(&json2).expect("serde deserialization should succeed");
         assert_eq!(denied, restored2);
     }
 
@@ -1439,7 +1447,8 @@ mod tests {
             checked_at: DeterministicTimestamp(5000),
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let restored: RevocationCheckEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: RevocationCheckEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, restored);
     }
 
@@ -1456,7 +1465,8 @@ mod tests {
             transitive_denials: 1,
         };
         let json = serde_json::to_string(&stats).expect("serde deserialization should succeed");
-        let restored: EnforcementStats = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: EnforcementStats =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(stats, restored);
     }
 
@@ -1608,7 +1618,10 @@ mod tests {
             [1; 32],
         );
         let sk = revocation_key();
-        enforcer.chain_mut().append(rev, &sk, "t-mut").expect("serde deserialization should succeed");
+        enforcer
+            .chain_mut()
+            .append(rev, &sk, "t-mut")
+            .expect("serde deserialization should succeed");
         assert_eq!(enforcer.chain().len(), 1);
     }
 
@@ -2119,7 +2132,8 @@ mod tests {
         ];
         for t in &types {
             let json = serde_json::to_string(t).expect("serde deserialization should succeed");
-            let restored: RevocationTargetType = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: RevocationTargetType =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*t, restored);
         }
     }
@@ -2326,7 +2340,8 @@ mod tests {
         };
         let json = serde_json::to_string(&denial).expect("serde deserialization should succeed");
         assert!(json.contains("\"transitive_root\":null"));
-        let restored: RevocationDenial = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: RevocationDenial =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(denial, restored);
         assert!(restored.transitive_root.is_none());
     }
@@ -2346,8 +2361,10 @@ mod tests {
                 enforcement_point: point,
                 checks_performed: 2,
             };
-            let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
-            let restored: EnforcementResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&result).expect("serde deserialization should succeed");
+            let restored: EnforcementResult =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(result, restored);
             assert!(restored.is_cleared());
         }

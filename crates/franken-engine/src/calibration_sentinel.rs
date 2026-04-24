@@ -1160,7 +1160,8 @@ mod tests {
         // SAFETY: SentinelError derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid SentinelError serialization
-        let back: SentinelError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SentinelError =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, back);
     }
 
@@ -1677,7 +1678,8 @@ mod tests {
             // SAFETY: SentinelKind derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(kind).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by valid SentinelKind serialization
-            let back: SentinelKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: SentinelKind =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*kind, back);
         }
     }
@@ -1695,7 +1697,8 @@ mod tests {
             // SAFETY: PromotionRule derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(rule).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by valid PromotionRule serialization
-            let back: PromotionRule = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: PromotionRule =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*rule, back);
         }
     }
@@ -1712,7 +1715,8 @@ mod tests {
             // SAFETY: SentinelState derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(state).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by valid SentinelState serialization
-            let back: SentinelState = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: SentinelState =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*state, back);
         }
     }
@@ -1723,7 +1727,8 @@ mod tests {
         // SAFETY: CalibrationSentinel derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid CalibrationSentinel serialization
-        let back: CalibrationSentinel = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: CalibrationSentinel =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(s, back);
     }
 
@@ -1733,7 +1738,8 @@ mod tests {
         // SAFETY: ObservabilityCell derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&cell).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid ObservabilityCell serialization
-        let back: ObservabilityCell = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ObservabilityCell =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cell, back);
     }
 
@@ -1744,7 +1750,8 @@ mod tests {
         // SAFETY: PromotionDecision derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&decision).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid PromotionDecision serialization
-        let back: PromotionDecision = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: PromotionDecision =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(decision, back);
     }
 
@@ -1755,7 +1762,8 @@ mod tests {
         // SAFETY: SentinelReport derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid SentinelReport serialization
-        let back: SentinelReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SentinelReport =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report, back);
     }
 

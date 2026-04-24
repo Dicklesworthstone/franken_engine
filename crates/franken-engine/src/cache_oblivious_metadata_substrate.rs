@@ -871,7 +871,9 @@ pub fn write_cache_oblivious_evidence_bundle(
             specimen_id: evidence.specimen_id.clone(),
             verdict: evidence.verdict,
         };
-        events_content.push_str(&serde_json::to_string(&event).expect("serde deserialization should succeed"));
+        events_content.push_str(
+            &serde_json::to_string(&event).expect("serde deserialization should succeed"),
+        );
         events_content.push('\n');
     }
     std::fs::write(&events_path, events_content)?;

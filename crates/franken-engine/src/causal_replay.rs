@@ -2284,7 +2284,8 @@ mod tests {
             rate_millionths: 500_000,
         };
         let json = serde_json::to_string(&mode).expect("serde deserialization should succeed");
-        let deser: RecordingMode = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let deser: RecordingMode =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(mode, deser);
     }
 
@@ -2294,7 +2295,8 @@ mod tests {
     fn trace_record_serde_round_trip() {
         let trace = make_trace(&[("sandbox", 200_000), ("allow", 0)]);
         let json = serde_json::to_string(&trace).expect("serde deserialization should succeed");
-        let deser: TraceRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let deser: TraceRecord =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
 
         assert_eq!(trace.trace_id, deser.trace_id);
         assert_eq!(trace.entries.len(), deser.entries.len());
@@ -2329,7 +2331,8 @@ mod tests {
         };
 
         let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
-        let deser: ActionDeltaReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let deser: ActionDeltaReport =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(
             report.harm_prevented_delta_millionths,
             deser.harm_prevented_delta_millionths
@@ -2489,7 +2492,9 @@ mod tests {
         assert_eq!(log.len(), 7);
 
         for (i, source) in sources.iter().enumerate() {
-            let entry = log.get(i as u64).expect("serde deserialization should succeed");
+            let entry = log
+                .get(i as u64)
+                .expect("serde deserialization should succeed");
             assert_eq!(&entry.source, source);
         }
     }
@@ -2540,7 +2545,8 @@ mod tests {
         let mut jsons = BTreeSet::new();
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: NondeterminismSource = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: NondeterminismSource =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
             jsons.insert(json);
         }
@@ -2561,7 +2567,8 @@ mod tests {
             extension_id: Some("ext-001".into()),
         };
         let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
-        let back: NondeterminismEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: NondeterminismEntry =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, back);
     }
 
@@ -2576,7 +2583,8 @@ mod tests {
             Some("ext-1".into()),
         );
         let json = serde_json::to_string(&log).expect("serde deserialization should succeed");
-        let back: NondeterminismLog = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: NondeterminismLog =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(log, back);
     }
 
@@ -2599,7 +2607,8 @@ mod tests {
             nondeterminism_range: (0, 2),
         };
         let json = serde_json::to_string(&snap).expect("serde deserialization should succeed");
-        let back: DecisionSnapshot = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DecisionSnapshot =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(snap, back);
     }
 
@@ -2614,7 +2623,8 @@ mod tests {
             diverged: true,
         };
         let json = serde_json::to_string(&outcome).expect("serde deserialization should succeed");
-        let back: ReplayDecisionOutcome = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ReplayDecisionOutcome =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(outcome, back);
     }
 
@@ -2635,7 +2645,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: ReplayVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ReplayVerdict =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -2652,7 +2663,8 @@ mod tests {
             branch_from_index: 3,
         };
         let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
-        let back: CounterfactualConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: CounterfactualConfig =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, back);
     }
 
@@ -2667,7 +2679,8 @@ mod tests {
             diverged: true,
         };
         let json = serde_json::to_string(&delta).expect("serde deserialization should succeed");
-        let back: DecisionDelta = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DecisionDelta =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(delta, back);
     }
 
@@ -2683,7 +2696,8 @@ mod tests {
             has_divergence: Some(true),
         };
         let json = serde_json::to_string(&query).expect("serde deserialization should succeed");
-        let back: TraceQuery = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: TraceQuery =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(query, back);
     }
 
@@ -2691,7 +2705,8 @@ mod tests {
     fn trace_retention_policy_serde_roundtrip() {
         let policy = TraceRetentionPolicy::default();
         let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
-        let back: TraceRetentionPolicy = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: TraceRetentionPolicy =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(policy, back);
     }
 
@@ -2705,7 +2720,8 @@ mod tests {
             signing_key: vec![42u8; 32],
         };
         let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
-        let back: RecorderConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: RecorderConfig =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, back);
     }
 
@@ -2732,7 +2748,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: ReplayError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ReplayError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -2780,7 +2797,8 @@ mod tests {
         ];
         for mode in &modes {
             let json = serde_json::to_string(mode).expect("serde deserialization should succeed");
-            let back: RecordingMode = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: RecordingMode =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*mode, back);
         }
     }
@@ -2812,7 +2830,9 @@ mod tests {
             policy_version_override: None,
             branch_from_index: 0,
         };
-        let report = engine.counterfactual_branch(&trace, config).expect("serde deserialization should succeed");
+        let report = engine
+            .counterfactual_branch(&trace, config)
+            .expect("serde deserialization should succeed");
         // If counterfactual chose lower-cost action, is_improvement() should be true
         // when harm_prevented_delta_millionths > 0.
         assert_eq!(
@@ -2998,8 +3018,12 @@ mod tests {
     #[test]
     fn trace_record_object_id_differs_by_zone() {
         let trace = make_trace(&[("sandbox", 200_000)]);
-        let id_a = trace.object_id("zone-a").expect("serde deserialization should succeed");
-        let id_b = trace.object_id("zone-b").expect("serde deserialization should succeed");
+        let id_a = trace
+            .object_id("zone-a")
+            .expect("serde deserialization should succeed");
+        let id_b = trace
+            .object_id("zone-b")
+            .expect("serde deserialization should succeed");
         assert_ne!(id_a, id_b);
     }
 
@@ -3053,7 +3077,9 @@ mod tests {
     fn trace_index_query_by_trace_id() {
         let mut index = TraceIndex::new(TraceRetentionPolicy::default());
         let trace = make_trace(&[("allow", 0)]);
-        index.insert(trace).expect("serde deserialization should succeed");
+        index
+            .insert(trace)
+            .expect("serde deserialization should succeed");
 
         let filter = TraceQuery {
             trace_id: Some("trace-001".into()),
@@ -3072,7 +3098,9 @@ mod tests {
     fn trace_index_query_by_policy_version() {
         let mut index = TraceIndex::new(TraceRetentionPolicy::default());
         let trace = make_trace(&[("allow", 0)]);
-        index.insert(trace).expect("serde deserialization should succeed");
+        index
+            .insert(trace)
+            .expect("serde deserialization should succeed");
 
         let filter = TraceQuery {
             policy_version: Some(1),
@@ -3095,7 +3123,9 @@ mod tests {
         };
         let mut index = TraceIndex::new(retention);
         let trace = make_trace(&[("allow", 0)]);
-        index.insert(trace).expect("serde deserialization should succeed");
+        index
+            .insert(trace)
+            .expect("serde deserialization should succeed");
         let before = index.storage_estimate();
         assert!(before > 0);
 
@@ -3112,7 +3142,8 @@ mod tests {
             rate_millionths: 250_000,
         };
         let json = serde_json::to_string(&mode).expect("serde deserialization should succeed");
-        let back: RecordingMode = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: RecordingMode =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(mode, back);
     }
 
@@ -3129,7 +3160,9 @@ mod tests {
             branch_from_index: 0,
         };
         let engine = CausalReplayEngine::new();
-        let report = engine.counterfactual_branch(&trace, config).expect("serde deserialization should succeed");
+        let report = engine
+            .counterfactual_branch(&trace, config)
+            .expect("serde deserialization should succeed");
         assert_eq!(report.divergence_count(), report.divergence_points.len());
     }
 
@@ -3146,9 +3179,15 @@ mod tests {
             branch_from_index: 0,
         };
         let engine = CausalReplayEngine::new();
-        let report = engine.counterfactual_branch(&trace, config).expect("serde deserialization should succeed");
-        let id1 = report.object_id("zone-a").expect("serde deserialization should succeed");
-        let id2 = report.object_id("zone-a").expect("serde deserialization should succeed");
+        let report = engine
+            .counterfactual_branch(&trace, config)
+            .expect("serde deserialization should succeed");
+        let id1 = report
+            .object_id("zone-a")
+            .expect("serde deserialization should succeed");
+        let id2 = report
+            .object_id("zone-a")
+            .expect("serde deserialization should succeed");
         assert_eq!(id1, id2);
     }
 
@@ -3189,7 +3228,9 @@ mod tests {
         let mut index = TraceIndex::new(retention);
         let trace = make_trace(&[("allow", 0)]);
         // First insert: evicts nothing (index empty), but storage > budget after insert
-        index.insert(trace).expect("serde deserialization should succeed");
+        index
+            .insert(trace)
+            .expect("serde deserialization should succeed");
         // The trace is inserted but next insert will evict
         assert!(index.len() <= 1);
     }

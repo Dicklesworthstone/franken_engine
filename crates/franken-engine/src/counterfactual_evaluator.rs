@@ -1101,10 +1101,13 @@ mod tests {
             estimator: EstimatorKind::Ips,
             ..Default::default()
         };
-        let mut e = CounterfactualEvaluator::new(cfg, BaselinePolicy::default()).expect("serde deserialization should succeed");
+        let mut e = CounterfactualEvaluator::new(cfg, BaselinePolicy::default())
+            .expect("serde deserialization should succeed");
         let batch = make_batch(100, 600_000, 500_000);
         let target = make_target(100, 500_000);
-        let result = e.evaluate(&batch, &target).expect("serde deserialization should succeed");
+        let result = e
+            .evaluate(&batch, &target)
+            .expect("serde deserialization should succeed");
         // When propensities match, IPS ≈ mean reward
         assert!(
             (result.candidate_envelope.estimate_millionths - 600_000).abs() < 10_000,
@@ -1119,11 +1122,14 @@ mod tests {
             estimator: EstimatorKind::Ips,
             ..Default::default()
         };
-        let mut e = CounterfactualEvaluator::new(cfg, BaselinePolicy::default()).expect("serde deserialization should succeed");
+        let mut e = CounterfactualEvaluator::new(cfg, BaselinePolicy::default())
+            .expect("serde deserialization should succeed");
         // Logging at 250k, target at 500k → weight ≈ 2
         let batch = make_batch(100, 300_000, 250_000);
         let target = make_target(100, 500_000);
-        let result = e.evaluate(&batch, &target).expect("serde deserialization should succeed");
+        let result = e
+            .evaluate(&batch, &target)
+            .expect("serde deserialization should succeed");
         // Weighted estimate: 300k * 2 = 600k
         assert!(
             (result.candidate_envelope.estimate_millionths - 600_000).abs() < 10_000,
@@ -1138,7 +1144,8 @@ mod tests {
             estimator: EstimatorKind::Ips,
             ..Default::default()
         };
-        let mut e = CounterfactualEvaluator::new(cfg, BaselinePolicy::default()).expect("serde deserialization should succeed");
+        let mut e = CounterfactualEvaluator::new(cfg, BaselinePolicy::default())
+            .expect("serde deserialization should succeed");
         let batch = make_batch(10, 500_000, 500_000);
         let target = make_target(10, 0); // Target never takes this action
         let result = e.evaluate(&batch, &target);
@@ -1153,7 +1160,9 @@ mod tests {
         let batch = make_batch(50, 400_000, 500_000);
         let mut target = make_target(50, 500_000);
         target.target_model_predictions_millionths = Some(vec![400_000; 50]);
-        let result = e.evaluate(&batch, &target).expect("serde deserialization should succeed");
+        let result = e
+            .evaluate(&batch, &target)
+            .expect("serde deserialization should succeed");
         // DR with equal propensities and perfect model → close to reward mean
         assert!(
             (result.candidate_envelope.estimate_millionths - 400_000).abs() < 20_000,
@@ -1167,7 +1176,9 @@ mod tests {
         let mut e = CounterfactualEvaluator::default_safe_mode();
         let batch = make_batch(50, 700_000, 500_000);
         let target = make_target(50, 500_000);
-        let result = e.evaluate(&batch, &target).expect("serde deserialization should succeed");
+        let result = e
+            .evaluate(&batch, &target)
+            .expect("serde deserialization should succeed");
         assert!(
             (result.candidate_envelope.estimate_millionths - 700_000).abs() < 20_000,
             "got {}",
@@ -1183,11 +1194,14 @@ mod tests {
             estimator: EstimatorKind::DirectMethod,
             ..Default::default()
         };
-        let mut e = CounterfactualEvaluator::new(cfg, BaselinePolicy::default()).expect("serde deserialization should succeed");
+        let mut e = CounterfactualEvaluator::new(cfg, BaselinePolicy::default())
+            .expect("serde deserialization should succeed");
         let batch = make_batch(10, 100_000, 500_000);
         let mut target = make_target(10, 500_000);
         target.target_model_predictions_millionths = Some(vec![800_000; 10]);
-        let result = e.evaluate(&batch, &target).expect("serde deserialization should succeed");
+        let result = e
+            .evaluate(&batch, &target)
+            .expect("serde deserialization should succeed");
         assert_eq!(result.candidate_envelope.estimate_millionths, 800_000);
     }
 
@@ -1197,10 +1211,13 @@ mod tests {
             estimator: EstimatorKind::DirectMethod,
             ..Default::default()
         };
-        let mut e = CounterfactualEvaluator::new(cfg, BaselinePolicy::default()).expect("serde deserialization should succeed");
+        let mut e = CounterfactualEvaluator::new(cfg, BaselinePolicy::default())
+            .expect("serde deserialization should succeed");
         let batch = make_batch(10, 500_000, 500_000);
         let target = make_target(10, 500_000);
-        let result = e.evaluate(&batch, &target).expect("serde deserialization should succeed");
+        let result = e
+            .evaluate(&batch, &target)
+            .expect("serde deserialization should succeed");
         assert_eq!(result.candidate_envelope.estimate_millionths, 0);
     }
 
@@ -1255,11 +1272,14 @@ mod tests {
             improvement_threshold_millionths: 0,
             ..Default::default()
         };
-        let mut e = CounterfactualEvaluator::new(cfg, BaselinePolicy::default()).expect("serde deserialization should succeed");
+        let mut e = CounterfactualEvaluator::new(cfg, BaselinePolicy::default())
+            .expect("serde deserialization should succeed");
         // Target propensity 2x logging → weights 2x → estimate 2x rewards
         let batch = make_batch(1000, 300_000, 250_000);
         let target = make_target(1000, 500_000);
-        let result = e.evaluate(&batch, &target).expect("serde deserialization should succeed");
+        let result = e
+            .evaluate(&batch, &target)
+            .expect("serde deserialization should succeed");
         // Improvement is large with tight CI on uniform data
         // Note: may be Inconclusive with small samples
         assert!(
@@ -1275,10 +1295,13 @@ mod tests {
             improvement_threshold_millionths: 500_000,
             ..Default::default()
         }; // Very high threshold
-        let mut e = CounterfactualEvaluator::new(cfg, BaselinePolicy::default()).expect("serde deserialization should succeed");
+        let mut e = CounterfactualEvaluator::new(cfg, BaselinePolicy::default())
+            .expect("serde deserialization should succeed");
         let batch = make_batch(100, 500_000, 500_000);
         let target = make_target(100, 500_000);
-        let result = e.evaluate(&batch, &target).expect("serde deserialization should succeed");
+        let result = e
+            .evaluate(&batch, &target)
+            .expect("serde deserialization should succeed");
         // Improvement is ~0 but threshold is 500k → unsafe
         assert_eq!(result.safety_status, EnvelopeStatus::Unsafe);
     }
@@ -1297,7 +1320,9 @@ mod tests {
         batch.transitions[4].regime = RegimeLabel::Elevated;
         batch.transitions[5].regime = RegimeLabel::Elevated;
         let target = make_target(6, 500_000);
-        let result = e.evaluate(&batch, &target).expect("serde deserialization should succeed");
+        let result = e
+            .evaluate(&batch, &target)
+            .expect("serde deserialization should succeed");
         assert!(result.regime_breakdown.contains_key("normal"));
         assert!(result.regime_breakdown.contains_key("elevated"));
         assert_eq!(result.regime_breakdown.len(), 2);
@@ -1309,10 +1334,13 @@ mod tests {
             regime_breakdown: false,
             ..Default::default()
         };
-        let mut e = CounterfactualEvaluator::new(cfg, BaselinePolicy::default()).expect("serde deserialization should succeed");
+        let mut e = CounterfactualEvaluator::new(cfg, BaselinePolicy::default())
+            .expect("serde deserialization should succeed");
         let batch = make_batch(10, 500_000, 500_000);
         let target = make_target(10, 500_000);
-        let result = e.evaluate(&batch, &target).expect("serde deserialization should succeed");
+        let result = e
+            .evaluate(&batch, &target)
+            .expect("serde deserialization should succeed");
         assert!(result.regime_breakdown.is_empty());
     }
 
@@ -1324,9 +1352,13 @@ mod tests {
         assert_eq!(e.evaluation_count(), 0);
         let batch = make_batch(5, 500_000, 500_000);
         let target = make_target(5, 500_000);
-        let _ = e.evaluate(&batch, &target).expect("serde deserialization should succeed");
+        let _ = e
+            .evaluate(&batch, &target)
+            .expect("serde deserialization should succeed");
         assert_eq!(e.evaluation_count(), 1);
-        let _ = e.evaluate(&batch, &target).expect("serde deserialization should succeed");
+        let _ = e
+            .evaluate(&batch, &target)
+            .expect("serde deserialization should succeed");
         assert_eq!(e.evaluation_count(), 2);
     }
 
@@ -1337,7 +1369,9 @@ mod tests {
         let mut e = CounterfactualEvaluator::default_safe_mode();
         let batch = make_batch(5, 500_000, 500_000);
         let target = make_target(5, 500_000);
-        let result = e.evaluate(&batch, &target).expect("serde deserialization should succeed");
+        let result = e
+            .evaluate(&batch, &target)
+            .expect("serde deserialization should succeed");
         assert_eq!(
             result.schema_version,
             COUNTERFACTUAL_EVALUATOR_SCHEMA_VERSION
@@ -1352,8 +1386,12 @@ mod tests {
         let mut e2 = CounterfactualEvaluator::default_safe_mode();
         let batch = make_batch(20, 500_000, 500_000);
         let target = make_target(20, 500_000);
-        let r1 = e1.evaluate(&batch, &target).expect("serde deserialization should succeed");
-        let r2 = e2.evaluate(&batch, &target).expect("serde deserialization should succeed");
+        let r1 = e1
+            .evaluate(&batch, &target)
+            .expect("serde deserialization should succeed");
+        let r2 = e2
+            .evaluate(&batch, &target)
+            .expect("serde deserialization should succeed");
         assert_eq!(r1.artifact_hash, r2.artifact_hash);
     }
 
@@ -1363,8 +1401,12 @@ mod tests {
         let batch1 = make_batch(20, 500_000, 500_000);
         let batch2 = make_batch(20, 600_000, 500_000);
         let target = make_target(20, 500_000);
-        let r1 = e.evaluate(&batch1, &target).expect("serde deserialization should succeed");
-        let r2 = e.evaluate(&batch2, &target).expect("serde deserialization should succeed");
+        let r1 = e
+            .evaluate(&batch1, &target)
+            .expect("serde deserialization should succeed");
+        let r2 = e
+            .evaluate(&batch2, &target)
+            .expect("serde deserialization should succeed");
         assert_ne!(r1.artifact_hash, r2.artifact_hash);
     }
 
@@ -1375,7 +1417,8 @@ mod tests {
         let mut e = CounterfactualEvaluator::default_safe_mode();
         let batch = make_batch(20, 500_000, 500_000);
         let candidates = vec![make_target(20, 300_000), make_target(20, 700_000)];
-        let results = compare_policies(&mut e, &batch, &candidates).expect("serde deserialization should succeed");
+        let results = compare_policies(&mut e, &batch, &candidates)
+            .expect("serde deserialization should succeed");
         assert_eq!(results.len(), 2);
     }
 
@@ -1503,7 +1546,8 @@ mod tests {
             EstimatorKind::DirectMethod,
         ] {
             let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
-            let back: EstimatorKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: EstimatorKind =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(kind, back);
         }
     }
@@ -1512,7 +1556,8 @@ mod tests {
     fn policy_id_serde_roundtrip() {
         let pid = PolicyId("test-policy-v3".to_string());
         let json = serde_json::to_string(&pid).expect("serde deserialization should succeed");
-        let back: PolicyId = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: PolicyId =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(pid, back);
     }
 
@@ -1520,7 +1565,8 @@ mod tests {
     fn logged_transition_serde_roundtrip() {
         let t = make_transition(5, 42, RegimeLabel::Attack, 750_000, 333_000);
         let json = serde_json::to_string(&t).expect("serde deserialization should succeed");
-        let back: LoggedTransition = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: LoggedTransition =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(t, back);
     }
 
@@ -1529,9 +1575,12 @@ mod tests {
         let mut e = CounterfactualEvaluator::default_safe_mode();
         let batch = make_batch(10, 500_000, 500_000);
         let target = make_target(10, 500_000);
-        let result = e.evaluate(&batch, &target).expect("serde deserialization should succeed");
+        let result = e
+            .evaluate(&batch, &target)
+            .expect("serde deserialization should succeed");
         let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
-        let back: EvaluationResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: EvaluationResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, back);
     }
 
@@ -1539,7 +1588,8 @@ mod tests {
     fn config_serde_roundtrip() {
         let cfg = EvaluatorConfig::default();
         let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
-        let back: EvaluatorConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: EvaluatorConfig =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cfg, back);
     }
 
@@ -1555,7 +1605,8 @@ mod tests {
         ];
         for e in errs {
             let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
-            let back: CounterfactualError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: CounterfactualError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(e, back);
         }
     }
@@ -1788,7 +1839,9 @@ mod tests {
             transitions,
         };
         let target = make_target(20, 500_000);
-        let result = e.evaluate(&batch, &target).expect("serde deserialization should succeed");
+        let result = e
+            .evaluate(&batch, &target)
+            .expect("serde deserialization should succeed");
         let bd = &result.regime_breakdown;
         assert!(bd.contains_key("normal"));
         assert!(bd.contains_key("degraded"));
@@ -1808,7 +1861,9 @@ mod tests {
         let mut e = CounterfactualEvaluator::default_safe_mode();
         let batch = make_batch(1, 500_000, 500_000);
         let target = make_target(1, 500_000);
-        let result = e.evaluate(&batch, &target).expect("serde deserialization should succeed");
+        let result = e
+            .evaluate(&batch, &target)
+            .expect("serde deserialization should succeed");
         assert!(result.candidate_envelope.effective_samples >= 1);
     }
 
@@ -1817,7 +1872,9 @@ mod tests {
         let mut e = CounterfactualEvaluator::default_safe_mode();
         let batch = make_batch(10_000, 500_000, 500_000);
         let target = make_target(10_000, 500_000);
-        let result = e.evaluate(&batch, &target).expect("serde deserialization should succeed");
+        let result = e
+            .evaluate(&batch, &target)
+            .expect("serde deserialization should succeed");
         assert!(result.candidate_envelope.effective_samples > 0);
     }
 
@@ -1827,7 +1884,8 @@ mod tests {
     fn baseline_policy_serde_roundtrip() {
         let bp = BaselinePolicy::default();
         let json = serde_json::to_string(&bp).expect("serde deserialization should succeed");
-        let back: BaselinePolicy = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: BaselinePolicy =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(bp, back);
     }
 
@@ -1835,7 +1893,8 @@ mod tests {
     fn transition_batch_serde_roundtrip() {
         let batch = make_batch(3, 100_000, 500_000);
         let json = serde_json::to_string(&batch).expect("serde deserialization should succeed");
-        let back: TransitionBatch = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: TransitionBatch =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(batch, back);
     }
 
@@ -1843,7 +1902,8 @@ mod tests {
     fn target_policy_mapping_serde_roundtrip() {
         let target = make_target(5, 600_000);
         let json = serde_json::to_string(&target).expect("serde deserialization should succeed");
-        let back: TargetPolicyMapping = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: TargetPolicyMapping =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(target, back);
     }
 
@@ -1857,7 +1917,8 @@ mod tests {
             effective_samples: 42,
         };
         let json = serde_json::to_string(&ce).expect("serde deserialization should succeed");
-        let back: ConfidenceEnvelope = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ConfidenceEnvelope =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ce, back);
     }
 
@@ -1868,8 +1929,10 @@ mod tests {
             EnvelopeStatus::Inconclusive,
             EnvelopeStatus::Unsafe,
         ] {
-            let json = serde_json::to_string(&variant).expect("serde deserialization should succeed");
-            let back: EnvelopeStatus = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&variant).expect("serde deserialization should succeed");
+            let back: EnvelopeStatus =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(variant, back);
         }
     }
@@ -1878,7 +1941,8 @@ mod tests {
     fn evaluator_config_serde_roundtrip() {
         let cfg = EvaluatorConfig::default();
         let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
-        let back: EvaluatorConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: EvaluatorConfig =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cfg, back);
     }
 
@@ -1886,7 +1950,8 @@ mod tests {
     fn counterfactual_evaluator_serde_roundtrip() {
         let e = CounterfactualEvaluator::default_safe_mode();
         let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
-        let back: CounterfactualEvaluator = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: CounterfactualEvaluator =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.evaluation_count(), 0);
         assert_eq!(back.config().estimator, EstimatorKind::DoublyRobust);
     }
@@ -2009,7 +2074,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: CounterfactualError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: CounterfactualError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -2041,7 +2107,8 @@ mod tests {
             improvement_threshold_millionths: 10_000,
             regime_breakdown: false,
         };
-        let e = CounterfactualEvaluator::new(cfg.clone(), BaselinePolicy::default()).expect("serde deserialization should succeed");
+        let e = CounterfactualEvaluator::new(cfg.clone(), BaselinePolicy::default())
+            .expect("serde deserialization should succeed");
         assert_eq!(*e.config(), cfg);
     }
 
@@ -2051,7 +2118,8 @@ mod tests {
             id: PolicyId("custom-baseline".into()),
             action: LaneAction::FallbackSafe,
         };
-        let e = CounterfactualEvaluator::new(EvaluatorConfig::default(), bl.clone()).expect("serde deserialization should succeed");
+        let e = CounterfactualEvaluator::new(EvaluatorConfig::default(), bl.clone())
+            .expect("serde deserialization should succeed");
         assert_eq!(*e.baseline(), bl);
     }
 
@@ -2061,9 +2129,11 @@ mod tests {
         assert_eq!(e.evaluation_count(), 0);
         let batch = make_batch(5, 500_000, 500_000);
         let target = make_target(5, 500_000);
-        e.evaluate(&batch, &target).expect("serde deserialization should succeed");
+        e.evaluate(&batch, &target)
+            .expect("serde deserialization should succeed");
         assert_eq!(e.evaluation_count(), 1);
-        e.evaluate(&batch, &target).expect("serde deserialization should succeed");
+        e.evaluate(&batch, &target)
+            .expect("serde deserialization should succeed");
         assert_eq!(e.evaluation_count(), 2);
     }
 
@@ -2126,7 +2196,8 @@ mod tests {
             EstimatorKind::DirectMethod,
         ] {
             let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
-            let back: EstimatorKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: EstimatorKind =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(v, back);
         }
     }

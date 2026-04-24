@@ -594,7 +594,8 @@ mod tests {
             LeverCategory::Config,
         ] {
             let json = serde_json::to_string(&cat).expect("serde deserialization should succeed");
-            let back: LeverCategory = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: LeverCategory =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(back, cat);
         }
     }
@@ -933,7 +934,12 @@ mod tests {
     fn decision_has_change_id() {
         let decision = evaluate_one_lever_policy(&non_opt_request());
         assert!(decision.change_id.is_some());
-        assert!(decision.change_id.expect("serde deserialization should succeed").starts_with("olp-"));
+        assert!(
+            decision
+                .change_id
+                .expect("serde deserialization should succeed")
+                .starts_with("olp-")
+        );
     }
 
     #[test]
@@ -978,7 +984,8 @@ mod tests {
     fn evidence_refs_serde() {
         let ev = full_evidence(3_000_000);
         let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
-        let back: OneLeverEvidenceRefs = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: OneLeverEvidenceRefs =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, ev);
     }
 
@@ -986,7 +993,8 @@ mod tests {
     fn policy_request_serde() {
         let req = single_lever_opt_request(3_000_000);
         let json = serde_json::to_string(&req).expect("serde deserialization should succeed");
-        let back: OneLeverPolicyRequest = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: OneLeverPolicyRequest =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, req);
     }
 
@@ -994,7 +1002,8 @@ mod tests {
     fn policy_decision_serde() {
         let decision = evaluate_one_lever_policy(&non_opt_request());
         let json = serde_json::to_string(&decision).expect("serde deserialization should succeed");
-        let back: OneLeverPolicyDecision = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: OneLeverPolicyDecision =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.outcome, decision.outcome);
         assert_eq!(back.blocked, decision.blocked);
     }
@@ -1006,7 +1015,8 @@ mod tests {
             category: Some(LeverCategory::Execution),
         };
         let json = serde_json::to_string(&plc).expect("serde deserialization should succeed");
-        let back: PathLeverClassification = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: PathLeverClassification =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, plc);
     }
 
@@ -1025,7 +1035,8 @@ mod tests {
             lever_category: None,
         };
         let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
-        let back: OneLeverPolicyEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: OneLeverPolicyEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, ev);
     }
 
@@ -1108,7 +1119,8 @@ mod tests {
         let req = single_lever_opt_request(3_000_000);
         let decision = evaluate_one_lever_policy(&req);
         let json = serde_json::to_string(&decision).expect("serde deserialization should succeed");
-        let back: OneLeverPolicyDecision = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: OneLeverPolicyDecision =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(decision, back);
     }
 
@@ -1221,7 +1233,8 @@ mod tests {
         let decision = evaluate_one_lever_policy(&req);
         assert!(decision.blocked);
         let json = serde_json::to_string(&decision).expect("serde deserialization should succeed");
-        let back: OneLeverPolicyDecision = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: OneLeverPolicyDecision =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(decision, back);
     }
 
@@ -1296,15 +1309,20 @@ mod tests {
 
     #[test]
     fn enrichment_lever_category_serde_snake_case_field_names() {
-        let json = serde_json::to_string(&LeverCategory::Execution).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&LeverCategory::Execution)
+            .expect("serde deserialization should succeed");
         assert_eq!(json, "\"execution\"");
-        let json = serde_json::to_string(&LeverCategory::Memory).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&LeverCategory::Memory)
+            .expect("serde deserialization should succeed");
         assert_eq!(json, "\"memory\"");
-        let json = serde_json::to_string(&LeverCategory::Security).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&LeverCategory::Security)
+            .expect("serde deserialization should succeed");
         assert_eq!(json, "\"security\"");
-        let json = serde_json::to_string(&LeverCategory::Benchmark).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&LeverCategory::Benchmark)
+            .expect("serde deserialization should succeed");
         assert_eq!(json, "\"benchmark\"");
-        let json = serde_json::to_string(&LeverCategory::Config).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&LeverCategory::Config)
+            .expect("serde deserialization should succeed");
         assert_eq!(json, "\"config\"");
     }
 
@@ -1358,7 +1376,8 @@ mod tests {
             category: None,
         };
         let json = serde_json::to_string(&plc).expect("serde deserialization should succeed");
-        let back: PathLeverClassification = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: PathLeverClassification =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, plc);
         assert!(json.contains("\"category\":null"));
     }

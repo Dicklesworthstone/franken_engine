@@ -1584,9 +1584,18 @@ mod tests {
         let order = scm.topological_order();
         assert_eq!(order.len(), 3);
         // C must come before T and Y
-        let c_pos = order.iter().position(|n| n == "C").expect("serde deserialization should succeed");
-        let t_pos = order.iter().position(|n| n == "T").expect("serde deserialization should succeed");
-        let y_pos = order.iter().position(|n| n == "Y").expect("serde deserialization should succeed");
+        let c_pos = order
+            .iter()
+            .position(|n| n == "C")
+            .expect("serde deserialization should succeed");
+        let t_pos = order
+            .iter()
+            .position(|n| n == "T")
+            .expect("serde deserialization should succeed");
+        let y_pos = order
+            .iter()
+            .position(|n| n == "Y")
+            .expect("serde deserialization should succeed");
         assert!(c_pos < t_pos);
         assert!(c_pos < y_pos);
         assert!(t_pos < y_pos);
@@ -1595,7 +1604,9 @@ mod tests {
     #[test]
     fn test_classify_confounders_basic() {
         let mut scm = simple_dag();
-        let confounders = scm.classify_confounders("T", "Y").expect("serde deserialization should succeed");
+        let confounders = scm
+            .classify_confounders("T", "Y")
+            .expect("serde deserialization should succeed");
         assert_eq!(confounders.len(), 1);
         assert_eq!(confounders[0].node_id, "C");
         // Regime domain → TimeVarying class
@@ -1615,7 +1626,9 @@ mod tests {
         .expect("serde deserialization should succeed");
         scm.add_edge(edge("T", "Y", EdgeSign::Positive, 900_000))
             .expect("serde deserialization should succeed");
-        let confounders = scm.classify_confounders("T", "Y").expect("serde deserialization should succeed");
+        let confounders = scm
+            .classify_confounders("T", "Y")
+            .expect("serde deserialization should succeed");
         assert!(confounders.is_empty());
     }
 
@@ -1647,7 +1660,9 @@ mod tests {
             .expect("serde deserialization should succeed");
         scm.add_edge(edge("Y", "M", EdgeSign::Positive, 500_000))
             .expect("serde deserialization should succeed");
-        let confounders = scm.classify_confounders("T", "Y").expect("serde deserialization should succeed");
+        let confounders = scm
+            .classify_confounders("T", "Y")
+            .expect("serde deserialization should succeed");
         let colliders: Vec<_> = confounders
             .iter()
             .filter(|c| c.class == ConfounderClass::Collider)
@@ -1659,7 +1674,9 @@ mod tests {
     #[test]
     fn test_backdoor_criterion_with_confounder() {
         let scm = simple_dag();
-        let result = scm.backdoor_criterion("T", "Y").expect("serde deserialization should succeed");
+        let result = scm
+            .backdoor_criterion("T", "Y")
+            .expect("serde deserialization should succeed");
         assert!(result.identified);
         assert!(result.adjustment_set.contains("C"));
     }
@@ -1677,7 +1694,9 @@ mod tests {
         .expect("serde deserialization should succeed");
         scm.add_edge(edge("T", "Y", EdgeSign::Positive, 900_000))
             .expect("serde deserialization should succeed");
-        let result = scm.backdoor_criterion("T", "Y").expect("serde deserialization should succeed");
+        let result = scm
+            .backdoor_criterion("T", "Y")
+            .expect("serde deserialization should succeed");
         assert!(result.identified);
         assert!(result.adjustment_set.is_empty());
         assert!(result.confounding_paths.is_empty());
@@ -1709,7 +1728,9 @@ mod tests {
             .expect("serde deserialization should succeed");
         scm.add_edge(edge("T", "Y", EdgeSign::Positive, 900_000))
             .expect("serde deserialization should succeed");
-        let result = scm.backdoor_criterion("T", "Y").expect("serde deserialization should succeed");
+        let result = scm
+            .backdoor_criterion("T", "Y")
+            .expect("serde deserialization should succeed");
         // Latent confounder is not observable, cannot be in adjustment set
         assert!(!result.adjustment_set.contains("U"));
         // If it's the only confounding path and U is not observable, identification fails
@@ -1719,7 +1740,9 @@ mod tests {
     #[test]
     fn test_intervention_surfaces_direct() {
         let mut scm = simple_dag();
-        let surfaces = scm.compute_intervention_surfaces("T", "Y").expect("serde deserialization should succeed");
+        let surfaces = scm
+            .compute_intervention_surfaces("T", "Y")
+            .expect("serde deserialization should succeed");
         assert!(
             surfaces
                 .iter()
@@ -1731,12 +1754,19 @@ mod tests {
     #[test]
     fn test_intervention_surfaces_backdoor() {
         let mut scm = simple_dag();
-        let surfaces = scm.compute_intervention_surfaces("T", "Y").expect("serde deserialization should succeed");
+        let surfaces = scm
+            .compute_intervention_surfaces("T", "Y")
+            .expect("serde deserialization should succeed");
         let backdoor_surface = surfaces
             .iter()
             .find(|s| s.name.contains("backdoor_adjustment"));
         assert!(backdoor_surface.is_some());
-        assert!(backdoor_surface.expect("serde deserialization should succeed").node_ids.contains("C"));
+        assert!(
+            backdoor_surface
+                .expect("serde deserialization should succeed")
+                .node_ids
+                .contains("C")
+        );
     }
 
     #[test]
@@ -1760,12 +1790,19 @@ mod tests {
             .expect("serde deserialization should succeed");
         scm.add_edge(edge("T", "Y", EdgeSign::Positive, 900_000))
             .expect("serde deserialization should succeed");
-        let surfaces = scm.compute_intervention_surfaces("T", "Y").expect("serde deserialization should succeed");
+        let surfaces = scm
+            .compute_intervention_surfaces("T", "Y")
+            .expect("serde deserialization should succeed");
         let iv_surface = surfaces
             .iter()
             .find(|s| s.name.contains("instrumental_variable"));
         assert!(iv_surface.is_some());
-        assert!(iv_surface.expect("serde deserialization should succeed").node_ids.contains("Z"));
+        assert!(
+            iv_surface
+                .expect("serde deserialization should succeed")
+                .node_ids
+                .contains("Z")
+        );
     }
 
     #[test]
@@ -1794,7 +1831,9 @@ mod tests {
         scm.add_edge(edge("T", "Y", EdgeSign::Positive, 900_000))
             .expect("serde deserialization should succeed");
 
-        let surfaces = scm.compute_intervention_surfaces("T", "Y").expect("serde deserialization should succeed");
+        let surfaces = scm
+            .compute_intervention_surfaces("T", "Y")
+            .expect("serde deserialization should succeed");
         let iv_surface = surfaces
             .iter()
             .find(|s| s.name.contains("instrumental_variable"))
@@ -1830,7 +1869,9 @@ mod tests {
         scm.add_edge(edge("T", "Y", EdgeSign::Positive, 900_000))
             .expect("serde deserialization should succeed");
 
-        let surfaces = scm.compute_intervention_surfaces("T", "Y").expect("serde deserialization should succeed");
+        let surfaces = scm
+            .compute_intervention_surfaces("T", "Y")
+            .expect("serde deserialization should succeed");
         assert!(
             !surfaces
                 .iter()
@@ -1846,14 +1887,19 @@ mod tests {
             value_millionths: 1_000_000,
             description: "Fix lane to JS lane".into(),
         };
-        let mutated = scm.do_intervention(&intervention).expect("serde deserialization should succeed");
+        let mutated = scm
+            .do_intervention(&intervention)
+            .expect("serde deserialization should succeed");
         // T should have no parents in the mutated model
         assert!(mutated.parents_of("T").is_empty());
         // T should still have children
         assert!(mutated.children_of("T").contains("Y"));
         // Fixed value should be set
         assert_eq!(
-            mutated.node("T").expect("serde deserialization should succeed").fixed_value_millionths,
+            mutated
+                .node("T")
+                .expect("serde deserialization should succeed")
+                .fixed_value_millionths,
             Some(1_000_000)
         );
     }
@@ -1913,7 +1959,9 @@ mod tests {
             });
         }
 
-        let effect = scm.estimate_ate("T", "Y", 1_000_000, 0, 5).expect("serde deserialization should succeed");
+        let effect = scm
+            .estimate_ate("T", "Y", 1_000_000, 0, 5)
+            .expect("serde deserialization should succeed");
         assert_eq!(effect.ate_millionths, 600_000);
         assert!(effect.identified);
         assert_eq!(effect.sample_size, 20);
@@ -1964,7 +2012,9 @@ mod tests {
             });
         }
 
-        let effect = scm.estimate_ate("T", "Y", 1_000_000, 0, 5).expect("serde deserialization should succeed");
+        let effect = scm
+            .estimate_ate("T", "Y", 1_000_000, 0, 5)
+            .expect("serde deserialization should succeed");
         assert_eq!(effect.ate_millionths, 400_000);
         assert!(effect.identified);
         assert!(effect.adjustment_set.contains("C"));
@@ -2045,7 +2095,9 @@ mod tests {
         scm.add_edge(edge("T", "Y", EdgeSign::Positive, 1_000_000))
             .expect("serde deserialization should succeed");
 
-        let decomp = scm.decompose_attribution("T", "Y", 500_000).expect("serde deserialization should succeed");
+        let decomp = scm
+            .decompose_attribution("T", "Y", 500_000)
+            .expect("serde deserialization should succeed");
         assert_eq!(decomp.pathways.len(), 1);
         assert_eq!(decomp.pathways[0].effect_millionths, 500_000);
         assert_eq!(decomp.pathways[0].fraction_millionths, 1_000_000);
@@ -2077,7 +2129,9 @@ mod tests {
         scm.add_edge(edge("T", "Y", EdgeSign::Positive, 800_000))
             .expect("serde deserialization should succeed");
 
-        let decomp = scm.decompose_attribution("T", "Y", 1_000_000).expect("serde deserialization should succeed");
+        let decomp = scm
+            .decompose_attribution("T", "Y", 1_000_000)
+            .expect("serde deserialization should succeed");
         assert_eq!(decomp.pathways.len(), 2);
         // T→M→Y strength = 0.5 * 0.6 = 0.3
         // T→Y strength = 0.8
@@ -2101,7 +2155,9 @@ mod tests {
         ))
         .expect("serde deserialization should succeed");
         // No edge between T and Y
-        let decomp = scm.decompose_attribution("T", "Y", 500_000).expect("serde deserialization should succeed");
+        let decomp = scm
+            .decompose_attribution("T", "Y", 500_000)
+            .expect("serde deserialization should succeed");
         assert!(decomp.pathways.is_empty());
         assert_eq!(decomp.residual_millionths, 500_000);
     }
@@ -2158,7 +2214,8 @@ mod tests {
     fn test_serde_roundtrip_node() {
         let n = node("test", NodeRole::Treatment, VariableDomain::LaneChoice);
         let json = serde_json::to_string(&n).expect("serde deserialization should succeed");
-        let back: CausalNode = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: CausalNode =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(n, back);
     }
 
@@ -2166,7 +2223,8 @@ mod tests {
     fn test_serde_roundtrip_edge() {
         let e = edge("A", "B", EdgeSign::Positive, 500_000);
         let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
-        let back: CausalEdge = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: CausalEdge =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(e, back);
     }
 
@@ -2174,7 +2232,8 @@ mod tests {
     fn test_serde_roundtrip_scm() {
         let scm = simple_dag();
         let json = serde_json::to_string(&scm).expect("serde deserialization should succeed");
-        let back: StructuralCausalModel = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: StructuralCausalModel =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(scm, back);
     }
 
@@ -2186,7 +2245,8 @@ mod tests {
             values: BTreeMap::from([("X".to_string(), 123_456)]),
         };
         let json = serde_json::to_string(&obs).expect("serde deserialization should succeed");
-        let back: Observation = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: Observation =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(obs, back);
     }
 
@@ -2201,7 +2261,8 @@ mod tests {
             identified: true,
         };
         let json = serde_json::to_string(&effect).expect("serde deserialization should succeed");
-        let back: CausalEffect = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: CausalEffect =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(effect, back);
     }
 
@@ -2213,7 +2274,8 @@ mod tests {
             description: "test".into(),
         };
         let json = serde_json::to_string(&iv).expect("serde deserialization should succeed");
-        let back: Intervention = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: Intervention =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(iv, back);
     }
 
@@ -2223,7 +2285,8 @@ mod tests {
             path: vec!["A".into(), "B".into(), "A".into()],
         };
         let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
-        let back: ScmError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ScmError =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, back);
     }
 
@@ -2360,10 +2423,14 @@ mod tests {
         scm.add_edge(edge("T", "Y", EdgeSign::Positive, 900_000))
             .expect("serde deserialization should succeed");
 
-        let confounders = scm.classify_confounders("T", "Y").expect("serde deserialization should succeed");
+        let confounders = scm
+            .classify_confounders("T", "Y")
+            .expect("serde deserialization should succeed");
         assert_eq!(confounders.len(), 2);
 
-        let result = scm.backdoor_criterion("T", "Y").expect("serde deserialization should succeed");
+        let result = scm
+            .backdoor_criterion("T", "Y")
+            .expect("serde deserialization should succeed");
         assert!(result.identified);
         assert!(result.adjustment_set.contains("C1"));
         assert!(result.adjustment_set.contains("C2"));
@@ -2431,8 +2498,14 @@ mod tests {
 
         let topo = scm.topological_order();
         assert_eq!(topo.len(), 4);
-        let t_pos = topo.iter().position(|n| n == "T").expect("serde deserialization should succeed");
-        let y_pos = topo.iter().position(|n| n == "Y").expect("serde deserialization should succeed");
+        let t_pos = topo
+            .iter()
+            .position(|n| n == "T")
+            .expect("serde deserialization should succeed");
+        let y_pos = topo
+            .iter()
+            .position(|n| n == "Y")
+            .expect("serde deserialization should succeed");
         assert!(t_pos < y_pos);
     }
 
@@ -2440,7 +2513,8 @@ mod tests {
     fn test_edge_sign_serde() {
         for sign in [EdgeSign::Positive, EdgeSign::Negative, EdgeSign::Ambiguous] {
             let json = serde_json::to_string(&sign).expect("serde deserialization should succeed");
-            let back: EdgeSign = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: EdgeSign =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(sign, back);
         }
     }
@@ -2455,7 +2529,8 @@ mod tests {
             description: "test confounder".into(),
         };
         let json = serde_json::to_string(&cc).expect("serde deserialization should succeed");
-        let back: ClassifiedConfounder = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ClassifiedConfounder =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cc, back);
     }
 
@@ -2468,7 +2543,8 @@ mod tests {
             justification: "test justification".into(),
         };
         let json = serde_json::to_string(&surface).expect("serde deserialization should succeed");
-        let back: InterventionSurface = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: InterventionSurface =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(surface, back);
     }
 
@@ -2482,7 +2558,8 @@ mod tests {
             confounding_paths: vec![vec!["T".into(), "C".into(), "Y".into()]],
         };
         let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
-        let back: BackdoorResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: BackdoorResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, back);
     }
 
@@ -2500,7 +2577,8 @@ mod tests {
             residual_millionths: 0,
         };
         let json = serde_json::to_string(&decomp).expect("serde deserialization should succeed");
-        let back: AttributionDecomposition = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: AttributionDecomposition =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(decomp, back);
     }
 
@@ -2512,7 +2590,8 @@ mod tests {
             fraction_millionths: 600_000,
         };
         let json = serde_json::to_string(&pc).expect("serde deserialization should succeed");
-        let back: PathwayContribution = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: PathwayContribution =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(pc, back);
     }
 
@@ -2524,7 +2603,9 @@ mod tests {
             value_millionths: 1_000_000,
             description: "fix T".into(),
         };
-        let mutated = scm.do_intervention(&intervention).expect("serde deserialization should succeed");
+        let mutated = scm
+            .do_intervention(&intervention)
+            .expect("serde deserialization should succeed");
         // C→Y edge should still exist
         assert!(mutated.has_path(&"C".to_string(), &"Y".to_string()));
         // C→T edge should be removed
@@ -2553,8 +2634,14 @@ mod tests {
 
         // For every edge, source must come before target
         for edge in dag.edges() {
-            let src_pos = order.iter().position(|n| n == &edge.source).expect("serde deserialization should succeed");
-            let tgt_pos = order.iter().position(|n| n == &edge.target).expect("serde deserialization should succeed");
+            let src_pos = order
+                .iter()
+                .position(|n| n == &edge.source)
+                .expect("serde deserialization should succeed");
+            let tgt_pos = order
+                .iter()
+                .position(|n| n == &edge.target)
+                .expect("serde deserialization should succeed");
             assert!(
                 src_pos < tgt_pos,
                 "Edge {} -> {} violates topological order",
@@ -2572,9 +2659,15 @@ mod tests {
         assert!(!paths.is_empty());
         for path in &paths {
             // SAFETY: causal paths are non-empty by construction; first() returns Some
-            assert_eq!(path.first().expect("serde deserialization should succeed"), "lane_choice");
+            assert_eq!(
+                path.first().expect("serde deserialization should succeed"),
+                "lane_choice"
+            );
             // SAFETY: causal paths are non-empty by construction; last() returns Some
-            assert_eq!(path.last().expect("serde deserialization should succeed"), "latency_outcome");
+            assert_eq!(
+                path.last().expect("serde deserialization should succeed"),
+                "latency_outcome"
+            );
         }
     }
 
@@ -2690,13 +2783,23 @@ mod tests {
             value_millionths: 1_000_000,
             description: "set T=1".to_string(),
         };
-        let mutated = scm.do_intervention(&intervention).expect("serde deserialization should succeed");
+        let mutated = scm
+            .do_intervention(&intervention)
+            .expect("serde deserialization should succeed");
         // Original is unchanged
-        assert!(scm.node("T").expect("serde deserialization should succeed").fixed_value_millionths.is_none());
+        assert!(
+            scm.node("T")
+                .expect("serde deserialization should succeed")
+                .fixed_value_millionths
+                .is_none()
+        );
         assert_eq!(scm.edges().len(), 1);
         // Mutated has fixed value and no incoming edges
         assert_eq!(
-            mutated.node("T").expect("serde deserialization should succeed").fixed_value_millionths,
+            mutated
+                .node("T")
+                .expect("serde deserialization should succeed")
+                .fixed_value_millionths,
             Some(1_000_000)
         );
         assert!(mutated.parents_of("T").is_empty());
@@ -2745,7 +2848,9 @@ mod tests {
         })
         .expect("serde deserialization should succeed");
         assert!(scm.confounders().is_empty());
-        let classified = scm.classify_confounders("T", "Y").expect("serde deserialization should succeed");
+        let classified = scm
+            .classify_confounders("T", "Y")
+            .expect("serde deserialization should succeed");
         assert!(!classified.is_empty());
         // After classify, accessor returns persisted confounders
         assert_eq!(scm.confounders().len(), classified.len());
@@ -2836,7 +2941,9 @@ mod tests {
             mechanism: "inhibitory".to_string(),
         })
         .expect("serde deserialization should succeed");
-        let attr = scm.decompose_attribution("T", "Y", 1_000_000).expect("serde deserialization should succeed");
+        let attr = scm
+            .decompose_attribution("T", "Y", 1_000_000)
+            .expect("serde deserialization should succeed");
         assert_eq!(attr.pathways.len(), 1);
         // Decomposition uses abs(strength) for fractions, so negative edge
         // still gets full attribution weight — effect equals total_delta
@@ -2856,7 +2963,8 @@ mod tests {
             values,
         };
         let json = serde_json::to_string(&obs).expect("serde deserialization should succeed");
-        let back: Observation = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: Observation =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(obs.epoch, back.epoch);
         assert_eq!(obs.tick, back.tick);
         assert_eq!(obs.values.len(), 3);
@@ -2874,7 +2982,8 @@ mod tests {
             fixed_value_millionths: Some(750_000),
         };
         let json = serde_json::to_string(&node).expect("serde deserialization should succeed");
-        let back: CausalNode = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: CausalNode =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.fixed_value_millionths, Some(750_000));
     }
 
@@ -3071,7 +3180,13 @@ mod tests {
         assert_eq!(recorded.len(), 1);
         assert_eq!(recorded[0].epoch, 1);
         assert_eq!(recorded[0].tick, 10);
-        assert_eq!(*recorded[0].values.get("X").expect("serde deserialization should succeed"), 500_000);
+        assert_eq!(
+            *recorded[0]
+                .values
+                .get("X")
+                .expect("serde deserialization should succeed"),
+            500_000
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -3157,7 +3272,8 @@ mod tests {
         ];
         for role in &roles {
             let json = serde_json::to_string(role).expect("serde deserialization should succeed");
-            let back: NodeRole = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: NodeRole =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*role, back);
         }
     }
@@ -3180,7 +3296,8 @@ mod tests {
         ];
         for domain in &domains {
             let json = serde_json::to_string(domain).expect("serde deserialization should succeed");
-            let back: VariableDomain = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: VariableDomain =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*domain, back);
         }
     }
@@ -3199,7 +3316,8 @@ mod tests {
         ];
         for class in &classes {
             let json = serde_json::to_string(class).expect("serde deserialization should succeed");
-            let back: ConfounderClass = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ConfounderClass =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*class, back);
         }
     }
@@ -3212,7 +3330,8 @@ mod tests {
     fn test_edge_sign_serde_all_variants() {
         for sign in [EdgeSign::Positive, EdgeSign::Negative, EdgeSign::Ambiguous] {
             let json = serde_json::to_string(&sign).expect("serde deserialization should succeed");
-            let back: EdgeSign = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: EdgeSign =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(sign, back);
         }
     }

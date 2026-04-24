@@ -777,7 +777,8 @@ mod tests {
         let temp_dir = tempdir().expect("serde deserialization should succeed");
         let test_dir = temp_dir.path().join("test/language/literals");
         fs::create_dir_all(&test_dir).expect("serde deserialization should succeed");
-        fs::write(test_dir.join("numeric-literal.js"), "42").expect("serde deserialization should succeed");
+        fs::write(test_dir.join("numeric-literal.js"), "42")
+            .expect("serde deserialization should succeed");
 
         let config = RunnerConfig {
             test262_path: temp_dir.path().to_path_buf(),
@@ -820,7 +821,8 @@ mod tests {
         let temp_dir = tempdir().expect("serde deserialization should succeed");
         let test_dir = temp_dir.path().join("test/language");
         fs::create_dir_all(&test_dir).expect("serde deserialization should succeed");
-        fs::write(test_dir.join("positive.js"), "42").expect("serde deserialization should succeed");
+        fs::write(test_dir.join("positive.js"), "42")
+            .expect("serde deserialization should succeed");
         fs::write(
             test_dir.join("negative.js"),
             "/*---\nnegative:\n  phase: parse\n  type: SyntaxError\n---*/\nlet",
@@ -834,7 +836,9 @@ mod tests {
             ..RunnerConfig::default()
         };
         let runner = Test262Runner::new(config);
-        let report = runner.run_conformance(SecurityEpoch::from_raw(1)).expect("serde deserialization should succeed");
+        let report = runner
+            .run_conformance(SecurityEpoch::from_raw(1))
+            .expect("serde deserialization should succeed");
 
         assert_eq!(report.overall.total_tests, 1);
         assert_eq!(
@@ -1589,7 +1593,9 @@ pub mod differential_testing {
         fn report_generates_readable_summary() {
             let harness = DifferentialHarness::new();
             let epoch = SecurityEpoch::from_raw(1);
-            let report = harness.run_differential_tests(epoch).expect("serde deserialization should succeed");
+            let report = harness
+                .run_differential_tests(epoch)
+                .expect("serde deserialization should succeed");
             let summary = report.generate_summary();
 
             assert!(summary.contains("Cross-Engine Differential Testing Report"));

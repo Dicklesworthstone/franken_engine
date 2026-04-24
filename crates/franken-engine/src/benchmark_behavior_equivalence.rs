@@ -978,7 +978,8 @@ mod tests {
         // SAFETY: BehaviorEquivalenceObservation derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&obs).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid BehaviorEquivalenceObservation serialization
-        let back: BehaviorEquivalenceObservation = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: BehaviorEquivalenceObservation =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(obs, back);
     }
 
@@ -993,7 +994,8 @@ mod tests {
         // SAFETY: BehaviorEquivalenceReport derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid BehaviorEquivalenceReport serialization
-        let back: BehaviorEquivalenceReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: BehaviorEquivalenceReport =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report, back);
     }
 
@@ -1246,9 +1248,11 @@ mod tests {
     fn evidence_surface_serde_roundtrip() {
         for surface in [EvidenceSurface::ShippedPath, EvidenceSurface::LibraryOnly] {
             // SAFETY: EvidenceSurface derives Serialize and has no non-serializable fields
-            let json = serde_json::to_string(&surface).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&surface).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by valid EvidenceSurface serialization
-            let back: EvidenceSurface = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: EvidenceSurface =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(surface, back);
         }
     }
@@ -1265,9 +1269,11 @@ mod tests {
         ];
         for variant in variants {
             // SAFETY: BehaviorEquivalenceClass derives Serialize and has no non-serializable fields
-            let json = serde_json::to_string(&variant).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&variant).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by valid BehaviorEquivalenceClass serialization
-            let back: BehaviorEquivalenceClass = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: BehaviorEquivalenceClass =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(variant, back);
         }
     }
@@ -1282,7 +1288,8 @@ mod tests {
             // SAFETY: PublicationDisposition derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(&disp).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by valid PublicationDisposition serialization
-            let back: PublicationDisposition = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: PublicationDisposition =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(disp, back);
         }
     }
@@ -1302,7 +1309,8 @@ mod tests {
             // SAFETY: OwnerRouteHint derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(&hint).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by valid OwnerRouteHint serialization
-            let back: OwnerRouteHint = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: OwnerRouteHint =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(hint, back);
         }
     }
@@ -1315,7 +1323,8 @@ mod tests {
         // SAFETY: BenchmarkParityVerdictRecord derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&record).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid BenchmarkParityVerdictRecord serialization
-        let back: BenchmarkParityVerdictRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: BenchmarkParityVerdictRecord =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(record, back);
     }
 
@@ -1325,7 +1334,8 @@ mod tests {
         let record = build_record(&obs);
         assert!(record.owner_route.is_none());
         let json = serde_json::to_string(&record).expect("serde deserialization should succeed");
-        let back: BenchmarkParityVerdictRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: BenchmarkParityVerdictRecord =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(record, back);
     }
 
@@ -1333,7 +1343,8 @@ mod tests {
     fn observation_serde_roundtrip_without_minimized_repro() {
         let obs = shipped_observation("w1").with_detail("no repro");
         let json = serde_json::to_string(&obs).expect("serde deserialization should succeed");
-        let back: BehaviorEquivalenceObservation = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: BehaviorEquivalenceObservation =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(obs, back);
         assert!(back.minimized_repro_command.is_none());
     }
@@ -1352,7 +1363,8 @@ mod tests {
             "detail": "",
             "owner_hint": "runtime_semantics"
         }"#;
-        let obs: BehaviorEquivalenceObservation = serde_json::from_str(json).expect("serde deserialization should succeed");
+        let obs: BehaviorEquivalenceObservation =
+            serde_json::from_str(json).expect("serde deserialization should succeed");
         assert!(obs.minimized_repro_command.is_none());
     }
 
@@ -1635,7 +1647,8 @@ mod tests {
         let obs = shipped_observation("unicode_test").with_detail("divergence \u{1F4A5} detected");
         let record = build_record(&obs);
         let json = serde_json::to_string(&record).expect("serde deserialization should succeed");
-        let back: BenchmarkParityVerdictRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: BenchmarkParityVerdictRecord =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.detail, "divergence \u{1F4A5} detected");
     }
 

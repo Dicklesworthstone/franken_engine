@@ -1729,28 +1729,37 @@ mod tests {
     #[test]
     fn claim_domain_serde_exact_snake_case_strings() {
         assert_eq!(
-            serde_json::to_string(&ClaimDomain::Compatibility).expect("serde deserialization should succeed"),
+            serde_json::to_string(&ClaimDomain::Compatibility)
+                .expect("serde deserialization should succeed"),
             "\"compatibility\""
         );
         assert_eq!(
-            serde_json::to_string(&ClaimDomain::ShippedSurface).expect("serde deserialization should succeed"),
+            serde_json::to_string(&ClaimDomain::ShippedSurface)
+                .expect("serde deserialization should succeed"),
             "\"shipped_surface\""
         );
         assert_eq!(
-            serde_json::to_string(&ClaimDomain::React).expect("serde deserialization should succeed"),
+            serde_json::to_string(&ClaimDomain::React)
+                .expect("serde deserialization should succeed"),
             "\"react\""
         );
         assert_eq!(
-            serde_json::to_string(&ClaimDomain::Supremacy).expect("serde deserialization should succeed"),
+            serde_json::to_string(&ClaimDomain::Supremacy)
+                .expect("serde deserialization should succeed"),
             "\"supremacy\""
         );
         assert_eq!(
-            serde_json::to_string(&ClaimDomain::Rollout).expect("serde deserialization should succeed"),
+            serde_json::to_string(&ClaimDomain::Rollout)
+                .expect("serde deserialization should succeed"),
             "\"rollout\""
         );
-        assert_eq!(serde_json::to_string(&ClaimDomain::Ga).expect("serde deserialization should succeed"), "\"ga\"");
         assert_eq!(
-            serde_json::to_string(&ClaimDomain::SupportSurface).expect("serde deserialization should succeed"),
+            serde_json::to_string(&ClaimDomain::Ga).expect("serde deserialization should succeed"),
+            "\"ga\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ClaimDomain::SupportSurface)
+                .expect("serde deserialization should succeed"),
             "\"support_surface\""
         );
     }
@@ -1758,19 +1767,23 @@ mod tests {
     #[test]
     fn claim_tier_serde_exact_snake_case_strings() {
         assert_eq!(
-            serde_json::to_string(&ClaimTier::ShippedFact).expect("serde deserialization should succeed"),
+            serde_json::to_string(&ClaimTier::ShippedFact)
+                .expect("serde deserialization should succeed"),
             "\"shipped_fact\""
         );
         assert_eq!(
-            serde_json::to_string(&ClaimTier::ScopedObserved).expect("serde deserialization should succeed"),
+            serde_json::to_string(&ClaimTier::ScopedObserved)
+                .expect("serde deserialization should succeed"),
             "\"scoped_observed\""
         );
         assert_eq!(
-            serde_json::to_string(&ClaimTier::FrontierAmbition).expect("serde deserialization should succeed"),
+            serde_json::to_string(&ClaimTier::FrontierAmbition)
+                .expect("serde deserialization should succeed"),
             "\"frontier_ambition\""
         );
         assert_eq!(
-            serde_json::to_string(&ClaimTier::UnsupportedSurface).expect("serde deserialization should succeed"),
+            serde_json::to_string(&ClaimTier::UnsupportedSurface)
+                .expect("serde deserialization should succeed"),
             "\"unsupported_surface\""
         );
     }
@@ -1778,15 +1791,18 @@ mod tests {
     #[test]
     fn morphism_effect_serde_exact_snake_case_strings() {
         assert_eq!(
-            serde_json::to_string(&MorphismEffect::Supports).expect("serde deserialization should succeed"),
+            serde_json::to_string(&MorphismEffect::Supports)
+                .expect("serde deserialization should succeed"),
             "\"supports\""
         );
         assert_eq!(
-            serde_json::to_string(&MorphismEffect::Constrains).expect("serde deserialization should succeed"),
+            serde_json::to_string(&MorphismEffect::Constrains)
+                .expect("serde deserialization should succeed"),
             "\"constrains\""
         );
         assert_eq!(
-            serde_json::to_string(&MorphismEffect::Disqualifies).expect("serde deserialization should succeed"),
+            serde_json::to_string(&MorphismEffect::Disqualifies)
+                .expect("serde deserialization should succeed"),
             "\"disqualifies\""
         );
     }
@@ -1794,19 +1810,23 @@ mod tests {
     #[test]
     fn disqualifier_verdict_serde_exact_snake_case_strings() {
         assert_eq!(
-            serde_json::to_string(&DisqualifierVerdict::Forbid).expect("serde deserialization should succeed"),
+            serde_json::to_string(&DisqualifierVerdict::Forbid)
+                .expect("serde deserialization should succeed"),
             "\"forbid\""
         );
         assert_eq!(
-            serde_json::to_string(&DisqualifierVerdict::DowngradeToScoped).expect("serde deserialization should succeed"),
+            serde_json::to_string(&DisqualifierVerdict::DowngradeToScoped)
+                .expect("serde deserialization should succeed"),
             "\"downgrade_to_scoped\""
         );
         assert_eq!(
-            serde_json::to_string(&DisqualifierVerdict::DowngradeToTarget).expect("serde deserialization should succeed"),
+            serde_json::to_string(&DisqualifierVerdict::DowngradeToTarget)
+                .expect("serde deserialization should succeed"),
             "\"downgrade_to_target\""
         );
         assert_eq!(
-            serde_json::to_string(&DisqualifierVerdict::RequireOperatorGuidance).expect("serde deserialization should succeed"),
+            serde_json::to_string(&DisqualifierVerdict::RequireOperatorGuidance)
+                .expect("serde deserialization should succeed"),
             "\"require_operator_guidance\""
         );
     }
@@ -1814,11 +1834,13 @@ mod tests {
     #[test]
     fn evidence_state_serde_exact_snake_case_strings() {
         assert_eq!(
-            serde_json::to_string(&EvidenceState::Fresh).expect("serde deserialization should succeed"),
+            serde_json::to_string(&EvidenceState::Fresh)
+                .expect("serde deserialization should succeed"),
             "\"fresh\""
         );
         assert_eq!(
-            serde_json::to_string(&EvidenceState::Stale).expect("serde deserialization should succeed"),
+            serde_json::to_string(&EvidenceState::Stale)
+                .expect("serde deserialization should succeed"),
             "\"stale\""
         );
     }
@@ -1826,15 +1848,18 @@ mod tests {
     #[test]
     fn claim_verdict_state_serde_exact_snake_case_strings() {
         assert_eq!(
-            serde_json::to_string(&ClaimVerdictState::Entitled).expect("serde deserialization should succeed"),
+            serde_json::to_string(&ClaimVerdictState::Entitled)
+                .expect("serde deserialization should succeed"),
             "\"entitled\""
         );
         assert_eq!(
-            serde_json::to_string(&ClaimVerdictState::NotYetProven).expect("serde deserialization should succeed"),
+            serde_json::to_string(&ClaimVerdictState::NotYetProven)
+                .expect("serde deserialization should succeed"),
             "\"not_yet_proven\""
         );
         assert_eq!(
-            serde_json::to_string(&ClaimVerdictState::BlockedByMissingEvidence).expect("serde deserialization should succeed"),
+            serde_json::to_string(&ClaimVerdictState::BlockedByMissingEvidence)
+                .expect("serde deserialization should succeed"),
             "\"blocked_by_missing_evidence\""
         );
         assert_eq!(
@@ -2549,7 +2574,10 @@ mod tests {
             .evaluate_scenarios(&scenarios)
             .expect("should succeed");
         let certs = &outputs.impossibility_certificates.evaluated_scenarios[0].certificates;
-        let cert = certs.iter().find(|c| c.atom_id == "atom-shipped").expect("serde deserialization should succeed");
+        let cert = certs
+            .iter()
+            .find(|c| c.atom_id == "atom-shipped")
+            .expect("serde deserialization should succeed");
         assert_eq!(cert.certificate_id, "scen-123::atom-shipped::rule-forbid");
     }
 

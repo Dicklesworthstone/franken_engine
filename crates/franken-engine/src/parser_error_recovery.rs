@@ -1065,7 +1065,8 @@ mod tests {
             features_hash: ContentHash::compute(b"test"),
         };
         let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
-        let back: EvidenceFeatures = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: EvidenceFeatures =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(e, back);
     }
 
@@ -1181,7 +1182,8 @@ mod tests {
     fn loss_matrix_serde_roundtrip() {
         let m = LossMatrix::default();
         let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
-        let back: LossMatrix = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: LossMatrix =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(m, back);
     }
 
@@ -1262,7 +1264,8 @@ mod tests {
     fn config_serde_roundtrip() {
         let config = RecoveryConfig::default();
         let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
-        let back: RecoveryConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: RecoveryConfig =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, back);
     }
 
@@ -1295,7 +1298,8 @@ mod tests {
             replacement: "var".to_string(),
         };
         let json = serde_json::to_string(&edit).expect("serde deserialization should succeed");
-        let back: RepairEdit = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: RepairEdit =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(edit, back);
     }
 
@@ -1420,7 +1424,8 @@ mod tests {
         let errors = [simple_error()];
         let ledger = run_recovery(&errors, 100, &config);
         let json = serde_json::to_string(&ledger).expect("serde deserialization should succeed");
-        let back: DecisionLedger = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DecisionLedger =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ledger, back);
     }
 
@@ -1451,7 +1456,8 @@ mod tests {
     fn calibration_report_serde_roundtrip() {
         let report = CalibrationReport::compute(80, 5, 90, 10, 800_000);
         let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
-        let back: CalibrationReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: CalibrationReport =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report, back);
     }
 
@@ -1490,7 +1496,8 @@ mod tests {
     fn mode_policy_serde_roundtrip() {
         let table = mode_policy_table();
         let json = serde_json::to_string(&table).expect("serde deserialization should succeed");
-        let back: Vec<ModePolicyEntry> = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: Vec<ModePolicyEntry> =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(table, back);
     }
 
@@ -1533,7 +1540,8 @@ mod tests {
             RecoveryMode::Execution,
         ] {
             let json = serde_json::to_string(&mode).expect("serde deserialization should succeed");
-            let back: RecoveryMode = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: RecoveryMode =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(mode, back);
         }
     }
@@ -1546,7 +1554,8 @@ mod tests {
             ErrorState::Unrecoverable,
         ] {
             let json = serde_json::to_string(&state).expect("serde deserialization should succeed");
-            let back: ErrorState = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ErrorState =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(state, back);
         }
     }
@@ -1625,7 +1634,8 @@ mod tests {
     fn syntax_error_serde_roundtrip() {
         let err = simple_error();
         let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
-        let back: SyntaxError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SyntaxError =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, back);
     }
 
@@ -1633,7 +1643,8 @@ mod tests {
     fn recovery_config_serde_roundtrip() {
         let config = RecoveryConfig::default();
         let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
-        let back: RecoveryConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: RecoveryConfig =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, back);
     }
 
@@ -1856,8 +1867,11 @@ mod tests {
             candidate_count: 2,
             features_hash: ContentHash::compute(b"test"),
         };
-        let val: serde_json::Value = serde_json::to_value(&ef).expect("serde deserialization should succeed");
-        let obj = val.as_object().expect("serde deserialization should succeed");
+        let val: serde_json::Value =
+            serde_json::to_value(&ef).expect("serde deserialization should succeed");
+        let obj = val
+            .as_object()
+            .expect("serde deserialization should succeed");
         assert!(obj.contains_key("tokens_before_error"));
         assert!(obj.contains_key("tokens_after_error"));
         assert!(obj.contains_key("error_offset"));
@@ -1872,8 +1886,11 @@ mod tests {
     #[test]
     fn state_probabilities_json_field_names() {
         let sp = StateProbabilities::default();
-        let val: serde_json::Value = serde_json::to_value(&sp).expect("serde deserialization should succeed");
-        let obj = val.as_object().expect("serde deserialization should succeed");
+        let val: serde_json::Value =
+            serde_json::to_value(&sp).expect("serde deserialization should succeed");
+        let obj = val
+            .as_object()
+            .expect("serde deserialization should succeed");
         assert!(obj.contains_key("recoverable"));
         assert!(obj.contains_key("ambiguous"));
         assert!(obj.contains_key("unrecoverable"));
@@ -1883,8 +1900,11 @@ mod tests {
     #[test]
     fn loss_matrix_json_field_names() {
         let lm = LossMatrix::default();
-        let val: serde_json::Value = serde_json::to_value(&lm).expect("serde deserialization should succeed");
-        let obj = val.as_object().expect("serde deserialization should succeed");
+        let val: serde_json::Value =
+            serde_json::to_value(&lm).expect("serde deserialization should succeed");
+        let obj = val
+            .as_object()
+            .expect("serde deserialization should succeed");
         assert!(obj.contains_key("recover_recoverable"));
         assert!(obj.contains_key("recover_ambiguous"));
         assert!(obj.contains_key("recover_unrecoverable"));
@@ -1904,8 +1924,11 @@ mod tests {
             partial_recover: 20,
             fail_strict: 30,
         };
-        let val: serde_json::Value = serde_json::to_value(&el).expect("serde deserialization should succeed");
-        let obj = val.as_object().expect("serde deserialization should succeed");
+        let val: serde_json::Value =
+            serde_json::to_value(&el).expect("serde deserialization should succeed");
+        let obj = val
+            .as_object()
+            .expect("serde deserialization should succeed");
         assert!(obj.contains_key("recover_continue"));
         assert!(obj.contains_key("partial_recover"));
         assert!(obj.contains_key("fail_strict"));
@@ -2165,7 +2188,8 @@ mod tests {
     fn loss_matrix_serde_roundtrip_enrichment() {
         let lm = LossMatrix::default();
         let json = serde_json::to_string(&lm).expect("serde deserialization should succeed");
-        let back: LossMatrix = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: LossMatrix =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(lm, back);
     }
 
@@ -2192,7 +2216,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: RepairEdit = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: RepairEdit =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -2205,7 +2230,8 @@ mod tests {
             fail_strict: 8,
         };
         let json = serde_json::to_string(&el).expect("serde deserialization should succeed");
-        let back: ExpectedLosses = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ExpectedLosses =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(el, back);
     }
 

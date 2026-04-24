@@ -856,8 +856,10 @@ mod tests {
 
     #[test]
     fn lane_type_serde_round_trip() {
-        let json = serde_json::to_string(&LaneType::ProofSpecialized).expect("serde deserialization should succeed");
-        let back: LaneType = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&LaneType::ProofSpecialized)
+            .expect("serde deserialization should succeed");
+        let back: LaneType =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, LaneType::ProofSpecialized);
     }
 
@@ -1264,7 +1266,8 @@ mod tests {
         let input = full_input(20);
         let decision = evaluate(&input);
         let json = decision.to_jsonl();
-        let back: GateDecision = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GateDecision =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(decision.pass, back.pass);
         assert_eq!(decision.decision_id, back.decision_id);
     }
@@ -1279,7 +1282,10 @@ mod tests {
         let decision = evaluate(&input);
         // 5 comparison logs + 2 fallback logs + 1 summary log = 8
         assert_eq!(decision.logs.len(), 8);
-        let summary = decision.logs.last().expect("serde deserialization should succeed");
+        let summary = decision
+            .logs
+            .last()
+            .expect("serde deserialization should succeed");
         assert_eq!(summary.event, "gate_decision");
         assert_eq!(summary.outcome, "pass");
     }
@@ -1397,7 +1403,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: GateFailureCode = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: GateFailureCode =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -1444,7 +1451,8 @@ mod tests {
             throughput_ops_per_sec: Some(100),
         };
         let json = serde_json::to_string(&sample).expect("serde deserialization should succeed");
-        let back: BenchmarkSample = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: BenchmarkSample =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(sample, back);
     }
 
@@ -1467,7 +1475,8 @@ mod tests {
             },
         );
         let json = serde_json::to_string(&comp).expect("serde deserialization should succeed");
-        let back: BenchmarkComparison = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: BenchmarkComparison =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(comp, back);
     }
 
@@ -1483,7 +1492,8 @@ mod tests {
             signature_valid: true,
         };
         let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
-        let back: ReceiptCoverageEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ReceiptCoverageEntry =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, back);
     }
 
@@ -1525,7 +1535,8 @@ mod tests {
             affected_item: Some("wl-1".into()),
         };
         let json = serde_json::to_string(&finding).expect("serde deserialization should succeed");
-        let back: GateFinding = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GateFinding =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(finding, back);
     }
 
@@ -1626,7 +1637,8 @@ mod tests {
     fn gate_input_serde_roundtrip() {
         let input = full_input(5);
         let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
-        let back: GateInput = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GateInput =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(input, back);
     }
 
@@ -1724,7 +1736,8 @@ mod tests {
             .collect();
         let s = StatisticalSummary::from_comparisons(&comps);
         let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
-        let back: StatisticalSummary = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: StatisticalSummary =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(s, back);
     }
 
@@ -1732,7 +1745,8 @@ mod tests {
     fn enrichment_receipt_chain_replay_result_serde_roundtrip() {
         let r = passing_replay();
         let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
-        let back: ReceiptChainReplayResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ReceiptChainReplayResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 
@@ -1740,7 +1754,8 @@ mod tests {
     fn enrichment_fallback_test_result_serde_roundtrip() {
         let fb = passing_fallback("serde-fb");
         let json = serde_json::to_string(&fb).expect("serde deserialization should succeed");
-        let back: FallbackTestResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: FallbackTestResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(fb, back);
     }
 
@@ -1760,7 +1775,8 @@ mod tests {
             outcome: "ok".into(),
         };
         let json = serde_json::to_string(&evt).expect("serde deserialization should succeed");
-        let back: GateLogEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GateLogEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(evt, back);
     }
 

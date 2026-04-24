@@ -1736,7 +1736,8 @@ mod tests {
 
     #[test]
     fn transcript_sign_verify_roundtrip() {
-        let signing_key = SigningKey::from_bytes([0x41; 32]).expect("serde deserialization should succeed");
+        let signing_key =
+            SigningKey::from_bytes([0x41; 32]).expect("serde deserialization should succeed");
         let report_id = EngineObjectId([0xAA; 32]);
         let mut initial = BTreeSet::new();
         initial.insert(cap("clock"));
@@ -2000,8 +2001,10 @@ mod tests {
             AblationSearchStrategy::LatticeGreedy,
             AblationSearchStrategy::BinaryGuided,
         ] {
-            let json = serde_json::to_string(&variant).expect("serde deserialization should succeed");
-            let back: AblationSearchStrategy = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&variant).expect("serde deserialization should succeed");
+            let back: AblationSearchStrategy =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(variant, back);
         }
     }
@@ -2013,8 +2016,10 @@ mod tests {
             AblationSearchStage::CorrelatedPair,
             AblationSearchStage::BinaryBlock,
         ] {
-            let json = serde_json::to_string(&variant).expect("serde deserialization should succeed");
-            let back: AblationSearchStage = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&variant).expect("serde deserialization should succeed");
+            let back: AblationSearchStage =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(variant, back);
         }
     }
@@ -2030,8 +2035,10 @@ mod tests {
             AblationFailureClass::InvalidOracleResult,
             AblationFailureClass::BudgetExhausted,
         ] {
-            let json = serde_json::to_string(&variant).expect("serde deserialization should succeed");
-            let back: AblationFailureClass = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&variant).expect("serde deserialization should succeed");
+            let back: AblationFailureClass =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(variant, back);
         }
     }
@@ -2040,7 +2047,8 @@ mod tests {
     fn config_serde_round_trip() {
         let config = config_with_seed(42);
         let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
-        let back: ShadowAblationConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ShadowAblationConfig =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, back);
     }
 
@@ -2057,7 +2065,8 @@ mod tests {
     fn evaluation_record_serde_round_trip() {
         let record = sample_evaluation("test-candidate");
         let json = serde_json::to_string(&record).expect("serde deserialization should succeed");
-        let back: ShadowAblationEvaluationRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ShadowAblationEvaluationRecord =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(record, back);
     }
 
@@ -2172,7 +2181,8 @@ mod tests {
     // ── Transcript tamper detection ────────────────────────────────
     #[test]
     fn tampered_transcript_fails_verification() {
-        let signing_key = SigningKey::from_bytes([0x42; 32]).expect("serde deserialization should succeed");
+        let signing_key =
+            SigningKey::from_bytes([0x42; 32]).expect("serde deserialization should succeed");
         let input = ShadowAblationTranscriptInput {
             trace_id: "trace-tamper".to_string(),
             decision_id: "decision-tamper".to_string(),
@@ -2189,8 +2199,8 @@ mod tests {
             fallback: None,
             budget_utilization: BTreeMap::new(),
         };
-        let mut transcript =
-            SignedShadowAblationTranscript::create_signed(input, &signing_key).expect("serde deserialization should succeed");
+        let mut transcript = SignedShadowAblationTranscript::create_signed(input, &signing_key)
+            .expect("serde deserialization should succeed");
         // Tamper with the transcript — signature check catches it first
         transcript.extension_id = "ext-evil".to_string();
         let err = transcript.verify_signature().unwrap_err();
@@ -2218,10 +2228,11 @@ mod tests {
     #[test]
     fn run_rejects_empty_static_upper_bound() {
         let config = config_with_seed(1);
-        let engine =
-            ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default()).expect("serde deserialization should succeed");
+        let engine = ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default())
+            .expect("serde deserialization should succeed");
         let report = test_static_report(&config.extension_id, BTreeSet::new());
-        let signing_key = SigningKey::from_bytes([0x01; 32]).expect("serde deserialization should succeed");
+        let signing_key =
+            SigningKey::from_bytes([0x01; 32]).expect("serde deserialization should succeed");
         let err = engine
             .run(&report, &signing_key, |_| unreachable!())
             .unwrap_err();
@@ -2235,9 +2246,11 @@ mod tests {
     #[test]
     fn run_rejects_extension_mismatch() {
         let config = config_with_seed(1);
-        let engine = ShadowAblationEngine::new(config, SynthesisBudgetContract::default()).expect("serde deserialization should succeed");
+        let engine = ShadowAblationEngine::new(config, SynthesisBudgetContract::default())
+            .expect("serde deserialization should succeed");
         let report = test_static_report("wrong-ext", BTreeSet::from([cap("fs_read")]));
-        let signing_key = SigningKey::from_bytes([0x01; 32]).expect("serde deserialization should succeed");
+        let signing_key =
+            SigningKey::from_bytes([0x01; 32]).expect("serde deserialization should succeed");
         let err = engine
             .run(&report, &signing_key, |_| unreachable!())
             .unwrap_err();
@@ -2248,13 +2261,14 @@ mod tests {
     #[test]
     fn run_oracle_error_records_failure_class() {
         let config = config_with_seed(1);
-        let engine =
-            ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default()).expect("serde deserialization should succeed");
+        let engine = ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default())
+            .expect("serde deserialization should succeed");
         let report = test_static_report(
             &config.extension_id,
             BTreeSet::from([cap("fs_read"), cap("net")]),
         );
-        let signing_key = SigningKey::from_bytes([0x01; 32]).expect("serde deserialization should succeed");
+        let signing_key =
+            SigningKey::from_bytes([0x01; 32]).expect("serde deserialization should succeed");
         let result = engine
             .run(&report, &signing_key, |_| {
                 Err(ShadowAblationError::Budget {
@@ -2277,13 +2291,14 @@ mod tests {
     #[test]
     fn run_invalid_observation_records_failure() {
         let config = config_with_seed(1);
-        let engine =
-            ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default()).expect("serde deserialization should succeed");
+        let engine = ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default())
+            .expect("serde deserialization should succeed");
         let report = test_static_report(
             &config.extension_id,
             BTreeSet::from([cap("fs_read"), cap("net")]),
         );
-        let signing_key = SigningKey::from_bytes([0x01; 32]).expect("serde deserialization should succeed");
+        let signing_key =
+            SigningKey::from_bytes([0x01; 32]).expect("serde deserialization should succeed");
         let result = engine
             .run(&report, &signing_key, |_| {
                 Ok(ShadowAblationObservation {
@@ -2315,8 +2330,8 @@ mod tests {
         config.strategy = AblationSearchStrategy::BinaryGuided;
         config.max_pair_trials = 10;
         config.max_block_trials = 10;
-        let engine =
-            ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default()).expect("serde deserialization should succeed");
+        let engine = ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default())
+            .expect("serde deserialization should succeed");
         let caps = BTreeSet::from([
             cap("a"),
             cap("b"),
@@ -2328,7 +2343,8 @@ mod tests {
             cap("h"),
         ]);
         let report = test_static_report(&config.extension_id, caps.clone());
-        let signing_key = SigningKey::from_bytes([0x02; 32]).expect("serde deserialization should succeed");
+        let signing_key =
+            SigningKey::from_bytes([0x02; 32]).expect("serde deserialization should succeed");
         // Oracle that rejects single removals but accepts block removals (>= 2),
         // so that single-phase leaves caps intact and block phase actually runs.
         let result = engine
@@ -2364,10 +2380,11 @@ mod tests {
     #[test]
     fn run_correctness_regression_retains_capability() {
         let config = config_with_seed(1);
-        let engine =
-            ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default()).expect("serde deserialization should succeed");
+        let engine = ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default())
+            .expect("serde deserialization should succeed");
         let report = test_static_report(&config.extension_id, BTreeSet::from([cap("only_cap")]));
-        let signing_key = SigningKey::from_bytes([0x02; 32]).expect("serde deserialization should succeed");
+        let signing_key =
+            SigningKey::from_bytes([0x02; 32]).expect("serde deserialization should succeed");
         // Correctness below threshold => regression
         let result = engine
             .run(&report, &signing_key, |_| {
@@ -2398,10 +2415,11 @@ mod tests {
     #[test]
     fn run_risk_budget_exceeded_retains_capability() {
         let config = config_with_seed(1);
-        let engine =
-            ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default()).expect("serde deserialization should succeed");
+        let engine = ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default())
+            .expect("serde deserialization should succeed");
         let report = test_static_report(&config.extension_id, BTreeSet::from([cap("only_cap")]));
-        let signing_key = SigningKey::from_bytes([0x02; 32]).expect("serde deserialization should succeed");
+        let signing_key =
+            SigningKey::from_bytes([0x02; 32]).expect("serde deserialization should succeed");
         // Risk above threshold
         let result = engine
             .run(&report, &signing_key, |_| {
@@ -2433,13 +2451,14 @@ mod tests {
     fn run_pair_removal_successful() {
         let mut config = config_with_seed(42);
         config.max_pair_trials = 100;
-        let engine =
-            ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default()).expect("serde deserialization should succeed");
+        let engine = ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default())
+            .expect("serde deserialization should succeed");
         let report = test_static_report(
             &config.extension_id,
             BTreeSet::from([cap("a"), cap("b"), cap("c")]),
         );
-        let signing_key = SigningKey::from_bytes([0x03; 32]).expect("serde deserialization should succeed");
+        let signing_key =
+            SigningKey::from_bytes([0x03; 32]).expect("serde deserialization should succeed");
         let call_count = std::cell::Cell::new(0u32);
         let result = engine
             .run(&report, &signing_key, |req| {
@@ -2474,7 +2493,8 @@ mod tests {
     // ── Unsigned bytes deterministic ───────────────────────────────
     #[test]
     fn transcript_unsigned_bytes_deterministic() {
-        let signing_key = SigningKey::from_bytes([0x50; 32]).expect("serde deserialization should succeed");
+        let signing_key =
+            SigningKey::from_bytes([0x50; 32]).expect("serde deserialization should succeed");
         let input = || ShadowAblationTranscriptInput {
             trace_id: "trace-bytes".to_string(),
             decision_id: "decision-bytes".to_string(),
@@ -2491,8 +2511,10 @@ mod tests {
             fallback: None,
             budget_utilization: BTreeMap::new(),
         };
-        let t1 = SignedShadowAblationTranscript::create_signed(input(), &signing_key).expect("serde deserialization should succeed");
-        let t2 = SignedShadowAblationTranscript::create_signed(input(), &signing_key).expect("serde deserialization should succeed");
+        let t1 = SignedShadowAblationTranscript::create_signed(input(), &signing_key)
+            .expect("serde deserialization should succeed");
+        let t2 = SignedShadowAblationTranscript::create_signed(input(), &signing_key)
+            .expect("serde deserialization should succeed");
         assert_eq!(t1.unsigned_bytes(), t2.unsigned_bytes());
         assert_eq!(t1.transcript_hash, t2.transcript_hash);
     }
@@ -2514,7 +2536,8 @@ mod tests {
             remaining_capability_count: Some(3),
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let back: ShadowAblationLogEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ShadowAblationLogEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
     }
 
@@ -2535,7 +2558,8 @@ mod tests {
             deterministic_seed: 42,
         };
         let json = serde_json::to_string(&req).expect("serde deserialization should succeed");
-        let back: ShadowAblationCandidateRequest = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ShadowAblationCandidateRequest =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(req, back);
     }
 
@@ -2554,7 +2578,8 @@ mod tests {
             failure_detail: None,
         };
         let json = serde_json::to_string(&obs).expect("serde deserialization should succeed");
-        let back: ShadowAblationObservation = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ShadowAblationObservation =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(obs, back);
     }
 
@@ -2562,8 +2587,8 @@ mod tests {
     #[test]
     fn engine_config_accessor() {
         let config = config_with_seed(99);
-        let engine =
-            ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default()).expect("serde deserialization should succeed");
+        let engine = ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default())
+            .expect("serde deserialization should succeed");
         assert_eq!(engine.config(), &config);
     }
 
@@ -2601,7 +2626,8 @@ mod tests {
         ];
         for err in &errors {
             let json = serde_json::to_string(err).expect("serde deserialization should succeed");
-            let restored: ShadowAblationError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: ShadowAblationError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, restored);
         }
     }
@@ -2625,7 +2651,8 @@ mod tests {
             budget_utilization: BTreeMap::new(),
         };
         let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
-        let restored: ShadowAblationTranscriptInput = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: ShadowAblationTranscriptInput =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(input, restored);
     }
 
@@ -2697,7 +2724,8 @@ mod tests {
             },
         };
         let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
-        let restored: ShadowAblationRunResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: ShadowAblationRunResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, restored);
     }
 
@@ -2730,8 +2758,10 @@ mod tests {
                 .verification_key(),
             signature: Signature::from_bytes([0u8; 64]),
         };
-        let json = serde_json::to_string(&transcript).expect("serde deserialization should succeed");
-        let restored: SignedShadowAblationTranscript = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json =
+            serde_json::to_string(&transcript).expect("serde deserialization should succeed");
+        let restored: SignedShadowAblationTranscript =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(transcript, restored);
     }
 
@@ -3095,10 +3125,11 @@ mod tests {
     fn run_invariant_violation_retains_capability() {
         let mut config = config_with_seed(1);
         config.required_invariants = BTreeSet::from(["must_hold".to_string()]);
-        let engine =
-            ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default()).expect("serde deserialization should succeed");
+        let engine = ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default())
+            .expect("serde deserialization should succeed");
         let report = test_static_report(&config.extension_id, BTreeSet::from([cap("only")]));
-        let signing_key = SigningKey::from_bytes([0x04; 32]).expect("serde deserialization should succeed");
+        let signing_key =
+            SigningKey::from_bytes([0x04; 32]).expect("serde deserialization should succeed");
         let result = engine
             .run(&report, &signing_key, |_| {
                 Ok(ShadowAblationObservation {
@@ -3127,10 +3158,11 @@ mod tests {
     #[test]
     fn run_execution_failure_retains_capability() {
         let config = config_with_seed(1);
-        let engine =
-            ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default()).expect("serde deserialization should succeed");
+        let engine = ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default())
+            .expect("serde deserialization should succeed");
         let report = test_static_report(&config.extension_id, BTreeSet::from([cap("only")]));
-        let signing_key = SigningKey::from_bytes([0x05; 32]).expect("serde deserialization should succeed");
+        let signing_key =
+            SigningKey::from_bytes([0x05; 32]).expect("serde deserialization should succeed");
         let result = engine
             .run(&report, &signing_key, |_| {
                 Ok(ShadowAblationObservation {
@@ -3159,13 +3191,14 @@ mod tests {
     #[test]
     fn run_successful_single_removal_reduces_capabilities() {
         let config = config_with_seed(1);
-        let engine =
-            ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default()).expect("serde deserialization should succeed");
+        let engine = ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default())
+            .expect("serde deserialization should succeed");
         let report = test_static_report(
             &config.extension_id,
             BTreeSet::from([cap("essential"), cap("removable")]),
         );
-        let signing_key = SigningKey::from_bytes([0x06; 32]).expect("serde deserialization should succeed");
+        let signing_key =
+            SigningKey::from_bytes([0x06; 32]).expect("serde deserialization should succeed");
         // Oracle: accept removal of "removable", reject removal of "essential"
         let result = engine
             .run(&report, &signing_key, |req| {
@@ -3210,7 +3243,8 @@ mod tests {
             "no_side_channels".to_string(),
         ]);
         let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
-        let restored: ShadowAblationConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: ShadowAblationConfig =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, restored);
         assert_eq!(restored.required_invariants.len(), 2);
     }
@@ -3234,10 +3268,10 @@ mod tests {
             fallback: None,
             budget_utilization: BTreeMap::new(),
         };
-        let t1 =
-            SignedShadowAblationTranscript::create_signed(make_input("trace-A"), &key).expect("serde deserialization should succeed");
-        let t2 =
-            SignedShadowAblationTranscript::create_signed(make_input("trace-B"), &key).expect("serde deserialization should succeed");
+        let t1 = SignedShadowAblationTranscript::create_signed(make_input("trace-A"), &key)
+            .expect("serde deserialization should succeed");
+        let t2 = SignedShadowAblationTranscript::create_signed(make_input("trace-B"), &key)
+            .expect("serde deserialization should succeed");
         assert_ne!(t1.transcript_hash, t2.transcript_hash);
     }
 
@@ -3260,8 +3294,10 @@ mod tests {
             fallback: None,
             budget_utilization: BTreeMap::new(),
         };
-        let t1 = SignedShadowAblationTranscript::create_signed(make_input(1), &key).expect("serde deserialization should succeed");
-        let t2 = SignedShadowAblationTranscript::create_signed(make_input(2), &key).expect("serde deserialization should succeed");
+        let t1 = SignedShadowAblationTranscript::create_signed(make_input(1), &key)
+            .expect("serde deserialization should succeed");
+        let t2 = SignedShadowAblationTranscript::create_signed(make_input(2), &key)
+            .expect("serde deserialization should succeed");
         assert_ne!(t1.transcript_hash, t2.transcript_hash);
     }
 
@@ -3367,7 +3403,8 @@ mod tests {
 
     #[test]
     fn transcript_id_format_starts_with_prefix() {
-        let signing_key = SigningKey::from_bytes([0x70; 32]).expect("serde deserialization should succeed");
+        let signing_key =
+            SigningKey::from_bytes([0x70; 32]).expect("serde deserialization should succeed");
         let input = ShadowAblationTranscriptInput {
             trace_id: "t-prefix".to_string(),
             decision_id: "d".to_string(),
@@ -3384,8 +3421,8 @@ mod tests {
             fallback: None,
             budget_utilization: BTreeMap::new(),
         };
-        let transcript =
-            SignedShadowAblationTranscript::create_signed(input, &signing_key).expect("serde deserialization should succeed");
+        let transcript = SignedShadowAblationTranscript::create_signed(input, &signing_key)
+            .expect("serde deserialization should succeed");
         assert!(
             transcript.transcript_id.starts_with("shadow-ablation-"),
             "transcript_id should start with 'shadow-ablation-', got: {}",
@@ -3436,7 +3473,8 @@ mod tests {
             failure_detail: Some("bad things happened".to_string()),
         };
         let json = serde_json::to_string(&obs).expect("serde deserialization should succeed");
-        let back: ShadowAblationObservation = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ShadowAblationObservation =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(obs, back);
         assert_eq!(back.failure_detail.as_deref(), Some("bad things happened"));
     }
@@ -3465,10 +3503,11 @@ mod tests {
     #[test]
     fn run_result_logs_contain_start_and_complete() {
         let config = config_with_seed(1);
-        let engine =
-            ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default()).expect("serde deserialization should succeed");
+        let engine = ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default())
+            .expect("serde deserialization should succeed");
         let report = test_static_report(&config.extension_id, BTreeSet::from([cap("only")]));
-        let signing_key = SigningKey::from_bytes([0x07; 32]).expect("serde deserialization should succeed");
+        let signing_key =
+            SigningKey::from_bytes([0x07; 32]).expect("serde deserialization should succeed");
         let result = engine
             .run(&report, &signing_key, |_| {
                 Ok(ShadowAblationObservation {
@@ -3516,13 +3555,14 @@ mod tests {
     fn run_all_caps_removable_reduces_to_empty() {
         // When oracle accepts every single removal, the minimal set should be empty.
         let config = config_with_seed(7);
-        let engine =
-            ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default()).expect("serde deserialization should succeed");
+        let engine = ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default())
+            .expect("serde deserialization should succeed");
         let report = test_static_report(
             &config.extension_id,
             BTreeSet::from([cap("a"), cap("b"), cap("c")]),
         );
-        let signing_key = SigningKey::from_bytes([0x08; 32]).expect("serde deserialization should succeed");
+        let signing_key =
+            SigningKey::from_bytes([0x08; 32]).expect("serde deserialization should succeed");
         let result = engine
             .run(&report, &signing_key, |_| {
                 Ok(ShadowAblationObservation {
@@ -3551,13 +3591,14 @@ mod tests {
         // With max_pair_trials=1 and single removals rejected, pair phase should stop after 1 trial.
         let mut config = config_with_seed(1);
         config.max_pair_trials = 1;
-        let engine =
-            ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default()).expect("serde deserialization should succeed");
+        let engine = ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default())
+            .expect("serde deserialization should succeed");
         let report = test_static_report(
             &config.extension_id,
             BTreeSet::from([cap("a"), cap("b"), cap("c")]),
         );
-        let signing_key = SigningKey::from_bytes([0x09; 32]).expect("serde deserialization should succeed");
+        let signing_key =
+            SigningKey::from_bytes([0x09; 32]).expect("serde deserialization should succeed");
         let pair_count = std::cell::Cell::new(0u32);
         let result = engine
             .run(&report, &signing_key, |req| {
@@ -3620,7 +3661,8 @@ mod tests {
 
     #[test]
     fn transcript_as_unsigned_input_roundtrip() {
-        let signing_key = SigningKey::from_bytes([0x0A; 32]).expect("serde deserialization should succeed");
+        let signing_key =
+            SigningKey::from_bytes([0x0A; 32]).expect("serde deserialization should succeed");
         let original_input = ShadowAblationTranscriptInput {
             trace_id: "trace-roundtrip".to_string(),
             decision_id: "decision-roundtrip".to_string(),
@@ -3652,10 +3694,11 @@ mod tests {
         config.strategy = AblationSearchStrategy::BinaryGuided;
         config.max_pair_trials = 10;
         config.max_block_trials = 10;
-        let engine =
-            ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default()).expect("serde deserialization should succeed");
+        let engine = ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default())
+            .expect("serde deserialization should succeed");
         let report = test_static_report(&config.extension_id, BTreeSet::from([cap("x"), cap("y")]));
-        let signing_key = SigningKey::from_bytes([0x0B; 32]).expect("serde deserialization should succeed");
+        let signing_key =
+            SigningKey::from_bytes([0x0B; 32]).expect("serde deserialization should succeed");
         let result = engine
             .run(&report, &signing_key, |_| {
                 // Reject all removals
@@ -3718,10 +3761,11 @@ mod tests {
         // it should default to false and produce InvariantViolation.
         let mut config = config_with_seed(1);
         config.required_invariants = BTreeSet::from(["missing_inv".to_string()]);
-        let engine =
-            ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default()).expect("serde deserialization should succeed");
+        let engine = ShadowAblationEngine::new(config.clone(), SynthesisBudgetContract::default())
+            .expect("serde deserialization should succeed");
         let report = test_static_report(&config.extension_id, BTreeSet::from([cap("only")]));
-        let signing_key = SigningKey::from_bytes([0x0C; 32]).expect("serde deserialization should succeed");
+        let signing_key =
+            SigningKey::from_bytes([0x0C; 32]).expect("serde deserialization should succeed");
         let result = engine
             .run(&report, &signing_key, |_| {
                 Ok(ShadowAblationObservation {

@@ -757,7 +757,10 @@ mod tests {
 
     fn make_share_keys(count: usize) -> Vec<SigningKey> {
         (0..count)
-            .map(|i| SigningKey::from_bytes([(i + 10) as u8; 32]).expect("serde deserialization should succeed"))
+            .map(|i| {
+                SigningKey::from_bytes([(i + 10) as u8; 32])
+                    .expect("serde deserialization should succeed")
+            })
             .collect()
     }
 
@@ -908,7 +911,11 @@ mod tests {
         let policy = create_test_policy(2, &keys);
         let holder = ShareHolderId::from_verification_key(&keys[0].verification_key());
         assert!(policy.is_authorized(&holder));
-        let rogue = ShareHolderId(*VerificationKey::from_bytes([0xFF; 32]).expect("serde deserialization should succeed").as_bytes());
+        let rogue = ShareHolderId(
+            *VerificationKey::from_bytes([0xFF; 32])
+                .expect("serde deserialization should succeed")
+                .as_bytes(),
+        );
         assert!(!policy.is_authorized(&rogue));
     }
 
@@ -1054,7 +1061,8 @@ mod tests {
         )
         .expect("serde deserialization should succeed");
 
-        let rogue_key = SigningKey::from_bytes([0xFF; 32]).expect("serde deserialization should succeed");
+        let rogue_key =
+            SigningKey::from_bytes([0xFF; 32]).expect("serde deserialization should succeed");
         let result =
             ceremony.submit_partial(&rogue_key, TEST_PREIMAGE, DeterministicTimestamp(1001));
         assert!(matches!(
@@ -1163,7 +1171,9 @@ mod tests {
         ceremony
             .submit_partial(&keys[1], TEST_PREIMAGE, DeterministicTimestamp(1002))
             .expect("serde deserialization should succeed");
-        ceremony.finalize(TEST_PREIMAGE).expect("serde deserialization should succeed");
+        ceremony
+            .finalize(TEST_PREIMAGE)
+            .expect("serde deserialization should succeed");
 
         let result = ceremony.submit_partial(&keys[2], TEST_PREIMAGE, DeterministicTimestamp(1003));
         assert!(matches!(
@@ -1195,7 +1205,9 @@ mod tests {
             .submit_partial(&keys[1], TEST_PREIMAGE, DeterministicTimestamp(1002))
             .expect("serde deserialization should succeed");
 
-        let result = ceremony.finalize(TEST_PREIMAGE).expect("serde deserialization should succeed");
+        let result = ceremony
+            .finalize(TEST_PREIMAGE)
+            .expect("serde deserialization should succeed");
         result.verify(TEST_PREIMAGE).expect("verify");
     }
 
@@ -1218,7 +1230,9 @@ mod tests {
             .submit_partial(&keys[1], TEST_PREIMAGE, DeterministicTimestamp(1002))
             .expect("serde deserialization should succeed");
 
-        let result = ceremony.finalize(TEST_PREIMAGE).expect("serde deserialization should succeed");
+        let result = ceremony
+            .finalize(TEST_PREIMAGE)
+            .expect("serde deserialization should succeed");
         let verify_result = result.verify(b"wrong-preimage");
         assert!(matches!(
             verify_result,
@@ -1237,7 +1251,10 @@ mod tests {
         let new_keys = make_share_keys(3)
             .into_iter()
             .enumerate()
-            .map(|(i, _)| SigningKey::from_bytes([(i + 50) as u8; 32]).expect("serde deserialization should succeed"))
+            .map(|(i, _)| {
+                SigningKey::from_bytes([(i + 50) as u8; 32])
+                    .expect("serde deserialization should succeed")
+            })
             .collect::<Vec<_>>();
         let new_vks: Vec<VerificationKey> =
             new_keys.iter().map(|sk| sk.verification_key()).collect();
@@ -1273,13 +1290,16 @@ mod tests {
         let keys = make_share_keys(3);
         let policy = create_test_policy(2, &keys);
         let new_keys: Vec<SigningKey> = (0..3)
-            .map(|i| SigningKey::from_bytes([(i + 50) as u8; 32]).expect("serde deserialization should succeed"))
+            .map(|i| {
+                SigningKey::from_bytes([(i + 50) as u8; 32])
+                    .expect("serde deserialization should succeed")
+            })
             .collect();
         let new_vks: Vec<VerificationKey> =
             new_keys.iter().map(|sk| sk.verification_key()).collect();
 
-        let (new_policy, _) =
-            refresh_shares(&policy, &new_vks, SecurityEpoch::from_raw(2)).expect("serde deserialization should succeed");
+        let (new_policy, _) = refresh_shares(&policy, &new_vks, SecurityEpoch::from_raw(2))
+            .expect("serde deserialization should succeed");
 
         // New keys can sign a ceremony with the new policy.
         let mut ceremony = ThresholdCeremony::new(
@@ -1296,7 +1316,9 @@ mod tests {
         ceremony
             .submit_partial(&new_keys[1], TEST_PREIMAGE, DeterministicTimestamp(2002))
             .expect("serde deserialization should succeed");
-        let result = ceremony.finalize(TEST_PREIMAGE).expect("serde deserialization should succeed");
+        let result = ceremony
+            .finalize(TEST_PREIMAGE)
+            .expect("serde deserialization should succeed");
         result.verify(TEST_PREIMAGE).expect("verify with new keys");
     }
 
@@ -1305,13 +1327,16 @@ mod tests {
         let keys = make_share_keys(3);
         let policy = create_test_policy(2, &keys);
         let new_keys: Vec<SigningKey> = (0..3)
-            .map(|i| SigningKey::from_bytes([(i + 50) as u8; 32]).expect("serde deserialization should succeed"))
+            .map(|i| {
+                SigningKey::from_bytes([(i + 50) as u8; 32])
+                    .expect("serde deserialization should succeed")
+            })
             .collect();
         let new_vks: Vec<VerificationKey> =
             new_keys.iter().map(|sk| sk.verification_key()).collect();
 
-        let (new_policy, _) =
-            refresh_shares(&policy, &new_vks, SecurityEpoch::from_raw(2)).expect("serde deserialization should succeed");
+        let (new_policy, _) = refresh_shares(&policy, &new_vks, SecurityEpoch::from_raw(2))
+            .expect("serde deserialization should succeed");
 
         let mut ceremony = ThresholdCeremony::new(
             &new_policy,
@@ -1351,7 +1376,9 @@ mod tests {
         ceremony
             .submit_partial(&keys[1], TEST_PREIMAGE, DeterministicTimestamp(1002))
             .expect("serde deserialization should succeed");
-        ceremony.finalize(TEST_PREIMAGE).expect("serde deserialization should succeed");
+        ceremony
+            .finalize(TEST_PREIMAGE)
+            .expect("serde deserialization should succeed");
 
         let events = ceremony.drain_events();
         assert_eq!(events.len(), 4); // init + 2 partials + finalize
@@ -1386,7 +1413,8 @@ mod tests {
         )
         .expect("serde deserialization should succeed");
 
-        let rogue = SigningKey::from_bytes([0xFF; 32]).expect("serde deserialization should succeed");
+        let rogue =
+            SigningKey::from_bytes([0xFF; 32]).expect("serde deserialization should succeed");
         let _ = ceremony.submit_partial(&rogue, TEST_PREIMAGE, DeterministicTimestamp(1001));
 
         let events = ceremony.drain_events();
@@ -1416,11 +1444,15 @@ mod tests {
         ceremony
             .submit_partial(&keys[2], TEST_PREIMAGE, DeterministicTimestamp(1002))
             .expect("serde deserialization should succeed");
-        ceremony.finalize(TEST_PREIMAGE).expect("serde deserialization should succeed");
+        ceremony
+            .finalize(TEST_PREIMAGE)
+            .expect("serde deserialization should succeed");
 
         let events = ceremony.drain_events();
-        if let ThresholdEventType::CeremonyFinalized { participants } =
-            &events.last().expect("serde deserialization should succeed").event_type
+        if let ThresholdEventType::CeremonyFinalized { participants } = &events
+            .last()
+            .expect("serde deserialization should succeed")
+            .event_type
         {
             assert_eq!(participants.len(), 2);
         } else {
@@ -1437,7 +1469,8 @@ mod tests {
         let keys = make_share_keys(3);
         let policy = create_test_policy(2, &keys);
         let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
-        let restored: ThresholdSigningPolicy = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: ThresholdSigningPolicy =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(policy, restored);
     }
 
@@ -1458,10 +1491,13 @@ mod tests {
         ceremony
             .submit_partial(&keys[1], TEST_PREIMAGE, DeterministicTimestamp(1002))
             .expect("serde deserialization should succeed");
-        let result = ceremony.finalize(TEST_PREIMAGE).expect("serde deserialization should succeed");
+        let result = ceremony
+            .finalize(TEST_PREIMAGE)
+            .expect("serde deserialization should succeed");
 
         let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
-        let restored: ThresholdResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: ThresholdResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, restored);
     }
 
@@ -1478,7 +1514,8 @@ mod tests {
         ];
         for err in &errors {
             let json = serde_json::to_string(err).expect("serde deserialization should succeed");
-            let restored: ThresholdError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: ThresholdError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, restored);
         }
     }
@@ -1550,7 +1587,8 @@ mod tests {
                 .expect("serde deserialization should succeed");
             c.submit_partial(&keys[1], TEST_PREIMAGE, DeterministicTimestamp(1002))
                 .expect("serde deserialization should succeed");
-            c.finalize(TEST_PREIMAGE).expect("serde deserialization should succeed")
+            c.finalize(TEST_PREIMAGE)
+                .expect("serde deserialization should succeed")
         };
 
         let r1 = run();
@@ -1608,7 +1646,9 @@ mod tests {
                 .expect("serde deserialization should succeed");
         }
         assert_eq!(ceremony.signatures_collected(), 5);
-        let result = ceremony.finalize(TEST_PREIMAGE).expect("serde deserialization should succeed");
+        let result = ceremony
+            .finalize(TEST_PREIMAGE)
+            .expect("serde deserialization should succeed");
         assert_eq!(result.signatures.len(), 5);
         result.verify(TEST_PREIMAGE).expect("verify all");
     }
@@ -1730,7 +1770,8 @@ mod tests {
         ];
         for evt in &events {
             let json = serde_json::to_string(evt).expect("serde deserialization should succeed");
-            let restored: ThresholdEventType = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: ThresholdEventType =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*evt, restored);
         }
     }
@@ -1751,7 +1792,8 @@ mod tests {
                 .expect("serde deserialization should succeed");
             c.submit_partial(&keys[1], TEST_PREIMAGE, DeterministicTimestamp(1002))
                 .expect("serde deserialization should succeed");
-            c.finalize(TEST_PREIMAGE).expect("serde deserialization should succeed")
+            c.finalize(TEST_PREIMAGE)
+                .expect("serde deserialization should succeed")
         };
         let r1 = run();
         let r2 = run();
@@ -1836,7 +1878,8 @@ mod tests {
     fn threshold_scope_serde_roundtrip_all_variants() {
         for scope in ThresholdScope::ALL {
             let json = serde_json::to_string(scope).expect("serde deserialization should succeed");
-            let back: ThresholdScope = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ThresholdScope =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(back, *scope);
         }
     }
@@ -1845,7 +1888,8 @@ mod tests {
     fn share_holder_id_serde_roundtrip() {
         let id = ShareHolderId([42u8; 32]);
         let json = serde_json::to_string(&id).expect("serde deserialization should succeed");
-        let back: ShareHolderId = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ShareHolderId =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, id);
     }
 
@@ -1899,7 +1943,9 @@ mod tests {
         ceremony
             .submit_partial(&keys[1], TEST_PREIMAGE, DeterministicTimestamp(1002))
             .expect("serde deserialization should succeed");
-        let result = ceremony.finalize(TEST_PREIMAGE).expect("serde deserialization should succeed");
+        let result = ceremony
+            .finalize(TEST_PREIMAGE)
+            .expect("serde deserialization should succeed");
         let cloned = result.clone();
         assert_eq!(result.ceremony_id, cloned.ceremony_id);
         assert_eq!(result.policy_id, cloned.policy_id);
@@ -1915,11 +1961,15 @@ mod tests {
         let keys = make_share_keys(3);
         let policy = create_test_policy(2, &keys);
         let new_keys: Vec<SigningKey> = (0..3)
-            .map(|i| SigningKey::from_bytes([(i + 80) as u8; 32]).expect("serde deserialization should succeed"))
+            .map(|i| {
+                SigningKey::from_bytes([(i + 80) as u8; 32])
+                    .expect("serde deserialization should succeed")
+            })
             .collect();
         let new_vks: Vec<VerificationKey> =
             new_keys.iter().map(|sk| sk.verification_key()).collect();
-        let (_, refresh) = refresh_shares(&policy, &new_vks, SecurityEpoch::from_raw(5)).expect("serde deserialization should succeed");
+        let (_, refresh) = refresh_shares(&policy, &new_vks, SecurityEpoch::from_raw(5))
+            .expect("serde deserialization should succeed");
         let cloned = refresh.clone();
         assert_eq!(refresh.policy_id, cloned.policy_id);
         assert_eq!(refresh.old_shares, cloned.old_shares);
@@ -1944,7 +1994,9 @@ mod tests {
         ceremony
             .submit_partial(&keys[1], TEST_PREIMAGE, DeterministicTimestamp(1002))
             .expect("serde deserialization should succeed");
-        let result = ceremony.finalize(TEST_PREIMAGE).expect("serde deserialization should succeed");
+        let result = ceremony
+            .finalize(TEST_PREIMAGE)
+            .expect("serde deserialization should succeed");
         let partial = &result.signatures[0];
         let cloned = partial.clone();
         assert_eq!(partial.signer, cloned.signer);
@@ -2016,7 +2068,9 @@ mod tests {
         ceremony
             .submit_partial(&keys[1], TEST_PREIMAGE, DeterministicTimestamp(1002))
             .expect("serde deserialization should succeed");
-        let result = ceremony.finalize(TEST_PREIMAGE).expect("serde deserialization should succeed");
+        let result = ceremony
+            .finalize(TEST_PREIMAGE)
+            .expect("serde deserialization should succeed");
         let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
         assert!(json.contains("\"ceremony_id\""), "missing ceremony_id");
         assert!(json.contains("\"policy_id\""), "missing policy_id");
@@ -2035,11 +2089,15 @@ mod tests {
         let keys = make_share_keys(3);
         let policy = create_test_policy(2, &keys);
         let new_keys: Vec<SigningKey> = (0..3)
-            .map(|i| SigningKey::from_bytes([(i + 80) as u8; 32]).expect("serde deserialization should succeed"))
+            .map(|i| {
+                SigningKey::from_bytes([(i + 80) as u8; 32])
+                    .expect("serde deserialization should succeed")
+            })
             .collect();
         let new_vks: Vec<VerificationKey> =
             new_keys.iter().map(|sk| sk.verification_key()).collect();
-        let (_, refresh) = refresh_shares(&policy, &new_vks, SecurityEpoch::from_raw(5)).expect("serde deserialization should succeed");
+        let (_, refresh) = refresh_shares(&policy, &new_vks, SecurityEpoch::from_raw(5))
+            .expect("serde deserialization should succeed");
         let json = serde_json::to_string(&refresh).expect("serde deserialization should succeed");
         assert!(json.contains("\"policy_id\""), "missing policy_id");
         assert!(json.contains("\"old_shares\""), "missing old_shares");
@@ -2065,7 +2123,8 @@ mod tests {
         )
         .expect("serde deserialization should succeed");
         let json = serde_json::to_string(&ceremony).expect("serde deserialization should succeed");
-        let restored: ThresholdCeremony = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: ThresholdCeremony =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ceremony.ceremony_id, restored.ceremony_id);
         assert_eq!(ceremony.policy_id, restored.policy_id);
         assert_eq!(ceremony.scope, restored.scope);
@@ -2362,7 +2421,9 @@ mod tests {
         ceremony
             .submit_partial(&keys[1], TEST_PREIMAGE, DeterministicTimestamp(3000))
             .expect("serde deserialization should succeed");
-        let result = ceremony.finalize(TEST_PREIMAGE).expect("serde deserialization should succeed");
+        let result = ceremony
+            .finalize(TEST_PREIMAGE)
+            .expect("serde deserialization should succeed");
         let err = result.verify(b"wrong-preimage").unwrap_err();
         assert!(matches!(err, ThresholdError::PreimageMismatch));
     }
@@ -2386,7 +2447,9 @@ mod tests {
         ceremony
             .submit_partial(&keys[1], TEST_PREIMAGE, DeterministicTimestamp(3000))
             .expect("serde deserialization should succeed");
-        let result = ceremony.finalize(TEST_PREIMAGE).expect("serde deserialization should succeed");
+        let result = ceremony
+            .finalize(TEST_PREIMAGE)
+            .expect("serde deserialization should succeed");
         assert!(result.verify(TEST_PREIMAGE).is_ok());
         assert_eq!(result.threshold_k, 2);
         assert_eq!(result.signatures.len(), 2);
@@ -2472,8 +2535,8 @@ mod tests {
         let policy = create_test_policy(2, &keys);
         let new_keys = make_share_keys(3);
         let new_vks: Vec<_> = new_keys.iter().map(|k| k.verification_key()).collect();
-        let (new_policy, _) =
-            refresh_shares(&policy, &new_vks, SecurityEpoch::from_raw(2)).expect("serde deserialization should succeed");
+        let (new_policy, _) = refresh_shares(&policy, &new_vks, SecurityEpoch::from_raw(2))
+            .expect("serde deserialization should succeed");
         assert_eq!(new_policy.threshold_k, policy.threshold_k);
         assert_eq!(new_policy.total_n, policy.total_n);
     }

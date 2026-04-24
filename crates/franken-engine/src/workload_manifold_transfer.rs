@@ -531,7 +531,8 @@ mod tests {
             // SAFETY: EmbeddingFeature derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(f).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by valid EmbeddingFeature serialization
-            let back: EmbeddingFeature = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: EmbeddingFeature =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*f, back);
         }
     }
@@ -600,7 +601,8 @@ mod tests {
             // SAFETY: TransferKind derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by valid TransferKind serialization
-            let back: TransferKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: TransferKind =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(kind, back);
         }
     }
@@ -609,7 +611,8 @@ mod tests {
     fn manifest_add_embedding() {
         let mut m = TransferManifest::new();
         // SAFETY: Test with valid embedding should succeed adding to empty manifest
-        m.add_embedding(test_embedding("a", &[])).expect("serde deserialization should succeed");
+        m.add_embedding(test_embedding("a", &[]))
+            .expect("serde deserialization should succeed");
         assert_eq!(m.embeddings.len(), 1);
     }
 
@@ -617,7 +620,8 @@ mod tests {
     fn manifest_duplicate_rejected() {
         let mut m = TransferManifest::new();
         // SAFETY: Test with valid embedding should succeed adding to empty manifest
-        m.add_embedding(test_embedding("a", &[])).expect("serde deserialization should succeed");
+        m.add_embedding(test_embedding("a", &[]))
+            .expect("serde deserialization should succeed");
         let err = m.add_embedding(test_embedding("a", &[])).unwrap_err();
         assert!(matches!(err, ManifoldError::DuplicateEmbedding { .. }));
     }
@@ -632,7 +636,9 @@ mod tests {
         ))
         .expect("serde deserialization should succeed");
         // SAFETY: Test certificate computation with same workload ID should succeed
-        let cert = m.compute_certificate("a", "a").expect("serde deserialization should succeed");
+        let cert = m
+            .compute_certificate("a", "a")
+            .expect("serde deserialization should succeed");
         assert!(cert.is_neighbor);
     }
 
@@ -652,7 +658,9 @@ mod tests {
         ))
         .expect("serde deserialization should succeed");
         // SAFETY: Test certificate computation between different workloads 'a' and 'b' should succeed
-        let cert = m.compute_certificate("a", "b").expect("serde deserialization should succeed");
+        let cert = m
+            .compute_certificate("a", "b")
+            .expect("serde deserialization should succeed");
         assert!(cert.is_neighbor);
     }
 
@@ -673,7 +681,8 @@ mod tests {
     fn manifest_serde_roundtrip() {
         let m = build_seed_manifest();
         let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
-        let back: TransferManifest = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: TransferManifest =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(m.embeddings.len(), back.embeddings.len());
         assert_eq!(m.content_hash(), back.content_hash());
     }

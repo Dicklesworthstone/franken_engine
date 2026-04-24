@@ -1435,10 +1435,12 @@ mod tests {
         for program in FrontierProgram::all() {
             // SAFETY: FrontierProgram derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json = serde_json::to_string(program).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(program).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by to_string of a valid FrontierProgram,
             // so from_str back to FrontierProgram cannot fail (valid format + matching schema).
-            let back: FrontierProgram = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: FrontierProgram =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*program, back);
         }
     }
@@ -1454,7 +1456,8 @@ mod tests {
         let json = serde_json::to_string(&gate).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid GateDefinition,
         // so from_str back to GateDefinition cannot fail (valid format + matching schema).
-        let back: GateDefinition = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GateDefinition =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(gate, back);
     }
 
@@ -1478,7 +1481,8 @@ mod tests {
         let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid GateEvaluationReceipt,
         // so from_str back to GateEvaluationReceipt cannot fail (valid format + matching schema).
-        let back: GateEvaluationReceipt = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GateEvaluationReceipt =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(receipt, back);
     }
 
@@ -1493,7 +1497,8 @@ mod tests {
         let json = serde_json::to_string(&registry).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid GateRegistry,
         // so from_str back to GateRegistry cannot fail (valid format + matching schema).
-        let back: GateRegistry = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GateRegistry =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(registry, back);
     }
 
@@ -1650,7 +1655,8 @@ mod tests {
             let json = serde_json::to_string(cat).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by to_string of a valid ArtifactCategory,
             // so from_str back to ArtifactCategory cannot fail (valid format + matching schema).
-            let back: ArtifactCategory = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ArtifactCategory =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*cat, back);
         }
     }
@@ -1664,10 +1670,12 @@ mod tests {
         ] {
             // SAFETY: PromotionDecision derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json = serde_json::to_string(&decision).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&decision).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by to_string of a valid PromotionDecision,
             // so from_str back to PromotionDecision cannot fail (valid format + matching schema).
-            let back: PromotionDecision = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: PromotionDecision =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(decision, back);
         }
     }
@@ -1704,7 +1712,8 @@ mod tests {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by to_string of a valid VerificationResult,
             // so from_str back to VerificationResult cannot fail (valid format + matching schema).
-            let back: VerificationResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: VerificationResult =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -1749,7 +1758,8 @@ mod tests {
         let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid ReadinessSummary,
         // so from_str back to ReadinessSummary cannot fail (valid format + matching schema).
-        let back: ReadinessSummary = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ReadinessSummary =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(summary, back);
     }
 
@@ -1885,7 +1895,8 @@ mod tests {
         let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid GateEvaluationInput,
         // so from_str back to GateEvaluationInput cannot fail (valid format + matching schema).
-        let back: GateEvaluationInput = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GateEvaluationInput =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(input, back);
     }
 
@@ -2028,7 +2039,8 @@ mod tests {
         assert_eq!(all.len(), 21);
         for cat in &all {
             let json = serde_json::to_string(cat).expect("serde deserialization should succeed");
-            let back: ArtifactCategory = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ArtifactCategory =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*cat, back);
         }
     }
@@ -2056,7 +2068,8 @@ mod tests {
             categories_satisfied: 0,
         };
         let json = serde_json::to_string(&status).expect("serde deserialization should succeed");
-        let back: ProgramGateStatus = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ProgramGateStatus =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(status, back);
     }
 
@@ -2096,7 +2109,8 @@ mod tests {
             detail: "defense regression".to_string(),
         };
         let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
-        let back: VerificationSummaryEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: VerificationSummaryEntry =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, back);
     }
 

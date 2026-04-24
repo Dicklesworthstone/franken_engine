@@ -1034,7 +1034,8 @@ mod tests {
         };
         let matrix = rock_paper_scissors_matrix();
         // SAFETY: Test with valid tournament config and matrix should create harness successfully
-        let mut harness = CoevolutionHarness::new(config, matrix).expect("serde deserialization should succeed");
+        let mut harness =
+            CoevolutionHarness::new(config, matrix).expect("serde deserialization should succeed");
         // SAFETY: Test harness with valid configuration should run tournament successfully
         let result = harness.run().expect("serde deserialization should succeed");
         assert_eq!(result.rounds_played, 500);
@@ -1050,7 +1051,8 @@ mod tests {
         };
         let matrix = security_game_matrix();
         // SAFETY: Test with valid security game config and matrix should create harness successfully
-        let mut harness = CoevolutionHarness::new(config, matrix).expect("serde deserialization should succeed");
+        let mut harness =
+            CoevolutionHarness::new(config, matrix).expect("serde deserialization should succeed");
         // SAFETY: Test harness with security game configuration should run tournament successfully
         let result = harness.run().expect("serde deserialization should succeed");
         assert_eq!(result.rounds_played, 200);
@@ -1066,9 +1068,11 @@ mod tests {
         let matrix = rock_paper_scissors_matrix();
 
         // SAFETY: Test with valid config and matrix should create first harness successfully
-        let mut h1 = CoevolutionHarness::new(config.clone(), matrix.clone()).expect("serde deserialization should succeed");
+        let mut h1 = CoevolutionHarness::new(config.clone(), matrix.clone())
+            .expect("serde deserialization should succeed");
         // SAFETY: Test with same config and matrix should create second harness successfully
-        let mut h2 = CoevolutionHarness::new(config, matrix).expect("serde deserialization should succeed");
+        let mut h2 =
+            CoevolutionHarness::new(config, matrix).expect("serde deserialization should succeed");
 
         // SAFETY: First test harness with valid configuration should run successfully
         let r1 = h1.run().expect("serde deserialization should succeed");
@@ -1101,9 +1105,11 @@ mod tests {
         };
 
         // SAFETY: Test with valid config1 and matrix should create first harness successfully
-        let mut h1 = CoevolutionHarness::new(config1, matrix.clone()).expect("serde deserialization should succeed");
+        let mut h1 = CoevolutionHarness::new(config1, matrix.clone())
+            .expect("serde deserialization should succeed");
         // SAFETY: Test with valid config2 and matrix should create second harness successfully
-        let mut h2 = CoevolutionHarness::new(config2, matrix).expect("serde deserialization should succeed");
+        let mut h2 =
+            CoevolutionHarness::new(config2, matrix).expect("serde deserialization should succeed");
 
         // SAFETY: First test harness with valid configuration should run successfully
         let r1 = h1.run().expect("serde deserialization should succeed");
@@ -1125,11 +1131,15 @@ mod tests {
         };
         let matrix = rock_paper_scissors_matrix();
         // SAFETY: Test with valid config and matrix should create harness successfully
-        let mut harness = CoevolutionHarness::new(config, matrix).expect("serde deserialization should succeed");
+        let mut harness =
+            CoevolutionHarness::new(config, matrix).expect("serde deserialization should succeed");
         // SAFETY: Test harness with valid configuration should run successfully
         let result = harness.run().expect("serde deserialization should succeed");
         // SAFETY: Test result with trajectory recording enabled contains trajectory
-        let traj = result.trajectory.as_ref().expect("serde deserialization should succeed");
+        let traj = result
+            .trajectory
+            .as_ref()
+            .expect("serde deserialization should succeed");
         assert_eq!(traj.round_count(), 50);
         assert_eq!(traj.attacker_cumulative_regret.len(), 50);
         assert_eq!(traj.defender_cumulative_regret.len(), 50);
@@ -1144,7 +1154,8 @@ mod tests {
         };
         let matrix = rock_paper_scissors_matrix();
         // SAFETY: Test with valid config (trajectory disabled) and matrix should create harness successfully
-        let mut harness = CoevolutionHarness::new(config, matrix).expect("serde deserialization should succeed");
+        let mut harness =
+            CoevolutionHarness::new(config, matrix).expect("serde deserialization should succeed");
         // SAFETY: Test harness with trajectory disabled should run successfully
         let result = harness.run().expect("serde deserialization should succeed");
         assert!(result.trajectory.is_none());
@@ -1158,11 +1169,14 @@ mod tests {
         };
         let matrix = rock_paper_scissors_matrix();
         // SAFETY: Test with valid config and matrix should create harness successfully for regret test
-        let mut harness = CoevolutionHarness::new(config, matrix).expect("serde deserialization should succeed");
+        let mut harness =
+            CoevolutionHarness::new(config, matrix).expect("serde deserialization should succeed");
         // SAFETY: Test harness with valid configuration should run successfully for regret test
         let result = harness.run().expect("serde deserialization should succeed");
         // SAFETY: Test result with default trajectory tracking should have trajectory data
-        let traj = result.trajectory.expect("serde deserialization should succeed");
+        let traj = result
+            .trajectory
+            .expect("serde deserialization should succeed");
         for r in &traj.attacker_cumulative_regret {
             assert!(*r >= 0, "negative attacker regret: {r}");
         }
@@ -1177,7 +1191,8 @@ mod tests {
             ..TournamentConfig::default()
         };
         let matrix = rock_paper_scissors_matrix();
-        let mut harness = CoevolutionHarness::new(config, matrix).expect("serde deserialization should succeed");
+        let mut harness =
+            CoevolutionHarness::new(config, matrix).expect("serde deserialization should succeed");
         let result = harness.run().expect("serde deserialization should succeed");
         // With enough rounds, EXP3 should have bounded average regret
         // This is a soft check — regret may or may not be bounded with 1000 rounds
@@ -1195,7 +1210,8 @@ mod tests {
             ..TournamentConfig::default()
         };
         let matrix = rock_paper_scissors_matrix();
-        let mut harness = CoevolutionHarness::new(config, matrix).expect("serde deserialization should succeed");
+        let mut harness =
+            CoevolutionHarness::new(config, matrix).expect("serde deserialization should succeed");
         let result = harness.run().expect("serde deserialization should succeed");
         let atk_total: u64 = result.convergence.attacker_frequency.values().sum();
         let def_total: u64 = result.convergence.defender_frequency.values().sum();
@@ -1212,7 +1228,8 @@ mod tests {
             ..TournamentConfig::default()
         };
         let matrix = security_game_matrix();
-        let mut harness = CoevolutionHarness::new(config, matrix).expect("serde deserialization should succeed");
+        let mut harness =
+            CoevolutionHarness::new(config, matrix).expect("serde deserialization should succeed");
         let result = harness.run().expect("serde deserialization should succeed");
         assert_eq!(result.policy_delta.recommended_mix.len(), 2);
         assert!(
@@ -1236,7 +1253,8 @@ mod tests {
             ..TournamentConfig::default()
         };
         let matrix = security_game_matrix();
-        let mut harness = CoevolutionHarness::new(config, matrix).expect("serde deserialization should succeed");
+        let mut harness =
+            CoevolutionHarness::new(config, matrix).expect("serde deserialization should succeed");
         let result = harness.run().expect("serde deserialization should succeed");
         let total: i64 = result.policy_delta.recommended_mix.values().sum();
         // Should be approximately MILLION (within rounding)
@@ -1253,7 +1271,8 @@ mod tests {
             ..TournamentConfig::default()
         };
         let matrix = security_game_matrix();
-        let mut harness = CoevolutionHarness::new(config, matrix).expect("serde deserialization should succeed");
+        let mut harness =
+            CoevolutionHarness::new(config, matrix).expect("serde deserialization should succeed");
         let result = harness.run().expect("serde deserialization should succeed");
         assert!(!result.policy_delta.artifact_hash.to_hex().is_empty());
     }
@@ -1490,7 +1509,8 @@ mod tests {
         };
         let matrix = security_game_matrix();
         // SAFETY: Test with valid config and matrix should create harness successfully for serde test
-        let mut harness = CoevolutionHarness::new(config, matrix).expect("serde deserialization should succeed");
+        let mut harness =
+            CoevolutionHarness::new(config, matrix).expect("serde deserialization should succeed");
         // SAFETY: Test harness with valid configuration should run successfully for serde test
         let result = harness.run().expect("serde deserialization should succeed");
         // SAFETY: TournamentResult derives Serialize and has no non-serializable fields.
@@ -1498,7 +1518,8 @@ mod tests {
         let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid TournamentResult,
         // so from_str back to TournamentResult cannot fail (valid format + matching schema).
-        let back: TournamentResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: TournamentResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, back);
     }
 
@@ -1517,7 +1538,8 @@ mod tests {
             let json = serde_json::to_string(&class).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by to_string of a valid ExploitClass,
             // so from_str back to ExploitClass cannot fail (valid format + matching schema).
-            let back: ExploitClass = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ExploitClass =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(class, back);
         }
     }
@@ -1532,7 +1554,8 @@ mod tests {
         let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid CoevolutionError,
         // so from_str back to CoevolutionError cannot fail (valid format + matching schema).
-        let back: CoevolutionError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: CoevolutionError =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, back);
     }
 
@@ -1544,7 +1567,8 @@ mod tests {
         let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid TournamentConfig,
         // so from_str back to TournamentConfig cannot fail (valid format + matching schema).
-        let back: TournamentConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: TournamentConfig =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, back);
     }
 
@@ -1581,7 +1605,8 @@ mod tests {
             ..TournamentConfig::default()
         };
         let matrix = security_game_matrix();
-        let mut harness = CoevolutionHarness::new(config, matrix).expect("serde deserialization should succeed");
+        let mut harness =
+            CoevolutionHarness::new(config, matrix).expect("serde deserialization should succeed");
         assert_eq!(harness.tournament_count(), 0);
         harness.run().expect("serde deserialization should succeed");
         assert_eq!(harness.tournament_count(), 1);
@@ -1598,7 +1623,8 @@ mod tests {
             ..TournamentConfig::default()
         };
         let matrix = security_game_matrix();
-        let mut harness = CoevolutionHarness::new(config, matrix).expect("serde deserialization should succeed");
+        let mut harness =
+            CoevolutionHarness::new(config, matrix).expect("serde deserialization should succeed");
         let result = harness.run().expect("serde deserialization should succeed");
         // The security game has strategies with >50% payoff, so exploits should be detected
         let exploits = &result.convergence.exploit_classes;
@@ -1619,7 +1645,8 @@ mod tests {
             ..TournamentConfig::default()
         };
         let matrix = security_game_matrix();
-        let mut harness = CoevolutionHarness::new(config, matrix).expect("serde deserialization should succeed");
+        let mut harness =
+            CoevolutionHarness::new(config, matrix).expect("serde deserialization should succeed");
         let result = harness.run().expect("serde deserialization should succeed");
         // Should stop before 10k rounds due to budget
         assert!(
@@ -1764,7 +1791,8 @@ mod tests {
         let json = serde_json::to_string(&delta).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid PolicyDelta,
         // so from_str back to PolicyDelta cannot fail (valid format + matching schema).
-        let back: PolicyDelta = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: PolicyDelta =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(delta, back);
     }
 
@@ -1911,7 +1939,8 @@ mod tests {
     fn strategy_id_serde_roundtrip() {
         let id = StrategyId("test-strategy".to_string());
         let json = serde_json::to_string(&id).expect("serde deserialization should succeed");
-        let back: StrategyId = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: StrategyId =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(id, back);
     }
 
@@ -2060,7 +2089,8 @@ mod tests {
             defender_cumulative_regret: vec![50],
         };
         let json = serde_json::to_string(&t).expect("serde deserialization should succeed");
-        let back: TrajectoryLedger = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: TrajectoryLedger =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(t, back);
     }
 
@@ -2140,7 +2170,8 @@ mod tests {
             ..TournamentConfig::default()
         };
         let m = rock_paper_scissors_matrix();
-        let mut harness = CoevolutionHarness::new(config, m).expect("serde deserialization should succeed");
+        let mut harness =
+            CoevolutionHarness::new(config, m).expect("serde deserialization should succeed");
         let result = harness.run().expect("serde deserialization should succeed");
         let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
         assert!(json.contains("\"schema_version\""));
@@ -2159,10 +2190,12 @@ mod tests {
             ..TournamentConfig::default()
         };
         let m = rock_paper_scissors_matrix();
-        let mut harness = CoevolutionHarness::new(config, m).expect("serde deserialization should succeed");
+        let mut harness =
+            CoevolutionHarness::new(config, m).expect("serde deserialization should succeed");
         let result = harness.run().expect("serde deserialization should succeed");
         let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
-        let back: TournamentResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: TournamentResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, back);
     }
 
@@ -2339,7 +2372,8 @@ mod tests {
             ..TournamentConfig::default()
         };
         let m = rock_paper_scissors_matrix();
-        let h = CoevolutionHarness::new(config.clone(), m.clone()).expect("serde deserialization should succeed");
+        let h = CoevolutionHarness::new(config.clone(), m.clone())
+            .expect("serde deserialization should succeed");
         assert_eq!(*h.config(), config);
         assert_eq!(*h.payoff_matrix(), m);
         assert_eq!(h.tournament_count(), 0);
@@ -2352,7 +2386,8 @@ mod tests {
             ..TournamentConfig::default()
         };
         let m = rock_paper_scissors_matrix();
-        let mut h = CoevolutionHarness::new(config, m).expect("serde deserialization should succeed");
+        let mut h =
+            CoevolutionHarness::new(config, m).expect("serde deserialization should succeed");
         assert_eq!(h.tournament_count(), 0);
         let _ = h.run().expect("serde deserialization should succeed");
         assert_eq!(h.tournament_count(), 1);
@@ -2368,7 +2403,8 @@ mod tests {
             ..TournamentConfig::default()
         };
         let m = rock_paper_scissors_matrix();
-        let mut h = CoevolutionHarness::new(config, m).expect("serde deserialization should succeed");
+        let mut h =
+            CoevolutionHarness::new(config, m).expect("serde deserialization should succeed");
         let result = h.run().expect("serde deserialization should succeed");
         assert!(result.trajectory.is_none());
     }
@@ -2411,7 +2447,9 @@ mod tests {
                 },
             ],
         };
-        let minimax = m.minimax_defender().expect("serde deserialization should succeed");
+        let minimax = m
+            .minimax_defender()
+            .expect("serde deserialization should succeed");
         assert_eq!(minimax, StrategyId("safe".to_string()));
     }
 
@@ -2444,11 +2482,18 @@ mod tests {
             ..TournamentConfig::default()
         };
         let m = rock_paper_scissors_matrix();
-        let mut h = CoevolutionHarness::new(config, m).expect("serde deserialization should succeed");
+        let mut h =
+            CoevolutionHarness::new(config, m).expect("serde deserialization should succeed");
         let r = h.run().expect("serde deserialization should succeed");
         assert_eq!(r.rounds_played, 1);
         assert!(r.trajectory.is_some());
-        assert_eq!(r.trajectory.as_ref().expect("serde deserialization should succeed").round_count(), 1);
+        assert_eq!(
+            r.trajectory
+                .as_ref()
+                .expect("serde deserialization should succeed")
+                .round_count(),
+            1
+        );
     }
 
     #[test]
@@ -2493,8 +2538,10 @@ mod tests {
         };
         let config2 = config1.clone();
         let m = rock_paper_scissors_matrix();
-        let mut h1 = CoevolutionHarness::new(config1, m.clone()).expect("serde deserialization should succeed");
-        let mut h2 = CoevolutionHarness::new(config2, m).expect("serde deserialization should succeed");
+        let mut h1 = CoevolutionHarness::new(config1, m.clone())
+            .expect("serde deserialization should succeed");
+        let mut h2 =
+            CoevolutionHarness::new(config2, m).expect("serde deserialization should succeed");
         let r1 = h1.run().expect("serde deserialization should succeed");
         let r2 = h2.run().expect("serde deserialization should succeed");
         assert_eq!(r1.artifact_hash, r2.artifact_hash);
@@ -2538,7 +2585,8 @@ mod tests {
             ..TournamentConfig::default()
         };
         let m = rock_paper_scissors_matrix();
-        let mut h = CoevolutionHarness::new(config, m).expect("serde deserialization should succeed");
+        let mut h =
+            CoevolutionHarness::new(config, m).expect("serde deserialization should succeed");
         let r = h.run().expect("serde deserialization should succeed");
         assert_eq!(r.schema_version, COEVOLUTION_SCHEMA_VERSION);
     }

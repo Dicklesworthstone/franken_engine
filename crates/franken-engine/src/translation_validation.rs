@@ -979,7 +979,8 @@ mod tests {
     fn verdict_serde_roundtrip() {
         for v in [pass_verdict(), fail_verdict(), inconclusive_verdict()] {
             let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
-            let restored: ValidationVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: ValidationVerdict =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(v, restored);
         }
     }
@@ -1023,7 +1024,8 @@ mod tests {
         ];
         for m in &modes {
             let json = serde_json::to_string(m).expect("serde deserialization should succeed");
-            let restored: ValidationMode = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: ValidationMode =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*m, restored);
         }
     }
@@ -1540,7 +1542,8 @@ mod tests {
         .sign(TEST_KEY);
 
         let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
-        let restored: RollbackReceipt = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: RollbackReceipt =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(receipt, restored);
     }
 
@@ -1576,7 +1579,8 @@ mod tests {
         .sign(TEST_KEY);
 
         let json = serde_json::to_string(&promo).expect("serde deserialization should succeed");
-        let restored: StagePromotion = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: StagePromotion =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(promo, restored);
     }
 
@@ -1720,7 +1724,8 @@ mod tests {
             current_epoch: 20,
         };
         let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
-        let restored: ValidationGateError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: ValidationGateError =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, restored);
     }
 
@@ -1740,7 +1745,8 @@ mod tests {
         .expect("serde deserialization should succeed");
 
         let json = serde_json::to_string(&gate).expect("serde deserialization should succeed");
-        let restored: TranslationValidationGate = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: TranslationValidationGate =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(restored.tracked_count(), 1);
         assert_eq!(restored.event_count(), 1);
     }
@@ -1869,7 +1875,8 @@ mod tests {
             quarantined_at_ticks: 5000,
         };
         let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
-        let restored: QuarantineEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: QuarantineEntry =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, restored);
     }
 
@@ -1887,7 +1894,8 @@ mod tests {
             epoch: SecurityEpoch::from_raw(1),
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let restored: ValidationEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: ValidationEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, restored);
     }
 
@@ -1985,7 +1993,8 @@ mod tests {
         gate.record_verdict("opt-1", fail_verdict(), TEST_KEY, epoch, 2000)
             .expect("serde deserialization should succeed");
 
-        gate.lift_quarantine("opt-1", "retry", epoch, 3000).expect("serde deserialization should succeed");
+        gate.lift_quarantine("opt-1", "retry", epoch, 3000)
+            .expect("serde deserialization should succeed");
         gate.submit(
             &test_receipt("opt-1"),
             &test_token("opt-1"),
@@ -2023,7 +2032,8 @@ mod tests {
             vector_count: 100,
         };
         let json = serde_json::to_string(&mode).expect("serde deserialization should succeed");
-        let back: ValidationMode = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ValidationMode =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(mode, back);
     }
 
@@ -2033,7 +2043,8 @@ mod tests {
             proof_hash: ContentHash::compute(b"proof"),
         };
         let json = serde_json::to_string(&mode).expect("serde deserialization should succeed");
-        let back: ValidationMode = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ValidationMode =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(mode, back);
     }
 
@@ -2044,7 +2055,8 @@ mod tests {
             trace_pair_count: 50,
         };
         let json = serde_json::to_string(&mode).expect("serde deserialization should succeed");
-        let back: ValidationMode = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ValidationMode =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(mode, back);
     }
 
@@ -2112,7 +2124,8 @@ mod tests {
     fn verdict_serde_roundtrip_pass() {
         let v = pass_verdict();
         let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
-        let back: ValidationVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ValidationVerdict =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, back);
     }
 
@@ -2120,7 +2133,8 @@ mod tests {
     fn verdict_serde_roundtrip_fail() {
         let v = fail_verdict();
         let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
-        let back: ValidationVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ValidationVerdict =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, back);
     }
 
@@ -2128,7 +2142,8 @@ mod tests {
     fn verdict_serde_roundtrip_inconclusive() {
         let v = inconclusive_verdict();
         let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
-        let back: ValidationVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ValidationVerdict =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, back);
     }
 
@@ -2148,7 +2163,8 @@ mod tests {
             signature: AuthenticityHash::compute_keyed(b"key", b"data"),
         };
         let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
-        let back: RollbackReceipt = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: RollbackReceipt =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(receipt, back);
     }
 
@@ -2186,7 +2202,8 @@ mod tests {
             signature: AuthenticityHash::compute_keyed(b"k", b"d"),
         };
         let json = serde_json::to_string(&promo).expect("serde deserialization should succeed");
-        let back: StagePromotion = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: StagePromotion =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(promo, back);
     }
 
@@ -2217,7 +2234,8 @@ mod tests {
             reason: "divergence".to_string(),
         };
         let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
-        let back: ValidationGateError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ValidationGateError =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, back);
     }
 
@@ -2345,7 +2363,8 @@ mod tests {
             quarantined_at_ticks: 99999,
         };
         let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
-        let restored: QuarantineEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: QuarantineEntry =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, restored);
         assert!(restored.counterexample_hash.is_some());
     }
@@ -2425,7 +2444,8 @@ mod tests {
                 epoch: SecurityEpoch::from_raw(1),
             };
             let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-            let back: ValidationEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ValidationEvent =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(event, back);
         }
     }

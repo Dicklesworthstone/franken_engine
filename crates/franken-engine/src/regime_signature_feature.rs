@@ -1438,7 +1438,8 @@ mod tests {
         ];
         for l in &labels {
             let json = serde_json::to_string(l).expect("serde deserialization should succeed");
-            let back: RegimeLabel = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: RegimeLabel =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*l, back);
         }
     }
@@ -1449,7 +1450,8 @@ mod tests {
         let trace = make_trace("test", "cpu", &[500_000, 600_000, 400_000, 550_000], 1);
         let sig = extract_signature(&trace, &config);
         let json = serde_json::to_string(&sig).expect("serde deserialization should succeed");
-        let back: TraceSignature = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: TraceSignature =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(sig, back);
     }
 
@@ -1473,7 +1475,8 @@ mod tests {
     fn inventory_serde_roundtrip() {
         let inv = run_signature_corpus();
         let json = serde_json::to_string(&inv).expect("serde deserialization should succeed");
-        let back: SignatureEvidenceInventory = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SignatureEvidenceInventory =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(inv, back);
     }
 
@@ -1582,7 +1585,8 @@ mod tests {
         for regime in [Regime::Normal, Regime::Degraded, Regime::Recovery] {
             let label = RegimeLabel::Classified(regime);
             let json = serde_json::to_string(&label).expect("serde deserialization should succeed");
-            let back: RegimeLabel = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: RegimeLabel =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(label, back);
         }
     }
@@ -1591,7 +1595,8 @@ mod tests {
     fn regime_label_serde_roundtrip_abstention() {
         let label = RegimeLabel::Abstention;
         let json = serde_json::to_string(&label).expect("serde deserialization should succeed");
-        let back: RegimeLabel = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: RegimeLabel =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(label, back);
     }
 
@@ -1680,7 +1685,8 @@ mod tests {
             trace_id: "trace-abc".to_string(),
         };
         let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
-        let back: RegimeStateEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: RegimeStateEntry =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, back);
     }
 
@@ -2030,7 +2036,8 @@ mod tests {
     fn signature_config_serde_roundtrip() {
         let config = SignatureConfig::default();
         let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
-        let back: SignatureConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SignatureConfig =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, back);
     }
 
@@ -2042,7 +2049,8 @@ mod tests {
             radius_millionths: 3_000_000,
         };
         let json = serde_json::to_string(&centroid).expect("serde deserialization should succeed");
-        let back: RegimeCentroid = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: RegimeCentroid =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(centroid, back);
     }
 
@@ -2054,7 +2062,8 @@ mod tests {
             value_millionths: 750_000,
         };
         let json = serde_json::to_string(&obs).expect("serde deserialization should succeed");
-        let back: TraceObservation = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: TraceObservation =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(obs, back);
     }
 
@@ -2066,7 +2075,8 @@ mod tests {
             42,
         );
         let json = serde_json::to_string(&trace).expect("serde deserialization should succeed");
-        let back: RuntimeTrace = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: RuntimeTrace =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(trace, back);
     }
 
@@ -2083,7 +2093,8 @@ mod tests {
             expected_transition_count: None,
         };
         let json = serde_json::to_string(&specimen).expect("serde deserialization should succeed");
-        let back: SignatureSpecimen = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SignatureSpecimen =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(specimen, back);
     }
 
@@ -2229,7 +2240,8 @@ mod tests {
             detail: Some("all good".to_string()),
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let back: SignatureEvidenceEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SignatureEvidenceEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
     }
 
@@ -2254,7 +2266,8 @@ mod tests {
             },
         };
         let json = serde_json::to_string(&manifest).expect("serde deserialization should succeed");
-        let back: SignatureRunManifest = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SignatureRunManifest =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(manifest, back);
     }
 
@@ -2321,8 +2334,10 @@ mod tests {
     #[test]
     fn signature_verdict_serde_roundtrip() {
         for verdict in [SignatureVerdict::Pass, SignatureVerdict::Fail] {
-            let json = serde_json::to_string(&verdict).expect("serde deserialization should succeed");
-            let back: SignatureVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&verdict).expect("serde deserialization should succeed");
+            let back: SignatureVerdict =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(verdict, back);
         }
     }
@@ -2339,8 +2354,10 @@ mod tests {
             SignatureExpectedOutcome::SimilarityComputed,
         ];
         for outcome in outcomes {
-            let json = serde_json::to_string(&outcome).expect("serde deserialization should succeed");
-            let back: SignatureExpectedOutcome = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&outcome).expect("serde deserialization should succeed");
+            let back: SignatureExpectedOutcome =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(outcome, back);
         }
     }
@@ -2354,7 +2371,8 @@ mod tests {
         ];
         let chart = build_regime_state_chart(&traces, &config);
         let json = serde_json::to_string(&chart).expect("serde deserialization should succeed");
-        let back: RegimeStateChart = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: RegimeStateChart =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(chart, back);
     }
 

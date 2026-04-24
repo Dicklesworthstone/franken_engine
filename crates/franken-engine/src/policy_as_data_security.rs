@@ -851,7 +851,8 @@ mod tests {
             PolicyDataKind::OptimizationPolicy,
         ] {
             let json = serde_json::to_string(&k).expect("serde deserialization should succeed");
-            let back: PolicyDataKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: PolicyDataKind =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(k, back);
         }
     }
@@ -924,7 +925,8 @@ mod tests {
     fn signed_artifact_serde_roundtrip() {
         let artifact = test_signed_artifact();
         let json = serde_json::to_string(&artifact).expect("serde deserialization should succeed");
-        let back: SignedPolicyArtifact = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SignedPolicyArtifact =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(artifact, back);
     }
 
@@ -967,7 +969,8 @@ mod tests {
     fn sandbox_serde_roundtrip() {
         let sandbox = SandboxRestriction::deny_all("test".to_string());
         let json = serde_json::to_string(&sandbox).expect("serde deserialization should succeed");
-        let back: SandboxRestriction = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SandboxRestriction =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(sandbox, back);
     }
 
@@ -1020,7 +1023,8 @@ mod tests {
             ScenarioCategory::FallbackSuppression,
         ] {
             let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
-            let back: ScenarioCategory = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ScenarioCategory =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(c, back);
         }
     }
@@ -1036,7 +1040,8 @@ mod tests {
             ExpectedOutcome::DetectedOnly,
         ] {
             let json = serde_json::to_string(&o).expect("serde deserialization should succeed");
-            let back: ExpectedOutcome = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ExpectedOutcome =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(o, back);
         }
     }
@@ -1145,7 +1150,8 @@ mod tests {
     fn suite_serde_roundtrip() {
         let suite = AdversarialSuite::new("test".to_string(), test_epoch());
         let json = serde_json::to_string(&suite).expect("serde deserialization should succeed");
-        let back: AdversarialSuite = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: AdversarialSuite =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(suite, back);
     }
 
@@ -1186,7 +1192,8 @@ mod tests {
             EscalationLevel::Emergency,
         ] {
             let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
-            let back: EscalationLevel = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: EscalationLevel =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(e, back);
         }
     }
@@ -1259,7 +1266,8 @@ mod tests {
             true,
         );
         let json = serde_json::to_string(&pb).expect("serde deserialization should succeed");
-        let back: FailurePlaybook = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: FailurePlaybook =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(pb, back);
     }
 
@@ -1334,7 +1342,8 @@ mod tests {
         let suite = AdversarialSuite::new("test".to_string(), test_epoch());
         let report = generate_report(&test_epoch(), 1, 1, &suite, 1, 1);
         let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
-        let back: SecurityReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SecurityReport =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report, back);
     }
 
@@ -1351,7 +1360,8 @@ mod tests {
             detail: "all checks pass".to_string(),
         };
         let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
-        let back: PolicyVerificationResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: PolicyVerificationResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, back);
     }
 
@@ -1667,7 +1677,8 @@ mod tests {
             detail: "definition hash mismatch".to_string(),
         };
         let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
-        let back: PolicyVerificationResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: PolicyVerificationResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, back);
         assert!(!back.all_valid);
         assert!(!back.definition_hash_valid);
@@ -1683,7 +1694,8 @@ mod tests {
             max_duration_ns: 60_000_000_000,
         };
         let json = serde_json::to_string(&step).expect("serde deserialization should succeed");
-        let back: PlaybookStep = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: PlaybookStep =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(step, back);
     }
 
@@ -1699,7 +1711,8 @@ mod tests {
             target_kinds: BTreeSet::from([PolicyDataKind::ContainmentPolicy]),
         };
         let json = serde_json::to_string(&scenario).expect("serde deserialization should succeed");
-        let back: AdversarialScenario = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: AdversarialScenario =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(scenario, back);
     }
 
@@ -1713,7 +1726,8 @@ mod tests {
             evidence_hash: "abc123".to_string(),
         };
         let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
-        let back: ScenarioResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ScenarioResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, back);
     }
 
@@ -1726,7 +1740,8 @@ mod tests {
             is_default: false,
         };
         let json = serde_json::to_string(&profile).expect("serde deserialization should succeed");
-        let back: PolicySandboxProfile = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: PolicySandboxProfile =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(profile, back);
     }
 
@@ -1865,7 +1880,8 @@ mod tests {
     fn signed_artifact_serde_roundtrip_full() {
         let artifact = test_signed_artifact();
         let json = serde_json::to_string(&artifact).expect("serde deserialization should succeed");
-        let restored: SignedPolicyArtifact = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: SignedPolicyArtifact =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(artifact, restored);
     }
 

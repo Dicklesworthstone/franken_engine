@@ -835,7 +835,8 @@ pub fn run_fast_lane_evidence() -> FastLaneEvidenceManifest {
         certificates.push(cert);
     }
 
-    let hash_data = serde_json::to_vec(&certificates).expect("serde deserialization should succeed");
+    let hash_data =
+        serde_json::to_vec(&certificates).expect("serde deserialization should succeed");
 
     FastLaneEvidenceManifest {
         schema_version: TYPED_ARRAY_SCHEMA_VERSION.to_string(),
@@ -1465,7 +1466,8 @@ mod tests {
     fn serde_element_kind_round_trip() {
         for kind in ElementKind::ALL {
             let json = serde_json::to_string(kind).expect("serde deserialization should succeed");
-            let back: ElementKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ElementKind =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*kind, back);
         }
     }
@@ -1474,7 +1476,8 @@ mod tests {
     fn serde_typed_array_kind_round_trip() {
         for kind in TypedArrayKind::ALL {
             let json = serde_json::to_string(kind).expect("serde deserialization should succeed");
-            let back: TypedArrayKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: TypedArrayKind =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*kind, back);
         }
     }
@@ -1483,7 +1486,8 @@ mod tests {
     fn serde_deopt_reason_round_trip() {
         for reason in DeoptReason::ALL {
             let json = serde_json::to_string(reason).expect("serde deserialization should succeed");
-            let back: DeoptReason = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: DeoptReason =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*reason, back);
         }
     }
@@ -1506,7 +1510,8 @@ mod tests {
         };
         let cert = certify_fast_lane(&profile, &config);
         let json = serde_json::to_string(&cert).expect("serde deserialization should succeed");
-        let back: FastLaneCertificate = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: FastLaneCertificate =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cert, back);
     }
 
@@ -1514,7 +1519,8 @@ mod tests {
     fn serde_evidence_manifest_round_trip() {
         let manifest = run_fast_lane_evidence();
         let json = serde_json::to_string(&manifest).expect("serde deserialization should succeed");
-        let back: FastLaneEvidenceManifest = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: FastLaneEvidenceManifest =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(manifest, back);
     }
 

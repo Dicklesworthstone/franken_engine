@@ -867,7 +867,8 @@ mod tests {
         tracker.record(&make_event(2, "ext-b", 800, 1, 128));
 
         let json = serde_json::to_string(&tracker).expect("serde deserialization should succeed");
-        let restored: PauseTracker = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: PauseTracker =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
 
         assert_eq!(tracker.count(), restored.count());
         assert_eq!(tracker.global_percentiles(), restored.global_percentiles());
@@ -886,7 +887,8 @@ mod tests {
     fn pause_budget_serde_roundtrip() {
         let budget = PauseBudget::new(100_000, 500_000, 2_000_000);
         let json = serde_json::to_string(&budget).expect("serde deserialization should succeed");
-        let restored: PauseBudget = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: PauseBudget =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(budget, restored);
     }
 
@@ -895,7 +897,8 @@ mod tests {
         let event = make_event(7, "ext-serde", 12345, 50, 8192);
         let record = PauseRecord::from_gc_event(&event);
         let json = serde_json::to_string(&record).expect("serde deserialization should succeed");
-        let restored: PauseRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: PauseRecord =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(record, restored);
     }
 
@@ -903,7 +906,8 @@ mod tests {
     fn percentile_serde_all_variants() {
         for p in [Percentile::P50, Percentile::P95, Percentile::P99] {
             let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
-            let restored: Percentile = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: Percentile =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(p, restored);
         }
     }
@@ -917,7 +921,8 @@ mod tests {
             scope: "ext-a".to_string(),
         };
         let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
-        let restored: BudgetViolation = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: BudgetViolation =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, restored);
     }
 
@@ -932,7 +937,8 @@ mod tests {
             p99_ns: 45_000,
         };
         let json = serde_json::to_string(&snap).expect("serde deserialization should succeed");
-        let restored: PercentileSnapshot = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: PercentileSnapshot =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(snap, restored);
     }
 
@@ -941,12 +947,18 @@ mod tests {
         use crate::gc::{GcCollector, GcConfig};
 
         let mut gc = GcCollector::new(GcConfig::deterministic());
-        gc.register_heap("ext-a".into()).expect("serde deserialization should succeed");
+        gc.register_heap("ext-a".into())
+            .expect("serde deserialization should succeed");
 
-        let obj = gc.allocate("ext-a", 100).expect("serde deserialization should succeed");
-        gc.unroot("ext-a", obj).expect("serde deserialization should succeed");
+        let obj = gc
+            .allocate("ext-a", 100)
+            .expect("serde deserialization should succeed");
+        gc.unroot("ext-a", obj)
+            .expect("serde deserialization should succeed");
 
-        let event = gc.collect("ext-a").expect("serde deserialization should succeed");
+        let event = gc
+            .collect("ext-a")
+            .expect("serde deserialization should succeed");
 
         let mut tracker = PauseTracker::default();
         tracker.record(&event);
@@ -1268,7 +1280,8 @@ mod tests {
         }
 
         let json = serde_json::to_string(&tracker).expect("serde deserialization should succeed");
-        let restored: PauseTracker = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: PauseTracker =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(tracker.global_percentiles(), restored.global_percentiles());
         assert_eq!(
             tracker.extension_percentiles("ext-a"),
@@ -1388,7 +1401,8 @@ mod tests {
     fn pause_budget_custom_serde_roundtrip() {
         let budget = PauseBudget::new(100, 200, 300);
         let json = serde_json::to_string(&budget).expect("serde deserialization should succeed");
-        let back: PauseBudget = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: PauseBudget =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(budget, back);
     }
 
@@ -1412,7 +1426,8 @@ mod tests {
             bytes_reclaimed: 4096,
         };
         let json = serde_json::to_string(&record).expect("serde deserialization should succeed");
-        let back: PauseRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: PauseRecord =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(record, back);
     }
 
@@ -1446,7 +1461,8 @@ mod tests {
     fn percentile_serde_roundtrip() {
         for p in [Percentile::P50, Percentile::P95, Percentile::P99] {
             let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
-            let back: Percentile = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: Percentile =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(p, back);
         }
     }
@@ -1475,7 +1491,8 @@ mod tests {
             scope: "ext-test".to_string(),
         };
         let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
-        let back: BudgetViolation = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: BudgetViolation =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, back);
     }
 
@@ -1490,7 +1507,8 @@ mod tests {
             p99_ns: 4_000_000,
         };
         let json = serde_json::to_string(&snap).expect("serde deserialization should succeed");
-        let back: PercentileSnapshot = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: PercentileSnapshot =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(snap, back);
     }
 
@@ -1521,7 +1539,8 @@ mod tests {
         tracker.record(&make_event(1, "ext-a", 100_000, 5, 512));
         tracker.record(&make_event(2, "ext-b", 200_000, 10, 1024));
         let json = serde_json::to_string(&tracker).expect("serde deserialization should succeed");
-        let back: PauseTracker = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: PauseTracker =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(tracker.count(), back.count());
         assert_eq!(tracker.global_percentiles(), back.global_percentiles());
     }

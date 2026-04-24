@@ -1135,7 +1135,8 @@ mod tests {
     fn domain_serde_roundtrip() {
         for d in HardwareAxisDomain::ALL {
             let json = serde_json::to_string(d).expect("serde deserialization should succeed");
-            let back: HardwareAxisDomain = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: HardwareAxisDomain =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*d, back);
         }
     }
@@ -1163,7 +1164,9 @@ mod tests {
     #[test]
     fn axis_normalize_mid() {
         let a = sample_axis();
-        let mid = a.normalize(64_500_000).expect("serde deserialization should succeed");
+        let mid = a
+            .normalize(64_500_000)
+            .expect("serde deserialization should succeed");
         assert!(mid > 0 && mid < MILLION);
     }
 
@@ -1196,7 +1199,8 @@ mod tests {
     fn axis_serde_roundtrip() {
         let a = sample_axis();
         let json = serde_json::to_string(&a).expect("serde deserialization should succeed");
-        let back: HardwareAxis = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: HardwareAxis =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(a, back);
     }
 
@@ -1234,7 +1238,8 @@ mod tests {
     fn fingerprint_serde_roundtrip() {
         let fp = sample_fingerprint("fp1", 8_000_000, 50_000_000);
         let json = serde_json::to_string(&fp).expect("serde deserialization should succeed");
-        let back: HardwareFingerprint = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: HardwareFingerprint =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(fp, back);
     }
 
@@ -1275,7 +1280,8 @@ mod tests {
             note: "same gen".into(),
         };
         let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
-        let back: SymmetryReason = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SymmetryReason =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 
@@ -1320,7 +1326,8 @@ mod tests {
             right_level: "neon".into(),
         };
         let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
-        let back: SymmetryRefusal = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SymmetryRefusal =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 
@@ -1402,7 +1409,8 @@ mod tests {
             },
         );
         let json = serde_json::to_string(&class).expect("serde deserialization should succeed");
-        let back: SymmetryClass = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SymmetryClass =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(class, back);
     }
 
@@ -1450,7 +1458,8 @@ mod tests {
     fn obligation_status_serde() {
         for s in ObligationStatus::ALL {
             let json = serde_json::to_string(s).expect("serde deserialization should succeed");
-            let back: ObligationStatus = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ObligationStatus =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*s, back);
         }
     }
@@ -1575,14 +1584,20 @@ mod tests {
         // Now reduce by symmetry
         g.reduce_by_symmetry();
         // fp2's obligations should be discharged by transport
-        let o_fp2_tier = g.find_obligation("fp2", "q-tiering").expect("serde deserialization should succeed");
+        let o_fp2_tier = g
+            .find_obligation("fp2", "q-tiering")
+            .expect("serde deserialization should succeed");
         assert_eq!(o_fp2_tier.status, ObligationStatus::DischargedByTransport);
         assert_eq!(o_fp2_tier.transport_source.as_deref(), Some("fp1"));
-        let o_fp2_gc = g.find_obligation("fp2", "q-gc").expect("serde deserialization should succeed");
+        let o_fp2_gc = g
+            .find_obligation("fp2", "q-gc")
+            .expect("serde deserialization should succeed");
         assert_eq!(o_fp2_gc.status, ObligationStatus::DischargedByTransport);
         // fp3 should still be pending (not in the class)
         assert_eq!(
-            g.find_obligation("fp3", "q-tiering").expect("serde deserialization should succeed").status,
+            g.find_obligation("fp3", "q-tiering")
+                .expect("serde deserialization should succeed")
+                .status,
             ObligationStatus::Pending
         );
     }
@@ -1615,7 +1630,9 @@ mod tests {
     #[test]
     fn graph_chebyshev_similar() {
         let g = sample_graph();
-        let dist = g.chebyshev_distance("fp1", "fp2").expect("serde deserialization should succeed");
+        let dist = g
+            .chebyshev_distance("fp1", "fp2")
+            .expect("serde deserialization should succeed");
         // fp1 and fp2 have similar values
         assert!(dist < 50_000);
     }
@@ -1623,7 +1640,9 @@ mod tests {
     #[test]
     fn graph_chebyshev_different() {
         let g = sample_graph();
-        let dist = g.chebyshev_distance("fp1", "fp3").expect("serde deserialization should succeed");
+        let dist = g
+            .chebyshev_distance("fp1", "fp3")
+            .expect("serde deserialization should succeed");
         // fp1 and fp3 have very different values
         assert!(dist > 100_000);
     }
@@ -1660,7 +1679,8 @@ mod tests {
         let mut g = sample_graph();
         g.generate_obligations();
         let json = serde_json::to_string(&g).expect("serde deserialization should succeed");
-        let back: ObligationGraph = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ObligationGraph =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(g, back);
     }
 
@@ -1730,7 +1750,8 @@ mod tests {
         g.generate_obligations();
         let r = ObligationReport::from_graph(&g, epoch());
         let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
-        let back: ObligationReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ObligationReport =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 

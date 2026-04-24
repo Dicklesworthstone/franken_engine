@@ -2073,7 +2073,8 @@ mod tests {
     fn payload_family_serde_roundtrip() {
         for fam in PayloadFamily::ALL {
             let json = serde_json::to_string(&fam).expect("serde deserialization should succeed");
-            let back: PayloadFamily = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: PayloadFamily =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(back, fam);
         }
     }
@@ -2298,7 +2299,9 @@ mod tests {
     fn channel_state_drain_releases_buffer() {
         let spec = &canonical_channel_specs()[0];
         let mut state = ChannelState::new(spec.channel_id.clone(), epoch(1));
-        state.emit(spec, 0).expect("serde deserialization should succeed");
+        state
+            .emit(spec, 0)
+            .expect("serde deserialization should succeed");
         assert_eq!(state.buffer_used, 1);
         state.drain_one();
         assert_eq!(state.buffer_used, 0);
@@ -2328,10 +2331,14 @@ mod tests {
         let spec = &canonical_channel_specs()[0]; // degradation threshold 50_000
         let mut state = ChannelState::new(spec.channel_id.clone(), epoch(1));
         // Below threshold.
-        state.emit(spec, 40_000).expect("serde deserialization should succeed");
+        state
+            .emit(spec, 40_000)
+            .expect("serde deserialization should succeed");
         assert_eq!(state.items_degraded, 0);
         // Above threshold.
-        state.emit(spec, 60_000).expect("serde deserialization should succeed");
+        state
+            .emit(spec, 60_000)
+            .expect("serde deserialization should succeed");
         assert_eq!(state.items_degraded, 1);
     }
 
@@ -2431,7 +2438,9 @@ mod tests {
         let mut state = ChannelState::new(spec.channel_id.clone(), epoch(1));
         // Emit 1000 items out of 100_000 capacity.
         for _ in 0..1000 {
-            state.emit(spec, 0).expect("serde deserialization should succeed");
+            state
+                .emit(spec, 0)
+                .expect("serde deserialization should succeed");
             state.drain_one();
         }
         states.insert(spec.channel_id.clone(), state);
@@ -2502,7 +2511,8 @@ mod tests {
     fn channel_spec_serde_roundtrip() {
         let specs = canonical_channel_specs();
         let json = serde_json::to_string(&specs).expect("serde deserialization should succeed");
-        let back: Vec<ChannelSpec> = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: Vec<ChannelSpec> =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.len(), specs.len());
     }
 
@@ -2511,7 +2521,8 @@ mod tests {
         let mut state = ChannelState::new("test".to_string(), epoch(1));
         state.items_emitted = 42;
         let json = serde_json::to_string(&state).expect("serde deserialization should succeed");
-        let back: ChannelState = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ChannelState =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.items_emitted, 42);
     }
 
@@ -2520,7 +2531,8 @@ mod tests {
         let specs = canonical_channel_specs();
         let report = generate_report(&specs, &BTreeMap::new(), epoch(1));
         let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
-        let back: ChannelReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ChannelReport =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.gate_pass, report.gate_pass);
         assert_eq!(back.content_hash, report.content_hash);
     }
@@ -2598,7 +2610,8 @@ mod tests {
         ];
         for kind in &kinds {
             let json = serde_json::to_string(kind).expect("serde deserialization should succeed");
-            let back: ViolationKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ViolationKind =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*kind, back);
         }
     }
@@ -2630,7 +2643,8 @@ mod tests {
             min_rate_millibits: 500_000,
         };
         let json = serde_json::to_string(&env).expect("serde deserialization should succeed");
-        let back: RateDistortionEnvelope = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: RateDistortionEnvelope =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(env, back);
     }
 
@@ -2638,7 +2652,9 @@ mod tests {
     fn channel_state_epoch_reset_clears_counters() {
         let spec = &canonical_channel_specs()[0];
         let mut state = ChannelState::new(spec.channel_id.clone(), epoch(1));
-        state.emit(spec, 0).expect("serde deserialization should succeed");
+        state
+            .emit(spec, 0)
+            .expect("serde deserialization should succeed");
         assert_eq!(state.items_emitted, 1);
         state.epoch_reset(epoch(2));
         assert_eq!(state.items_emitted, 0);
@@ -2774,7 +2790,8 @@ mod tests {
             DistortionMetric::BinaryFidelity,
         ] {
             let json = serde_json::to_string(&dm).expect("serde deserialization should succeed");
-            let back: DistortionMetric = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: DistortionMetric =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(dm, back);
         }
     }
@@ -2783,7 +2800,8 @@ mod tests {
     fn channel_path_serde_roundtrip_all() {
         for cp in ChannelPath::ALL {
             let json = serde_json::to_string(&cp).expect("serde deserialization should succeed");
-            let back: ChannelPath = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ChannelPath =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(cp, back);
         }
     }
@@ -2980,7 +2998,8 @@ mod tests {
             ],
         };
         let json = serde_json::to_string(&ledger).expect("serde deserialization should succeed");
-        let back: DistortionRiskLedger = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DistortionRiskLedger =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ledger, back);
     }
 
@@ -2992,7 +3011,8 @@ mod tests {
             consequence: "moderate risk".into(),
         };
         let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
-        let back: DistortionRiskEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DistortionRiskEntry =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, back);
     }
 
@@ -3005,7 +3025,8 @@ mod tests {
             fail_closed: false,
         };
         let json = serde_json::to_string(&fb).expect("serde deserialization should succeed");
-        let back: FailureBudget = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: FailureBudget =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(fb, back);
     }
 
@@ -3026,8 +3047,12 @@ mod tests {
         spec.buffer_capacity = 2;
         let mut state = ChannelState::new(spec.channel_id.clone(), epoch(1));
         // Fill buffer.
-        state.emit(&spec, 0).expect("serde deserialization should succeed");
-        state.emit(&spec, 0).expect("serde deserialization should succeed");
+        state
+            .emit(&spec, 0)
+            .expect("serde deserialization should succeed");
+        state
+            .emit(&spec, 0)
+            .expect("serde deserialization should succeed");
         // Buffer full: next emit fails.
         assert!(state.emit(&spec, 0).is_err());
         // Drain one: relieves backpressure.
@@ -3043,7 +3068,9 @@ mod tests {
         // degradation check uses `>` not `>=`, so exactly at threshold is not degraded.
         let spec = &canonical_channel_specs()[0]; // degradation threshold 50_000
         let mut state = ChannelState::new(spec.channel_id.clone(), epoch(1));
-        state.emit(spec, 50_000).expect("serde deserialization should succeed");
+        state
+            .emit(spec, 50_000)
+            .expect("serde deserialization should succeed");
         assert_eq!(state.items_degraded, 0);
     }
 
@@ -3054,14 +3081,20 @@ mod tests {
         let mut state = ChannelState::new(spec.channel_id.clone(), epoch(1));
         // Exceed degradation budget: distortion above 100_000 threshold.
         for _ in 0..51 {
-            state.emit(spec, 150_000).expect("serde deserialization should succeed");
+            state
+                .emit(spec, 150_000)
+                .expect("serde deserialization should succeed");
         }
         // 51 items degraded, budget is 50, but fail_closed=false so all Ok.
         assert_eq!(state.items_degraded, 51);
         // But a violation was recorded.
         assert!(!state.violations.is_empty());
         assert_eq!(
-            state.violations.last().expect("serde deserialization should succeed").violation_kind,
+            state
+                .violations
+                .last()
+                .expect("serde deserialization should succeed")
+                .violation_kind,
             ViolationKind::DegradationBudgetExceeded
         );
     }
@@ -3073,7 +3106,9 @@ mod tests {
         let mut state = ChannelState::new(spec.channel_id.clone(), epoch(1));
         // 5 degraded items within budget.
         for _ in 0..5 {
-            state.emit(spec, 60_000).expect("serde deserialization should succeed");
+            state
+                .emit(spec, 60_000)
+                .expect("serde deserialization should succeed");
         }
         assert_eq!(state.items_degraded, 5);
         // 6th exceeds budget and fail_closed=true → error.
@@ -3092,7 +3127,9 @@ mod tests {
         spec.max_items_per_epoch = 100;
         let mut state = ChannelState::new(spec.channel_id.clone(), epoch(1));
         // First violation: backpressure (emit fills buffer, second triggers overflow).
-        state.emit(&spec, 0).expect("serde deserialization should succeed");
+        state
+            .emit(&spec, 0)
+            .expect("serde deserialization should succeed");
         let _ = state.emit(&spec, 0); // BackpressureOverflow
         assert_eq!(state.violations.len(), 1);
         // Drain so we can try another violation.
@@ -3127,7 +3164,9 @@ mod tests {
         let mut spec = canonical_channel_specs()[0].clone();
         spec.max_items_per_epoch = 1;
         let mut state = ChannelState::new(spec.channel_id.clone(), epoch(1));
-        state.emit(&spec, 0).expect("serde deserialization should succeed");
+        state
+            .emit(&spec, 0)
+            .expect("serde deserialization should succeed");
         let err = state.emit(&spec, 0).unwrap_err();
         assert!(err.detail.contains("rate cap"));
         assert!(err.detail.contains("1")); // the cap value
@@ -3199,7 +3238,8 @@ mod tests {
             violation_count: 0,
         };
         let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
-        let back: ChannelHealthEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ChannelHealthEntry =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, back);
     }
 
@@ -3267,7 +3307,8 @@ mod tests {
             detail: "buffer full".into(),
         };
         let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
-        let back: PolicyViolation = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: PolicyViolation =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, back);
     }
 
@@ -3326,7 +3367,9 @@ mod tests {
         let mut spec = canonical_channel_specs()[0].clone();
         spec.buffer_capacity = 1;
         let mut state = ChannelState::new(spec.channel_id.clone(), epoch(1));
-        state.emit(&spec, 0).expect("serde deserialization should succeed");
+        state
+            .emit(&spec, 0)
+            .expect("serde deserialization should succeed");
         let err = state.emit(&spec, 0).unwrap_err();
         assert!(err.detail.contains("buffer full"));
         assert!(err.detail.contains("1")); // capacity

@@ -347,7 +347,8 @@ mod tests {
         // Derive an ID for each domain and verify they are all distinct.
         let mut ids = BTreeMap::new();
         for domain in ObjectDomain::ALL {
-            let id = derive_id(*domain, zone, &schema, canonical_bytes).expect("serde deserialization should succeed");
+            let id = derive_id(*domain, zone, &schema, canonical_bytes)
+                .expect("serde deserialization should succeed");
             ids.insert(format!("{domain}"), id.to_hex());
         }
 
@@ -790,8 +791,14 @@ mod tests {
         let chain1 = build_chain();
         let chain2 = build_chain();
         assert_eq!(
-            chain1.head().expect("serde deserialization should succeed").chain_hash,
-            chain2.head().expect("serde deserialization should succeed").chain_hash,
+            chain1
+                .head()
+                .expect("serde deserialization should succeed")
+                .chain_hash,
+            chain2
+                .head()
+                .expect("serde deserialization should succeed")
+                .chain_hash,
             "deterministic chains must produce identical hashes"
         );
     }
@@ -1007,7 +1014,8 @@ mod tests {
             expect_error: false,
         };
         let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
-        let back: GoldenVector = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GoldenVector =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, back);
     }
 
@@ -1032,7 +1040,8 @@ mod tests {
             vectors: vec![vector],
         };
         let json = serde_json::to_string(&set).expect("serde deserialization should succeed");
-        let back: GoldenVectorSet = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GoldenVectorSet =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(set, back);
         assert_eq!(back.vectors.len(), 1);
         assert!(back.vectors[0].expect_error);
@@ -1230,7 +1239,8 @@ mod tests {
             expect_error: false,
         };
         let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
-        let back: GoldenVector = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GoldenVector =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, back);
     }
 
@@ -1242,7 +1252,8 @@ mod tests {
             vectors: vec![],
         };
         let json = serde_json::to_string(&set).expect("serde deserialization should succeed");
-        let back: GoldenVectorSet = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GoldenVectorSet =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.vectors.len(), 0);
     }
 

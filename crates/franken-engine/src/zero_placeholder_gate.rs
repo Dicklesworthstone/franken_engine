@@ -987,7 +987,8 @@ mod tests {
             // SAFETY: Subsystem derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(s).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by valid Subsystem serialization
-            let back: Subsystem = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: Subsystem =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*s, back);
         }
     }
@@ -1025,7 +1026,8 @@ mod tests {
             // SAFETY: PlaceholderKind derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(k).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by valid PlaceholderKind serialization
-            let back: PlaceholderKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: PlaceholderKind =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*k, back);
         }
     }
@@ -1057,7 +1059,8 @@ mod tests {
             // SAFETY: PlaceholderSeverity derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(s).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by valid PlaceholderSeverity serialization
-            let back: PlaceholderSeverity = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: PlaceholderSeverity =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*s, back);
         }
     }
@@ -1110,7 +1113,8 @@ mod tests {
     fn entry_serde_roundtrip() {
         let e = blocking_entry(Subsystem::Parser);
         let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
-        let back: PlaceholderEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: PlaceholderEntry =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(e, back);
     }
 
@@ -1131,7 +1135,8 @@ mod tests {
             WaiverStatus::Revoked,
         ] {
             let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
-            let back: WaiverStatus = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: WaiverStatus =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(s, back);
         }
     }
@@ -1189,7 +1194,8 @@ mod tests {
     fn gate_action_serde_roundtrip() {
         for a in [GateAction::Block, GateAction::Warn, GateAction::Allow] {
             let json = serde_json::to_string(&a).expect("serde deserialization should succeed");
-            let back: GateAction = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: GateAction =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(a, back);
         }
     }
@@ -1253,7 +1259,8 @@ mod tests {
     fn config_serde_roundtrip() {
         let cfg = GateConfig::default_config();
         let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
-        let back: GateConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GateConfig =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cfg, back);
     }
 
@@ -1291,7 +1298,8 @@ mod tests {
     fn scan_result_serde_roundtrip() {
         let s = scan_with(Subsystem::Lowering, vec![medium_entry(Subsystem::Lowering)]);
         let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
-        let back: ScanResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ScanResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(s, back);
     }
 
@@ -1320,7 +1328,8 @@ mod tests {
     fn verdict_serde_roundtrip() {
         for v in [GateVerdict::Pass, GateVerdict::Warn, GateVerdict::Block] {
             let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
-            let back: GateVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: GateVerdict =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(v, back);
         }
     }
@@ -1368,7 +1377,8 @@ mod tests {
             999,
         );
         let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
-        let back: DecisionReceipt = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DecisionReceipt =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 
@@ -1377,7 +1387,8 @@ mod tests {
     #[test]
     fn gate_clean_scans_pass() {
         let scans = vec![clean_scan(Subsystem::Parser)];
-        let r = evaluate_gate(&scans, &[], &GateConfig::default(), &test_epoch(), 1).expect("serde deserialization should succeed");
+        let r = evaluate_gate(&scans, &[], &GateConfig::default(), &test_epoch(), 1)
+            .expect("serde deserialization should succeed");
         assert!(r.is_pass());
         assert_eq!(r.blocked_count(), 0);
         assert_eq!(r.warned_count(), 0);
@@ -1387,7 +1398,8 @@ mod tests {
     fn gate_blocking_without_waiver_blocks() {
         let entry = blocking_entry(Subsystem::Parser);
         let scans = vec![scan_with(Subsystem::Parser, vec![entry])];
-        let r = evaluate_gate(&scans, &[], &GateConfig::default(), &test_epoch(), 1).expect("serde deserialization should succeed");
+        let r = evaluate_gate(&scans, &[], &GateConfig::default(), &test_epoch(), 1)
+            .expect("serde deserialization should succeed");
         assert!(r.is_block());
         assert_eq!(r.blocked_count(), 1);
     }
@@ -1397,7 +1409,8 @@ mod tests {
         let entry = blocking_entry(Subsystem::Parser);
         let waiver = make_waiver(&entry, Subsystem::Parser);
         let scans = vec![scan_with(Subsystem::Parser, vec![entry])];
-        let r = evaluate_gate(&scans, &[waiver], &GateConfig::default(), &test_epoch(), 1).expect("serde deserialization should succeed");
+        let r = evaluate_gate(&scans, &[waiver], &GateConfig::default(), &test_epoch(), 1)
+            .expect("serde deserialization should succeed");
         assert!(r.is_pass());
         assert_eq!(r.waived_count(), 1);
     }
@@ -1406,7 +1419,8 @@ mod tests {
     fn gate_high_without_waiver_warns() {
         let entry = high_entry(Subsystem::Parser);
         let scans = vec![scan_with(Subsystem::Parser, vec![entry])];
-        let r = evaluate_gate(&scans, &[], &GateConfig::default(), &test_epoch(), 1).expect("serde deserialization should succeed");
+        let r = evaluate_gate(&scans, &[], &GateConfig::default(), &test_epoch(), 1)
+            .expect("serde deserialization should succeed");
         assert_eq!(r.verdict, GateVerdict::Warn);
         assert_eq!(r.warned_count(), 1);
     }
@@ -1420,7 +1434,8 @@ mod tests {
                 low_entry(Subsystem::Runtime),
             ],
         )];
-        let r = evaluate_gate(&scans, &[], &GateConfig::default(), &test_epoch(), 1).expect("serde deserialization should succeed");
+        let r = evaluate_gate(&scans, &[], &GateConfig::default(), &test_epoch(), 1)
+            .expect("serde deserialization should succeed");
         assert!(r.is_pass());
     }
 
@@ -1490,7 +1505,8 @@ mod tests {
         w.expires_epoch = 50; // expires before epoch 100
         w.created_epoch = 40;
         let scans = vec![scan_with(Subsystem::Parser, vec![entry])];
-        let r = evaluate_gate(&scans, &[w], &GateConfig::default(), &test_epoch(), 1).expect("serde deserialization should succeed");
+        let r = evaluate_gate(&scans, &[w], &GateConfig::default(), &test_epoch(), 1)
+            .expect("serde deserialization should succeed");
         assert!(r.is_block());
         assert_eq!(r.waived_count(), 0);
     }
@@ -1501,7 +1517,8 @@ mod tests {
         let mut w = make_waiver(&entry, Subsystem::Parser);
         w.status = WaiverStatus::Revoked;
         let scans = vec![scan_with(Subsystem::Parser, vec![entry])];
-        let r = evaluate_gate(&scans, &[w], &GateConfig::default(), &test_epoch(), 1).expect("serde deserialization should succeed");
+        let r = evaluate_gate(&scans, &[w], &GateConfig::default(), &test_epoch(), 1)
+            .expect("serde deserialization should succeed");
         assert!(r.is_block());
     }
 
@@ -1512,7 +1529,8 @@ mod tests {
             clean_scan(Subsystem::Lowering),
             clean_scan(Subsystem::Runtime),
         ];
-        let r = evaluate_gate(&scans, &[], &GateConfig::default(), &test_epoch(), 1).expect("serde deserialization should succeed");
+        let r = evaluate_gate(&scans, &[], &GateConfig::default(), &test_epoch(), 1)
+            .expect("serde deserialization should succeed");
         assert!(r.is_pass());
         assert_eq!(r.total_placeholders(), 0);
     }
@@ -1521,7 +1539,8 @@ mod tests {
     fn gate_strict_blocks_low() {
         let entry = low_entry(Subsystem::Cli);
         let scans = vec![scan_with(Subsystem::Cli, vec![entry])];
-        let r = evaluate_gate(&scans, &[], &GateConfig::strict(), &test_epoch(), 1).expect("serde deserialization should succeed");
+        let r = evaluate_gate(&scans, &[], &GateConfig::strict(), &test_epoch(), 1)
+            .expect("serde deserialization should succeed");
         assert!(r.is_block());
     }
 
@@ -1530,7 +1549,8 @@ mod tests {
         let entry = blocking_entry(Subsystem::Parser);
         let scans = vec![scan_with(Subsystem::Parser, vec![entry])];
         let cfg = GateConfig::permissive();
-        let r = evaluate_gate(&scans, &[], &cfg, &test_epoch(), 1).expect("serde deserialization should succeed");
+        let r = evaluate_gate(&scans, &[], &cfg, &test_epoch(), 1)
+            .expect("serde deserialization should succeed");
         assert!(r.is_pass());
     }
 
@@ -1546,7 +1566,8 @@ mod tests {
                 ],
             ),
         ];
-        let r = evaluate_gate(&scans, &[], &GateConfig::default(), &test_epoch(), 1).expect("serde deserialization should succeed");
+        let r = evaluate_gate(&scans, &[], &GateConfig::default(), &test_epoch(), 1)
+            .expect("serde deserialization should succeed");
         assert_eq!(r.total_placeholders(), 3);
     }
 
@@ -1555,7 +1576,8 @@ mod tests {
     #[test]
     fn summarize_contains_verdict() {
         let scans = vec![clean_scan(Subsystem::Parser)];
-        let r = evaluate_gate(&scans, &[], &GateConfig::default(), &test_epoch(), 1).expect("serde deserialization should succeed");
+        let r = evaluate_gate(&scans, &[], &GateConfig::default(), &test_epoch(), 1)
+            .expect("serde deserialization should succeed");
         let s = summarize_report(&r);
         assert!(s.contains("pass"));
     }
@@ -1564,7 +1586,8 @@ mod tests {
     fn summarize_blocked_entries_listed() {
         let entry = blocking_entry(Subsystem::Parser);
         let scans = vec![scan_with(Subsystem::Parser, vec![entry])];
-        let r = evaluate_gate(&scans, &[], &GateConfig::default(), &test_epoch(), 1).expect("serde deserialization should succeed");
+        let r = evaluate_gate(&scans, &[], &GateConfig::default(), &test_epoch(), 1)
+            .expect("serde deserialization should succeed");
         let s = summarize_report(&r);
         assert!(s.contains("blocked entries:"));
         assert!(s.contains("src/lib.rs:42"));
@@ -1574,7 +1597,8 @@ mod tests {
     fn summarize_warned_entries_listed() {
         let entry = high_entry(Subsystem::Parser);
         let scans = vec![scan_with(Subsystem::Parser, vec![entry])];
-        let r = evaluate_gate(&scans, &[], &GateConfig::default(), &test_epoch(), 1).expect("serde deserialization should succeed");
+        let r = evaluate_gate(&scans, &[], &GateConfig::default(), &test_epoch(), 1)
+            .expect("serde deserialization should succeed");
         let s = summarize_report(&r);
         assert!(s.contains("warned entries:"));
     }
@@ -1584,7 +1608,8 @@ mod tests {
         let entry = blocking_entry(Subsystem::Parser);
         let waiver = make_waiver(&entry, Subsystem::Parser);
         let scans = vec![scan_with(Subsystem::Parser, vec![entry])];
-        let r = evaluate_gate(&scans, &[waiver], &GateConfig::default(), &test_epoch(), 1).expect("serde deserialization should succeed");
+        let r = evaluate_gate(&scans, &[waiver], &GateConfig::default(), &test_epoch(), 1)
+            .expect("serde deserialization should succeed");
         let s = summarize_report(&r);
         assert!(s.contains("waived entries:"));
     }
@@ -1648,7 +1673,8 @@ mod tests {
     fn gate_error_serde_roundtrip() {
         let e = GateError::EmptyScans;
         let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
-        let back: GateError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GateError =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(e, back);
     }
 
@@ -1663,7 +1689,8 @@ mod tests {
                 high_entry(Subsystem::Parser),
             ],
         )];
-        let r = evaluate_gate(&scans, &[], &GateConfig::default(), &test_epoch(), 1).expect("serde deserialization should succeed");
+        let r = evaluate_gate(&scans, &[], &GateConfig::default(), &test_epoch(), 1)
+            .expect("serde deserialization should succeed");
         assert!(r.is_block());
         assert_eq!(r.blocked_count(), 1);
         assert_eq!(r.warned_count(), 1);
@@ -1682,7 +1709,8 @@ mod tests {
         );
         let w = make_waiver(&e1, Subsystem::Parser);
         let scans = vec![scan_with(Subsystem::Parser, vec![e1, e2])];
-        let r = evaluate_gate(&scans, &[w], &GateConfig::default(), &test_epoch(), 1).expect("serde deserialization should succeed");
+        let r = evaluate_gate(&scans, &[w], &GateConfig::default(), &test_epoch(), 1)
+            .expect("serde deserialization should succeed");
         assert!(r.is_block());
         assert_eq!(r.waived_count(), 1);
         assert_eq!(r.blocked_count(), 1);
@@ -1697,7 +1725,8 @@ mod tests {
             scan_with(Subsystem::Parser, vec![b]),
             scan_with(Subsystem::Lowering, vec![h]),
         ];
-        let r = evaluate_gate(&scans, &[waiver], &GateConfig::default(), &test_epoch(), 1).expect("serde deserialization should succeed");
+        let r = evaluate_gate(&scans, &[waiver], &GateConfig::default(), &test_epoch(), 1)
+            .expect("serde deserialization should succeed");
         // Blocking waived, but High warns.
         assert_eq!(r.verdict, GateVerdict::Warn);
         assert_eq!(r.waived_count(), 1);
@@ -1707,7 +1736,8 @@ mod tests {
     #[test]
     fn gate_report_receipt_epoch_matches() {
         let scans = vec![clean_scan(Subsystem::Parser)];
-        let r = evaluate_gate(&scans, &[], &GateConfig::default(), &test_epoch(), 42).expect("serde deserialization should succeed");
+        let r = evaluate_gate(&scans, &[], &GateConfig::default(), &test_epoch(), 42)
+            .expect("serde deserialization should succeed");
         assert_eq!(r.receipt.epoch, test_epoch());
         assert_eq!(r.receipt.timestamp_micros, 42);
     }
@@ -1717,7 +1747,8 @@ mod tests {
         let e = blocking_entry(Subsystem::Parser);
         let w = make_waiver(&e, Subsystem::Parser);
         let json = serde_json::to_string(&w).expect("serde deserialization should succeed");
-        let back: Waiver = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: Waiver =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(w, back);
     }
 
@@ -1727,9 +1758,11 @@ mod tests {
             Subsystem::Parser,
             vec![blocking_entry(Subsystem::Parser)],
         )];
-        let r = evaluate_gate(&scans, &[], &GateConfig::default(), &test_epoch(), 1).expect("serde deserialization should succeed");
+        let r = evaluate_gate(&scans, &[], &GateConfig::default(), &test_epoch(), 1)
+            .expect("serde deserialization should succeed");
         let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
-        let back: GateReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GateReport =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 }

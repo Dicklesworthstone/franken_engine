@@ -551,7 +551,8 @@ impl HarnessMigrationRegistry {
 
         let evidence_linked_scenarios = self.scenarios.iter().filter(|s| s.evidence_linked).count();
 
-        let input_bytes = serde_json::to_vec(&(&self.scenarios, &self.containment_tests)).expect("serde deserialization should succeed");
+        let input_bytes = serde_json::to_vec(&(&self.scenarios, &self.containment_tests))
+            .expect("serde deserialization should succeed");
         let content_hash = ContentHash::compute(&input_bytes);
 
         HarnessMigrationReport {
@@ -741,8 +742,10 @@ mod tests {
             MigrationStatus::Verified,
             MigrationStatus::Deferred,
         ] {
-            let json = serde_json::to_string(&status).expect("serde deserialization should succeed");
-            let round: MigrationStatus = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&status).expect("serde deserialization should succeed");
+            let round: MigrationStatus =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(status, round);
         }
     }
@@ -826,7 +829,8 @@ mod tests {
         entry.bridge_oracles.insert("determinism".to_owned());
         entry.mark_migrated("upstream");
         let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
-        let round: ScenarioMigrationEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let round: ScenarioMigrationEntry =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, round);
     }
 
@@ -874,7 +878,8 @@ mod tests {
         let entry =
             ContainmentTestEntry::new(ContainmentTestKind::MockSeamAbsence, "tests/orch.rs", 8);
         let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
-        let round: ContainmentTestEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let round: ContainmentTestEntry =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, round);
     }
 
@@ -897,7 +902,9 @@ mod tests {
     #[test]
     fn registry_scenario_lookup() {
         let reg = HarnessMigrationRegistry::with_default_scenarios(test_epoch());
-        let startup = reg.scenario(LifecycleScenarioId::Startup).expect("serde deserialization should succeed");
+        let startup = reg
+            .scenario(LifecycleScenarioId::Startup)
+            .expect("serde deserialization should succeed");
         assert_eq!(startup.scenario_id, LifecycleScenarioId::Startup);
         assert_eq!(startup.local_harness, "frankenlab_extension_lifecycle");
     }
@@ -915,7 +922,12 @@ mod tests {
     fn registry_status_counts_all_local() {
         let reg = HarnessMigrationRegistry::with_default_scenarios(test_epoch());
         let counts = reg.scenario_status_counts();
-        assert_eq!(*counts.get("local_only").expect("serde deserialization should succeed"), 10);
+        assert_eq!(
+            *counts
+                .get("local_only")
+                .expect("serde deserialization should succeed"),
+            10
+        );
     }
 
     #[test]
@@ -945,8 +957,10 @@ mod tests {
     #[test]
     fn registry_serde_roundtrip() {
         let reg = HarnessMigrationRegistry::with_default_scenarios(test_epoch());
-        let json = serde_json::to_string_pretty(&reg).expect("serde deserialization should succeed");
-        let round: HarnessMigrationRegistry = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json =
+            serde_json::to_string_pretty(&reg).expect("serde deserialization should succeed");
+        let round: HarnessMigrationRegistry =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(reg, round);
     }
 
@@ -969,12 +983,16 @@ mod tests {
 
         // Migrate all scenarios
         for scenario_id in LifecycleScenarioId::ALL {
-            reg.scenario_mut(scenario_id).expect("serde deserialization should succeed").mark_verified();
+            reg.scenario_mut(scenario_id)
+                .expect("serde deserialization should succeed")
+                .mark_verified();
         }
 
         // Migrate all containment tests
         for kind in ContainmentTestKind::ALL {
-            let test = reg.containment_test_mut(kind).expect("serde deserialization should succeed");
+            let test = reg
+                .containment_test_mut(kind)
+                .expect("serde deserialization should succeed");
             test.status = MigrationStatus::Verified;
             test.upstream_test_count = test.local_test_count;
         }
@@ -990,8 +1008,10 @@ mod tests {
     fn report_serde_roundtrip() {
         let reg = HarnessMigrationRegistry::with_default_scenarios(test_epoch());
         let report = reg.build_report();
-        let json = serde_json::to_string_pretty(&report).expect("serde deserialization should succeed");
-        let round: HarnessMigrationReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json =
+            serde_json::to_string_pretty(&report).expect("serde deserialization should succeed");
+        let round: HarnessMigrationReport =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report, round);
     }
 
@@ -1046,7 +1066,8 @@ mod tests {
         entry.add_scenario("startup");
         entry.mark_cross_validated();
         let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
-        let round: OracleMigrationEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let round: OracleMigrationEntry =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, round);
     }
 
@@ -1071,7 +1092,8 @@ mod tests {
     fn lifecycle_scenario_id_serde_all() {
         for id in LifecycleScenarioId::ALL {
             let json = serde_json::to_string(&id).expect("serde deserialization should succeed");
-            let back: LifecycleScenarioId = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: LifecycleScenarioId =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(id, back);
         }
     }
@@ -1087,7 +1109,8 @@ mod tests {
     fn containment_test_kind_serde_all() {
         for kind in ContainmentTestKind::ALL {
             let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
-            let back: ContainmentTestKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ContainmentTestKind =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(kind, back);
         }
     }

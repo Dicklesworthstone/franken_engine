@@ -1087,9 +1087,13 @@ mod tests {
         // Reward arm 0 heavily.
         for _ in 0..10 {
             // SAFETY: Test-only unwrap with valid arm index and reward
-            state.update(0, 900_000).expect("serde deserialization should succeed");
+            state
+                .update(0, 900_000)
+                .expect("serde deserialization should succeed");
             // SAFETY: Test-only unwrap with valid arm index and reward
-            state.update(1, 100_000).expect("serde deserialization should succeed");
+            state
+                .update(1, 100_000)
+                .expect("serde deserialization should succeed");
         }
         let probs = state.arm_probabilities();
         assert!(probs[0] > probs[1], "arm 0 should have higher probability");
@@ -1196,11 +1200,17 @@ mod tests {
         // Arm 2 is consistently best.
         for _ in 0..50 {
             // SAFETY: Test-only unwrap with valid arm index and reward
-            state.update(0, 200_000).expect("serde deserialization should succeed");
+            state
+                .update(0, 200_000)
+                .expect("serde deserialization should succeed");
             // SAFETY: Test-only unwrap with valid arm index and reward
-            state.update(1, 300_000).expect("serde deserialization should succeed");
+            state
+                .update(1, 300_000)
+                .expect("serde deserialization should succeed");
             // SAFETY: Test-only unwrap with valid arm index and reward
-            state.update(2, 800_000).expect("serde deserialization should succeed");
+            state
+                .update(2, 800_000)
+                .expect("serde deserialization should succeed");
         }
         let probs = state.arm_probabilities();
         assert!(probs[2] > probs[0]);
@@ -1219,9 +1229,15 @@ mod tests {
     #[test]
     fn ftrl_mean_rewards_correct() {
         let mut state = FtrlState::new(2).expect("serde deserialization should succeed");
-        state.update(0, 400_000).expect("serde deserialization should succeed");
-        state.update(0, 600_000).expect("serde deserialization should succeed");
-        state.update(1, 800_000).expect("serde deserialization should succeed");
+        state
+            .update(0, 400_000)
+            .expect("serde deserialization should succeed");
+        state
+            .update(0, 600_000)
+            .expect("serde deserialization should succeed");
+        state
+            .update(1, 800_000)
+            .expect("serde deserialization should succeed");
         let means = state.mean_rewards();
         assert_eq!(means[0], 500_000);
         assert_eq!(means[1], 800_000);
@@ -1232,7 +1248,8 @@ mod tests {
     #[test]
     fn router_creation() {
         let arms = make_arms(3);
-        let router = RegretBoundedRouter::new(arms, 100_000).expect("serde deserialization should succeed");
+        let router =
+            RegretBoundedRouter::new(arms, 100_000).expect("serde deserialization should succeed");
         assert_eq!(router.num_arms(), 3);
         assert_eq!(router.rounds(), 0);
     }
@@ -1248,7 +1265,8 @@ mod tests {
     #[test]
     fn router_full_round_trip() {
         let arms = make_arms(2);
-        let mut router = RegretBoundedRouter::new(arms, 100_000).expect("serde deserialization should succeed");
+        let mut router =
+            RegretBoundedRouter::new(arms, 100_000).expect("serde deserialization should succeed");
 
         let arm = router.select_arm(300_000);
         let signal = RewardSignal {
@@ -1259,7 +1277,9 @@ mod tests {
             epoch: SecurityEpoch::from_raw(1),
             counterfactual_rewards_millionths: None,
         };
-        let receipt = router.observe_reward(&signal).expect("serde deserialization should succeed");
+        let receipt = router
+            .observe_reward(&signal)
+            .expect("serde deserialization should succeed");
         assert_eq!(receipt.round, 1);
         assert!(!receipt.exact_regret_available);
         assert!(!receipt.regret_within_bound);
@@ -1268,7 +1288,8 @@ mod tests {
     #[test]
     fn router_exact_regret_uses_counterfactuals_when_available() {
         let arms = make_arms(2);
-        let mut router = RegretBoundedRouter::new(arms, 100_000).expect("serde deserialization should succeed");
+        let mut router =
+            RegretBoundedRouter::new(arms, 100_000).expect("serde deserialization should succeed");
 
         let signal = RewardSignal {
             arm_index: 0,
@@ -1278,7 +1299,9 @@ mod tests {
             epoch: SecurityEpoch::from_raw(1),
             counterfactual_rewards_millionths: Some(vec![200_000, 900_000]),
         };
-        let receipt = router.observe_reward(&signal).expect("serde deserialization should succeed");
+        let receipt = router
+            .observe_reward(&signal)
+            .expect("serde deserialization should succeed");
 
         assert!(receipt.exact_regret_available);
         assert!(receipt.regret_within_bound);
@@ -1288,7 +1311,8 @@ mod tests {
     #[test]
     fn router_exact_regret_uses_best_fixed_arm_not_dynamic_oracle() {
         let arms = make_arms(2);
-        let mut router = RegretBoundedRouter::new(arms, 100_000).expect("serde deserialization should succeed");
+        let mut router =
+            RegretBoundedRouter::new(arms, 100_000).expect("serde deserialization should succeed");
 
         // Round 1: arm 0 is better.
         router
@@ -1322,7 +1346,8 @@ mod tests {
     #[test]
     fn router_rejects_counterfactual_size_mismatch() {
         let arms = make_arms(2);
-        let mut router = RegretBoundedRouter::new(arms, 100_000).expect("serde deserialization should succeed");
+        let mut router =
+            RegretBoundedRouter::new(arms, 100_000).expect("serde deserialization should succeed");
         let signal = RewardSignal {
             arm_index: 0,
             reward_millionths: 500_000,
@@ -1340,7 +1365,8 @@ mod tests {
     #[test]
     fn router_invalid_arm_does_not_mutate_counterfactual_state() {
         let arms = make_arms(2);
-        let mut router = RegretBoundedRouter::new(arms, 100_000).expect("serde deserialization should succeed");
+        let mut router =
+            RegretBoundedRouter::new(arms, 100_000).expect("serde deserialization should succeed");
         let signal = RewardSignal {
             arm_index: 99,
             reward_millionths: 500_000,
@@ -1361,7 +1387,8 @@ mod tests {
     #[test]
     fn router_invalid_reward_does_not_mutate_counterfactual_state() {
         let arms = make_arms(2);
-        let mut router = RegretBoundedRouter::new(arms, 100_000).expect("serde deserialization should succeed");
+        let mut router =
+            RegretBoundedRouter::new(arms, 100_000).expect("serde deserialization should succeed");
         let signal = RewardSignal {
             arm_index: 0,
             reward_millionths: -1,
@@ -1382,7 +1409,8 @@ mod tests {
     #[test]
     fn router_invalid_counterfactual_entry_does_not_partially_mutate() {
         let arms = make_arms(3);
-        let mut router = RegretBoundedRouter::new(arms, 100_000).expect("serde deserialization should succeed");
+        let mut router =
+            RegretBoundedRouter::new(arms, 100_000).expect("serde deserialization should succeed");
         // First two counterfactual entries are valid, third is out of range.
         // Before the fix, the first two would have been accumulated before the
         // error return, leaving state inconsistent.
@@ -1407,7 +1435,8 @@ mod tests {
     #[test]
     fn router_regret_stays_bounded() {
         let arms = make_arms(2);
-        let mut router = RegretBoundedRouter::new(arms, 100_000).expect("serde deserialization should succeed");
+        let mut router =
+            RegretBoundedRouter::new(arms, 100_000).expect("serde deserialization should succeed");
 
         // Simulate 100 rounds with arm 0 = good, arm 1 = bad.
         for i in 0..100u64 {
@@ -1421,7 +1450,9 @@ mod tests {
                 epoch: SecurityEpoch::from_raw(i),
                 counterfactual_rewards_millionths: None,
             };
-            router.observe_reward(&signal).expect("serde deserialization should succeed");
+            router
+                .observe_reward(&signal)
+                .expect("serde deserialization should succeed");
         }
 
         let cert = router.regret_certificate();
@@ -1437,7 +1468,8 @@ mod tests {
     #[test]
     fn router_regime_detection() {
         let arms = make_arms(2);
-        let mut router = RegretBoundedRouter::new(arms, 100_000).expect("serde deserialization should succeed");
+        let mut router =
+            RegretBoundedRouter::new(arms, 100_000).expect("serde deserialization should succeed");
         assert_eq!(router.active_regime, RegimeKind::Unknown);
 
         // Feed very consistent rewards (low variance → stochastic).
@@ -1450,7 +1482,9 @@ mod tests {
                 epoch: SecurityEpoch::from_raw(i),
                 counterfactual_rewards_millionths: None,
             };
-            router.observe_reward(&signal).expect("serde deserialization should succeed");
+            router
+                .observe_reward(&signal)
+                .expect("serde deserialization should succeed");
         }
 
         // After enough rounds, regime should be detected.
@@ -1461,10 +1495,12 @@ mod tests {
     #[test]
     fn router_summary_serde_roundtrip() {
         let arms = make_arms(2);
-        let router = RegretBoundedRouter::new(arms, 100_000).expect("serde deserialization should succeed");
+        let router =
+            RegretBoundedRouter::new(arms, 100_000).expect("serde deserialization should succeed");
         let summary = router.summary();
         let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
-        let restored: RouterSummary = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: RouterSummary =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(summary, restored);
     }
 
@@ -1483,7 +1519,8 @@ mod tests {
             regret_within_bound: true,
         };
         let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
-        let restored: RoutingDecisionReceipt = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: RoutingDecisionReceipt =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(receipt, restored);
     }
 
@@ -1500,7 +1537,8 @@ mod tests {
             growth_rate_class: "sublinear_verified".to_string(),
         };
         let json = serde_json::to_string(&cert).expect("serde deserialization should succeed");
-        let restored: RegretCertificate = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: RegretCertificate =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cert, restored);
     }
 
@@ -1575,7 +1613,8 @@ mod tests {
     #[test]
     fn router_select_warm_up_round_robin() {
         let arms = make_arms(3);
-        let router = RegretBoundedRouter::new(arms, 100_000).expect("serde deserialization should succeed");
+        let router =
+            RegretBoundedRouter::new(arms, 100_000).expect("serde deserialization should succeed");
         // During warm-up (Unknown regime, first K rounds), should be round-robin.
         assert_eq!(router.select_arm(500_000), 0);
     }
@@ -1597,7 +1636,8 @@ mod tests {
             counterfactual_rewards_millionths: None,
         };
         let json = serde_json::to_string(&signal).expect("serde deserialization should succeed");
-        let restored: RewardSignal = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: RewardSignal =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(signal, restored);
     }
 
@@ -1608,7 +1648,8 @@ mod tests {
             description: "QuickJS-inspired lane".into(),
         };
         let json = serde_json::to_string(&arm).expect("serde deserialization should succeed");
-        let restored: LaneArm = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: LaneArm =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(arm, restored);
     }
 
@@ -1623,7 +1664,8 @@ mod tests {
         // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&rt).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let restored: RegimeTransition = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: RegimeTransition =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(rt, restored);
     }
 
@@ -1695,13 +1737,18 @@ mod tests {
         // SAFETY: Test-only unwrap with valid arm count
         let mut state = FtrlState::new(2).expect("serde deserialization should succeed");
         // SAFETY: Test-only unwrap with valid arm index and reward
-        state.update(0, 600_000).expect("serde deserialization should succeed");
+        state
+            .update(0, 600_000)
+            .expect("serde deserialization should succeed");
         // SAFETY: Test-only unwrap with valid arm index and reward
-        state.update(1, 400_000).expect("serde deserialization should succeed");
+        state
+            .update(1, 400_000)
+            .expect("serde deserialization should succeed");
         // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&state).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let restored: FtrlState = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: FtrlState =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(state, restored);
     }
 
@@ -1710,7 +1757,8 @@ mod tests {
     #[test]
     fn exp3_exactly_max_arms_accepted() {
         // SAFETY: Test-only unwrap with valid arm count and gamma parameters
-        let state = Exp3State::new(MAX_ARMS, 100_000).expect("serde deserialization should succeed");
+        let state =
+            Exp3State::new(MAX_ARMS, 100_000).expect("serde deserialization should succeed");
         assert_eq!(state.num_arms, MAX_ARMS);
     }
 
@@ -1719,25 +1767,32 @@ mod tests {
         // SAFETY: Test-only unwrap with valid arm count and gamma parameters
         let mut state = Exp3State::new(2, 200_000).expect("serde deserialization should succeed");
         // SAFETY: Test-only unwrap with valid arm index and reward
-        state.update(0, 700_000).expect("serde deserialization should succeed");
+        state
+            .update(0, 700_000)
+            .expect("serde deserialization should succeed");
         // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&state).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let restored: Exp3State = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: Exp3State =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(state, restored);
     }
 
     #[test]
     fn exp3_zero_reward_accepted() {
         let mut state = Exp3State::new(2, 100_000).expect("serde deserialization should succeed");
-        state.update(0, 0).expect("serde deserialization should succeed");
+        state
+            .update(0, 0)
+            .expect("serde deserialization should succeed");
         assert_eq!(state.rounds, 1);
     }
 
     #[test]
     fn exp3_max_reward_accepted() {
         let mut state = Exp3State::new(2, 100_000).expect("serde deserialization should succeed");
-        state.update(0, MILLION).expect("serde deserialization should succeed");
+        state
+            .update(0, MILLION)
+            .expect("serde deserialization should succeed");
         assert_eq!(state.rounds, 1);
     }
 
@@ -1755,14 +1810,16 @@ mod tests {
     #[test]
     fn router_exactly_max_arms_accepted() {
         let arms = make_arms(MAX_ARMS);
-        let router = RegretBoundedRouter::new(arms, 100_000).expect("serde deserialization should succeed");
+        let router =
+            RegretBoundedRouter::new(arms, 100_000).expect("serde deserialization should succeed");
         assert_eq!(router.num_arms(), MAX_ARMS);
     }
 
     #[test]
     fn router_counterfactual_reward_out_of_range() {
         let arms = make_arms(2);
-        let mut router = RegretBoundedRouter::new(arms, 100_000).expect("serde deserialization should succeed");
+        let mut router =
+            RegretBoundedRouter::new(arms, 100_000).expect("serde deserialization should succeed");
         let signal = RewardSignal {
             arm_index: 0,
             reward_millionths: 500_000,
@@ -1780,7 +1837,8 @@ mod tests {
     #[test]
     fn router_full_counterfactual_sequence_exact_regret() {
         let arms = make_arms(3);
-        let mut router = RegretBoundedRouter::new(arms, 100_000).expect("serde deserialization should succeed");
+        let mut router =
+            RegretBoundedRouter::new(arms, 100_000).expect("serde deserialization should succeed");
 
         for i in 0..20u64 {
             let arm = router.select_arm((i as i64 * 31337) % MILLION);
@@ -1792,7 +1850,9 @@ mod tests {
                 epoch: SecurityEpoch::from_raw(i),
                 counterfactual_rewards_millionths: Some(vec![500_000, 500_000, 500_000]),
             };
-            router.observe_reward(&signal).expect("serde deserialization should succeed");
+            router
+                .observe_reward(&signal)
+                .expect("serde deserialization should succeed");
         }
 
         // All arms have equal counterfactual rewards, so exact regret is 0.
@@ -1802,7 +1862,8 @@ mod tests {
     #[test]
     fn router_regime_shift_adversarial_high_variance() {
         let arms = make_arms(2);
-        let mut router = RegretBoundedRouter::new(arms, 100_000).expect("serde deserialization should succeed");
+        let mut router =
+            RegretBoundedRouter::new(arms, 100_000).expect("serde deserialization should succeed");
 
         // Alternate wildly between 0 and MILLION for high variance.
         for i in 0..30u64 {
@@ -1815,7 +1876,9 @@ mod tests {
                 epoch: SecurityEpoch::from_raw(i),
                 counterfactual_rewards_millionths: None,
             };
-            router.observe_reward(&signal).expect("serde deserialization should succeed");
+            router
+                .observe_reward(&signal)
+                .expect("serde deserialization should succeed");
         }
 
         // High variance should trigger adversarial regime or leave unknown.
@@ -1828,7 +1891,8 @@ mod tests {
     #[test]
     fn router_regime_shift_stochastic_low_variance() {
         let arms = make_arms(2);
-        let mut router = RegretBoundedRouter::new(arms, 100_000).expect("serde deserialization should succeed");
+        let mut router =
+            RegretBoundedRouter::new(arms, 100_000).expect("serde deserialization should succeed");
 
         // Constant rewards → stochastic regime.
         for i in 0..30u64 {
@@ -1840,7 +1904,9 @@ mod tests {
                 epoch: SecurityEpoch::from_raw(i),
                 counterfactual_rewards_millionths: None,
             };
-            router.observe_reward(&signal).expect("serde deserialization should succeed");
+            router
+                .observe_reward(&signal)
+                .expect("serde deserialization should succeed");
         }
 
         // Should detect stochastic regime.
@@ -1855,7 +1921,8 @@ mod tests {
     #[test]
     fn router_regime_history_recorded() {
         let arms = make_arms(2);
-        let mut router = RegretBoundedRouter::new(arms, 100_000).expect("serde deserialization should succeed");
+        let mut router =
+            RegretBoundedRouter::new(arms, 100_000).expect("serde deserialization should succeed");
 
         // Feed constant rewards to trigger stochastic detection.
         for i in 0..20u64 {
@@ -1867,7 +1934,9 @@ mod tests {
                 epoch: SecurityEpoch::from_raw(i),
                 counterfactual_rewards_millionths: None,
             };
-            router.observe_reward(&signal).expect("serde deserialization should succeed");
+            router
+                .observe_reward(&signal)
+                .expect("serde deserialization should succeed");
         }
 
         if !router.regime_history.is_empty() {
@@ -1880,7 +1949,8 @@ mod tests {
     #[test]
     fn router_summary_fields_populated() {
         let arms = make_arms(2);
-        let mut router = RegretBoundedRouter::new(arms, 100_000).expect("serde deserialization should succeed");
+        let mut router =
+            RegretBoundedRouter::new(arms, 100_000).expect("serde deserialization should succeed");
         router
             .observe_reward(&RewardSignal {
                 arm_index: 0,
@@ -1907,7 +1977,8 @@ mod tests {
     #[test]
     fn router_regret_certificate_no_rounds_class() {
         let arms = make_arms(2);
-        let router = RegretBoundedRouter::new(arms, 100_000).expect("serde deserialization should succeed");
+        let router =
+            RegretBoundedRouter::new(arms, 100_000).expect("serde deserialization should succeed");
         let cert = router.regret_certificate();
         // No counterfactual data → empirical_estimate
         assert_eq!(cert.growth_rate_class, "empirical_estimate");
@@ -1917,7 +1988,8 @@ mod tests {
     #[test]
     fn router_regret_certificate_zero_growth_with_counterfactual() {
         let arms = make_arms(2);
-        let mut router = RegretBoundedRouter::new(arms, 100_000).expect("serde deserialization should succeed");
+        let mut router =
+            RegretBoundedRouter::new(arms, 100_000).expect("serde deserialization should succeed");
 
         // Provide counterfactual rewards so exact_regret_available becomes true.
         // Both arms get same reward → regret is zero.
@@ -1930,7 +2002,9 @@ mod tests {
                 epoch: SecurityEpoch::from_raw(i),
                 counterfactual_rewards_millionths: Some(vec![400_000, 400_000]),
             };
-            router.observe_reward(&signal).expect("serde deserialization should succeed");
+            router
+                .observe_reward(&signal)
+                .expect("serde deserialization should succeed");
         }
 
         let cert = router.regret_certificate();
@@ -1943,7 +2017,8 @@ mod tests {
     #[test]
     fn router_regret_certificate_sublinear_with_counterfactual() {
         let arms = make_arms(2);
-        let mut router = RegretBoundedRouter::new(arms, 100_000).expect("serde deserialization should succeed");
+        let mut router =
+            RegretBoundedRouter::new(arms, 100_000).expect("serde deserialization should succeed");
 
         // Arm 0 gets 400k, arm 1 gets 500k → some regret but within bound.
         for i in 0..20u64 {
@@ -1955,7 +2030,9 @@ mod tests {
                 epoch: SecurityEpoch::from_raw(i),
                 counterfactual_rewards_millionths: Some(vec![400_000, 500_000]),
             };
-            router.observe_reward(&signal).expect("serde deserialization should succeed");
+            router
+                .observe_reward(&signal)
+                .expect("serde deserialization should succeed");
         }
 
         let cert = router.regret_certificate();
@@ -1968,7 +2045,8 @@ mod tests {
     #[test]
     fn realized_regret_clamps_large_round_counts() {
         let arms = make_arms(2);
-        let mut router = RegretBoundedRouter::new(arms, 100_000).expect("serde deserialization should succeed");
+        let mut router =
+            RegretBoundedRouter::new(arms, 100_000).expect("serde deserialization should succeed");
         router.exp3.rounds = u64::MAX;
         router.per_arm_cumulative = vec![MILLION, 0];
         router.per_arm_count = vec![1, 1];
@@ -1980,7 +2058,8 @@ mod tests {
     #[test]
     fn router_serde_roundtrip() {
         let arms = make_arms(2);
-        let mut router = RegretBoundedRouter::new(arms, 100_000).expect("serde deserialization should succeed");
+        let mut router =
+            RegretBoundedRouter::new(arms, 100_000).expect("serde deserialization should succeed");
         router
             .observe_reward(&RewardSignal {
                 arm_index: 0,
@@ -1993,14 +2072,16 @@ mod tests {
             .expect("serde deserialization should succeed");
 
         let json = serde_json::to_string(&router).expect("serde deserialization should succeed");
-        let restored: RegretBoundedRouter = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: RegretBoundedRouter =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(router, restored);
     }
 
     #[test]
     fn router_receipt_schema_version() {
         let arms = make_arms(2);
-        let mut router = RegretBoundedRouter::new(arms, 100_000).expect("serde deserialization should succeed");
+        let mut router =
+            RegretBoundedRouter::new(arms, 100_000).expect("serde deserialization should succeed");
         let receipt = router
             .observe_reward(&RewardSignal {
                 arm_index: 0,
@@ -2144,7 +2225,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: RegimeKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: RegimeKind =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -2173,7 +2255,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: RouterError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: RouterError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }

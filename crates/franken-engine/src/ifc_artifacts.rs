@@ -754,7 +754,9 @@ impl SignaturePreimage for FlowPolicy {
     fn unsigned_view(&self) -> CanonicalValue {
         let mut copy = self.clone();
         copy.signature = Signature::from_bytes(SIGNATURE_SENTINEL);
-        CanonicalValue::Bytes(serde_json::to_vec(&copy).expect("serde deserialization should succeed"))
+        CanonicalValue::Bytes(
+            serde_json::to_vec(&copy).expect("serde deserialization should succeed"),
+        )
     }
 }
 
@@ -873,7 +875,9 @@ impl SignaturePreimage for FlowProof {
     fn unsigned_view(&self) -> CanonicalValue {
         let mut copy = self.clone();
         copy.signature = Signature::from_bytes(SIGNATURE_SENTINEL);
-        CanonicalValue::Bytes(serde_json::to_vec(&copy).expect("serde deserialization should succeed"))
+        CanonicalValue::Bytes(
+            serde_json::to_vec(&copy).expect("serde deserialization should succeed"),
+        )
     }
 }
 
@@ -1056,7 +1060,9 @@ impl SignaturePreimage for DeclassificationReceipt {
     fn unsigned_view(&self) -> CanonicalValue {
         let mut copy = self.clone();
         copy.signature = Signature::from_bytes(SIGNATURE_SENTINEL);
-        CanonicalValue::Bytes(serde_json::to_vec(&copy).expect("serde deserialization should succeed"))
+        CanonicalValue::Bytes(
+            serde_json::to_vec(&copy).expect("serde deserialization should succeed"),
+        )
     }
 }
 
@@ -1170,7 +1176,9 @@ impl SignaturePreimage for ConfinementClaim {
     fn unsigned_view(&self) -> CanonicalValue {
         let mut copy = self.clone();
         copy.signature = Signature::from_bytes(SIGNATURE_SENTINEL);
-        CanonicalValue::Bytes(serde_json::to_vec(&copy).expect("serde deserialization should succeed"))
+        CanonicalValue::Bytes(
+            serde_json::to_vec(&copy).expect("serde deserialization should succeed"),
+        )
     }
 }
 
@@ -1368,7 +1376,8 @@ mod tests {
     fn schema_version_serde_roundtrip() {
         let v = IfcSchemaVersion::CURRENT;
         let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
-        let parsed: IfcSchemaVersion = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let parsed: IfcSchemaVersion =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, parsed);
     }
 
@@ -1447,7 +1456,8 @@ mod tests {
             },
         ] {
             let json = serde_json::to_string(&label).expect("serde deserialization should succeed");
-            let parsed: Label = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let parsed: Label =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(label, parsed);
         }
     }
@@ -1458,7 +1468,8 @@ mod tests {
     fn flow_policy_serde_roundtrip() {
         let policy = make_flow_policy();
         let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
-        let parsed: FlowPolicy = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let parsed: FlowPolicy =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(policy, parsed);
     }
 
@@ -1481,17 +1492,24 @@ mod tests {
     fn flow_policy_sign_and_verify() {
         let key = test_key();
         let mut policy = make_flow_policy();
-        policy.sign(&key).expect("serde deserialization should succeed");
+        policy
+            .sign(&key)
+            .expect("serde deserialization should succeed");
         assert!(!policy.signature.is_sentinel());
-        policy.verify(&key.verification_key()).expect("serde deserialization should succeed");
+        policy
+            .verify(&key.verification_key())
+            .expect("serde deserialization should succeed");
     }
 
     #[test]
     fn flow_policy_verify_fails_wrong_key() {
         let key = test_key();
-        let wrong_key = SigningKey::from_bytes([99u8; 32]).expect("serde deserialization should succeed");
+        let wrong_key =
+            SigningKey::from_bytes([99u8; 32]).expect("serde deserialization should succeed");
         let mut policy = make_flow_policy();
-        policy.sign(&key).expect("serde deserialization should succeed");
+        policy
+            .sign(&key)
+            .expect("serde deserialization should succeed");
         assert!(policy.verify(&wrong_key.verification_key()).is_err());
     }
 
@@ -1551,7 +1569,8 @@ mod tests {
     fn flow_proof_serde_roundtrip() {
         let proof = make_flow_proof();
         let json = serde_json::to_string(&proof).expect("serde deserialization should succeed");
-        let parsed: FlowProof = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let parsed: FlowProof =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(proof, parsed);
     }
 
@@ -1566,9 +1585,13 @@ mod tests {
     fn flow_proof_sign_and_verify() {
         let key = test_key();
         let mut proof = make_flow_proof();
-        proof.sign(&key).expect("serde deserialization should succeed");
+        proof
+            .sign(&key)
+            .expect("serde deserialization should succeed");
         assert!(!proof.signature.is_sentinel());
-        proof.verify(&key.verification_key()).expect("serde deserialization should succeed");
+        proof
+            .verify(&key.verification_key())
+            .expect("serde deserialization should succeed");
     }
 
     // -- ProofMethod tests --
@@ -1590,8 +1613,10 @@ mod tests {
             ProofMethod::RuntimeCheck,
             ProofMethod::Declassification,
         ] {
-            let json = serde_json::to_string(&method).expect("serde deserialization should succeed");
-            let parsed: ProofMethod = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&method).expect("serde deserialization should succeed");
+            let parsed: ProofMethod =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(method, parsed);
         }
     }
@@ -1602,7 +1627,8 @@ mod tests {
     fn receipt_serde_roundtrip() {
         let receipt = make_receipt();
         let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
-        let parsed: DeclassificationReceipt = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let parsed: DeclassificationReceipt =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(receipt, parsed);
     }
 
@@ -1617,15 +1643,21 @@ mod tests {
     fn receipt_sign_and_verify() {
         let key = test_key();
         let mut receipt = make_receipt();
-        receipt.sign(&key).expect("serde deserialization should succeed");
+        receipt
+            .sign(&key)
+            .expect("serde deserialization should succeed");
         assert!(!receipt.signature.is_sentinel());
-        receipt.verify(&key.verification_key()).expect("serde deserialization should succeed");
+        receipt
+            .verify(&key.verification_key())
+            .expect("serde deserialization should succeed");
     }
 
     #[test]
     fn receipt_validate_accepts_linked_receipt() {
         let receipt = make_receipt();
-        receipt.validate().expect("serde deserialization should succeed");
+        receipt
+            .validate()
+            .expect("serde deserialization should succeed");
     }
 
     #[test]
@@ -1662,7 +1694,9 @@ mod tests {
     fn receipt_verify_rejects_blank_replay_linkage_after_signing() {
         let key = test_key();
         let mut receipt = make_receipt();
-        receipt.sign(&key).expect("serde deserialization should succeed");
+        receipt
+            .sign(&key)
+            .expect("serde deserialization should succeed");
         receipt.replay_linkage = "\n".to_string();
 
         let err = receipt.verify(&key.verification_key()).unwrap_err();
@@ -1692,7 +1726,8 @@ mod tests {
             DeclassificationDecision::Deny,
         ] {
             let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
-            let parsed: DeclassificationDecision = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let parsed: DeclassificationDecision =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(d, parsed);
         }
     }
@@ -1755,7 +1790,8 @@ mod tests {
         for strength in [ClaimStrength::Full, ClaimStrength::Partial] {
             let claim = make_claim(strength);
             let json = serde_json::to_string(&claim).expect("serde deserialization should succeed");
-            let parsed: ConfinementClaim = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let parsed: ConfinementClaim =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(claim, parsed);
         }
     }
@@ -1771,9 +1807,13 @@ mod tests {
     fn claim_sign_and_verify() {
         let key = test_key();
         let mut claim = make_claim(ClaimStrength::Full);
-        claim.sign(&key).expect("serde deserialization should succeed");
+        claim
+            .sign(&key)
+            .expect("serde deserialization should succeed");
         assert!(!claim.signature.is_sentinel());
-        claim.verify(&key.verification_key()).expect("serde deserialization should succeed");
+        claim
+            .verify(&key.verification_key())
+            .expect("serde deserialization should succeed");
     }
 
     #[test]
@@ -1786,7 +1826,8 @@ mod tests {
     fn claim_strength_serde_roundtrip() {
         for s in [ClaimStrength::Full, ClaimStrength::Partial] {
             let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
-            let parsed: ClaimStrength = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let parsed: ClaimStrength =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(s, parsed);
         }
     }
@@ -1846,7 +1887,8 @@ mod tests {
         ];
         for err in errors {
             let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
-            let parsed: IfcValidationError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let parsed: IfcValidationError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(err, parsed);
         }
     }
@@ -1860,7 +1902,8 @@ mod tests {
             sink_clearance: Label::Confidential,
         };
         let json = serde_json::to_string(&rule).expect("serde deserialization should succeed");
-        let parsed: FlowRule = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let parsed: FlowRule =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(rule, parsed);
     }
 
@@ -1875,7 +1918,8 @@ mod tests {
             conditions: vec!["audit_approval".to_string(), "ciso_sign_off".to_string()],
         };
         let json = serde_json::to_string(&route).expect("serde deserialization should succeed");
-        let parsed: DeclassificationRoute = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let parsed: DeclassificationRoute =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(route, parsed);
     }
 
@@ -1894,7 +1938,8 @@ mod tests {
         ];
         for r in results {
             let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
-            let parsed: FlowCheckResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let parsed: FlowCheckResult =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(r, parsed);
         }
     }
@@ -1907,19 +1952,31 @@ mod tests {
 
         // 1. Define policy
         let mut policy = make_flow_policy();
-        policy.sign(&key).expect("serde deserialization should succeed");
-        policy.verify(&key.verification_key()).expect("serde deserialization should succeed");
+        policy
+            .sign(&key)
+            .expect("serde deserialization should succeed");
+        policy
+            .verify(&key.verification_key())
+            .expect("serde deserialization should succeed");
 
         // 2. Prove a flow
         let mut proof = make_flow_proof();
         proof.policy_ref = policy.policy_id.clone();
-        proof.sign(&key).expect("serde deserialization should succeed");
-        proof.verify(&key.verification_key()).expect("serde deserialization should succeed");
+        proof
+            .sign(&key)
+            .expect("serde deserialization should succeed");
+        proof
+            .verify(&key.verification_key())
+            .expect("serde deserialization should succeed");
 
         // 3. Issue declassification receipt
         let mut receipt = make_receipt();
-        receipt.sign(&key).expect("serde deserialization should succeed");
-        receipt.verify(&key.verification_key()).expect("serde deserialization should succeed");
+        receipt
+            .sign(&key)
+            .expect("serde deserialization should succeed");
+        receipt
+            .verify(&key.verification_key())
+            .expect("serde deserialization should succeed");
 
         // 4. Make confinement claim
         let mut claim = ConfinementClaim {
@@ -1933,9 +1990,15 @@ mod tests {
             schema_version: IfcSchemaVersion::CURRENT,
             signature: sentinel_sig(),
         };
-        claim.validate().expect("serde deserialization should succeed");
-        claim.sign(&key).expect("serde deserialization should succeed");
-        claim.verify(&key.verification_key()).expect("serde deserialization should succeed");
+        claim
+            .validate()
+            .expect("serde deserialization should succeed");
+        claim
+            .sign(&key)
+            .expect("serde deserialization should succeed");
+        claim
+            .verify(&key.verification_key())
+            .expect("serde deserialization should succeed");
         assert!(claim.is_full());
     }
 
@@ -2184,7 +2247,8 @@ mod tests {
     fn clearance_class_serde_roundtrip() {
         for cc in ClearanceClass::all() {
             let json = serde_json::to_string(&cc).expect("serde deserialization should succeed");
-            let parsed: ClearanceClass = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let parsed: ClearanceClass =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(cc, parsed);
         }
     }
@@ -2240,7 +2304,8 @@ mod tests {
     fn obligation_serde_roundtrip() {
         let obl = make_obligation();
         let json = serde_json::to_string(&obl).expect("serde deserialization should succeed");
-        let parsed: DeclassificationObligation = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let parsed: DeclassificationObligation =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(obl, parsed);
     }
 
@@ -2397,8 +2462,10 @@ mod tests {
             },
         ];
         for source in sources {
-            let json = serde_json::to_string(&source).expect("serde deserialization should succeed");
-            let parsed: Ir2LabelSource = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&source).expect("serde deserialization should succeed");
+            let parsed: Ir2LabelSource =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(source, parsed);
         }
     }
@@ -2424,7 +2491,8 @@ mod tests {
     fn flow_envelope_serde_roundtrip() {
         let env = make_flow_envelope();
         let json = serde_json::to_string(&env).expect("serde deserialization should succeed");
-        let parsed: FlowEnvelope = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let parsed: FlowEnvelope =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(env, parsed);
     }
 

@@ -1315,7 +1315,11 @@ mod tests {
     fn register_creates_extension_in_unloaded_state() {
         let mut mgr = make_manager();
         register_ext(&mut mgr, "ext-a");
-        assert_eq!(mgr.state("ext-a").expect("serde deserialization should succeed"), ExtensionState::Unloaded);
+        assert_eq!(
+            mgr.state("ext-a")
+                .expect("serde deserialization should succeed"),
+            ExtensionState::Unloaded
+        );
     }
 
     #[test]
@@ -1340,7 +1344,8 @@ mod tests {
         let mut mgr = make_manager();
         register_ext(&mut mgr, "ext-a");
         // Unloaded is terminal
-        mgr.unregister("ext-a").expect("serde deserialization should succeed");
+        mgr.unregister("ext-a")
+            .expect("serde deserialization should succeed");
         assert!(mgr.state("ext-a").is_err());
     }
 
@@ -1364,29 +1369,49 @@ mod tests {
 
         // Unloaded → Running
         advance_to_running(&mut mgr, "ext-a");
-        assert_eq!(mgr.state("ext-a").expect("serde deserialization should succeed"), ExtensionState::Running);
+        assert_eq!(
+            mgr.state("ext-a")
+                .expect("serde deserialization should succeed"),
+            ExtensionState::Running
+        );
 
         // Running → Suspending → Suspended
         mgr.transition("ext-a", LifecycleTransition::Suspend, "t2", None)
             .expect("serde deserialization should succeed");
-        assert_eq!(mgr.state("ext-a").expect("serde deserialization should succeed"), ExtensionState::Suspending);
+        assert_eq!(
+            mgr.state("ext-a")
+                .expect("serde deserialization should succeed"),
+            ExtensionState::Suspending
+        );
         mgr.transition("ext-a", LifecycleTransition::Freeze, "t2", None)
             .expect("serde deserialization should succeed");
-        assert_eq!(mgr.state("ext-a").expect("serde deserialization should succeed"), ExtensionState::Suspended);
+        assert_eq!(
+            mgr.state("ext-a")
+                .expect("serde deserialization should succeed"),
+            ExtensionState::Suspended
+        );
 
         // Suspended → Resuming → Running
         mgr.transition("ext-a", LifecycleTransition::Resume, "t3", None)
             .expect("serde deserialization should succeed");
         mgr.transition("ext-a", LifecycleTransition::Reactivate, "t3", None)
             .expect("serde deserialization should succeed");
-        assert_eq!(mgr.state("ext-a").expect("serde deserialization should succeed"), ExtensionState::Running);
+        assert_eq!(
+            mgr.state("ext-a")
+                .expect("serde deserialization should succeed"),
+            ExtensionState::Running
+        );
 
         // Running → Terminating → Terminated
         mgr.transition("ext-a", LifecycleTransition::Terminate, "t4", None)
             .expect("serde deserialization should succeed");
         mgr.transition("ext-a", LifecycleTransition::Finalize, "t4", None)
             .expect("serde deserialization should succeed");
-        assert_eq!(mgr.state("ext-a").expect("serde deserialization should succeed"), ExtensionState::Terminated);
+        assert_eq!(
+            mgr.state("ext-a")
+                .expect("serde deserialization should succeed"),
+            ExtensionState::Terminated
+        );
     }
 
     #[test]
@@ -1416,10 +1441,18 @@ mod tests {
         register_ext(&mut mgr, "ext-a");
         mgr.transition("ext-a", LifecycleTransition::Validate, "t1", None)
             .expect("serde deserialization should succeed");
-        assert_eq!(mgr.state("ext-a").expect("serde deserialization should succeed"), ExtensionState::Validating);
+        assert_eq!(
+            mgr.state("ext-a")
+                .expect("serde deserialization should succeed"),
+            ExtensionState::Validating
+        );
         mgr.transition("ext-a", LifecycleTransition::RejectManifest, "t1", None)
             .expect("serde deserialization should succeed");
-        assert_eq!(mgr.state("ext-a").expect("serde deserialization should succeed"), ExtensionState::Unloaded);
+        assert_eq!(
+            mgr.state("ext-a")
+                .expect("serde deserialization should succeed"),
+            ExtensionState::Unloaded
+        );
     }
 
     #[test]
@@ -1432,7 +1465,11 @@ mod tests {
             .expect("serde deserialization should succeed");
         mgr.transition("ext-a", LifecycleTransition::LoadFailed, "t1", None)
             .expect("serde deserialization should succeed");
-        assert_eq!(mgr.state("ext-a").expect("serde deserialization should succeed"), ExtensionState::Unloaded);
+        assert_eq!(
+            mgr.state("ext-a")
+                .expect("serde deserialization should succeed"),
+            ExtensionState::Unloaded
+        );
     }
 
     #[test]
@@ -1442,7 +1479,11 @@ mod tests {
         advance_to_running(&mut mgr, "ext-a");
         mgr.transition("ext-a", LifecycleTransition::Quarantine, "t1", None)
             .expect("serde deserialization should succeed");
-        assert_eq!(mgr.state("ext-a").expect("serde deserialization should succeed"), ExtensionState::Quarantined);
+        assert_eq!(
+            mgr.state("ext-a")
+                .expect("serde deserialization should succeed"),
+            ExtensionState::Quarantined
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -1454,7 +1495,9 @@ mod tests {
         let mut mgr = make_manager();
         register_ext(&mut mgr, "ext-a");
         advance_to_running(&mut mgr, "ext-a");
-        let log = mgr.transition_log("ext-a").expect("serde deserialization should succeed");
+        let log = mgr
+            .transition_log("ext-a")
+            .expect("serde deserialization should succeed");
         assert_eq!(log.len(), 4); // Validate, Load, Start, Activate
         assert_eq!(log[0].from_state, ExtensionState::Unloaded);
         assert_eq!(log[0].to_state, ExtensionState::Validating);
@@ -1476,7 +1519,9 @@ mod tests {
             Some("decision-1"),
         )
         .expect("serde deserialization should succeed");
-        let log = mgr.transition_log("ext-a").expect("serde deserialization should succeed");
+        let log = mgr
+            .transition_log("ext-a")
+            .expect("serde deserialization should succeed");
         assert_eq!(log[0].trace_id, "trace-1");
         assert_eq!(log[0].decision_id.as_deref(), Some("decision-1"));
     }
@@ -1505,8 +1550,11 @@ mod tests {
     fn consume_cpu_reduces_budget() {
         let mut mgr = make_manager();
         register_ext(&mut mgr, "ext-a");
-        mgr.consume_cpu("ext-a", 100_000).expect("serde deserialization should succeed");
-        let b = mgr.budget("ext-a").expect("serde deserialization should succeed");
+        mgr.consume_cpu("ext-a", 100_000)
+            .expect("serde deserialization should succeed");
+        let b = mgr
+            .budget("ext-a")
+            .expect("serde deserialization should succeed");
         assert_eq!(b.cpu_remaining_millionths, 900_000);
     }
 
@@ -1530,7 +1578,11 @@ mod tests {
         let contained = mgr.enforce_budgets("trace-budget");
         assert_eq!(contained.len(), 1);
         assert_eq!(contained[0].0, "ext-a");
-        assert_eq!(mgr.state("ext-a").expect("serde deserialization should succeed"), ExtensionState::Terminating);
+        assert_eq!(
+            mgr.state("ext-a")
+                .expect("serde deserialization should succeed"),
+            ExtensionState::Terminating
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -1589,7 +1641,8 @@ mod tests {
             force_on_timeout: false,
             propagate_to_children: true,
         };
-        mgr.register("ext-a", default_budget(), cfg).expect("serde deserialization should succeed");
+        mgr.register("ext-a", default_budget(), cfg)
+            .expect("serde deserialization should succeed");
         advance_to_running(&mut mgr, "ext-a");
         let err = mgr
             .cooperative_shutdown("ext-a", "t-shutdown", 6_000_000_000, false)
@@ -1640,8 +1693,12 @@ mod tests {
             max_lifetime_ns: 3_600_000_000_000,
             schema_version: 1,
         };
-        mgr.set_manifest("ext-a", manifest.clone()).expect("serde deserialization should succeed");
-        let stored = mgr.manifest("ext-a").expect("serde deserialization should succeed").expect("serde deserialization should succeed");
+        mgr.set_manifest("ext-a", manifest.clone())
+            .expect("serde deserialization should succeed");
+        let stored = mgr
+            .manifest("ext-a")
+            .expect("serde deserialization should succeed")
+            .expect("serde deserialization should succeed");
         assert_eq!(stored.capabilities.len(), 2);
         assert_eq!(stored.schema_version, 1);
     }
@@ -1687,7 +1744,8 @@ mod tests {
     fn extension_state_serde_roundtrip() {
         let state = ExtensionState::Running;
         let json = serde_json::to_string(&state).expect("serde deserialization should succeed");
-        let back: ExtensionState = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ExtensionState =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, state);
     }
 
@@ -1699,7 +1757,8 @@ mod tests {
             attempted: LifecycleTransition::Validate,
         };
         let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
-        let back: LifecycleError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: LifecycleError =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, err);
     }
 
@@ -1715,7 +1774,8 @@ mod tests {
             decision_id: Some("dec-1".to_string()),
         };
         let json = serde_json::to_string(&rec).expect("serde deserialization should succeed");
-        let back: TransitionRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: TransitionRecord =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, rec);
     }
 
@@ -1735,7 +1795,8 @@ mod tests {
             transition: Some("validate".to_string()),
         };
         let json = serde_json::to_string(&evt).expect("serde deserialization should succeed");
-        let back: LifecycleManagerEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: LifecycleManagerEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, evt);
     }
 
@@ -1743,7 +1804,8 @@ mod tests {
     fn resource_budget_serde_roundtrip() {
         let b = ResourceBudget::new(500_000, 1024, 50);
         let json = serde_json::to_string(&b).expect("serde deserialization should succeed");
-        let back: ResourceBudget = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ResourceBudget =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, b);
     }
 
@@ -1769,7 +1831,9 @@ mod tests {
                 .expect("serde deserialization should succeed");
             mgr.transition("ext-a", LifecycleTransition::Finalize, "t4", None)
                 .expect("serde deserialization should succeed");
-            mgr.transition_log("ext-a").expect("serde deserialization should succeed").to_vec()
+            mgr.transition_log("ext-a")
+                .expect("serde deserialization should succeed")
+                .to_vec()
         };
 
         let log1 = run(1);
@@ -1868,14 +1932,30 @@ mod tests {
         register_ext(&mut mgr, "ext-b");
 
         advance_to_running(&mut mgr, "ext-a");
-        assert_eq!(mgr.state("ext-a").expect("serde deserialization should succeed"), ExtensionState::Running);
-        assert_eq!(mgr.state("ext-b").expect("serde deserialization should succeed"), ExtensionState::Unloaded);
+        assert_eq!(
+            mgr.state("ext-a")
+                .expect("serde deserialization should succeed"),
+            ExtensionState::Running
+        );
+        assert_eq!(
+            mgr.state("ext-b")
+                .expect("serde deserialization should succeed"),
+            ExtensionState::Unloaded
+        );
 
         advance_to_running(&mut mgr, "ext-b");
         mgr.transition("ext-a", LifecycleTransition::Terminate, "t", None)
             .expect("serde deserialization should succeed");
-        assert_eq!(mgr.state("ext-a").expect("serde deserialization should succeed"), ExtensionState::Terminating);
-        assert_eq!(mgr.state("ext-b").expect("serde deserialization should succeed"), ExtensionState::Running);
+        assert_eq!(
+            mgr.state("ext-a")
+                .expect("serde deserialization should succeed"),
+            ExtensionState::Terminating
+        );
+        assert_eq!(
+            mgr.state("ext-b")
+                .expect("serde deserialization should succeed"),
+            ExtensionState::Running
+        );
     }
 
     #[test]
@@ -1897,7 +1977,11 @@ mod tests {
         let contained = mgr.enforce_budgets("trace-enforce");
         assert_eq!(contained.len(), 1);
         assert_eq!(contained[0].0, "ext-exhausted");
-        assert_eq!(mgr.state("ext-healthy").expect("serde deserialization should succeed"), ExtensionState::Running);
+        assert_eq!(
+            mgr.state("ext-healthy")
+                .expect("serde deserialization should succeed"),
+            ExtensionState::Running
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -1908,7 +1992,11 @@ mod tests {
     fn manifest_ref_not_set_initially() {
         let mut mgr = make_manager();
         register_ext(&mut mgr, "ext-a");
-        assert!(mgr.manifest("ext-a").expect("serde deserialization should succeed").is_none());
+        assert!(
+            mgr.manifest("ext-a")
+                .expect("serde deserialization should succeed")
+                .is_none()
+        );
     }
 
     #[test]
@@ -1921,7 +2009,9 @@ mod tests {
         };
         mgr.register("ext-a", default_budget(), cfg.clone())
             .expect("serde deserialization should succeed");
-        let stored = mgr.cancellation_config("ext-a").expect("serde deserialization should succeed");
+        let stored = mgr
+            .cancellation_config("ext-a")
+            .expect("serde deserialization should succeed");
         assert_eq!(stored.grace_period_ns, 10_000_000_000);
         assert!(!stored.force_on_timeout);
     }
@@ -1983,7 +2073,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: ExtensionState = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ExtensionState =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, v);
         }
         assert_eq!(variants.len(), 11);
@@ -2009,7 +2100,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: LifecycleTransition = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: LifecycleTransition =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, v);
         }
         assert_eq!(variants.len(), 14);
@@ -2080,7 +2172,8 @@ mod tests {
             attempted: LifecycleTransition::Validate,
         };
         let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
-        let back: LifecycleError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: LifecycleError =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, err);
     }
 

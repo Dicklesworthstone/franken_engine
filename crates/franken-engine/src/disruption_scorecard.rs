@@ -929,7 +929,10 @@ mod tests {
         .expect("serde deserialization should succeed");
 
         assert!(!result.outcome.is_pass());
-        let sec = result.dimension_scores.get("security_delta").expect("serde deserialization should succeed");
+        let sec = result
+            .dimension_scores
+            .get("security_delta")
+            .expect("serde deserialization should succeed");
         assert!(!sec.meets_floor);
     }
 
@@ -1179,7 +1182,13 @@ mod tests {
 
         assert_eq!(history.len(), 1);
         assert!(!history.is_empty());
-        assert_eq!(history.latest().expect("serde deserialization should succeed").candidate_id, "rc-1");
+        assert_eq!(
+            history
+                .latest()
+                .expect("serde deserialization should succeed")
+                .candidate_id,
+            "rc-1"
+        );
     }
 
     #[test]
@@ -1315,7 +1324,8 @@ mod tests {
     fn serde_dimension_roundtrip() {
         for dim in DisruptionDimension::all() {
             let json = serde_json::to_string(dim).expect("serde deserialization should succeed");
-            let back: DisruptionDimension = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: DisruptionDimension =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, dim);
         }
     }
@@ -1323,8 +1333,10 @@ mod tests {
     #[test]
     fn serde_outcome_roundtrip() {
         for outcome in &[ScorecardOutcome::Pass, ScorecardOutcome::Fail] {
-            let json = serde_json::to_string(outcome).expect("serde deserialization should succeed");
-            let back: ScorecardOutcome = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(outcome).expect("serde deserialization should succeed");
+            let back: ScorecardOutcome =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, outcome);
         }
     }
@@ -1333,7 +1345,8 @@ mod tests {
     fn serde_schema_roundtrip() {
         let schema = default_schema();
         let json = serde_json::to_string(&schema).expect("serde deserialization should succeed");
-        let back: ScorecardSchema = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ScorecardSchema =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.thresholds.len(), 3);
         assert_eq!(back.version, schema.version);
     }
@@ -1348,7 +1361,8 @@ mod tests {
         )
         .expect("serde deserialization should succeed");
         let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
-        let back: ScorecardResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ScorecardResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.outcome, result.outcome);
         assert_eq!(back.result_hash, result.result_hash);
     }
@@ -1365,7 +1379,8 @@ mod tests {
         .expect("serde deserialization should succeed");
         history.append("rc-1".to_string(), "t1".to_string(), result);
         let json = serde_json::to_string(&history).expect("serde deserialization should succeed");
-        let back: ScorecardHistory = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ScorecardHistory =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.len(), 1);
     }
 
@@ -1373,7 +1388,8 @@ mod tests {
     fn serde_evidence_input_roundtrip() {
         let ev = make_evidence(DisruptionDimension::SecurityDelta, 750_000, &["bd-3rd"]);
         let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
-        let back: EvidenceInput = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: EvidenceInput =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.dimension, ev.dimension);
         assert_eq!(back.raw_score_millionths, ev.raw_score_millionths);
     }
@@ -1391,7 +1407,8 @@ mod tests {
             evidence_refs: vec!["bd-1ze".to_string()],
         };
         let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
-        let back: ScorecardLogEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ScorecardLogEntry =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.trace_id, "t1");
     }
 
@@ -1527,7 +1544,8 @@ mod tests {
         ];
         for e in &errors {
             let json = serde_json::to_string(e).expect("serde deserialization should succeed");
-            let back: ScorecardError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ScorecardError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*e, back);
         }
     }
@@ -1545,7 +1563,8 @@ mod tests {
             description: "security threshold".to_string(),
         };
         let json = serde_json::to_string(&t).expect("serde deserialization should succeed");
-        let back: DimensionThreshold = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DimensionThreshold =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(t.floor_millionths, back.floor_millionths);
         assert_eq!(t.target_millionths, back.target_millionths);
     }
@@ -1657,8 +1676,10 @@ mod tests {
 
     #[test]
     fn outcome_serde_distinct_json() {
-        let pass_json = serde_json::to_string(&ScorecardOutcome::Pass).expect("serde deserialization should succeed");
-        let fail_json = serde_json::to_string(&ScorecardOutcome::Fail).expect("serde deserialization should succeed");
+        let pass_json = serde_json::to_string(&ScorecardOutcome::Pass)
+            .expect("serde deserialization should succeed");
+        let fail_json = serde_json::to_string(&ScorecardOutcome::Fail)
+            .expect("serde deserialization should succeed");
         assert_ne!(pass_json, fail_json);
     }
 
@@ -2117,7 +2138,12 @@ mod tests {
             h.append(format!("rc-{}", i), format!("t{}", i), result);
         }
         assert_eq!(h.len(), 5);
-        assert_eq!(h.latest().expect("serde deserialization should succeed").candidate_id, "rc-4");
+        assert_eq!(
+            h.latest()
+                .expect("serde deserialization should succeed")
+                .candidate_id,
+            "rc-4"
+        );
     }
 
     #[test]
@@ -2210,8 +2236,10 @@ mod tests {
             "deep-roundtrip".to_string(),
         )
         .expect("serde deserialization should succeed");
-        let json = serde_json::to_string_pretty(&result).expect("serde deserialization should succeed");
-        let back: ScorecardResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json =
+            serde_json::to_string_pretty(&result).expect("serde deserialization should succeed");
+        let back: ScorecardResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, back);
     }
 
@@ -2251,7 +2279,8 @@ mod tests {
             );
         }
         let json = serde_json::to_string(&history).expect("serde deserialization should succeed");
-        let back: ScorecardHistory = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ScorecardHistory =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(history, back);
         assert_eq!(back.len(), 3);
     }
@@ -2276,7 +2305,8 @@ mod tests {
         ];
         for e in &errors {
             let json = serde_json::to_string(e).expect("serde deserialization should succeed");
-            let back: ScorecardError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ScorecardError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*e, back);
         }
     }
@@ -2290,7 +2320,8 @@ mod tests {
             description: String::new(),
         };
         let json = serde_json::to_string(&t).expect("serde deserialization should succeed");
-        let back: DimensionThreshold = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DimensionThreshold =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(t, back);
         assert!(back.description.is_empty());
     }
@@ -2311,7 +2342,8 @@ mod tests {
             refs.clone(),
         );
         let json = serde_json::to_string(&score).expect("serde deserialization should succeed");
-        let back: DimensionScore = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DimensionScore =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(score, back);
         assert_eq!(back.evidence_refs.len(), 20);
     }
@@ -2420,7 +2452,10 @@ mod tests {
     #[test]
     fn schema_validate_floor_one_above_target_fails() {
         let mut schema = default_schema();
-        let t = schema.thresholds.get_mut("autonomy_delta").expect("serde deserialization should succeed");
+        let t = schema
+            .thresholds
+            .get_mut("autonomy_delta")
+            .expect("serde deserialization should succeed");
         t.floor_millionths = t.target_millionths + 1;
         assert!(schema.validate().is_err());
     }
@@ -2511,7 +2546,8 @@ mod tests {
             detail: "complex detail with special chars: <>&\"'".to_string(),
         };
         let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
-        let back: ScorecardError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ScorecardError =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(e, back);
     }
 
@@ -2530,7 +2566,8 @@ mod tests {
             result,
         };
         let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
-        let back: HistoryEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: HistoryEntry =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, back);
     }
 }

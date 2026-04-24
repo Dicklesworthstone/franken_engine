@@ -684,7 +684,8 @@ mod tests {
             // SAFETY: TwoPhaseCategory derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(&cat).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by valid TwoPhaseCategory serialization
-            let restored: TwoPhaseCategory = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: TwoPhaseCategory =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(cat, restored);
         }
     }
@@ -719,7 +720,8 @@ mod tests {
             // SAFETY: OperationPhase derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(&phase).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by valid OperationPhase serialization
-            let restored: OperationPhase = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: OperationPhase =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(phase, restored);
         }
     }
@@ -764,7 +766,8 @@ mod tests {
         // SAFETY: ObligationIntegrationError derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid ObligationIntegrationError serialization
-        let restored: ObligationIntegrationError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: ObligationIntegrationError =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, restored);
     }
 
@@ -893,7 +896,9 @@ mod tests {
             .begin_operation(&mut cell, "op-1", TwoPhaseCategory::StateMutation, "tx")
             .expect("serde deserialization should succeed");
         // SAFETY: Test-only unwrap expecting valid commit operation to succeed
-        tracker.commit_operation(&mut cell, "op-1").expect("serde deserialization should succeed");
+        tracker
+            .commit_operation(&mut cell, "op-1")
+            .expect("serde deserialization should succeed");
 
         let err = tracker.commit_operation(&mut cell, "op-1").unwrap_err();
         assert_eq!(err.error_code(), "obligation_already_resolved");
@@ -909,7 +914,9 @@ mod tests {
             .begin_operation(&mut cell, "op-1", TwoPhaseCategory::StateMutation, "tx")
             .expect("serde deserialization should succeed");
         // SAFETY: Test-only unwrap expecting valid abort operation to succeed
-        tracker.abort_operation(&mut cell, "op-1").expect("serde deserialization should succeed");
+        tracker
+            .abort_operation(&mut cell, "op-1")
+            .expect("serde deserialization should succeed");
 
         let err = tracker.abort_operation(&mut cell, "op-1").unwrap_err();
         assert_eq!(err.error_code(), "obligation_already_resolved");
@@ -969,7 +976,9 @@ mod tests {
             )
             .expect("serde deserialization should succeed");
         // SAFETY: Test-only unwrap expecting valid commit operation to succeed
-        tracker.commit_operation(&mut cell, "op-1").expect("serde deserialization should succeed");
+        tracker
+            .commit_operation(&mut cell, "op-1")
+            .expect("serde deserialization should succeed");
 
         // SAFETY: Test-only unwrap expecting cell close operation to succeed with valid parameters
         cell.close(
@@ -1050,7 +1059,9 @@ mod tests {
         tracker
             .begin_operation(&mut cell, "op-1", TwoPhaseCategory::StateMutation, "tx")
             .expect("serde deserialization should succeed");
-        tracker.commit_operation(&mut cell, "op-1").expect("serde deserialization should succeed");
+        tracker
+            .commit_operation(&mut cell, "op-1")
+            .expect("serde deserialization should succeed");
 
         let events = tracker.events();
         assert_eq!(events.len(), 2);
@@ -1082,7 +1093,12 @@ mod tests {
         let events = tracker.events();
         let leak_event = events.iter().find(|e| e.event == "leak_detected");
         assert!(leak_event.is_some());
-        assert_eq!(leak_event.expect("serde deserialization should succeed").outcome, "leaked");
+        assert_eq!(
+            leak_event
+                .expect("serde deserialization should succeed")
+                .outcome,
+            "leaked"
+        );
     }
 
     #[test]
@@ -1122,19 +1138,27 @@ mod tests {
             .expect("serde deserialization should succeed");
 
         // SAFETY: Test scenario with valid operation ID that was previously begun
-        tracker.commit_operation(&mut cell, "alloc-1").expect("serde deserialization should succeed");
+        tracker
+            .commit_operation(&mut cell, "alloc-1")
+            .expect("serde deserialization should succeed");
         // SAFETY: Test scenario with valid operation ID that was previously begun
-        tracker.abort_operation(&mut cell, "alloc-2").expect("serde deserialization should succeed");
+        tracker
+            .abort_operation(&mut cell, "alloc-2")
+            .expect("serde deserialization should succeed");
 
         let stats = tracker.category_stats();
         // SAFETY: Test scenario verifying category that was used in operations above
-        let alloc_stats = stats.get(&TwoPhaseCategory::ResourceAlloc).expect("serde deserialization should succeed");
+        let alloc_stats = stats
+            .get(&TwoPhaseCategory::ResourceAlloc)
+            .expect("serde deserialization should succeed");
         assert_eq!(alloc_stats.started, 2);
         assert_eq!(alloc_stats.committed, 1);
         assert_eq!(alloc_stats.aborted, 1);
 
         // SAFETY: Test scenario verifying category that was used in operations above
-        let perm_stats = stats.get(&TwoPhaseCategory::PermissionGrant).expect("serde deserialization should succeed");
+        let perm_stats = stats
+            .get(&TwoPhaseCategory::PermissionGrant)
+            .expect("serde deserialization should succeed");
         assert_eq!(perm_stats.started, 1);
         assert_eq!(perm_stats.committed, 0);
     }
@@ -1247,9 +1271,15 @@ mod tests {
         assert_eq!(tracker.active_count(), 3);
         assert_eq!(cell.pending_obligations(), 3);
 
-        tracker.commit_operation(&mut cell, "alloc-1").expect("serde deserialization should succeed");
-        tracker.commit_operation(&mut cell, "tx-1").expect("serde deserialization should succeed");
-        tracker.commit_operation(&mut cell, "ev-1").expect("serde deserialization should succeed");
+        tracker
+            .commit_operation(&mut cell, "alloc-1")
+            .expect("serde deserialization should succeed");
+        tracker
+            .commit_operation(&mut cell, "tx-1")
+            .expect("serde deserialization should succeed");
+        tracker
+            .commit_operation(&mut cell, "ev-1")
+            .expect("serde deserialization should succeed");
 
         assert_eq!(tracker.active_count(), 0);
         assert_eq!(cell.pending_obligations(), 0);
@@ -1283,9 +1313,13 @@ mod tests {
         .expect("serde deserialization should succeed");
 
         // Resolve obligation during drain
-        tracker.commit_operation(&mut cell, "alloc-1").expect("serde deserialization should succeed");
+        tracker
+            .commit_operation(&mut cell, "alloc-1")
+            .expect("serde deserialization should succeed");
 
-        let result = cell.finalize().expect("serde deserialization should succeed");
+        let result = cell
+            .finalize()
+            .expect("serde deserialization should succeed");
         assert!(result.success);
         assert_eq!(result.obligations_committed, 1);
     }
@@ -1311,8 +1345,12 @@ mod tests {
             tracker
                 .begin_operation(&mut cell, "tx-1", TwoPhaseCategory::StateMutation, "config")
                 .expect("serde deserialization should succeed");
-            tracker.commit_operation(&mut cell, "alloc-1").expect("serde deserialization should succeed");
-            tracker.abort_operation(&mut cell, "tx-1").expect("serde deserialization should succeed");
+            tracker
+                .commit_operation(&mut cell, "alloc-1")
+                .expect("serde deserialization should succeed");
+            tracker
+                .abort_operation(&mut cell, "tx-1")
+                .expect("serde deserialization should succeed");
             tracker.drain_events()
         };
 
@@ -1338,7 +1376,8 @@ mod tests {
         // SAFETY: TwoPhaseOperation derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&op).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid TwoPhaseOperation serialization
-        let restored: TwoPhaseOperation = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: TwoPhaseOperation =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(op, restored);
     }
 
@@ -1358,7 +1397,8 @@ mod tests {
         // SAFETY: ObligationEvent derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid ObligationEvent serialization
-        let restored: ObligationEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: ObligationEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, restored);
     }
 
@@ -1374,7 +1414,8 @@ mod tests {
         // SAFETY: LeakRecord derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&leak).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid LeakRecord serialization
-        let restored: LeakRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: LeakRecord =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(leak, restored);
     }
 
@@ -1387,7 +1428,8 @@ mod tests {
             leaked: 1,
         };
         let json = serde_json::to_string(&stats).expect("serde deserialization should succeed");
-        let restored: CategoryStats = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: CategoryStats =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(stats, restored);
     }
 
@@ -1518,7 +1560,9 @@ mod tests {
             .expect("serde deserialization should succeed");
 
         // Create a session cell
-        let mut session_cell = ext_cell.create_session("sess-1", "t").expect("serde deserialization should succeed");
+        let mut session_cell = ext_cell
+            .create_session("sess-1", "t")
+            .expect("serde deserialization should succeed");
 
         tracker
             .begin_operation(
@@ -1539,7 +1583,9 @@ mod tests {
         assert_eq!(tracker.active_count(), 1);
 
         // The remaining active one belongs to ext_cell
-        let op = tracker.get_operation("ext-alloc").expect("serde deserialization should succeed");
+        let op = tracker
+            .get_operation("ext-alloc")
+            .expect("serde deserialization should succeed");
         assert_eq!(op.phase, OperationPhase::Phase1Active);
     }
 
@@ -1566,10 +1612,18 @@ mod tests {
         assert_eq!(cell.pending_obligations(), 4);
 
         // Commit first two, abort the rest
-        tracker.commit_operation(&mut cell, "res-1").expect("serde deserialization should succeed");
-        tracker.commit_operation(&mut cell, "perm-1").expect("serde deserialization should succeed");
-        tracker.abort_operation(&mut cell, "state-1").expect("serde deserialization should succeed");
-        tracker.abort_operation(&mut cell, "ev-1").expect("serde deserialization should succeed");
+        tracker
+            .commit_operation(&mut cell, "res-1")
+            .expect("serde deserialization should succeed");
+        tracker
+            .commit_operation(&mut cell, "perm-1")
+            .expect("serde deserialization should succeed");
+        tracker
+            .abort_operation(&mut cell, "state-1")
+            .expect("serde deserialization should succeed");
+        tracker
+            .abort_operation(&mut cell, "ev-1")
+            .expect("serde deserialization should succeed");
 
         assert_eq!(tracker.active_count(), 0);
         assert_eq!(cell.pending_obligations(), 0);
@@ -1663,15 +1717,19 @@ mod tests {
         tracker.detect_leaks(&cell);
 
         // Verify the operation phase is Leaked
-        let op = tracker.get_operation("op-leak").expect("serde deserialization should succeed");
+        let op = tracker
+            .get_operation("op-leak")
+            .expect("serde deserialization should succeed");
         assert_eq!(op.phase, OperationPhase::Leaked);
     }
 
     #[test]
     fn leak_policy_serde_roundtrip() {
         for policy in [LeakPolicy::Lab, LeakPolicy::Production] {
-            let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
-            let restored: LeakPolicy = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&policy).expect("serde deserialization should succeed");
+            let restored: LeakPolicy =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(policy, restored);
         }
     }
@@ -1797,8 +1855,10 @@ mod tests {
     #[test]
     fn leak_policy_serde_all_variants() {
         for policy in [LeakPolicy::Lab, LeakPolicy::Production] {
-            let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
-            let back: LeakPolicy = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&policy).expect("serde deserialization should succeed");
+            let back: LeakPolicy =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(policy, back);
         }
     }
@@ -1823,7 +1883,8 @@ mod tests {
                 phase,
             };
             let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-            let back: ObligationEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ObligationEvent =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(event.phase, back.phase);
         }
     }
@@ -1926,7 +1987,9 @@ mod tests {
         assert_eq!(tracker.active_count(), 1);
         assert_eq!(tracker.total_count(), 1);
 
-        tracker.commit_operation(&mut cell, "op1").expect("serde deserialization should succeed");
+        tracker
+            .commit_operation(&mut cell, "op1")
+            .expect("serde deserialization should succeed");
         assert_eq!(tracker.active_count(), 0);
         assert_eq!(tracker.total_count(), 1);
     }
@@ -1940,7 +2003,8 @@ mod tests {
             leaked: 1,
         };
         let json = serde_json::to_string(&stats).expect("serde deserialization should succeed");
-        let back: CategoryStats = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: CategoryStats =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(stats.started, back.started);
         assert_eq!(stats.committed, back.committed);
         assert_eq!(stats.aborted, back.aborted);
@@ -1959,7 +2023,9 @@ mod tests {
                 "test",
             )
             .expect("serde deserialization should succeed");
-        let op = tracker.get_operation("op-check").expect("serde deserialization should succeed");
+        let op = tracker
+            .get_operation("op-check")
+            .expect("serde deserialization should succeed");
         assert!(matches!(op.phase, OperationPhase::Phase1Active));
         assert_eq!(op.category, TwoPhaseCategory::StateMutation);
     }
@@ -2185,7 +2251,8 @@ mod tests {
         ];
         for err in &errors {
             let json = serde_json::to_string(err).expect("serde deserialization should succeed");
-            let back: ObligationIntegrationError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ObligationIntegrationError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, back);
         }
     }
@@ -2217,7 +2284,9 @@ mod tests {
         tracker
             .begin_operation(&mut cell, "op-1", TwoPhaseCategory::ResourceAlloc, "res")
             .expect("serde deserialization should succeed");
-        tracker.abort_operation(&mut cell, "op-1").expect("serde deserialization should succeed");
+        tracker
+            .abort_operation(&mut cell, "op-1")
+            .expect("serde deserialization should succeed");
         let err = tracker.commit_operation(&mut cell, "op-1").unwrap_err();
         assert_eq!(err.error_code(), "obligation_already_resolved");
         match err {
@@ -2240,7 +2309,9 @@ mod tests {
                 "perm",
             )
             .expect("serde deserialization should succeed");
-        tracker.abort_operation(&mut cell, "op-abort-ev").expect("serde deserialization should succeed");
+        tracker
+            .abort_operation(&mut cell, "op-abort-ev")
+            .expect("serde deserialization should succeed");
 
         let events = tracker.events();
         assert_eq!(events.len(), 2);
@@ -2276,7 +2347,9 @@ mod tests {
         tracker.detect_leaks(&cell);
 
         let stats = tracker.category_stats();
-        let ev_stats = stats.get(&TwoPhaseCategory::EvidenceCommit).expect("serde deserialization should succeed");
+        let ev_stats = stats
+            .get(&TwoPhaseCategory::EvidenceCommit)
+            .expect("serde deserialization should succeed");
         assert_eq!(ev_stats.started, 1);
         assert_eq!(ev_stats.leaked, 1);
         assert_eq!(ev_stats.committed, 0);

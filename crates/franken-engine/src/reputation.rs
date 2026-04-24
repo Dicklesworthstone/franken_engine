@@ -1113,7 +1113,9 @@ mod tests {
         let mut graph = ReputationGraph::new();
         let ext = test_extension("ext-1", "pub-1");
         // SAFETY: Test helper creates valid extension; register_extension succeeds for first registration.
-        graph.register_extension(ext).expect("serde deserialization should succeed");
+        graph
+            .register_extension(ext)
+            .expect("serde deserialization should succeed");
         let ext2 = test_extension("ext-1", "pub-1");
         assert!(matches!(
             graph.register_extension(ext2),
@@ -1161,7 +1163,9 @@ mod tests {
             .register_extension(test_extension("ext-1", "pub-1"))
             .expect("serde deserialization should succeed");
         // SAFETY: Test adds evidence to registered extension; add_evidence succeeds for first evidence.
-        graph.add_evidence("ext-1", test_evidence("ev-1")).expect("serde deserialization should succeed");
+        graph
+            .add_evidence("ext-1", test_evidence("ev-1"))
+            .expect("serde deserialization should succeed");
         assert!(matches!(
             graph.add_evidence("ext-1", test_evidence("ev-1")),
             Err(ReputationGraphError::DuplicateEvidence { .. })
@@ -1176,7 +1180,9 @@ mod tests {
         let mut ext = test_extension("ext-1", "pub-1");
         ext.current_trust_level = TrustLevel::Established;
         // SAFETY: Test helper creates valid extension; register_extension succeeds for new extension.
-        graph.register_extension(ext).expect("serde deserialization should succeed");
+        graph
+            .register_extension(ext)
+            .expect("serde deserialization should succeed");
 
         let tt = graph
             .transition_trust(
@@ -1193,7 +1199,10 @@ mod tests {
         assert_eq!(tt.new_level, TrustLevel::Suspicious);
         assert!(!tt.operator_override);
         assert_eq!(
-            graph.get_extension("ext-1").expect("serde deserialization should succeed").current_trust_level,
+            graph
+                .get_extension("ext-1")
+                .expect("serde deserialization should succeed")
+                .current_trust_level,
             TrustLevel::Suspicious
         );
     }
@@ -1225,7 +1234,9 @@ mod tests {
         let mut graph = ReputationGraph::new();
         let mut ext = test_extension("ext-1", "pub-1");
         ext.current_trust_level = TrustLevel::Suspicious;
-        graph.register_extension(ext).expect("serde deserialization should succeed");
+        graph
+            .register_extension(ext)
+            .expect("serde deserialization should succeed");
 
         assert!(matches!(
             graph.transition_trust(
@@ -1245,7 +1256,9 @@ mod tests {
         let mut graph = ReputationGraph::new();
         let mut ext = test_extension("ext-1", "pub-1");
         ext.current_trust_level = TrustLevel::Compromised;
-        graph.register_extension(ext).expect("serde deserialization should succeed");
+        graph
+            .register_extension(ext)
+            .expect("serde deserialization should succeed");
 
         let tt = graph
             .operator_trust_override(OperatorOverrideInput {
@@ -1264,7 +1277,10 @@ mod tests {
         assert_eq!(tt.new_level, TrustLevel::Provisional);
         assert!(tt.operator_justification.is_some());
         assert_eq!(
-            graph.get_extension("ext-1").expect("serde deserialization should succeed").current_trust_level,
+            graph
+                .get_extension("ext-1")
+                .expect("serde deserialization should succeed")
+                .current_trust_level,
             TrustLevel::Provisional
         );
     }
@@ -1274,7 +1290,9 @@ mod tests {
         let mut graph = ReputationGraph::new();
         let mut ext = test_extension("ext-1", "pub-1");
         ext.current_trust_level = TrustLevel::Compromised;
-        graph.register_extension(ext).expect("serde deserialization should succeed");
+        graph
+            .register_extension(ext)
+            .expect("serde deserialization should succeed");
 
         let err = graph
             .operator_trust_override(OperatorOverrideInput {
@@ -1297,7 +1315,10 @@ mod tests {
             }
         );
         assert_eq!(
-            graph.get_extension("ext-1").expect("serde deserialization should succeed").current_trust_level,
+            graph
+                .get_extension("ext-1")
+                .expect("serde deserialization should succeed")
+                .current_trust_level,
             TrustLevel::Compromised
         );
     }
@@ -1310,9 +1331,15 @@ mod tests {
         let ext_a = test_extension("ext-a", "pub-1");
         let ext_b = test_extension_with_deps("ext-b", "pub-1", &["ext-a"]);
         let ext_c = test_extension_with_deps("ext-c", "pub-1", &["ext-a"]);
-        graph.register_extension(ext_a).expect("serde deserialization should succeed");
-        graph.register_extension(ext_b).expect("serde deserialization should succeed");
-        graph.register_extension(ext_c).expect("serde deserialization should succeed");
+        graph
+            .register_extension(ext_a)
+            .expect("serde deserialization should succeed");
+        graph
+            .register_extension(ext_b)
+            .expect("serde deserialization should succeed");
+        graph
+            .register_extension(ext_c)
+            .expect("serde deserialization should succeed");
 
         // Revoke ext-a.
         graph
@@ -1346,8 +1373,12 @@ mod tests {
         let ext_a = test_extension("ext-a", "pub-1");
         let mut ext_b = test_extension_with_deps("ext-b", "pub-1", &["ext-a"]);
         ext_b.current_trust_level = TrustLevel::Established;
-        graph.register_extension(ext_a).expect("serde deserialization should succeed");
-        graph.register_extension(ext_b).expect("serde deserialization should succeed");
+        graph
+            .register_extension(ext_a)
+            .expect("serde deserialization should succeed");
+        graph
+            .register_extension(ext_b)
+            .expect("serde deserialization should succeed");
 
         graph
             .propagate_revocation(
@@ -1359,7 +1390,10 @@ mod tests {
             .expect("serde deserialization should succeed");
 
         assert_eq!(
-            graph.get_extension("ext-b").expect("serde deserialization should succeed").current_trust_level,
+            graph
+                .get_extension("ext-b")
+                .expect("serde deserialization should succeed")
+                .current_trust_level,
             TrustLevel::Suspicious
         );
     }
@@ -1382,10 +1416,16 @@ mod tests {
         graph
             .register_extension(test_extension("ext-1", "pub-1"))
             .expect("serde deserialization should succeed");
-        graph.add_evidence("ext-1", test_evidence("ev-1")).expect("serde deserialization should succeed");
-        graph.add_evidence("ext-1", test_evidence("ev-2")).expect("serde deserialization should succeed");
+        graph
+            .add_evidence("ext-1", test_evidence("ev-1"))
+            .expect("serde deserialization should succeed");
+        graph
+            .add_evidence("ext-1", test_evidence("ev-2"))
+            .expect("serde deserialization should succeed");
 
-        let result = graph.trust_lookup("ext-1").expect("serde deserialization should succeed");
+        let result = graph
+            .trust_lookup("ext-1")
+            .expect("serde deserialization should succeed");
         assert_eq!(result.current_trust_level, TrustLevel::Unknown);
         assert_eq!(result.evidence_count, 2);
         assert_eq!(result.transition_count, 0);
@@ -1446,11 +1486,19 @@ mod tests {
 
         let ext = test_extension_with_deps("ext-1", "pub-1", &["dep-a", "dep-b"]);
 
-        graph.register_extension(dep_a).expect("serde deserialization should succeed");
-        graph.register_extension(dep_b).expect("serde deserialization should succeed");
-        graph.register_extension(ext).expect("serde deserialization should succeed");
+        graph
+            .register_extension(dep_a)
+            .expect("serde deserialization should succeed");
+        graph
+            .register_extension(dep_b)
+            .expect("serde deserialization should succeed");
+        graph
+            .register_extension(ext)
+            .expect("serde deserialization should succeed");
 
-        let result = graph.trust_lookup("ext-1").expect("serde deserialization should succeed");
+        let result = graph
+            .trust_lookup("ext-1")
+            .expect("serde deserialization should succeed");
         // dep-a is Unknown (300_000), dep-b is Suspicious (500_000)
         // Average: (300_000 + 500_000) / 2 = 400_000
         assert_eq!(result.dependency_risk_score, 400_000);
@@ -1462,7 +1510,9 @@ mod tests {
         graph
             .register_extension(test_extension("ext-1", "pub-1"))
             .expect("serde deserialization should succeed");
-        let result = graph.trust_lookup("ext-1").expect("serde deserialization should succeed");
+        let result = graph
+            .trust_lookup("ext-1")
+            .expect("serde deserialization should succeed");
         assert_eq!(result.dependency_risk_score, 0);
     }
 
@@ -1484,9 +1534,13 @@ mod tests {
             has_provenance_gap: false,
             gap_descriptions: vec![],
         };
-        graph.set_provenance(record).expect("serde deserialization should succeed");
+        graph
+            .set_provenance(record)
+            .expect("serde deserialization should succeed");
 
-        let prov = graph.get_provenance("ext-1").expect("serde deserialization should succeed");
+        let prov = graph
+            .get_provenance("ext-1")
+            .expect("serde deserialization should succeed");
         assert!(prov.publisher_verified);
         assert!(prov.build_attested);
     }
@@ -1518,7 +1572,9 @@ mod tests {
         graph
             .register_extension(test_extension("ext-1", "pub-1"))
             .expect("serde deserialization should succeed");
-        graph.add_evidence("ext-1", test_evidence("ev-1")).expect("serde deserialization should succeed");
+        graph
+            .add_evidence("ext-1", test_evidence("ev-1"))
+            .expect("serde deserialization should succeed");
         graph
             .transition_trust(
                 "ext-1",
@@ -1531,7 +1587,8 @@ mod tests {
             .expect("serde deserialization should succeed");
 
         let json = serde_json::to_string(&graph).expect("serde deserialization should succeed");
-        let restored: ReputationGraph = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: ReputationGraph =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
 
         assert_eq!(restored.extension_count(), 1);
         assert_eq!(restored.evidence_count(), 1);
@@ -1553,7 +1610,8 @@ mod tests {
             epoch: SecurityEpoch::from_raw(2),
         };
         let json = serde_json::to_string(&tt).expect("serde deserialization should succeed");
-        let restored: TrustTransition = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: TrustTransition =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(tt, restored);
     }
 
@@ -1584,7 +1642,8 @@ mod tests {
         ];
         for err in &errors {
             let json = serde_json::to_string(err).expect("serde deserialization should succeed");
-            let restored: ReputationGraphError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: ReputationGraphError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, restored);
         }
     }
@@ -1622,11 +1681,14 @@ mod tests {
                 .expect("serde deserialization should succeed");
             g.register_extension(test_extension("ext-2", "pub-1"))
                 .expect("serde deserialization should succeed");
-            g.add_evidence("ext-1", test_evidence("ev-1")).expect("serde deserialization should succeed");
+            g.add_evidence("ext-1", test_evidence("ev-1"))
+                .expect("serde deserialization should succeed");
             g
         };
-        let json1 = serde_json::to_string(&build_graph()).expect("serde deserialization should succeed");
-        let json2 = serde_json::to_string(&build_graph()).expect("serde deserialization should succeed");
+        let json1 =
+            serde_json::to_string(&build_graph()).expect("serde deserialization should succeed");
+        let json2 =
+            serde_json::to_string(&build_graph()).expect("serde deserialization should succeed");
         assert_eq!(json1, json2, "identical graphs must produce identical JSON");
     }
 
@@ -1641,7 +1703,9 @@ mod tests {
         // register_extension creates a PublishedBy edge.
         assert_eq!(graph.edge_count(), 1);
 
-        graph.add_evidence("ext-1", test_evidence("ev-1")).expect("serde deserialization should succeed");
+        graph
+            .add_evidence("ext-1", test_evidence("ev-1"))
+            .expect("serde deserialization should succeed");
         // add_evidence creates an ObservedBehavior edge.
         assert_eq!(graph.edge_count(), 2);
 
@@ -1692,7 +1756,8 @@ mod tests {
     fn trust_level_serde_roundtrip_all_variants() {
         for level in &TrustLevel::ALL {
             let json = serde_json::to_string(level).expect("serde deserialization should succeed");
-            let back: TrustLevel = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: TrustLevel =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*level, back);
         }
     }
@@ -1710,7 +1775,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: EvidenceType = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: EvidenceType =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -1727,7 +1793,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: EvidenceSource = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: EvidenceSource =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -1741,7 +1808,8 @@ mod tests {
             IncidentSeverity::Critical,
         ] {
             let json = serde_json::to_string(sev).expect("serde deserialization should succeed");
-            let back: IncidentSeverity = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: IncidentSeverity =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*sev, back);
         }
     }
@@ -1755,7 +1823,8 @@ mod tests {
             ResolutionStatus::FalsePositive,
         ] {
             let json = serde_json::to_string(status).expect("serde deserialization should succeed");
-            let back: ResolutionStatus = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ResolutionStatus =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*status, back);
         }
     }
@@ -1774,7 +1843,8 @@ mod tests {
             gap_descriptions: vec!["missing attestation".into()],
         };
         let json = serde_json::to_string(&record).expect("serde deserialization should succeed");
-        let back: ProvenanceRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ProvenanceRecord =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(record, back);
     }
 
@@ -1790,7 +1860,8 @@ mod tests {
             publisher_trust_score: Some(750_000),
         };
         let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
-        let back: TrustLookupResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: TrustLookupResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, back);
     }
 
@@ -1802,7 +1873,8 @@ mod tests {
             trust_degradations: vec![],
         };
         let json = serde_json::to_string(&impact).expect("serde deserialization should succeed");
-        let back: RevocationImpact = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: RevocationImpact =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(impact, back);
     }
 
@@ -1818,7 +1890,8 @@ mod tests {
             timestamp_ns: 1_000,
         };
         let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
-        let back: OperatorOverrideInput = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: OperatorOverrideInput =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.extension_id, "ext-1");
         assert_eq!(back.new_level, TrustLevel::Provisional);
     }
@@ -1987,7 +2060,8 @@ mod tests {
         ];
         for edge in &edges {
             let json = serde_json::to_string(edge).expect("serde deserialization should succeed");
-            let back: EdgeType = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: EdgeType =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*edge, back);
         }
     }
@@ -2533,7 +2607,8 @@ mod tests {
             dependencies: BTreeSet::new(),
         };
         let json = serde_json::to_string(&ext).expect("serde deserialization should succeed");
-        let back: ExtensionNode = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ExtensionNode =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ext, back);
     }
 
@@ -2547,7 +2622,8 @@ mod tests {
             first_published_ns: 0,
         };
         let json = serde_json::to_string(&pub_node).expect("serde deserialization should succeed");
-        let back: PublisherNode = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: PublisherNode =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.trust_score, 0);
     }
 
@@ -2561,7 +2637,8 @@ mod tests {
             first_published_ns: u64::MAX,
         };
         let json = serde_json::to_string(&pub_node).expect("serde deserialization should succeed");
-        let back: PublisherNode = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: PublisherNode =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.published_count, u64::MAX);
         assert_eq!(back.first_published_ns, u64::MAX);
     }
@@ -2578,7 +2655,8 @@ mod tests {
             gap_descriptions: vec!["no source".into()],
         };
         let json = serde_json::to_string(&record).expect("serde deserialization should succeed");
-        let back: ProvenanceRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ProvenanceRecord =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert!(back.attestation_source.is_none());
         assert!(back.has_provenance_gap);
     }
@@ -2595,7 +2673,8 @@ mod tests {
             publisher_trust_score: None,
         };
         let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
-        let back: TrustLookupResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: TrustLookupResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert!(back.last_transition.is_none());
         assert!(back.publisher_trust_score.is_none());
     }
@@ -2611,7 +2690,8 @@ mod tests {
             timestamp_ns: 0,
         };
         let json = serde_json::to_string(&incident).expect("serde deserialization should succeed");
-        let back: IncidentNode = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: IncidentNode =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert!(back.affected_extensions.is_empty());
         assert!(back.containment_actions.is_empty());
     }
@@ -2622,9 +2702,15 @@ mod tests {
         let mut dep = test_extension("dep-rev", "pub-1");
         dep.current_trust_level = TrustLevel::Revoked;
         let ext = test_extension_with_deps("ext-1", "pub-1", &["dep-rev"]);
-        graph.register_extension(dep).expect("serde deserialization should succeed");
-        graph.register_extension(ext).expect("serde deserialization should succeed");
-        let result = graph.trust_lookup("ext-1").expect("serde deserialization should succeed");
+        graph
+            .register_extension(dep)
+            .expect("serde deserialization should succeed");
+        graph
+            .register_extension(ext)
+            .expect("serde deserialization should succeed");
+        let result = graph
+            .trust_lookup("ext-1")
+            .expect("serde deserialization should succeed");
         assert_eq!(result.dependency_risk_score, 1_000_000);
     }
 
@@ -2634,9 +2720,15 @@ mod tests {
         let mut dep = test_extension("dep-comp", "pub-1");
         dep.current_trust_level = TrustLevel::Compromised;
         let ext = test_extension_with_deps("ext-1", "pub-1", &["dep-comp"]);
-        graph.register_extension(dep).expect("serde deserialization should succeed");
-        graph.register_extension(ext).expect("serde deserialization should succeed");
-        let result = graph.trust_lookup("ext-1").expect("serde deserialization should succeed");
+        graph
+            .register_extension(dep)
+            .expect("serde deserialization should succeed");
+        graph
+            .register_extension(ext)
+            .expect("serde deserialization should succeed");
+        let result = graph
+            .trust_lookup("ext-1")
+            .expect("serde deserialization should succeed");
         assert_eq!(result.dependency_risk_score, 800_000);
     }
 
@@ -2645,8 +2737,12 @@ mod tests {
         let mut graph = ReputationGraph::new();
         // ext-1 depends on dep-ghost which is not registered
         let ext = test_extension_with_deps("ext-1", "pub-1", &["dep-ghost"]);
-        graph.register_extension(ext).expect("serde deserialization should succeed");
-        let result = graph.trust_lookup("ext-1").expect("serde deserialization should succeed");
+        graph
+            .register_extension(ext)
+            .expect("serde deserialization should succeed");
+        let result = graph
+            .trust_lookup("ext-1")
+            .expect("serde deserialization should succeed");
         // Unknown dependency = high risk (500_000)
         assert_eq!(result.dependency_risk_score, 500_000);
     }
@@ -2657,9 +2753,15 @@ mod tests {
         let mut dep = test_extension("dep-trusted", "pub-1");
         dep.current_trust_level = TrustLevel::Trusted;
         let ext = test_extension_with_deps("ext-1", "pub-1", &["dep-trusted"]);
-        graph.register_extension(dep).expect("serde deserialization should succeed");
-        graph.register_extension(ext).expect("serde deserialization should succeed");
-        let result = graph.trust_lookup("ext-1").expect("serde deserialization should succeed");
+        graph
+            .register_extension(dep)
+            .expect("serde deserialization should succeed");
+        graph
+            .register_extension(ext)
+            .expect("serde deserialization should succeed");
+        let result = graph
+            .trust_lookup("ext-1")
+            .expect("serde deserialization should succeed");
         assert_eq!(result.dependency_risk_score, 0);
     }
 
@@ -2678,7 +2780,8 @@ mod tests {
             timestamp_ns: 9_000_000_000,
         };
         let json = serde_json::to_string(&incident).expect("serde deserialization should succeed");
-        let back: IncidentNode = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: IncidentNode =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(incident, back);
     }
 
@@ -2694,7 +2797,8 @@ mod tests {
             epoch: SecurityEpoch::from_raw(5),
         };
         let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
-        let back: EvidenceNode = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: EvidenceNode =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ev, back);
     }
 
@@ -2713,7 +2817,8 @@ mod tests {
             epoch: SecurityEpoch::from_raw(10),
         };
         let json = serde_json::to_string(&tt).expect("serde deserialization should succeed");
-        let back: TrustTransition = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: TrustTransition =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(tt, back);
         assert!(back.operator_override);
         assert_eq!(
@@ -2741,7 +2846,8 @@ mod tests {
             }],
         };
         let json = serde_json::to_string(&impact).expect("serde deserialization should succeed");
-        let back: RevocationImpact = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: RevocationImpact =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(impact, back);
         assert_eq!(back.directly_affected.len(), 2);
         assert_eq!(back.transitively_affected.len(), 2);
@@ -2760,7 +2866,8 @@ mod tests {
             timestamp_ns: 8_888_888_888,
         };
         let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
-        let back: OperatorOverrideInput = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: OperatorOverrideInput =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.extension_id, "ext-full");
         assert_eq!(back.new_level, TrustLevel::Established);
         assert_eq!(back.evidence_ids.len(), 3);
@@ -2935,10 +3042,14 @@ mod tests {
                 1_000,
             )
             .expect("serde deserialization should succeed");
-        let result = graph.trust_lookup("ext-lt").expect("serde deserialization should succeed");
+        let result = graph
+            .trust_lookup("ext-lt")
+            .expect("serde deserialization should succeed");
         assert_eq!(result.transition_count, 1);
         assert!(result.last_transition.is_some());
-        let last = result.last_transition.expect("serde deserialization should succeed");
+        let last = result
+            .last_transition
+            .expect("serde deserialization should succeed");
         assert_eq!(last.new_level, TrustLevel::Provisional);
     }
 
@@ -2948,8 +3059,12 @@ mod tests {
         graph
             .register_extension(test_extension("ext-ev", "pub-1"))
             .expect("serde deserialization should succeed");
-        graph.add_evidence("ext-ev", test_evidence("ev-a")).expect("serde deserialization should succeed");
-        graph.add_evidence("ext-ev", test_evidence("ev-b")).expect("serde deserialization should succeed");
+        graph
+            .add_evidence("ext-ev", test_evidence("ev-a"))
+            .expect("serde deserialization should succeed");
+        graph
+            .add_evidence("ext-ev", test_evidence("ev-b"))
+            .expect("serde deserialization should succeed");
         let evs = graph.get_evidence_for_extension("ext-ev");
         assert_eq!(evs.len(), 2);
     }
@@ -3037,7 +3152,10 @@ mod tests {
         }
         assert_eq!(graph.total_transitions(), 3);
         assert_eq!(
-            graph.get_extension("ext-seq").expect("serde deserialization should succeed").current_trust_level,
+            graph
+                .get_extension("ext-seq")
+                .expect("serde deserialization should succeed")
+                .current_trust_level,
             TrustLevel::Trusted
         );
     }

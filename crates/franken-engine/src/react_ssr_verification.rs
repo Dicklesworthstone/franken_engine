@@ -1243,7 +1243,8 @@ mod tests {
             let json = serde_json::to_string(kind).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by to_string of a valid ExecutionPathKind,
             // so from_str back to ExecutionPathKind cannot fail (valid format + matching schema).
-            let back: ExecutionPathKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ExecutionPathKind =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*kind, back);
         }
     }
@@ -1296,7 +1297,8 @@ mod tests {
             let json = serde_json::to_string(mode).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by to_string of a valid VerificationMode,
             // so from_str back to VerificationMode cannot fail (valid format + matching schema).
-            let back: VerificationMode = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: VerificationMode =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*mode, back);
         }
     }
@@ -1350,7 +1352,8 @@ mod tests {
             let json = serde_json::to_string(kind).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by to_string of a valid MismatchKind,
             // so from_str back to MismatchKind cannot fail (valid format + matching schema).
-            let back: MismatchKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: MismatchKind =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*kind, back);
         }
     }
@@ -1385,7 +1388,8 @@ mod tests {
             let json = serde_json::to_string(sev).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by to_string of a valid MismatchSeverity,
             // so from_str back to MismatchSeverity cannot fail (valid format + matching schema).
-            let back: MismatchSeverity = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: MismatchSeverity =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*sev, back);
         }
     }
@@ -1475,7 +1479,8 @@ mod tests {
     fn path_evidence_serde_roundtrip() {
         let e = ssr_evidence("p1", b"data");
         let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
-        let back: PathEvidence = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: PathEvidence =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(e, back);
     }
 
@@ -1536,7 +1541,8 @@ mod tests {
     fn config_serde_roundtrip() {
         let c = default_config();
         let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
-        let back: VerificationConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: VerificationConfig =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c, back);
     }
 
@@ -1596,7 +1602,8 @@ mod tests {
     fn path_verdict_serde_roundtrip() {
         for v in PathVerdict::ALL {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: PathVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: PathVerdict =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -1648,7 +1655,8 @@ mod tests {
     fn verify_pair_no_mismatches_is_verified() {
         let pair =
             DifferentialPair::new(ssr_evidence("ref", b"same"), ssr_evidence("cand", b"same"));
-        let result = verify_path_pair(&pair, &default_config()).expect("serde deserialization should succeed");
+        let result = verify_path_pair(&pair, &default_config())
+            .expect("serde deserialization should succeed");
         assert_eq!(result.verdict, PathVerdict::Verified);
         assert!(result.divergence_report.is_none());
     }
@@ -1660,7 +1668,8 @@ mod tests {
             ssr_evidence("cand", b"b"),
             vec![make_mismatch(MismatchKind::OutputMismatch)],
         );
-        let result = verify_path_pair(&pair, &default_config()).expect("serde deserialization should succeed");
+        let result = verify_path_pair(&pair, &default_config())
+            .expect("serde deserialization should succeed");
         assert_eq!(result.verdict, PathVerdict::Divergent);
         assert!(result.divergence_report.is_some());
     }
@@ -1703,7 +1712,8 @@ mod tests {
             max_divergence_millionths: MILLIONTHS, // would pass on score alone
             ..default_config()
         };
-        let result = verify_path_pair(&pair, &config).expect("serde deserialization should succeed");
+        let result =
+            verify_path_pair(&pair, &config).expect("serde deserialization should succeed");
         assert_eq!(result.verdict, PathVerdict::Divergent);
     }
 
@@ -1718,7 +1728,8 @@ mod tests {
             fail_on_timing_anomaly: true,
             ..default_config()
         };
-        let result = verify_path_pair(&pair, &config).expect("serde deserialization should succeed");
+        let result =
+            verify_path_pair(&pair, &config).expect("serde deserialization should succeed");
         assert_eq!(result.verdict, PathVerdict::Divergent);
     }
 
@@ -1734,7 +1745,8 @@ mod tests {
             max_divergence_millionths: MILLIONTHS, // permissive score
             ..default_config()
         };
-        let result = verify_path_pair(&pair, &config).expect("serde deserialization should succeed");
+        let result =
+            verify_path_pair(&pair, &config).expect("serde deserialization should succeed");
         assert_eq!(result.verdict, PathVerdict::Verified);
     }
 
@@ -1742,7 +1754,8 @@ mod tests {
     fn verify_pair_receipt_has_correct_metadata() {
         let pair =
             DifferentialPair::new(ssr_evidence("ref", b"same"), ssr_evidence("cand", b"same"));
-        let result = verify_path_pair(&pair, &default_config()).expect("serde deserialization should succeed");
+        let result = verify_path_pair(&pair, &default_config())
+            .expect("serde deserialization should succeed");
         assert_eq!(result.receipt.schema_version, SCHEMA_VERSION);
         assert_eq!(result.receipt.component, COMPONENT);
         assert_eq!(result.receipt.bead_id, BEAD_ID);
@@ -1752,8 +1765,10 @@ mod tests {
     #[test]
     fn verify_pair_receipt_content_hash_deterministic() {
         let pair = DifferentialPair::new(ssr_evidence("ref", b"x"), ssr_evidence("cand", b"x"));
-        let r1 = verify_path_pair(&pair, &default_config()).expect("serde deserialization should succeed");
-        let r2 = verify_path_pair(&pair, &default_config()).expect("serde deserialization should succeed");
+        let r1 = verify_path_pair(&pair, &default_config())
+            .expect("serde deserialization should succeed");
+        let r2 = verify_path_pair(&pair, &default_config())
+            .expect("serde deserialization should succeed");
         assert_eq!(r1.receipt.content_hash(), r2.receipt.content_hash());
     }
 
@@ -1765,7 +1780,8 @@ mod tests {
             DifferentialPair::new(ssr_evidence("r1", b"a"), ssr_evidence("c1", b"a")),
             DifferentialPair::new(ssr_evidence("r2", b"b"), ssr_evidence("c2", b"b")),
         ];
-        let result = verify_batch(&pairs, &default_config()).expect("serde deserialization should succeed");
+        let result =
+            verify_batch(&pairs, &default_config()).expect("serde deserialization should succeed");
         assert_eq!(result.overall_verdict, PathVerdict::Verified);
         assert_eq!(result.verified_count, 2);
         assert_eq!(result.divergent_count, 0);
@@ -1782,7 +1798,8 @@ mod tests {
                 vec![make_mismatch(MismatchKind::OutputMismatch)],
             ),
         ];
-        let result = verify_batch(&pairs, &default_config()).expect("serde deserialization should succeed");
+        let result =
+            verify_batch(&pairs, &default_config()).expect("serde deserialization should succeed");
         assert_eq!(result.overall_verdict, PathVerdict::Divergent);
         assert_eq!(result.verified_count, 1);
         assert_eq!(result.divergent_count, 1);
@@ -1811,14 +1828,16 @@ mod tests {
             DifferentialPair::new(ssr_evidence("r2", b"b"), ssr_evidence("c2", b"b")),
             DifferentialPair::new(ssr_evidence("r3", b"c"), ssr_evidence("c3", b"c")),
         ];
-        let result = verify_batch(&pairs, &default_config()).expect("serde deserialization should succeed");
+        let result =
+            verify_batch(&pairs, &default_config()).expect("serde deserialization should succeed");
         // First receipt has no previous hash.
         assert!(result.results[0].receipt.previous_hash.is_none());
         // Subsequent receipts chain to previous.
         assert!(result.results[1].receipt.previous_hash.is_some());
         assert!(result.results[2].receipt.previous_hash.is_some());
         // Chain is deterministic.
-        let r2 = verify_batch(&pairs, &default_config()).expect("serde deserialization should succeed");
+        let r2 =
+            verify_batch(&pairs, &default_config()).expect("serde deserialization should succeed");
         assert_eq!(
             result.results[2].receipt.previous_hash,
             r2.results[2].receipt.previous_hash
@@ -1839,7 +1858,8 @@ mod tests {
                 vec![make_mismatch(MismatchKind::OutputMismatch)],
             ),
         ];
-        let result = verify_batch(&pairs, &default_config()).expect("serde deserialization should succeed");
+        let result =
+            verify_batch(&pairs, &default_config()).expect("serde deserialization should succeed");
         assert_eq!(result.pass_rate(), 0);
     }
 
@@ -1849,8 +1869,10 @@ mod tests {
             DifferentialPair::new(ssr_evidence("r1", b"x"), ssr_evidence("c1", b"x")),
             DifferentialPair::new(ssr_evidence("r2", b"y"), ssr_evidence("c2", b"y")),
         ];
-        let b1 = verify_batch(&pairs, &default_config()).expect("serde deserialization should succeed");
-        let b2 = verify_batch(&pairs, &default_config()).expect("serde deserialization should succeed");
+        let b1 =
+            verify_batch(&pairs, &default_config()).expect("serde deserialization should succeed");
+        let b2 =
+            verify_batch(&pairs, &default_config()).expect("serde deserialization should succeed");
         assert_eq!(b1.content_hash, b2.content_hash);
     }
 
@@ -1955,7 +1977,8 @@ mod tests {
             reason: "test".to_string(),
         };
         let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
-        let back: VerificationError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: VerificationError =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, back);
     }
 
@@ -1982,9 +2005,11 @@ mod tests {
             DifferentialPair::new(ssr_evidence("r1", b"a"), ssr_evidence("c1", b"a")),
             DifferentialPair::new(ssr_evidence("r2", b"b"), ssr_evidence("c2", b"b")),
         ];
-        let bv = verify_batch(&pairs, &default_config()).expect("serde deserialization should succeed");
+        let bv =
+            verify_batch(&pairs, &default_config()).expect("serde deserialization should succeed");
         let json = serde_json::to_string(&bv).expect("serde deserialization should succeed");
-        let back: BatchVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: BatchVerdict =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(bv, back);
     }
 }

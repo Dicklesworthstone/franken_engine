@@ -646,7 +646,8 @@ mod tests {
             let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by to_string of a valid Subsystem,
             // so from_str back to Subsystem cannot fail (valid format + matching schema).
-            let back: Subsystem = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: Subsystem =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(s, back);
         }
     }
@@ -667,7 +668,8 @@ mod tests {
             let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by to_string of a valid Player,
             // so from_str back to Player cannot fail (valid format + matching schema).
-            let back: Player = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: Player =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(p, back);
         }
     }
@@ -702,7 +704,8 @@ mod tests {
             let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by to_string of a valid LossDimension,
             // so from_str back to LossDimension cannot fail (valid format + matching schema).
-            let back: LossDimension = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: LossDimension =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(d, back);
         }
     }
@@ -788,7 +791,8 @@ mod tests {
         let json = serde_json::to_string(&tensor).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid LossTensor,
         // so from_str back to LossTensor cannot fail (valid format + matching schema).
-        let back: LossTensor = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: LossTensor =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(tensor, back);
     }
 
@@ -823,7 +827,9 @@ mod tests {
             },
         ];
         let tensor = LossTensor::from_entries(Subsystem::Runtime, entries);
-        let minimax = tensor.minimax_defender().expect("serde deserialization should succeed");
+        let minimax = tensor
+            .minimax_defender()
+            .expect("serde deserialization should succeed");
         assert_eq!(minimax, atk("d2"));
     }
 
@@ -871,7 +877,8 @@ mod tests {
             all_defender_actions: BTreeSet::from([atk("x"), atk("y")]),
         };
         let json = serde_json::to_string(&automaton).expect("serde deserialization should succeed");
-        let back: AdmissibleActionAutomaton = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: AdmissibleActionAutomaton =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(automaton, back);
     }
 
@@ -946,7 +953,8 @@ mod tests {
         let json = serde_json::to_string(&model).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid GameModel,
         // so from_str back to GameModel cannot fail (valid format + matching schema).
-        let back: GameModel = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GameModel =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(model, back);
     }
 
@@ -997,7 +1005,8 @@ mod tests {
     fn report_serde_roundtrip() {
         let report = generate_report(&[], &test_epoch());
         let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
-        let back: GameModelReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GameModelReport =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report, back);
     }
 
@@ -1039,7 +1048,8 @@ mod tests {
             active_conditions: vec!["always".to_string()],
         };
         let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
-        let back: HardConstraint = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: HardConstraint =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c, back);
     }
 
@@ -1049,7 +1059,8 @@ mod tests {
     fn strategic_action_serde_roundtrip() {
         let a = make_attacker_action("test", Subsystem::Compiler);
         let json = serde_json::to_string(&a).expect("serde deserialization should succeed");
-        let back: StrategicAction = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: StrategicAction =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(a, back);
     }
 
@@ -1332,7 +1343,8 @@ mod tests {
             minimax_recommendation: Some("block".to_string()),
         };
         let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
-        let back: SubsystemSummary = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SubsystemSummary =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(summary, back);
     }
 
@@ -1437,7 +1449,8 @@ mod tests {
     fn action_id_serde_roundtrip() {
         let id = ActionId("complex_multi_stage_attack".to_string());
         let json = serde_json::to_string(&id).expect("serde deserialization should succeed");
-        let back: ActionId = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ActionId =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(id, back);
     }
 
@@ -1539,7 +1552,10 @@ mod tests {
         let result = tensor.minimax_defender();
         assert!(result.is_some());
         // With identical losses, BTreeSet ordering gives d1 first
-        assert_eq!(result.expect("serde deserialization should succeed"), atk("d1"));
+        assert_eq!(
+            result.expect("serde deserialization should succeed"),
+            atk("d1")
+        );
     }
 
     #[test]
@@ -1650,7 +1666,10 @@ mod tests {
             })
             .build();
         let report = generate_report(&[model], &test_epoch());
-        let summary = report.subsystem_summaries.get("runtime").expect("serde deserialization should succeed");
+        let summary = report
+            .subsystem_summaries
+            .get("runtime")
+            .expect("serde deserialization should succeed");
         assert_eq!(summary.minimax_recommendation, Some("d1".to_string()));
     }
 
@@ -1661,7 +1680,10 @@ mod tests {
             .defender_action(make_defender_action("d1", Subsystem::Compiler))
             .build();
         let report = generate_report(&[model], &test_epoch());
-        let summary = report.subsystem_summaries.get("compiler").expect("serde deserialization should succeed");
+        let summary = report
+            .subsystem_summaries
+            .get("compiler")
+            .expect("serde deserialization should succeed");
         assert_eq!(summary.minimax_recommendation, None);
     }
 
@@ -1669,22 +1691,26 @@ mod tests {
     fn model_serde_preserves_schema_version() {
         let model = GameModelBuilder::new(Subsystem::ControlPlane, test_epoch()).build();
         let json = serde_json::to_string(&model).expect("serde deserialization should succeed");
-        let back: GameModel = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GameModel =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.schema_version, SCHEMA_VERSION);
     }
 
     #[test]
     fn subsystem_serde_rename_all_snake_case() {
         assert_eq!(
-            serde_json::to_string(&Subsystem::ControlPlane).expect("serde deserialization should succeed"),
+            serde_json::to_string(&Subsystem::ControlPlane)
+                .expect("serde deserialization should succeed"),
             "\"control_plane\""
         );
         assert_eq!(
-            serde_json::to_string(&Subsystem::ExtensionHost).expect("serde deserialization should succeed"),
+            serde_json::to_string(&Subsystem::ExtensionHost)
+                .expect("serde deserialization should succeed"),
             "\"extension_host\""
         );
         assert_eq!(
-            serde_json::to_string(&Subsystem::EvidencePipeline).expect("serde deserialization should succeed"),
+            serde_json::to_string(&Subsystem::EvidencePipeline)
+                .expect("serde deserialization should succeed"),
             "\"evidence_pipeline\""
         );
     }
@@ -1692,15 +1718,18 @@ mod tests {
     #[test]
     fn loss_dimension_serde_rename_all_snake_case() {
         assert_eq!(
-            serde_json::to_string(&LossDimension::UserHarm).expect("serde deserialization should succeed"),
+            serde_json::to_string(&LossDimension::UserHarm)
+                .expect("serde deserialization should succeed"),
             "\"user_harm\""
         );
         assert_eq!(
-            serde_json::to_string(&LossDimension::FalsePositiveCost).expect("serde deserialization should succeed"),
+            serde_json::to_string(&LossDimension::FalsePositiveCost)
+                .expect("serde deserialization should succeed"),
             "\"false_positive_cost\""
         );
         assert_eq!(
-            serde_json::to_string(&LossDimension::EvidenceIntegrityCost).expect("serde deserialization should succeed"),
+            serde_json::to_string(&LossDimension::EvidenceIntegrityCost)
+                .expect("serde deserialization should succeed"),
             "\"evidence_integrity_cost\""
         );
     }
@@ -1824,7 +1853,8 @@ mod tests {
             .build();
         let report = generate_report(&[model], &test_epoch());
         let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
-        let back: GameModelReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GameModelReport =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report, back);
     }
 
@@ -1839,7 +1869,8 @@ mod tests {
             Subsystem::EvidencePipeline,
         ] {
             let display = s.to_string();
-            let serde_str = serde_json::to_string(&s).expect("serde deserialization should succeed");
+            let serde_str =
+                serde_json::to_string(&s).expect("serde deserialization should succeed");
             assert_eq!(format!("\"{display}\""), serde_str);
         }
     }
@@ -1854,7 +1885,8 @@ mod tests {
             LossDimension::EvidenceIntegrityCost,
         ] {
             let display = d.to_string();
-            let serde_str = serde_json::to_string(&d).expect("serde deserialization should succeed");
+            let serde_str =
+                serde_json::to_string(&d).expect("serde deserialization should succeed");
             assert_eq!(format!("\"{display}\""), serde_str);
         }
     }
@@ -1863,7 +1895,8 @@ mod tests {
     fn player_display_matches_serde_key() {
         for p in [Player::Attacker, Player::Defender] {
             let display = p.to_string();
-            let serde_str = serde_json::to_string(&p).expect("serde deserialization should succeed");
+            let serde_str =
+                serde_json::to_string(&p).expect("serde deserialization should succeed");
             assert_eq!(format!("\"{display}\""), serde_str);
         }
     }
@@ -1882,7 +1915,8 @@ mod tests {
             ],
         };
         let json = serde_json::to_string(&action).expect("serde deserialization should succeed");
-        let back: StrategicAction = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: StrategicAction =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(action, back);
         assert_eq!(back.constraints.len(), 2);
     }

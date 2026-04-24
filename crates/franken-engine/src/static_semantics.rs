@@ -2648,7 +2648,8 @@ mod tests {
         ];
         for kind in kinds {
             let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
-            let back: StaticErrorKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: StaticErrorKind =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(kind, back);
         }
     }
@@ -2657,7 +2658,8 @@ mod tests {
     fn static_error_serde() {
         let err = StaticError::new(StaticErrorKind::DuplicateBinding, "test error", span(5));
         let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
-        let back: StaticError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: StaticError =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, back);
     }
 
@@ -2674,7 +2676,8 @@ mod tests {
         );
         let result = analyze(&tree);
         let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
-        let back: StaticAnalysisResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: StaticAnalysisResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, back);
     }
 
@@ -2790,7 +2793,8 @@ mod tests {
             is_module: false,
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let back: StaticSemanticsEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: StaticSemanticsEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
     }
 
@@ -4478,7 +4482,8 @@ mod tests {
         let result = analyze(&tree);
         assert!(result.is_module);
         let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
-        let back: StaticAnalysisResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: StaticAnalysisResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, back);
         assert!(back.is_module);
     }
@@ -5471,7 +5476,8 @@ mod tests {
         ];
         for kind in kinds {
             let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
-            let back: StaticErrorKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: StaticErrorKind =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(kind, back);
         }
     }

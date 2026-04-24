@@ -1132,7 +1132,8 @@ mod tests {
             // SAFETY: ExperimentKind derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by valid ExperimentKind serialization
-            let back: ExperimentKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ExperimentKind =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(back, kind);
         }
     }
@@ -1166,9 +1167,11 @@ mod tests {
     fn acquisition_signal_serde_round_trip() {
         for &signal in AcquisitionSignal::ALL {
             // SAFETY: AcquisitionSignal derives Serialize and has no non-serializable fields
-            let json = serde_json::to_string(&signal).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&signal).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by valid AcquisitionSignal serialization
-            let back: AcquisitionSignal = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: AcquisitionSignal =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(back, signal);
         }
     }
@@ -1254,7 +1257,8 @@ mod tests {
         // SAFETY: ExperimentProposal derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid ExperimentProposal serialization
-        let back: ExperimentProposal = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ExperimentProposal =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, p);
     }
 
@@ -1488,7 +1492,8 @@ mod tests {
 
         let w = default_weights();
         // SAFETY: Test with valid proposals and budget should produce valid experiment plan
-        let plan = select_experiments(vec![p1, p2], 500_000, &w).expect("serde deserialization should succeed");
+        let plan = select_experiments(vec![p1, p2], 500_000, &w)
+            .expect("serde deserialization should succeed");
         assert_eq!(plan.proposals.len(), 2);
         assert_eq!(plan.total_expected_gain_millionths, 1_100_000);
         assert_eq!(plan.budget_remaining_millionths, 0);
@@ -1539,7 +1544,8 @@ mod tests {
         let w = default_weights();
         // Budget only fits the cheap one.
         // SAFETY: Test with budget sufficient for at least one proposal should succeed
-        let plan = select_experiments(vec![p1, p2], 200_000, &w).expect("serde deserialization should succeed");
+        let plan = select_experiments(vec![p1, p2], 200_000, &w)
+            .expect("serde deserialization should succeed");
         assert_eq!(plan.proposals.len(), 1);
         assert_eq!(plan.proposals[0].proposal_id, "cheap");
         assert_eq!(plan.budget_remaining_millionths, 100_000);
@@ -1557,7 +1563,8 @@ mod tests {
         );
         let w = default_weights();
         // SAFETY: Test with single proposal and maximum budget should succeed
-        let plan = select_experiments(vec![p1], MILLIONTHS, &w).expect("serde deserialization should succeed");
+        let plan = select_experiments(vec![p1], MILLIONTHS, &w)
+            .expect("serde deserialization should succeed");
         assert_ne!(plan.content_hash, ContentHash::compute(b""));
     }
 
@@ -1581,7 +1588,8 @@ mod tests {
         );
         let w = default_weights();
         // SAFETY: Test-only unwrap for select_experiments with valid proposals and sufficient budget
-        let plan = select_experiments(vec![p1, p2], MILLIONTHS, &w).expect("serde deserialization should succeed");
+        let plan = select_experiments(vec![p1, p2], MILLIONTHS, &w)
+            .expect("serde deserialization should succeed");
         let errors = validate_plan(&plan);
         assert!(errors.is_empty(), "validation errors: {errors:?}");
     }
@@ -1810,7 +1818,8 @@ mod tests {
             // SAFETY: AcquisitionError derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(err).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by valid AcquisitionError serialization
-            let back: AcquisitionError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: AcquisitionError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, err);
         }
     }
@@ -2204,7 +2213,8 @@ mod tests {
         // SAFETY: ExperimentOutcome derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&outcome).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid ExperimentOutcome serialization
-        let back: ExperimentOutcome = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ExperimentOutcome =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, outcome);
     }
 
@@ -2225,7 +2235,8 @@ mod tests {
         let o = record_outcome(&p, 350_000);
         let cal = calibrate_oracle(&[o], &[p]);
         let json = serde_json::to_string(&cal).expect("serde deserialization should succeed");
-        let back: OracleCalibration = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: OracleCalibration =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, cal);
     }
 
@@ -2246,7 +2257,8 @@ mod tests {
         let w = default_weights();
         let score = score_proposal(&p, &w);
         let json = serde_json::to_string(&score).expect("serde deserialization should succeed");
-        let back: AcquisitionScore = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: AcquisitionScore =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, score);
     }
 
@@ -2260,7 +2272,8 @@ mod tests {
         // SAFETY: ExperimentPlan derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&plan).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid ExperimentPlan serialization
-        let back: ExperimentPlan = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ExperimentPlan =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, plan);
     }
 

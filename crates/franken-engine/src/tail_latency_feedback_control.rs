@@ -1227,7 +1227,8 @@ mod tests {
         ];
         for action in &actions {
             let json = serde_json::to_string(action).expect("serde deserialization should succeed");
-            let decoded: ControlAction = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let decoded: ControlAction =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*action, decoded);
         }
     }
@@ -1236,7 +1237,8 @@ mod tests {
     fn test_serde_latency_target() {
         let target = make_target(990_000, 1_000_000, 50_000);
         let json = serde_json::to_string(&target).expect("serde deserialization should succeed");
-        let decoded: LatencyTarget = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let decoded: LatencyTarget =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(target, decoded);
     }
 
@@ -1244,7 +1246,8 @@ mod tests {
     fn test_serde_controller_state() {
         let state = ControllerState::new("test", SecurityEpoch::from_raw(1));
         let json = serde_json::to_string(&state).expect("serde deserialization should succeed");
-        let decoded: ControllerState = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let decoded: ControllerState =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(state, decoded);
     }
 
@@ -1252,7 +1255,8 @@ mod tests {
     fn test_serde_feedback_report() {
         let report = franken_engine_feedback_control_manifest();
         let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
-        let decoded: FeedbackControlReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let decoded: FeedbackControlReport =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report, decoded);
     }
 
@@ -1265,7 +1269,8 @@ mod tests {
             SecurityEpoch::from_raw(10),
         );
         let json = serde_json::to_string(&over).expect("serde deserialization should succeed");
-        let decoded: PolicyOverride = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let decoded: PolicyOverride =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(over, decoded);
     }
 

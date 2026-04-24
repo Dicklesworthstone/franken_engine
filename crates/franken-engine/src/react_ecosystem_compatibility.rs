@@ -1682,7 +1682,9 @@ mod tests {
                 .with_metrics(metrics.clone())
                 .with_execution_time(1),
         );
-        fast_report.finalize().expect("serde deserialization should succeed");
+        fast_report
+            .finalize()
+            .expect("serde deserialization should succeed");
 
         let mut slow_report = EcosystemCompatibilityReport::new(epoch);
         slow_report.add_test_result(
@@ -1690,7 +1692,9 @@ mod tests {
                 .with_metrics(metrics)
                 .with_execution_time(10_000),
         );
-        slow_report.finalize().expect("serde deserialization should succeed");
+        slow_report
+            .finalize()
+            .expect("serde deserialization should succeed");
 
         assert_ne!(
             fast_report.total_execution_time_ms,

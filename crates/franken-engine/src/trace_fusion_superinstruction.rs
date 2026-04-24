@@ -118,7 +118,11 @@ impl FusionCandidate {
         let mut data = Vec::new();
         for seg in segments {
             data.extend_from_slice(seg.id.as_bytes());
-            data.extend_from_slice(serde_json::to_string(&seg.motif).expect("serde deserialization should succeed").as_bytes());
+            data.extend_from_slice(
+                serde_json::to_string(&seg.motif)
+                    .expect("serde deserialization should succeed")
+                    .as_bytes(),
+            );
             data.extend_from_slice(&seg.instruction_count.to_le_bytes());
         }
         ContentHash::compute(&data)
@@ -571,7 +575,11 @@ pub fn certify_fusion(
     let mut cert_data = Vec::new();
     cert_data.extend_from_slice(TRACE_FUSION_SCHEMA_VERSION.as_bytes());
     cert_data.extend_from_slice(candidate.fusion_hash.as_bytes());
-    cert_data.extend_from_slice(serde_json::to_string(&decision).expect("serde deserialization should succeed").as_bytes());
+    cert_data.extend_from_slice(
+        serde_json::to_string(&decision)
+            .expect("serde deserialization should succeed")
+            .as_bytes(),
+    );
     if let Some(ref p) = proof {
         cert_data.extend_from_slice(p.proof_hash.as_bytes());
     }
@@ -786,7 +794,8 @@ mod tests {
         ];
         for kind in &kinds {
             let json = serde_json::to_string(kind).expect("serde deserialization should succeed");
-            let back: MotifKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: MotifKind =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, kind);
         }
     }
@@ -804,7 +813,8 @@ mod tests {
         let effect = SideEffectKind::MemoryWrite;
         let json = serde_json::to_string(&effect).expect("serde deserialization should succeed");
         assert!(json.contains("memory_write"));
-        let back: SideEffectKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SideEffectKind =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, effect);
     }
 
@@ -1149,7 +1159,8 @@ mod tests {
     fn test_config_serde_roundtrip() {
         let cfg = TraceFusionConfig::default_config();
         let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
-        let back: TraceFusionConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: TraceFusionConfig =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, cfg);
     }
 
@@ -1182,7 +1193,8 @@ mod tests {
             id: "seg-x".to_string(),
         };
         let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
-        let back: TraceFusionError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: TraceFusionError =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, err);
     }
 
@@ -1194,7 +1206,8 @@ mod tests {
             superinstruction_id: "si-abc".to_string(),
         };
         let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
-        let back: FusionDecision = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: FusionDecision =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, d);
     }
 
@@ -1204,7 +1217,8 @@ mod tests {
             reason: FusionRejectReason::ProofMissing,
         };
         let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
-        let back: FusionDecision = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: FusionDecision =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, d);
     }
 
@@ -1214,7 +1228,8 @@ mod tests {
             reason: "waiting for profiling data".to_string(),
         };
         let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
-        let back: FusionDecision = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: FusionDecision =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, d);
     }
 
@@ -1227,7 +1242,8 @@ mod tests {
         let config = TraceFusionConfig::default_config();
         let cert = certify_fusion(&cand, &config);
         let json = serde_json::to_string(&cert).expect("serde deserialization should succeed");
-        let back: FusionCertificate = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: FusionCertificate =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, cert);
     }
 
@@ -1240,7 +1256,9 @@ mod tests {
         let proof = build_proof(&cand);
         let si = build_superinstruction(&cand, &proof);
         assert!(si.disable_token.is_some());
-        let token = si.disable_token.expect("serde deserialization should succeed");
+        let token = si
+            .disable_token
+            .expect("serde deserialization should succeed");
         assert!(token.starts_with("disable-"));
     }
 
@@ -1258,7 +1276,8 @@ mod tests {
         ];
         for reason in &reasons {
             let json = serde_json::to_string(reason).expect("serde deserialization should succeed");
-            let back: FusionRejectReason = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: FusionRejectReason =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, reason);
         }
     }

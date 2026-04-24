@@ -1777,7 +1777,9 @@ mod tests {
     #[test]
     fn policy_round_trip_canonical_json() {
         let policy = sample_policy(7);
-        let json = policy.to_canonical_json().expect("serde deserialization should succeed");
+        let json = policy
+            .to_canonical_json()
+            .expect("serde deserialization should succeed");
         let parsed = TeeAttestationPolicy::from_json(&json).expect("parse");
         assert_eq!(policy, parsed);
     }
@@ -1913,7 +1915,8 @@ mod tests {
             .load_policy(policy.clone(), "trace-load-1", "decision-load-1")
             .expect("policy load");
 
-        let signing_key = SigningKey::from_bytes([7u8; 32]).expect("serde deserialization should succeed");
+        let signing_key =
+            SigningKey::from_bytes([7u8; 32]).expect("serde deserialization should succeed");
         let verifier = signing_key.verification_key();
         let artifact = SignedTrustRootOverrideArtifact::create_signed(
             &signing_key,
@@ -1971,7 +1974,8 @@ mod tests {
             .load_policy(sample_policy(10), "trace-load-2", "decision-load-2")
             .expect("policy load");
 
-        let signing_key = SigningKey::from_bytes([8u8; 32]).expect("serde deserialization should succeed");
+        let signing_key =
+            SigningKey::from_bytes([8u8; 32]).expect("serde deserialization should succeed");
         let verifier = signing_key.verification_key();
         let mut artifact = SignedTrustRootOverrideArtifact::create_signed(
             &signing_key,
@@ -2064,8 +2068,10 @@ mod tests {
     #[test]
     fn tee_platform_serde_round_trip() {
         for platform in TeePlatform::ALL {
-            let json = serde_json::to_string(&platform).expect("serde deserialization should succeed");
-            let parsed: TeePlatform = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&platform).expect("serde deserialization should succeed");
+            let parsed: TeePlatform =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(platform, parsed);
         }
     }
@@ -2096,7 +2102,8 @@ mod tests {
             MeasurementAlgorithm::Sha512,
         ] {
             let json = serde_json::to_string(&alg).expect("serde deserialization should succeed");
-            let parsed: MeasurementAlgorithm = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let parsed: MeasurementAlgorithm =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(alg, parsed);
         }
     }
@@ -2151,7 +2158,9 @@ mod tests {
             algorithm: MeasurementAlgorithm::Sha512,
             digest_hex: digest_hex(0xaa, 64),
         };
-        digest.validate_for_platform(TeePlatform::ArmCca).expect("serde deserialization should succeed");
+        digest
+            .validate_for_platform(TeePlatform::ArmCca)
+            .expect("serde deserialization should succeed");
     }
 
     // -----------------------------------------------------------------------
@@ -2187,7 +2196,9 @@ mod tests {
             standard_max_age_secs: 100,
             high_impact_max_age_secs: 100,
         };
-        window.validate().expect("serde deserialization should succeed");
+        window
+            .validate()
+            .expect("serde deserialization should succeed");
     }
 
     // -----------------------------------------------------------------------
@@ -2248,7 +2259,8 @@ mod tests {
             RevocationSourceType::Other("custom".to_string()),
         ] {
             let json = serde_json::to_string(&st).expect("serde deserialization should succeed");
-            let parsed: RevocationSourceType = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let parsed: RevocationSourceType =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(st, parsed);
         }
     }
@@ -2595,7 +2607,9 @@ mod tests {
     #[test]
     fn store_load_policy_epoch_regression_rejected() {
         let mut store = TeeAttestationPolicyStore::default();
-        store.load_policy(sample_policy(10), "t-1", "d-1").expect("serde deserialization should succeed");
+        store
+            .load_policy(sample_policy(10), "t-1", "d-1")
+            .expect("serde deserialization should succeed");
         let err = store
             .load_policy(sample_policy(5), "t-2", "d-2")
             .unwrap_err();
@@ -2641,7 +2655,10 @@ mod tests {
                 "d-eval",
             )
             .expect("serde deserialization should succeed");
-        let last = store.governance_ledger().last().expect("serde deserialization should succeed");
+        let last = store
+            .governance_ledger()
+            .last()
+            .expect("serde deserialization should succeed");
         assert_eq!(last.event, "quote_accepted");
         assert_eq!(last.outcome, "allow");
     }
@@ -2667,7 +2684,10 @@ mod tests {
             err,
             TeeAttestationPolicyError::AttestationStale { .. }
         ));
-        let last = store.governance_ledger().last().expect("serde deserialization should succeed");
+        let last = store
+            .governance_ledger()
+            .last()
+            .expect("serde deserialization should succeed");
         assert_eq!(last.event, "quote_rejected");
         assert_eq!(last.outcome, "deny");
     }
@@ -2698,8 +2718,12 @@ mod tests {
     fn emitter_sync_sets_epoch() {
         let mut emitter = DecisionReceiptEmitter::new("e-1");
         let mut store = TeeAttestationPolicyStore::default();
-        store.load_policy(sample_policy(7), "t-1", "d-1").expect("serde deserialization should succeed");
-        let epoch = emitter.sync_policy(&store).expect("serde deserialization should succeed");
+        store
+            .load_policy(sample_policy(7), "t-1", "d-1")
+            .expect("serde deserialization should succeed");
+        let epoch = emitter
+            .sync_policy(&store)
+            .expect("serde deserialization should succeed");
         assert_eq!(epoch, SecurityEpoch::from_raw(7));
         assert_eq!(
             emitter.last_synced_policy_epoch,
@@ -2711,7 +2735,9 @@ mod tests {
     fn emitter_can_emit_not_synced_fails() {
         let emitter = DecisionReceiptEmitter::new("e-1");
         let mut store = TeeAttestationPolicyStore::default();
-        store.load_policy(sample_policy(5), "t-1", "d-1").expect("serde deserialization should succeed");
+        store
+            .load_policy(sample_policy(5), "t-1", "d-1")
+            .expect("serde deserialization should succeed");
         let err = emitter
             .can_emit(SecurityEpoch::from_raw(5), &store)
             .unwrap_err();
@@ -2725,10 +2751,16 @@ mod tests {
     fn emitter_can_emit_stale_fails() {
         let mut emitter = DecisionReceiptEmitter::new("e-1");
         let mut store = TeeAttestationPolicyStore::default();
-        store.load_policy(sample_policy(5), "t-1", "d-1").expect("serde deserialization should succeed");
-        emitter.sync_policy(&store).expect("serde deserialization should succeed");
+        store
+            .load_policy(sample_policy(5), "t-1", "d-1")
+            .expect("serde deserialization should succeed");
+        emitter
+            .sync_policy(&store)
+            .expect("serde deserialization should succeed");
         // Load a much newer policy
-        store.load_policy(sample_policy(10), "t-2", "d-2").expect("serde deserialization should succeed");
+        store
+            .load_policy(sample_policy(10), "t-2", "d-2")
+            .expect("serde deserialization should succeed");
         let err = emitter
             .can_emit(SecurityEpoch::from_raw(10), &store)
             .unwrap_err();
@@ -2742,9 +2774,15 @@ mod tests {
     fn emitter_can_emit_one_behind_ok() {
         let mut emitter = DecisionReceiptEmitter::new("e-1");
         let mut store = TeeAttestationPolicyStore::default();
-        store.load_policy(sample_policy(5), "t-1", "d-1").expect("serde deserialization should succeed");
-        emitter.sync_policy(&store).expect("serde deserialization should succeed");
-        store.load_policy(sample_policy(6), "t-2", "d-2").expect("serde deserialization should succeed");
+        store
+            .load_policy(sample_policy(5), "t-1", "d-1")
+            .expect("serde deserialization should succeed");
+        emitter
+            .sync_policy(&store)
+            .expect("serde deserialization should succeed");
+        store
+            .load_policy(sample_policy(6), "t-2", "d-2")
+            .expect("serde deserialization should succeed");
         // Synced at 5, active is 6 — one epoch behind is OK
         emitter
             .can_emit(SecurityEpoch::from_raw(6), &store)
@@ -2893,7 +2931,8 @@ mod tests {
 
     #[test]
     fn override_artifact_empty_actor_rejected() {
-        let signing_key = SigningKey::from_bytes([7u8; 32]).expect("serde deserialization should succeed");
+        let signing_key =
+            SigningKey::from_bytes([7u8; 32]).expect("serde deserialization should succeed");
         let err = SignedTrustRootOverrideArtifact::create_signed(
             &signing_key,
             TrustRootOverrideArtifactInput {
@@ -2915,7 +2954,8 @@ mod tests {
 
     #[test]
     fn override_artifact_empty_justification_rejected() {
-        let signing_key = SigningKey::from_bytes([7u8; 32]).expect("serde deserialization should succeed");
+        let signing_key =
+            SigningKey::from_bytes([7u8; 32]).expect("serde deserialization should succeed");
         let err = SignedTrustRootOverrideArtifact::create_signed(
             &signing_key,
             TrustRootOverrideArtifactInput {
@@ -2937,7 +2977,8 @@ mod tests {
 
     #[test]
     fn override_artifact_expires_before_issued_rejected() {
-        let signing_key = SigningKey::from_bytes([7u8; 32]).expect("serde deserialization should succeed");
+        let signing_key =
+            SigningKey::from_bytes([7u8; 32]).expect("serde deserialization should succeed");
         let err = SignedTrustRootOverrideArtifact::create_signed(
             &signing_key,
             TrustRootOverrideArtifactInput {
@@ -2959,7 +3000,8 @@ mod tests {
 
     #[test]
     fn override_artifact_verify_expired_rejected() {
-        let signing_key = SigningKey::from_bytes([7u8; 32]).expect("serde deserialization should succeed");
+        let signing_key =
+            SigningKey::from_bytes([7u8; 32]).expect("serde deserialization should succeed");
         let verifier = signing_key.verification_key();
         let artifact = SignedTrustRootOverrideArtifact::create_signed(
             &signing_key,
@@ -2995,8 +3037,10 @@ mod tests {
                 rotation_group: "grp-1".to_string(),
             },
         ] {
-            let json = serde_json::to_string(&pinning).expect("serde deserialization should succeed");
-            let parsed: TrustRootPinning = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&pinning).expect("serde deserialization should succeed");
+            let parsed: TrustRootPinning =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(pinning, parsed);
         }
     }
@@ -3008,8 +3052,10 @@ mod tests {
     #[test]
     fn decision_impact_serde_round_trip() {
         for impact in [DecisionImpact::Standard, DecisionImpact::HighImpact] {
-            let json = serde_json::to_string(&impact).expect("serde deserialization should succeed");
-            let parsed: DecisionImpact = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&impact).expect("serde deserialization should succeed");
+            let parsed: DecisionImpact =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(impact, parsed);
         }
     }
@@ -3021,8 +3067,10 @@ mod tests {
             RevocationProbeStatus::Revoked,
             RevocationProbeStatus::Unavailable,
         ] {
-            let json = serde_json::to_string(&status).expect("serde deserialization should succeed");
-            let parsed: RevocationProbeStatus = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&status).expect("serde deserialization should succeed");
+            let parsed: RevocationProbeStatus =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(status, parsed);
         }
     }
@@ -3038,7 +3086,8 @@ mod tests {
             RevocationFallback::FailClosed,
         ] {
             let json = serde_json::to_string(&fb).expect("serde deserialization should succeed");
-            let parsed: RevocationFallback = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let parsed: RevocationFallback =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(fb, parsed);
         }
     }
@@ -3052,8 +3101,10 @@ mod tests {
         let p1 = sample_policy(1);
         let p2 = sample_policy(2);
         assert_ne!(
-            p1.derive_policy_id().expect("serde deserialization should succeed"),
-            p2.derive_policy_id().expect("serde deserialization should succeed")
+            p1.derive_policy_id()
+                .expect("serde deserialization should succeed"),
+            p2.derive_policy_id()
+                .expect("serde deserialization should succeed")
         );
     }
 
@@ -3074,7 +3125,8 @@ mod tests {
             metadata: BTreeMap::new(),
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let parsed: PolicyGovernanceEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let parsed: PolicyGovernanceEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, parsed);
     }
 
@@ -3099,7 +3151,8 @@ mod tests {
         ];
         for src in variants {
             let json = serde_json::to_string(&src).expect("serde deserialization should succeed");
-            let parsed: TrustRootSource = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let parsed: TrustRootSource =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(src, parsed);
         }
     }
@@ -3108,7 +3161,8 @@ mod tests {
     fn attestation_quote_serde_roundtrip() {
         let quote = quote_for_sgx();
         let json = serde_json::to_string(&quote).expect("serde deserialization should succeed");
-        let parsed: AttestationQuote = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let parsed: AttestationQuote =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(quote, parsed);
     }
 
@@ -3119,7 +3173,8 @@ mod tests {
             digest_hex: digest_hex(0xbb, 64),
         };
         let json = serde_json::to_string(&digest).expect("serde deserialization should succeed");
-        let parsed: MeasurementDigest = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let parsed: MeasurementDigest =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(digest, parsed);
     }
 
@@ -3132,7 +3187,8 @@ mod tests {
             on_unavailable: RevocationFallback::TryNextSource,
         };
         let json = serde_json::to_string(&source).expect("serde deserialization should succeed");
-        let parsed: RevocationSource = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let parsed: RevocationSource =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(source, parsed);
     }
 
@@ -3153,16 +3209,20 @@ mod tests {
             },
         };
         let json = serde_json::to_string(&root).expect("serde deserialization should succeed");
-        let parsed: PlatformTrustRoot = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let parsed: PlatformTrustRoot =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(root, parsed);
     }
 
     #[test]
     fn store_serde_roundtrip() {
         let mut store = TeeAttestationPolicyStore::default();
-        store.load_policy(sample_policy(3), "t-1", "d-1").expect("serde deserialization should succeed");
+        store
+            .load_policy(sample_policy(3), "t-1", "d-1")
+            .expect("serde deserialization should succeed");
         let json = serde_json::to_string(&store).expect("serde deserialization should succeed");
-        let parsed: TeeAttestationPolicyStore = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let parsed: TeeAttestationPolicyStore =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(
             store.receipt_emission_halted(),
             parsed.receipt_emission_halted()
@@ -3173,8 +3233,14 @@ mod tests {
             parsed.governance_ledger().len()
         );
         assert_eq!(
-            store.active_policy().expect("serde deserialization should succeed").policy_epoch,
-            parsed.active_policy().expect("serde deserialization should succeed").policy_epoch
+            store
+                .active_policy()
+                .expect("serde deserialization should succeed")
+                .policy_epoch,
+            parsed
+                .active_policy()
+                .expect("serde deserialization should succeed")
+                .policy_epoch
         );
     }
 
@@ -3183,7 +3249,8 @@ mod tests {
         let mut emitter = DecisionReceiptEmitter::new("e-serde");
         emitter.last_synced_policy_epoch = Some(SecurityEpoch::from_raw(42));
         let json = serde_json::to_string(&emitter).expect("serde deserialization should succeed");
-        let parsed: DecisionReceiptEmitter = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let parsed: DecisionReceiptEmitter =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(emitter, parsed);
     }
 
@@ -3205,17 +3272,27 @@ mod tests {
     fn store_load_policy_json_success() {
         let mut store = TeeAttestationPolicyStore::default();
         let policy = sample_policy(20);
-        let json = policy.to_canonical_json().expect("serde deserialization should succeed");
-        let policy_id = store.load_policy_json(&json, "t-json", "d-json").expect("serde deserialization should succeed");
+        let json = policy
+            .to_canonical_json()
+            .expect("serde deserialization should succeed");
+        let policy_id = store
+            .load_policy_json(&json, "t-json", "d-json")
+            .expect("serde deserialization should succeed");
         assert!(!store.receipt_emission_halted());
         assert!(store.last_error_code().is_none());
         // Policy ID should be deterministic
-        assert_eq!(policy_id, policy.derive_policy_id().expect("serde deserialization should succeed"));
+        assert_eq!(
+            policy_id,
+            policy
+                .derive_policy_id()
+                .expect("serde deserialization should succeed")
+        );
     }
 
     #[test]
     fn override_empty_target_root_id_rejected() {
-        let signing_key = SigningKey::from_bytes([7u8; 32]).expect("serde deserialization should succeed");
+        let signing_key =
+            SigningKey::from_bytes([7u8; 32]).expect("serde deserialization should succeed");
         let err = SignedTrustRootOverrideArtifact::create_signed(
             &signing_key,
             TrustRootOverrideArtifactInput {
@@ -3238,8 +3315,11 @@ mod tests {
     #[test]
     fn override_target_mismatch_rejected() {
         let mut store = TeeAttestationPolicyStore::default();
-        store.load_policy(sample_policy(10), "t-1", "d-1").expect("serde deserialization should succeed");
-        let signing_key = SigningKey::from_bytes([9u8; 32]).expect("serde deserialization should succeed");
+        store
+            .load_policy(sample_policy(10), "t-1", "d-1")
+            .expect("serde deserialization should succeed");
+        let signing_key =
+            SigningKey::from_bytes([9u8; 32]).expect("serde deserialization should succeed");
         let verifier = signing_key.verification_key();
         let artifact = SignedTrustRootOverrideArtifact::create_signed(
             &signing_key,
@@ -3290,7 +3370,8 @@ mod tests {
             ..TeeAttestationPolicyStore::default()
         };
 
-        let signing_key = SigningKey::from_bytes([7u8; 32]).expect("serde deserialization should succeed");
+        let signing_key =
+            SigningKey::from_bytes([7u8; 32]).expect("serde deserialization should succeed");
         let verifier = signing_key.verification_key();
         let artifact = SignedTrustRootOverrideArtifact::create_signed(
             &signing_key,
@@ -3361,8 +3442,12 @@ mod tests {
     fn emitter_can_emit_runtime_epoch_too_far_ahead() {
         let mut emitter = DecisionReceiptEmitter::new("e-rt");
         let mut store = TeeAttestationPolicyStore::default();
-        store.load_policy(sample_policy(5), "t-1", "d-1").expect("serde deserialization should succeed");
-        emitter.sync_policy(&store).expect("serde deserialization should succeed");
+        store
+            .load_policy(sample_policy(5), "t-1", "d-1")
+            .expect("serde deserialization should succeed");
+        emitter
+            .sync_policy(&store)
+            .expect("serde deserialization should succeed");
         // Runtime epoch is 2 ahead of synced epoch (5) — should fail
         let err = emitter
             .can_emit(SecurityEpoch::from_raw(7), &store)
@@ -3400,7 +3485,8 @@ mod tests {
 
     #[test]
     fn override_artifact_evidence_refs_sorted_and_deduped() {
-        let signing_key = SigningKey::from_bytes([7u8; 32]).expect("serde deserialization should succeed");
+        let signing_key =
+            SigningKey::from_bytes([7u8; 32]).expect("serde deserialization should succeed");
         let artifact = SignedTrustRootOverrideArtifact::create_signed(
             &signing_key,
             TrustRootOverrideArtifactInput {
@@ -3430,13 +3516,15 @@ mod tests {
             high_impact_max_age_secs: 60,
         };
         let json = serde_json::to_string(&window).expect("serde deserialization should succeed");
-        let back: AttestationFreshnessWindow = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: AttestationFreshnessWindow =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(window, back);
     }
 
     #[test]
     fn temporary_trust_root_override_serde_round_trip() {
-        let signing_key = SigningKey::from_bytes([7u8; 32]).expect("serde deserialization should succeed");
+        let signing_key =
+            SigningKey::from_bytes([7u8; 32]).expect("serde deserialization should succeed");
         let artifact = SignedTrustRootOverrideArtifact::create_signed(
             &signing_key,
             TrustRootOverrideArtifactInput {
@@ -3465,16 +3553,21 @@ mod tests {
             },
             artifact,
         };
-        let json = serde_json::to_string(&override_req).expect("serde deserialization should succeed");
-        let back: TemporaryTrustRootOverride = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json =
+            serde_json::to_string(&override_req).expect("serde deserialization should succeed");
+        let back: TemporaryTrustRootOverride =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(override_req, back);
     }
 
     #[test]
     fn override_empty_override_id_rejected() {
         let mut store = TeeAttestationPolicyStore::default();
-        store.load_policy(sample_policy(10), "t-1", "d-1").expect("serde deserialization should succeed");
-        let signing_key = SigningKey::from_bytes([7u8; 32]).expect("serde deserialization should succeed");
+        store
+            .load_policy(sample_policy(10), "t-1", "d-1")
+            .expect("serde deserialization should succeed");
+        let signing_key =
+            SigningKey::from_bytes([7u8; 32]).expect("serde deserialization should succeed");
         let verifier = signing_key.verification_key();
         let artifact = SignedTrustRootOverrideArtifact::create_signed(
             &signing_key,
@@ -3521,7 +3614,8 @@ mod tests {
 
     #[test]
     fn verify_artifact_valid_signature_passes() {
-        let signing_key = SigningKey::from_bytes([7u8; 32]).expect("serde deserialization should succeed");
+        let signing_key =
+            SigningKey::from_bytes([7u8; 32]).expect("serde deserialization should succeed");
         let verifier = signing_key.verification_key();
         let artifact = SignedTrustRootOverrideArtifact::create_signed(
             &signing_key,
@@ -3678,7 +3772,10 @@ mod tests {
             )
             .unwrap_err();
         assert!(matches!(err, TeeAttestationPolicyError::NoActivePolicy));
-        let last = store.governance_ledger().last().expect("serde deserialization should succeed");
+        let last = store
+            .governance_ledger()
+            .last()
+            .expect("serde deserialization should succeed");
         assert_eq!(last.event, "quote_evaluation_failed");
         assert_eq!(last.outcome, "deny");
     }
@@ -3699,7 +3796,8 @@ mod tests {
     fn emitter_serde_no_synced_epoch() {
         let emitter = DecisionReceiptEmitter::new("e-no-sync");
         let json = serde_json::to_string(&emitter).expect("serde deserialization should succeed");
-        let back: DecisionReceiptEmitter = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DecisionReceiptEmitter =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(emitter, back);
         assert!(back.last_synced_policy_epoch.is_none());
     }
@@ -3719,7 +3817,8 @@ mod tests {
 
     #[test]
     fn signed_artifact_deterministic_id() {
-        let signing_key = SigningKey::from_bytes([7u8; 32]).expect("serde deserialization should succeed");
+        let signing_key =
+            SigningKey::from_bytes([7u8; 32]).expect("serde deserialization should succeed");
         let input = TrustRootOverrideArtifactInput {
             actor: "op".to_string(),
             justification: "determ test".to_string(),
@@ -3729,9 +3828,10 @@ mod tests {
             issued_epoch: SecurityEpoch::from_raw(1),
             expires_epoch: SecurityEpoch::from_raw(5),
         };
-        let a1 =
-            SignedTrustRootOverrideArtifact::create_signed(&signing_key, input.clone()).expect("serde deserialization should succeed");
-        let a2 = SignedTrustRootOverrideArtifact::create_signed(&signing_key, input).expect("serde deserialization should succeed");
+        let a1 = SignedTrustRootOverrideArtifact::create_signed(&signing_key, input.clone())
+            .expect("serde deserialization should succeed");
+        let a2 = SignedTrustRootOverrideArtifact::create_signed(&signing_key, input)
+            .expect("serde deserialization should succeed");
         assert_eq!(a1.artifact_id, a2.artifact_id);
     }
 
@@ -3797,7 +3897,8 @@ mod tests {
     fn tee_platform_serde_roundtrip_all() {
         for p in TeePlatform::ALL {
             let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
-            let back: TeePlatform = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: TeePlatform =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(back, p);
         }
     }
@@ -3810,7 +3911,8 @@ mod tests {
             MeasurementAlgorithm::Sha512,
         ] {
             let json = serde_json::to_string(&a).expect("serde deserialization should succeed");
-            let back: MeasurementAlgorithm = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: MeasurementAlgorithm =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(back, a);
         }
     }
@@ -3825,7 +3927,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: RevocationSourceType = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: RevocationSourceType =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, v);
         }
     }
@@ -3837,7 +3940,8 @@ mod tests {
             RevocationFallback::FailClosed,
         ] {
             let json = serde_json::to_string(&f).expect("serde deserialization should succeed");
-            let back: RevocationFallback = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: RevocationFallback =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(back, f);
         }
     }
@@ -3852,7 +3956,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: TrustRootPinning = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: TrustRootPinning =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, v);
         }
     }
@@ -3868,7 +3973,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: TrustRootSource = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: TrustRootSource =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, v);
         }
     }
@@ -3877,7 +3983,8 @@ mod tests {
     fn decision_impact_serde_roundtrip() {
         for d in [DecisionImpact::Standard, DecisionImpact::HighImpact] {
             let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
-            let back: DecisionImpact = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: DecisionImpact =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(back, d);
         }
     }
@@ -3890,7 +3997,8 @@ mod tests {
             RevocationProbeStatus::Unavailable,
         ] {
             let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
-            let back: RevocationProbeStatus = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: RevocationProbeStatus =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(back, s);
         }
     }
@@ -3902,7 +4010,8 @@ mod tests {
             digest_hex: "a".repeat(64),
         };
         let json = serde_json::to_string(&digest).expect("serde deserialization should succeed");
-        let back: MeasurementDigest = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: MeasurementDigest =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, digest);
     }
 

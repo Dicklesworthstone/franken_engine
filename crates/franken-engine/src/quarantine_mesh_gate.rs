@@ -853,7 +853,10 @@ mod tests {
 
         // SAFETY: Test runner always generates at least one event (gate_validation_complete).
         // The events vector is guaranteed to be non-empty for valid test results.
-        let final_event = result.events.last().expect("serde deserialization should succeed");
+        let final_event = result
+            .events
+            .last()
+            .expect("serde deserialization should succeed");
         assert_eq!(final_event.event, "gate_validation_complete");
         assert_eq!(final_event.outcome, "pass");
     }
@@ -894,7 +897,8 @@ mod tests {
         let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid GateValidationResult,
         // so from_str back to GateValidationResult cannot fail (valid format + matching schema).
-        let back: GateValidationResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GateValidationResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, back);
     }
 
@@ -913,7 +917,8 @@ mod tests {
         let json = serde_json::to_string(&scenario).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid FaultScenario,
         // so from_str back to FaultScenario cannot fail (valid format + matching schema).
-        let back: FaultScenario = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: FaultScenario =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(scenario, back);
     }
 
@@ -939,7 +944,8 @@ mod tests {
         let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid FaultScenarioResult,
         // so from_str back to FaultScenarioResult cannot fail (valid format + matching schema).
-        let back: FaultScenarioResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: FaultScenarioResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, back);
     }
 
@@ -961,7 +967,8 @@ mod tests {
             receipt_hash: None,
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let back: GateValidationEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GateValidationEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
     }
 
@@ -973,7 +980,8 @@ mod tests {
             detail: "failed reason".to_string(),
         };
         let json = serde_json::to_string(&cr).expect("serde deserialization should succeed");
-        let back: CriterionResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: CriterionResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cr, back);
     }
 
@@ -1076,7 +1084,8 @@ mod tests {
         ];
         for ft in &variants {
             let json = serde_json::to_string(ft).expect("serde deserialization should succeed");
-            let back: FaultType = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: FaultType =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*ft, back);
         }
     }
@@ -1289,7 +1298,8 @@ mod tests {
             receipt_hash: Some("abc123".to_string()),
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let back: GateValidationEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GateValidationEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
     }
 
@@ -1311,7 +1321,8 @@ mod tests {
             receipt_hash: None,
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let back: GateValidationEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GateValidationEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
     }
 
@@ -1330,7 +1341,8 @@ mod tests {
             seed: 0,
         };
         let json = serde_json::to_string(&scenario).expect("serde deserialization should succeed");
-        let back: FaultScenario = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: FaultScenario =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(scenario, back);
     }
 
@@ -1352,7 +1364,8 @@ mod tests {
             recovery_verified: false,
         };
         let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
-        let back: FaultScenarioResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: FaultScenarioResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, back);
     }
 
@@ -1378,7 +1391,10 @@ mod tests {
         let mut runner = QuarantineMeshGateRunner::new(42);
         let result = runner.run_all();
         assert!(result.passed);
-        let final_ev = result.events.last().expect("serde deserialization should succeed");
+        let final_ev = result
+            .events
+            .last()
+            .expect("serde deserialization should succeed");
         assert!(final_ev.error_code.is_none());
     }
 
@@ -1540,7 +1556,8 @@ mod tests {
         let mut runner = QuarantineMeshGateRunner::new(u64::MAX);
         let result = runner.run_all();
         let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
-        let back: GateValidationResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GateValidationResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, back);
     }
 

@@ -1136,7 +1136,8 @@ mod tests {
     fn test_workload_class_serde_roundtrip() {
         for wc in WorkloadClass::ALL {
             let json = serde_json::to_string(wc).expect("serde deserialization should succeed");
-            let back: WorkloadClass = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: WorkloadClass =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*wc, back);
         }
     }
@@ -1164,9 +1165,11 @@ mod tests {
 
     #[test]
     fn test_surface_serde() {
-        let json = serde_json::to_string(&Surface::Cli).expect("serde deserialization should succeed");
+        let json =
+            serde_json::to_string(&Surface::Cli).expect("serde deserialization should succeed");
         assert_eq!(json, "\"cli\"");
-        let back: Surface = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: Surface =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, Surface::Cli);
     }
 
@@ -1201,7 +1204,8 @@ mod tests {
     fn test_artifact_kind_serde_roundtrip() {
         for k in ArtifactKind::ALL {
             let json = serde_json::to_string(k).expect("serde deserialization should succeed");
-            let back: ArtifactKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ArtifactKind =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*k, back);
         }
     }
@@ -1274,7 +1278,8 @@ mod tests {
             WorkloadClass::Cjs,
         );
         let json = serde_json::to_string(&a).expect("serde deserialization should succeed");
-        let back: CapturedArtifact = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: CapturedArtifact =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(a, back);
     }
 
@@ -1300,7 +1305,8 @@ mod tests {
     fn test_mismatch_class_serde_roundtrip() {
         for mc in MismatchClass::ALL {
             let json = serde_json::to_string(mc).expect("serde deserialization should succeed");
-            let back: MismatchClass = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: MismatchClass =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*mc, back);
         }
     }
@@ -1332,7 +1338,8 @@ mod tests {
     fn test_severity_serde_roundtrip() {
         for s in MismatchSeverity::ALL {
             let json = serde_json::to_string(s).expect("serde deserialization should succeed");
-            let back: MismatchSeverity = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: MismatchSeverity =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*s, back);
         }
     }
@@ -1367,8 +1374,10 @@ mod tests {
 
     #[test]
     fn test_cell_verdict_serde() {
-        let json = serde_json::to_string(&CellVerdict::Fail).expect("serde deserialization should succeed");
-        let back: CellVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&CellVerdict::Fail)
+            .expect("serde deserialization should succeed");
+        let back: CellVerdict =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, CellVerdict::Fail);
     }
 
@@ -1664,7 +1673,8 @@ mod tests {
     fn test_config_serde_roundtrip() {
         let cfg = MatrixConfig::default();
         let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
-        let back: MatrixConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: MatrixConfig =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cfg, back);
     }
 
@@ -1714,7 +1724,8 @@ mod tests {
         let r =
             DecisionReceipt::compute(&epoch(), ContentHash::compute(b"x"), CellVerdict::Fail, 999);
         let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
-        let back: DecisionReceipt = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DecisionReceipt =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 
@@ -1755,7 +1766,8 @@ mod tests {
             .iter()
             .map(|wc| passing_cell(*wc))
             .collect();
-        let report = evaluate_matrix(&cells, &cfg, &epoch(), 1000).expect("serde deserialization should succeed");
+        let report = evaluate_matrix(&cells, &cfg, &epoch(), 1000)
+            .expect("serde deserialization should succeed");
         assert_eq!(report.overall_verdict, CellVerdict::Pass);
         assert_eq!(report.total_mismatches, 0);
         assert_eq!(report.critical_count, 0);
@@ -1769,7 +1781,8 @@ mod tests {
             passing_cell(WorkloadClass::PureJs),
             failing_cell(WorkloadClass::PureTs),
         ];
-        let report = evaluate_matrix(&cells, &cfg, &epoch(), 0).expect("serde deserialization should succeed");
+        let report = evaluate_matrix(&cells, &cfg, &epoch(), 0)
+            .expect("serde deserialization should succeed");
         assert_eq!(report.overall_verdict, CellVerdict::Fail);
         assert_eq!(report.critical_count, 1);
     }
@@ -1787,7 +1800,8 @@ mod tests {
                 CellVerdict::Inconclusive,
             ),
         ];
-        let report = evaluate_matrix(&cells, &cfg, &epoch(), 0).expect("serde deserialization should succeed");
+        let report = evaluate_matrix(&cells, &cfg, &epoch(), 0)
+            .expect("serde deserialization should succeed");
         assert_eq!(report.overall_verdict, CellVerdict::Inconclusive);
     }
 
@@ -1804,7 +1818,8 @@ mod tests {
                 CellVerdict::Inconclusive,
             ),
         ];
-        let report = evaluate_matrix(&cells, &cfg, &epoch(), 0).expect("serde deserialization should succeed");
+        let report = evaluate_matrix(&cells, &cfg, &epoch(), 0)
+            .expect("serde deserialization should succeed");
         assert_eq!(report.overall_verdict, CellVerdict::Fail);
     }
 
@@ -1812,7 +1827,8 @@ mod tests {
     fn test_evaluate_report_receipt_present() {
         let cfg = relaxed_config();
         let cells = vec![passing_cell(WorkloadClass::PureJs)];
-        let report = evaluate_matrix(&cells, &cfg, &epoch(), 42_000).expect("serde deserialization should succeed");
+        let report = evaluate_matrix(&cells, &cfg, &epoch(), 42_000)
+            .expect("serde deserialization should succeed");
         assert_eq!(report.receipt.timestamp_micros, 42_000);
         assert_eq!(report.receipt.schema_version, SCHEMA_VERSION);
     }
@@ -1821,7 +1837,8 @@ mod tests {
     fn test_evaluate_input_hash_distinguishes_missing_mismatch_hashes() {
         let cfg = relaxed_config();
         let some_hash_report =
-            evaluate_matrix(&[failing_cell(WorkloadClass::PureJs)], &cfg, &epoch(), 0).expect("serde deserialization should succeed");
+            evaluate_matrix(&[failing_cell(WorkloadClass::PureJs)], &cfg, &epoch(), 0)
+                .expect("serde deserialization should succeed");
         let missing_hash_cell = MatrixCell::new(
             WorkloadClass::PureJs,
             vec![],
@@ -1838,7 +1855,8 @@ mod tests {
             }],
             CellVerdict::Fail,
         );
-        let missing_hash_report = evaluate_matrix(&[missing_hash_cell], &cfg, &epoch(), 0).expect("serde deserialization should succeed");
+        let missing_hash_report = evaluate_matrix(&[missing_hash_cell], &cfg, &epoch(), 0)
+            .expect("serde deserialization should succeed");
         assert_ne!(
             some_hash_report.receipt.input_hash, missing_hash_report.receipt.input_hash,
             "matrix input hash should encode whether mismatch content hashes are present"
@@ -1877,7 +1895,8 @@ mod tests {
     fn test_matrix_error_serde_roundtrip() {
         let e = MatrixError::NoCells;
         let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
-        let back: MatrixError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: MatrixError =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(e, back);
     }
 
@@ -1932,9 +1951,11 @@ mod tests {
     fn test_report_serde_roundtrip() {
         let cfg = relaxed_config();
         let cells = vec![passing_cell(WorkloadClass::PureJs)];
-        let report = evaluate_matrix(&cells, &cfg, &epoch(), 1).expect("serde deserialization should succeed");
+        let report = evaluate_matrix(&cells, &cfg, &epoch(), 1)
+            .expect("serde deserialization should succeed");
         let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
-        let back: MatrixReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: MatrixReport =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report, back);
     }
 

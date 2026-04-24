@@ -1476,7 +1476,9 @@ pub fn hsp_corpus() -> Vec<HspSpecimen> {
             50,
         );
         for seq in 1..=10 {
-            state.check_replay(seq, seq * 10, None).expect("serde deserialization should succeed");
+            state
+                .check_replay(seq, seq * 10, None)
+                .expect("serde deserialization should succeed");
         }
         let replay_err = state.check_replay(5, 110, None).is_err();
         let tc = state.transition_history.len();
@@ -1544,7 +1546,9 @@ pub fn hsp_corpus() -> Vec<HspSpecimen> {
                 ContentHash::compute(purpose.domain_label().as_bytes()),
             );
         }
-        state.attach_key_schedule(ks).expect("serde deserialization should succeed");
+        state
+            .attach_key_schedule(ks)
+            .expect("serde deserialization should succeed");
         let mismatch = state.validate_epoch(SecurityEpoch::from_raw(99)).is_err();
         let tc = state.transition_history.len();
         corpus.push(HspSpecimen {
@@ -1628,9 +1632,15 @@ pub fn hsp_corpus() -> Vec<HspSpecimen> {
                 ContentHash::compute(purpose.domain_label().as_bytes()),
             );
         }
-        state.attach_key_schedule(ks).expect("serde deserialization should succeed");
-        state.check_replay(1, 10, None).expect("serde deserialization should succeed");
-        state.check_replay(2, 20, None).expect("serde deserialization should succeed");
+        state
+            .attach_key_schedule(ks)
+            .expect("serde deserialization should succeed");
+        state
+            .check_replay(1, 10, None)
+            .expect("serde deserialization should succeed");
+        state
+            .check_replay(2, 20, None)
+            .expect("serde deserialization should succeed");
         state
             .enter_degraded(DegradedSeverity::StaleKey, "rekey".into(), 30)
             .expect("serde deserialization should succeed");
@@ -2018,7 +2028,8 @@ mod tests {
     fn phase_tag_serde_roundtrip() {
         for tag in SessionPhaseTag::ALL {
             let json = serde_json::to_string(tag).expect("serde deserialization should succeed");
-            let back: SessionPhaseTag = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: SessionPhaseTag =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*tag, back);
         }
     }
@@ -2146,7 +2157,8 @@ mod tests {
         ];
         for t in &triggers {
             let json = serde_json::to_string(t).expect("serde deserialization should succeed");
-            let back: TransitionTrigger = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: TransitionTrigger =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*t, back);
         }
     }
@@ -2215,7 +2227,8 @@ mod tests {
     fn key_schedule_serde_roundtrip() {
         let ks = make_key_schedule();
         let json = serde_json::to_string(&ks).expect("serde deserialization should succeed");
-        let back: SessionKeySchedule = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SessionKeySchedule =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ks.session_id, back.session_id);
         assert_eq!(ks.derived_stages.len(), back.derived_stages.len());
     }
@@ -2336,7 +2349,8 @@ mod tests {
         ledger.check_and_record(1, 1, None);
         ledger.check_and_record(2, 2, None);
         let json = serde_json::to_string(&ledger).expect("serde deserialization should succeed");
-        let back: AntiReplayLedger = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: AntiReplayLedger =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.total_accepted(), 2);
         assert_eq!(back.session_id(), "sess");
     }
@@ -2370,7 +2384,8 @@ mod tests {
             ReplayVerdict::AboveCeiling,
         ] {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: ReplayVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ReplayVerdict =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -2429,7 +2444,8 @@ mod tests {
     fn degraded_policy_serde_roundtrip() {
         let p = DegradedModePolicy::permissive(DegradedSeverity::PartialMacFailure);
         let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
-        let back: DegradedModePolicy = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DegradedModePolicy =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(p.severity, back.severity);
         assert_eq!(p.allow_readonly_hostcalls, back.allow_readonly_hostcalls);
     }
@@ -2470,7 +2486,8 @@ mod tests {
         ];
         for e in &errors {
             let json = serde_json::to_string(e).expect("serde deserialization should succeed");
-            let back: ProtocolError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ProtocolError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*e, back);
         }
     }
@@ -2578,7 +2595,9 @@ mod tests {
     fn state_machine_attach_key_schedule() {
         let mut state = make_state();
         let ks = make_key_schedule();
-        state.attach_key_schedule(ks).expect("serde deserialization should succeed");
+        state
+            .attach_key_schedule(ks)
+            .expect("serde deserialization should succeed");
         assert!(state.key_schedule.is_some());
     }
 
@@ -2600,7 +2619,9 @@ mod tests {
     fn state_machine_epoch_validation() {
         let mut state = make_state();
         let ks = make_key_schedule();
-        state.attach_key_schedule(ks).expect("serde deserialization should succeed");
+        state
+            .attach_key_schedule(ks)
+            .expect("serde deserialization should succeed");
 
         assert!(state.validate_epoch(test_epoch()).is_ok());
         assert!(state.validate_epoch(SecurityEpoch::from_raw(99)).is_err());
@@ -2720,7 +2741,10 @@ mod tests {
             .expect("serde deserialization should succeed");
 
         // Exhaust the budget.
-        let policy = state.degraded_policy.as_ref().expect("serde deserialization should succeed");
+        let policy = state
+            .degraded_policy
+            .as_ref()
+            .expect("serde deserialization should succeed");
         let limit = policy.max_degraded_messages;
         for _ in 0..limit {
             state.record_degraded_message();
@@ -2741,7 +2765,8 @@ mod tests {
             )
             .expect("serde deserialization should succeed");
         let json = serde_json::to_string(&state).expect("serde deserialization should succeed");
-        let back: SessionProtocolState = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SessionProtocolState =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.phase, SessionPhaseTag::Negotiating);
         assert_eq!(back.session_id, "sess-001");
     }
@@ -2826,7 +2851,10 @@ mod tests {
             .enter_degraded(DegradedSeverity::StaleKey, "stale".into(), 100)
             .expect("serde deserialization should succeed");
 
-        let policy = state.degraded_policy.as_ref().expect("serde deserialization should succeed");
+        let policy = state
+            .degraded_policy
+            .as_ref()
+            .expect("serde deserialization should succeed");
         let max_ticks = policy.max_degraded_ticks;
 
         // Within budget.

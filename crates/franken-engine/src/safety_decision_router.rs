@@ -878,8 +878,10 @@ mod tests {
     #[test]
     fn safety_action_serde_roundtrip() {
         for &action in SafetyAction::all() {
-            let json = serde_json::to_string(&action).expect("serde deserialization should succeed");
-            let restored: SafetyAction = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&action).expect("serde deserialization should succeed");
+            let restored: SafetyAction =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(action, restored);
         }
     }
@@ -963,7 +965,8 @@ mod tests {
         ];
         for v in &verdicts {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let restored: SafetyVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: SafetyVerdict =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, restored);
         }
     }
@@ -1018,7 +1021,8 @@ mod tests {
     fn safety_contract_bayes_action_with_safe_posterior_is_allow() {
         let c = SafetyContract::default_for(SafetyAction::BudgetOverride);
         // Posterior strongly favoring "safe" state.
-        let posterior = Posterior::new(vec![0.99, 0.01]).expect("serde deserialization should succeed");
+        let posterior =
+            Posterior::new(vec![0.99, 0.01]).expect("serde deserialization should succeed");
         // expected_loss(allow) = 0.99*0.0 + 0.01*0.9 = 0.009
         // expected_loss(deny)  = 0.99*0.1 + 0.01*0.0 = 0.099
         let action_idx = c.choose_action(&posterior);
@@ -1033,11 +1037,14 @@ mod tests {
             *router
                 .posteriors
                 .get_mut(&SafetyAction::ExtensionQuarantine)
-                .expect("registered posterior") = Posterior::new(vec![0.99, 0.01]).expect("serde deserialization should succeed");
+                .expect("registered posterior") =
+                Posterior::new(vec![0.99, 0.01]).expect("serde deserialization should succeed");
 
             let mut cx = test_cx(100);
             let request = test_request(SafetyAction::ExtensionQuarantine, 42);
-            let result = router.evaluate(&mut cx, &request).expect("serde deserialization should succeed");
+            let result = router
+                .evaluate(&mut cx, &request)
+                .expect("serde deserialization should succeed");
             assert!(
                 result.verdict.is_allow(),
                 "{action_name} should permit the safety action"
@@ -1055,11 +1062,14 @@ mod tests {
             *router
                 .posteriors
                 .get_mut(&SafetyAction::ExtensionQuarantine)
-                .expect("registered posterior") = Posterior::new(vec![0.01, 0.99]).expect("serde deserialization should succeed");
+                .expect("registered posterior") =
+                Posterior::new(vec![0.01, 0.99]).expect("serde deserialization should succeed");
 
             let mut cx = test_cx(100);
             let request = test_request(SafetyAction::ExtensionQuarantine, 43);
-            let result = router.evaluate(&mut cx, &request).expect("serde deserialization should succeed");
+            let result = router
+                .evaluate(&mut cx, &request)
+                .expect("serde deserialization should succeed");
             assert!(
                 matches!(result.verdict, SafetyVerdict::Deny { .. }),
                 "{action_name} should deny the safety action"
@@ -1081,7 +1091,8 @@ mod tests {
     fn safety_contract_serde_roundtrip() {
         let c = SafetyContract::default_for(SafetyAction::CrossExtensionShare);
         let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
-        let restored: SafetyContract = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: SafetyContract =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c.action_type(), restored.action_type());
         assert_eq!(c.name(), restored.name());
     }
@@ -1128,7 +1139,9 @@ mod tests {
         r.register_all_defaults();
         let mut cx = test_cx(100);
         let req = test_request(SafetyAction::ExtensionQuarantine, 1);
-        let result = r.evaluate(&mut cx, &req).expect("serde deserialization should succeed");
+        let result = r
+            .evaluate(&mut cx, &req)
+            .expect("serde deserialization should succeed");
         // With uniform prior and safety-biased loss, expect deny.
         assert!(
             matches!(result.verdict, SafetyVerdict::Deny { .. }),
@@ -1145,12 +1158,16 @@ mod tests {
         let mut r = SafetyDecisionRouter::new();
         r.register_all_defaults();
         // Force the posterior to strongly favor "safe".
-        *r.posteriors.get_mut(&SafetyAction::BudgetOverride).expect("serde deserialization should succeed") =
+        *r.posteriors
+            .get_mut(&SafetyAction::BudgetOverride)
+            .expect("serde deserialization should succeed") =
             Posterior::new(vec![0.99, 0.01]).expect("serde deserialization should succeed");
 
         let mut cx = test_cx(100);
         let req = test_request(SafetyAction::BudgetOverride, 2);
-        let result = r.evaluate(&mut cx, &req).expect("serde deserialization should succeed");
+        let result = r
+            .evaluate(&mut cx, &req)
+            .expect("serde deserialization should succeed");
         assert!(result.verdict.is_allow());
     }
 
@@ -1160,7 +1177,8 @@ mod tests {
         r.register_all_defaults();
         let mut cx = test_cx(100);
         let req = test_request(SafetyAction::ForcedTermination, 3);
-        r.evaluate(&mut cx, &req).expect("serde deserialization should succeed");
+        r.evaluate(&mut cx, &req)
+            .expect("serde deserialization should succeed");
         assert_eq!(r.evidence().len(), 1);
     }
 
@@ -1170,7 +1188,8 @@ mod tests {
         r.register_all_defaults();
         let mut cx = test_cx(100);
         let req = test_request(SafetyAction::CapabilityRevocation, 4);
-        r.evaluate(&mut cx, &req).expect("serde deserialization should succeed");
+        r.evaluate(&mut cx, &req)
+            .expect("serde deserialization should succeed");
         let events = r.drain_events();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].component, "safety_decision_router");
@@ -1183,7 +1202,8 @@ mod tests {
         r.register_all_defaults();
         let mut cx = test_cx(100);
         let req = test_request(SafetyAction::PrivilegeEscalation, 5);
-        r.evaluate(&mut cx, &req).expect("serde deserialization should succeed");
+        r.evaluate(&mut cx, &req)
+            .expect("serde deserialization should succeed");
         assert_eq!(
             cx.budget().remaining_ms(),
             100 - SAFETY_DECISION_BUDGET_COST_MS
@@ -1215,7 +1235,13 @@ mod tests {
         assert!(matches!(err, SafetyRouterError::BudgetExhausted { .. }));
         assert_eq!(r.decision_count(), u64::MAX);
         assert_eq!(r.deny_count(), u64::MAX);
-        assert_eq!(r.results().last().expect("serde deserialization should succeed").sequence_number, u64::MAX);
+        assert_eq!(
+            r.results()
+                .last()
+                .expect("serde deserialization should succeed")
+                .sequence_number,
+            u64::MAX
+        );
     }
 
     #[test]
@@ -1235,7 +1261,9 @@ mod tests {
         let mut cx = test_cx(100);
         let trace_str = cx.trace_id().to_string();
         let req = test_request(SafetyAction::ExtensionQuarantine, 8);
-        let result = r.evaluate(&mut cx, &req).expect("serde deserialization should succeed");
+        let result = r
+            .evaluate(&mut cx, &req)
+            .expect("serde deserialization should succeed");
         assert_eq!(result.trace_id, trace_str);
     }
 
@@ -1253,7 +1281,8 @@ mod tests {
             .probs()
             .to_vec();
         // Observe "safe" state.
-        r.observe(SafetyAction::ExtensionQuarantine, 0).expect("serde deserialization should succeed");
+        r.observe(SafetyAction::ExtensionQuarantine, 0)
+            .expect("serde deserialization should succeed");
         let after = r
             .posterior(SafetyAction::ExtensionQuarantine)
             .expect("serde deserialization should succeed")
@@ -1276,11 +1305,14 @@ mod tests {
         r.register_all_defaults();
         // Many "safe" observations should shift posterior toward allow.
         for _ in 0..20 {
-            r.observe(SafetyAction::BudgetOverride, 0).expect("serde deserialization should succeed");
+            r.observe(SafetyAction::BudgetOverride, 0)
+                .expect("serde deserialization should succeed");
         }
         let mut cx = test_cx(100);
         let req = test_request(SafetyAction::BudgetOverride, 9);
-        let result = r.evaluate(&mut cx, &req).expect("serde deserialization should succeed");
+        let result = r
+            .evaluate(&mut cx, &req)
+            .expect("serde deserialization should succeed");
         // After many safe observations, should allow.
         assert!(result.verdict.is_allow());
     }
@@ -1294,7 +1326,9 @@ mod tests {
         let mut r = SafetyDecisionRouter::new();
         r.register_all_defaults();
         // Force safe posterior so normal eval would allow.
-        *r.posteriors.get_mut(&SafetyAction::BudgetOverride).expect("serde deserialization should succeed") =
+        *r.posteriors
+            .get_mut(&SafetyAction::BudgetOverride)
+            .expect("serde deserialization should succeed") =
             Posterior::new(vec![0.99, 0.01]).expect("serde deserialization should succeed");
 
         let mut cx = test_cx(100);
@@ -1302,7 +1336,9 @@ mod tests {
         // Set calibration below threshold (0.7 default).
         req.calibration_score_bps = 5_000; // 0.50
 
-        let result = r.evaluate(&mut cx, &req).expect("serde deserialization should succeed");
+        let result = r
+            .evaluate(&mut cx, &req)
+            .expect("serde deserialization should succeed");
         assert!(matches!(result.verdict, SafetyVerdict::Fallback { .. }));
         assert!(result.fallback_active);
         assert_eq!(r.fallback_count(), 1);
@@ -1314,14 +1350,17 @@ mod tests {
         r.register_all_defaults();
         *r.posteriors
             .get_mut(&SafetyAction::PrivilegeEscalation)
-            .expect("serde deserialization should succeed") = Posterior::new(vec![0.99, 0.01]).expect("serde deserialization should succeed");
+            .expect("serde deserialization should succeed") =
+            Posterior::new(vec![0.99, 0.01]).expect("serde deserialization should succeed");
 
         let mut cx = test_cx(100);
         let mut req = test_request(SafetyAction::PrivilegeEscalation, 11);
         // Set e-process above threshold (20.0 default).
         req.e_process_milli = 25_000; // 25.0
 
-        let result = r.evaluate(&mut cx, &req).expect("serde deserialization should succeed");
+        let result = r
+            .evaluate(&mut cx, &req)
+            .expect("serde deserialization should succeed");
         assert!(matches!(result.verdict, SafetyVerdict::Fallback { .. }));
     }
 
@@ -1371,7 +1410,8 @@ mod tests {
     fn safety_decision_request_serde_roundtrip() {
         let req = test_request(SafetyAction::CrossExtensionShare, 42);
         let json = serde_json::to_string(&req).expect("serde deserialization should succeed");
-        let restored: SafetyDecisionRequest = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: SafetyDecisionRequest =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(req, restored);
     }
 
@@ -1392,7 +1432,8 @@ mod tests {
             sequence_number: 1,
         };
         let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
-        let restored: SafetyDecisionResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: SafetyDecisionResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, restored);
     }
 
@@ -1409,7 +1450,8 @@ mod tests {
             error_code: None,
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let restored: SafetyDecisionEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: SafetyDecisionEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, restored);
     }
 
@@ -1432,7 +1474,8 @@ mod tests {
         ];
         for e in &errors {
             let json = serde_json::to_string(e).expect("serde deserialization should succeed");
-            let restored: SafetyRouterError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: SafetyRouterError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*e, restored);
         }
     }
@@ -1461,7 +1504,8 @@ mod tests {
             fallbacks: 2,
         };
         let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
-        let restored: ActionSummary = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: ActionSummary =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(s, restored);
     }
 
@@ -1476,7 +1520,8 @@ mod tests {
             r.register_all_defaults();
             let mut cx = test_cx(100);
             let req = test_request(SafetyAction::ExtensionQuarantine, 1);
-            r.evaluate(&mut cx, &req).expect("serde deserialization should succeed")
+            r.evaluate(&mut cx, &req)
+                .expect("serde deserialization should succeed")
         };
         let r1 = run();
         let r2 = run();
@@ -1503,7 +1548,9 @@ mod tests {
         // index wins (allow at index 0).
         let mut cx = test_cx(100);
         let req = test_request(SafetyAction::CrossExtensionShare, 20);
-        let result = r.evaluate(&mut cx, &req).expect("serde deserialization should succeed");
+        let result = r
+            .evaluate(&mut cx, &req)
+            .expect("serde deserialization should succeed");
         assert!(result.verdict.is_allow());
     }
 
@@ -1523,11 +1570,14 @@ mod tests {
         // the Bayes-optimal action.
         *r.posteriors
             .get_mut(&SafetyAction::ForcedTermination)
-            .expect("serde deserialization should succeed") = Posterior::new(vec![0.99, 0.01]).expect("serde deserialization should succeed");
+            .expect("serde deserialization should succeed") =
+            Posterior::new(vec![0.99, 0.01]).expect("serde deserialization should succeed");
 
         let mut cx = test_cx(100);
         let req = test_request(SafetyAction::ForcedTermination, 21);
-        let result = r.evaluate(&mut cx, &req).expect("serde deserialization should succeed");
+        let result = r
+            .evaluate(&mut cx, &req)
+            .expect("serde deserialization should succeed");
         assert!(
             matches!(result.verdict, SafetyVerdict::Deny { .. }),
             "expected deny with highly asymmetric loss"
@@ -1655,7 +1705,8 @@ mod tests {
         r.register_all_defaults();
         let mut cx = test_cx(100);
         let req = test_request(SafetyAction::ExtensionQuarantine, 1);
-        r.evaluate(&mut cx, &req).expect("serde deserialization should succeed");
+        r.evaluate(&mut cx, &req)
+            .expect("serde deserialization should succeed");
         assert_eq!(r.drain_events().len(), 1);
         assert!(
             r.drain_events().is_empty(),
@@ -1676,7 +1727,9 @@ mod tests {
         let mut last_seq = 0;
         for i in 0..5u64 {
             let req = test_request(SafetyAction::ExtensionQuarantine, i);
-            let result = r.evaluate(&mut cx, &req).expect("serde deserialization should succeed");
+            let result = r
+                .evaluate(&mut cx, &req)
+                .expect("serde deserialization should succeed");
             assert!(
                 result.sequence_number > last_seq,
                 "sequence must be monotonically increasing"
@@ -1758,7 +1811,8 @@ mod tests {
         ];
         for v in &verdicts {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: SafetyVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: SafetyVerdict =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -1782,7 +1836,8 @@ mod tests {
         ];
         for e in &errors {
             let json = serde_json::to_string(e).expect("serde deserialization should succeed");
-            let back: SafetyRouterError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: SafetyRouterError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*e, back);
         }
     }
@@ -1822,7 +1877,8 @@ mod tests {
         ];
         for (i, action) in actions.iter().enumerate() {
             let req = test_request(*action, i as u64);
-            r.evaluate(&mut cx, &req).expect("serde deserialization should succeed");
+            r.evaluate(&mut cx, &req)
+                .expect("serde deserialization should succeed");
         }
 
         assert_eq!(r.decision_count(), 3);
@@ -1835,7 +1891,8 @@ mod tests {
         r.register_all_defaults();
         let mut cx = test_cx(200);
         let req = test_request(SafetyAction::ExtensionQuarantine, 0);
-        r.evaluate(&mut cx, &req).expect("serde deserialization should succeed");
+        r.evaluate(&mut cx, &req)
+            .expect("serde deserialization should succeed");
 
         let events = r.drain_events();
         assert!(!events.is_empty());
@@ -1874,7 +1931,8 @@ mod tests {
             error_code: None,
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let back: SafetyDecisionEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SafetyDecisionEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
     }
 
@@ -1887,7 +1945,8 @@ mod tests {
             fallbacks: 2,
         };
         let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
-        let back: ActionSummary = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ActionSummary =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(s, back);
     }
 
@@ -1895,7 +1954,8 @@ mod tests {
     fn safety_action_serde_roundtrip_batch2() {
         for action in SafetyAction::all() {
             let json = serde_json::to_string(action).expect("serde deserialization should succeed");
-            let back: SafetyAction = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: SafetyAction =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*action, back);
         }
     }
@@ -2095,7 +2155,8 @@ mod tests {
             ci_width_milli: 0,
         };
         let json = serde_json::to_string(&req).expect("serde deserialization should succeed");
-        let restored: SafetyDecisionRequest = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: SafetyDecisionRequest =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(req, restored);
     }
 

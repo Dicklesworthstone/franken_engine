@@ -995,7 +995,8 @@ mod tests {
     fn sibling_repo_serde_round_trip() {
         for repo in SiblingRepo::all() {
             let json = serde_json::to_string(repo).expect("serde deserialization should succeed");
-            let decoded: SiblingRepo = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let decoded: SiblingRepo =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*repo, decoded);
         }
     }
@@ -1059,7 +1060,8 @@ mod tests {
     fn semantic_version_serde_round_trip() {
         let v = SemanticVersion::new(1, 2, 3);
         let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
-        let decoded: SemanticVersion = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let decoded: SemanticVersion =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, decoded);
     }
 
@@ -1119,7 +1121,8 @@ mod tests {
             migration_path: None,
         };
         let json = serde_json::to_vec(&result).expect("serde deserialization should succeed");
-        let decoded: VersionNegotiationResult = serde_json::from_slice(&json).expect("serde deserialization should succeed");
+        let decoded: VersionNegotiationResult =
+            serde_json::from_slice(&json).expect("serde deserialization should succeed");
         assert_eq!(result, decoded);
     }
 
@@ -1178,7 +1181,12 @@ mod tests {
         let taxonomy = failure_taxonomy();
         let entry = classify_failure(&taxonomy, RegressionClass::Breaking);
         assert!(entry.is_some());
-        assert_eq!(entry.expect("serde deserialization should succeed").severity, FailureSeverity::Critical);
+        assert_eq!(
+            entry
+                .expect("serde deserialization should succeed")
+                .severity,
+            FailureSeverity::Critical
+        );
     }
 
     #[test]
@@ -1192,7 +1200,8 @@ mod tests {
     fn failure_taxonomy_serde_round_trip() {
         let taxonomy = failure_taxonomy();
         let json = serde_json::to_vec(&taxonomy).expect("serde deserialization should succeed");
-        let decoded: Vec<FailureTaxonomyEntry> = serde_json::from_slice(&json).expect("serde deserialization should succeed");
+        let decoded: Vec<FailureTaxonomyEntry> =
+            serde_json::from_slice(&json).expect("serde deserialization should succeed");
         assert_eq!(taxonomy, decoded);
     }
 
@@ -1294,7 +1303,8 @@ mod tests {
             reproduction_command: "cargo test --lib".to_string(),
         };
         let json = serde_json::to_vec(&artifact).expect("serde deserialization should succeed");
-        let decoded: ReplayArtifact = serde_json::from_slice(&json).expect("serde deserialization should succeed");
+        let decoded: ReplayArtifact =
+            serde_json::from_slice(&json).expect("serde deserialization should succeed");
         assert_eq!(artifact, decoded);
     }
 
@@ -1352,7 +1362,13 @@ mod tests {
         let catalog = build_canonical_catalog();
         let entry = catalog.get_entry("frankentui/adapter_envelope");
         assert!(entry.is_some());
-        assert_eq!(entry.expect("serde deserialization should succeed").boundary.sibling, SiblingRepo::Frankentui);
+        assert_eq!(
+            entry
+                .expect("serde deserialization should succeed")
+                .boundary
+                .sibling,
+            SiblingRepo::Frankentui
+        );
     }
 
     #[test]
@@ -1384,7 +1400,8 @@ mod tests {
     fn catalog_serde_round_trip() {
         let catalog = build_canonical_catalog();
         let json = serde_json::to_vec(&catalog).expect("serde deserialization should succeed");
-        let decoded: ConformanceCatalog = serde_json::from_slice(&json).expect("serde deserialization should succeed");
+        let decoded: ConformanceCatalog =
+            serde_json::from_slice(&json).expect("serde deserialization should succeed");
         assert_eq!(catalog, decoded);
     }
 
@@ -1541,7 +1558,8 @@ mod tests {
             ChangeKind::VectorRemoved,
         ] {
             let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
-            let decoded: ChangeKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let decoded: ChangeKind =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(kind, decoded);
         }
     }
@@ -1761,7 +1779,8 @@ mod tests {
             detail: "empty".to_string(),
         };
         let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
-        let decoded: CatalogValidationError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let decoded: CatalogValidationError =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, decoded);
     }
 
@@ -2290,7 +2309,8 @@ mod tests {
     fn semantic_version_max_fields() {
         let v = SemanticVersion::new(u32::MAX, u32::MAX, u32::MAX);
         let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
-        let decoded: SemanticVersion = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let decoded: SemanticVersion =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, decoded);
         assert_eq!(v.major, u32::MAX);
         assert_eq!(v.minor, u32::MAX);
@@ -2381,7 +2401,8 @@ mod tests {
             expected_regression_class: Some(RegressionClass::Breaking),
         };
         let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
-        let decoded: ConformanceVector = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let decoded: ConformanceVector =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, decoded);
     }
 
@@ -2395,7 +2416,8 @@ mod tests {
             expected_regression_class: None,
         };
         let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
-        let decoded: ConformanceVector = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let decoded: ConformanceVector =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, decoded);
         assert!(decoded.expected_regression_class.is_none());
     }
@@ -2479,7 +2501,8 @@ mod tests {
             approval_epoch: Some(42),
         };
         let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
-        let decoded: CatalogEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let decoded: CatalogEntry =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, decoded);
     }
 
@@ -2497,7 +2520,8 @@ mod tests {
             version_class: VersionClass::Minor,
         };
         let json = serde_json::to_string(&surface).expect("serde deserialization should succeed");
-        let decoded: BoundarySurface = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let decoded: BoundarySurface =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(surface, decoded);
     }
 
@@ -2509,7 +2533,8 @@ mod tests {
             required: true,
         };
         let json = serde_json::to_string(&fvc).expect("serde deserialization should succeed");
-        let decoded: FieldVersionCoverage = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let decoded: FieldVersionCoverage =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(fvc, decoded);
         assert_eq!(decoded.protected_at, VersionClass::Minor);
         assert!(decoded.required);
@@ -2547,7 +2572,12 @@ mod tests {
         ] {
             let entry = classify_failure(&taxonomy, class);
             assert!(entry.is_some(), "should find entry for {class:?}");
-            assert_eq!(entry.expect("serde deserialization should succeed").regression_class, class);
+            assert_eq!(
+                entry
+                    .expect("serde deserialization should succeed")
+                    .regression_class,
+                class
+            );
         }
     }
 
@@ -2595,8 +2625,18 @@ mod tests {
         let counts = catalog.entries_by_class();
         let total: usize = counts.values().sum();
         assert_eq!(total, catalog.entries.len());
-        assert_eq!(*counts.get(&RegressionClass::Breaking).expect("serde deserialization should succeed"), 2);
-        assert_eq!(*counts.get(&RegressionClass::Behavioral).expect("serde deserialization should succeed"), 1);
+        assert_eq!(
+            *counts
+                .get(&RegressionClass::Breaking)
+                .expect("serde deserialization should succeed"),
+            2
+        );
+        assert_eq!(
+            *counts
+                .get(&RegressionClass::Behavioral)
+                .expect("serde deserialization should succeed"),
+            1
+        );
     }
 
     #[test]
@@ -2635,7 +2675,8 @@ mod tests {
             migration_path: Some("migrate_v1_to_v2.sh".to_string()),
         };
         let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
-        let decoded: VersionNegotiationResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let decoded: VersionNegotiationResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, decoded);
         assert!(decoded.migration_required);
         assert_eq!(
@@ -2653,7 +2694,8 @@ mod tests {
             change_kind: ChangeKind::EntryModified,
         };
         let json = serde_json::to_string(&record).expect("serde deserialization should succeed");
-        let decoded: CatalogChangeRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let decoded: CatalogChangeRecord =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(record, decoded);
         assert_eq!(decoded.change_kind, ChangeKind::EntryModified);
     }
@@ -2727,7 +2769,10 @@ mod tests {
             set.insert(*repo);
         }
         assert_eq!(set.len(), 6);
-        let first = *set.iter().next().expect("serde deserialization should succeed");
+        let first = *set
+            .iter()
+            .next()
+            .expect("serde deserialization should succeed");
         // Asupersync should be first alphabetically
         assert_eq!(first, SiblingRepo::Asupersync);
     }

@@ -1810,7 +1810,8 @@ mod tests {
     fn serde_round_trip_locality_domain() {
         for domain in LocalityDomain::ALL {
             let json = serde_json::to_string(domain).expect("serde deserialization should succeed");
-            let back: LocalityDomain = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: LocalityDomain =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*domain, back);
         }
     }
@@ -1819,7 +1820,8 @@ mod tests {
     fn serde_round_trip_governance_decision() {
         for d in GovernanceDecision::ALL {
             let json = serde_json::to_string(d).expect("serde deserialization should succeed");
-            let back: GovernanceDecision = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: GovernanceDecision =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*d, back);
         }
     }
@@ -1829,7 +1831,8 @@ mod tests {
         let cache = good_cache_evidence();
         let result = evaluate(Some(&cache), None, None, None, &default_config());
         let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
-        let back: GateResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GateResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, back);
     }
 

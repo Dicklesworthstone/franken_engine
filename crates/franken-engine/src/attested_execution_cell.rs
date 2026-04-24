@@ -1280,9 +1280,13 @@ mod tests {
         let root = test_trust_root();
         let m = test_measurement(&root);
         // SAFETY: Test measurement with valid zone name should succeed
-        let id = m.derive_id("production").expect("serde deserialization should succeed");
+        let id = m
+            .derive_id("production")
+            .expect("serde deserialization should succeed");
         // SAFETY: Test measurement with valid zone name should succeed
-        let id2 = m.derive_id("production").expect("serde deserialization should succeed");
+        let id2 = m
+            .derive_id("production")
+            .expect("serde deserialization should succeed");
         assert_eq!(id, id2); // Deterministic.
     }
 
@@ -1291,9 +1295,13 @@ mod tests {
         let root = test_trust_root();
         let m = test_measurement(&root);
         // SAFETY: Test measurement with valid zone names should succeed
-        let id1 = m.derive_id("zone-a").expect("serde deserialization should succeed");
+        let id1 = m
+            .derive_id("zone-a")
+            .expect("serde deserialization should succeed");
         // SAFETY: Test measurement with valid zone names should succeed
-        let id2 = m.derive_id("zone-b").expect("serde deserialization should succeed");
+        let id2 = m
+            .derive_id("zone-b")
+            .expect("serde deserialization should succeed");
         assert_ne!(id1, id2);
     }
 
@@ -1304,7 +1312,8 @@ mod tests {
         // SAFETY: MeasurementDigest derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid MeasurementDigest serialization
-        let restored: MeasurementDigest = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: MeasurementDigest =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(m, restored);
     }
 
@@ -1329,7 +1338,8 @@ mod tests {
         // SAFETY: AttestationQuote derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&quote).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid AttestationQuote serialization
-        let restored: AttestationQuote = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: AttestationQuote =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(quote, restored);
     }
 
@@ -1557,11 +1567,15 @@ mod tests {
     fn create_cell_happy_path() {
         let mut reg = CellRegistry::new();
         // SAFETY: Test setup ensures create_cell succeeds with valid inputs
-        let cell_id = reg.create_cell(default_cell_input(), 1_000).expect("serde deserialization should succeed");
+        let cell_id = reg
+            .create_cell(default_cell_input(), 1_000)
+            .expect("serde deserialization should succeed");
         assert_eq!(reg.cell_count(), 1);
 
         // SAFETY: Cell was just created successfully, so get() with its ID cannot fail
-        let cell = reg.get(&format!("{cell_id}")).expect("serde deserialization should succeed");
+        let cell = reg
+            .get(&format!("{cell_id}"))
+            .expect("serde deserialization should succeed");
         assert_eq!(cell.lifecycle, CellLifecycle::Provisioning);
         assert_eq!(cell.function, CellFunction::DecisionReceiptSigner);
         assert_eq!(cell.zone, "production");
@@ -1603,7 +1617,8 @@ mod tests {
     #[test]
     fn create_cell_rejects_duplicate() {
         let mut reg = CellRegistry::new();
-        reg.create_cell(default_cell_input(), 1_000).expect("serde deserialization should succeed");
+        reg.create_cell(default_cell_input(), 1_000)
+            .expect("serde deserialization should succeed");
         assert!(matches!(
             reg.create_cell(default_cell_input(), 2_000),
             Err(CellError::Duplicate { .. })
@@ -1614,8 +1629,12 @@ mod tests {
     fn create_cell_deterministic_id() {
         let mut reg1 = CellRegistry::new();
         let mut reg2 = CellRegistry::new();
-        let id1 = reg1.create_cell(default_cell_input(), 1_000).expect("serde deserialization should succeed");
-        let id2 = reg2.create_cell(default_cell_input(), 2_000).expect("serde deserialization should succeed");
+        let id1 = reg1
+            .create_cell(default_cell_input(), 1_000)
+            .expect("serde deserialization should succeed");
+        let id2 = reg2
+            .create_cell(default_cell_input(), 2_000)
+            .expect("serde deserialization should succeed");
         assert_eq!(id1, id2);
     }
 
@@ -1627,7 +1646,9 @@ mod tests {
         let root = test_trust_root();
         let epoch = test_epoch();
         // SAFETY: Test setup ensures create_cell succeeds with valid inputs
-        let cell_id = reg.create_cell(default_cell_input(), 1_000).expect("serde deserialization should succeed");
+        let cell_id = reg
+            .create_cell(default_cell_input(), 1_000)
+            .expect("serde deserialization should succeed");
         let cid = format!("{cell_id}");
 
         // Measure.
@@ -1636,23 +1657,45 @@ mod tests {
         reg.measure_cell(&cid, measurement.clone(), 2_000, epoch)
             .expect("serde deserialization should succeed");
         // SAFETY: Cell exists and measure_cell just succeeded, so get() cannot fail
-        assert_eq!(reg.get(&cid).expect("serde deserialization should succeed").lifecycle, CellLifecycle::Measured);
+        assert_eq!(
+            reg.get(&cid)
+                .expect("serde deserialization should succeed")
+                .lifecycle,
+            CellLifecycle::Measured
+        );
 
         // Attest.
         let nonce = [7u8; 32];
         let quote = root.attest(&measurement, nonce, 10_000_000, 2_000);
         // SAFETY: attest_cell cannot fail with valid test inputs
-        reg.attest_cell(&cid, quote, 3_000, epoch).expect("serde deserialization should succeed");
+        reg.attest_cell(&cid, quote, 3_000, epoch)
+            .expect("serde deserialization should succeed");
         // SAFETY: get cannot fail for existing cell ID
-        assert_eq!(reg.get(&cid).expect("serde deserialization should succeed").lifecycle, CellLifecycle::Attested);
+        assert_eq!(
+            reg.get(&cid)
+                .expect("serde deserialization should succeed")
+                .lifecycle,
+            CellLifecycle::Attested
+        );
 
         // Activate.
         // SAFETY: activate_cell cannot fail with valid test inputs
-        reg.activate_cell(&cid, 4_000, epoch).expect("serde deserialization should succeed");
+        reg.activate_cell(&cid, 4_000, epoch)
+            .expect("serde deserialization should succeed");
         // SAFETY: get cannot fail for existing cell ID
-        assert_eq!(reg.get(&cid).expect("serde deserialization should succeed").lifecycle, CellLifecycle::Active);
+        assert_eq!(
+            reg.get(&cid)
+                .expect("serde deserialization should succeed")
+                .lifecycle,
+            CellLifecycle::Active
+        );
         // SAFETY: get cannot fail for existing cell ID
-        assert!(reg.get(&cid).expect("serde deserialization should succeed").lifecycle.is_operational());
+        assert!(
+            reg.get(&cid)
+                .expect("serde deserialization should succeed")
+                .lifecycle
+                .is_operational()
+        );
 
         // Decommission.
         // SAFETY: decommission_cell cannot fail with valid test inputs
@@ -1660,11 +1703,19 @@ mod tests {
             .expect("serde deserialization should succeed");
         assert_eq!(
             // SAFETY: get cannot fail for existing cell ID
-            reg.get(&cid).expect("serde deserialization should succeed").lifecycle,
+            reg.get(&cid)
+                .expect("serde deserialization should succeed")
+                .lifecycle,
             CellLifecycle::Decommissioned
         );
         // SAFETY: get cannot fail for existing cell ID
-        assert_eq!(reg.get(&cid).expect("serde deserialization should succeed").transition_receipts.len(), 4);
+        assert_eq!(
+            reg.get(&cid)
+                .expect("serde deserialization should succeed")
+                .transition_receipts
+                .len(),
+            4
+        );
     }
 
     #[test]
@@ -1673,45 +1724,69 @@ mod tests {
         let root = test_trust_root();
         let epoch = test_epoch();
         // SAFETY: create_cell cannot fail with valid test inputs
-        let cell_id = reg.create_cell(default_cell_input(), 1_000).expect("serde deserialization should succeed");
+        let cell_id = reg
+            .create_cell(default_cell_input(), 1_000)
+            .expect("serde deserialization should succeed");
         let cid = format!("{cell_id}");
 
         // Go to Active.
         let m = test_measurement(&root);
         // SAFETY: measure_cell cannot fail with valid test inputs
-        reg.measure_cell(&cid, m.clone(), 2_000, epoch).expect("serde deserialization should succeed");
+        reg.measure_cell(&cid, m.clone(), 2_000, epoch)
+            .expect("serde deserialization should succeed");
         let q = root.attest(&m, [1u8; 32], 10_000_000, 2_000);
         // SAFETY: attest_cell cannot fail with valid test inputs
-        reg.attest_cell(&cid, q, 3_000, epoch).expect("serde deserialization should succeed");
+        reg.attest_cell(&cid, q, 3_000, epoch)
+            .expect("serde deserialization should succeed");
         // SAFETY: activate_cell cannot fail with valid test inputs
-        reg.activate_cell(&cid, 4_000, epoch).expect("serde deserialization should succeed");
+        reg.activate_cell(&cid, 4_000, epoch)
+            .expect("serde deserialization should succeed");
 
         // Suspend.
         // SAFETY: suspend_cell cannot fail with valid test inputs
         reg.suspend_cell(&cid, "trust root update", 5_000, epoch)
             .expect("serde deserialization should succeed");
         // SAFETY: get cannot fail for existing cell ID
-        assert_eq!(reg.get(&cid).expect("serde deserialization should succeed").lifecycle, CellLifecycle::Suspended);
+        assert_eq!(
+            reg.get(&cid)
+                .expect("serde deserialization should succeed")
+                .lifecycle,
+            CellLifecycle::Suspended
+        );
 
         // Re-attest from Suspended.
         let q2 = root.attest(&m, [2u8; 32], 10_000_000, 5_000);
         // SAFETY: attest_cell cannot fail with valid test inputs
-        reg.attest_cell(&cid, q2, 6_000, epoch).expect("serde deserialization should succeed");
+        reg.attest_cell(&cid, q2, 6_000, epoch)
+            .expect("serde deserialization should succeed");
         // SAFETY: get cannot fail for existing cell ID
-        assert_eq!(reg.get(&cid).expect("serde deserialization should succeed").lifecycle, CellLifecycle::Attested);
+        assert_eq!(
+            reg.get(&cid)
+                .expect("serde deserialization should succeed")
+                .lifecycle,
+            CellLifecycle::Attested
+        );
 
         // Re-activate.
         // SAFETY: activate_cell cannot fail with valid test inputs
-        reg.activate_cell(&cid, 7_000, epoch).expect("serde deserialization should succeed");
+        reg.activate_cell(&cid, 7_000, epoch)
+            .expect("serde deserialization should succeed");
         // SAFETY: get cannot fail for existing cell ID
-        assert_eq!(reg.get(&cid).expect("serde deserialization should succeed").lifecycle, CellLifecycle::Active);
+        assert_eq!(
+            reg.get(&cid)
+                .expect("serde deserialization should succeed")
+                .lifecycle,
+            CellLifecycle::Active
+        );
     }
 
     #[test]
     fn invalid_transition_provisioning_to_active() {
         let mut reg = CellRegistry::new();
         // SAFETY: create_cell cannot fail with valid test inputs
-        let cell_id = reg.create_cell(default_cell_input(), 1_000).expect("serde deserialization should succeed");
+        let cell_id = reg
+            .create_cell(default_cell_input(), 1_000)
+            .expect("serde deserialization should succeed");
         let cid = format!("{cell_id}");
         assert!(matches!(
             reg.activate_cell(&cid, 2_000, test_epoch()),
@@ -1723,7 +1798,9 @@ mod tests {
     fn invalid_transition_measured_to_active() {
         let mut reg = CellRegistry::new();
         let root = test_trust_root();
-        let cell_id = reg.create_cell(default_cell_input(), 1_000).expect("serde deserialization should succeed");
+        let cell_id = reg
+            .create_cell(default_cell_input(), 1_000)
+            .expect("serde deserialization should succeed");
         let cid = format!("{cell_id}");
         reg.measure_cell(&cid, test_measurement(&root), 2_000, test_epoch())
             .expect("serde deserialization should succeed");
@@ -1736,7 +1813,9 @@ mod tests {
     #[test]
     fn invalid_transition_suspend_from_provisioning() {
         let mut reg = CellRegistry::new();
-        let cell_id = reg.create_cell(default_cell_input(), 1_000).expect("serde deserialization should succeed");
+        let cell_id = reg
+            .create_cell(default_cell_input(), 1_000)
+            .expect("serde deserialization should succeed");
         let cid = format!("{cell_id}");
         assert!(matches!(
             reg.suspend_cell(&cid, "test", 2_000, test_epoch()),
@@ -1750,25 +1829,33 @@ mod tests {
         let root = test_trust_root();
         let epoch = test_epoch();
         // SAFETY: Test-only unwrap with valid cell input
-        let cell_id = reg.create_cell(default_cell_input(), 1_000).expect("serde deserialization should succeed");
+        let cell_id = reg
+            .create_cell(default_cell_input(), 1_000)
+            .expect("serde deserialization should succeed");
         let cid = format!("{cell_id}");
 
         let m = test_measurement(&root);
         // SAFETY: Test-only unwrap with valid cell ID and measurement
-        reg.measure_cell(&cid, m.clone(), 2_000, epoch).expect("serde deserialization should succeed");
+        reg.measure_cell(&cid, m.clone(), 2_000, epoch)
+            .expect("serde deserialization should succeed");
         let q = root.attest(&m, [1u8; 32], 10_000_000, 2_000);
         // SAFETY: Test-only unwrap with valid cell ID and attestation
-        reg.attest_cell(&cid, q, 3_000, epoch).expect("serde deserialization should succeed");
+        reg.attest_cell(&cid, q, 3_000, epoch)
+            .expect("serde deserialization should succeed");
         // SAFETY: Test-only unwrap with valid cell ID
-        reg.activate_cell(&cid, 4_000, epoch).expect("serde deserialization should succeed");
+        reg.activate_cell(&cid, 4_000, epoch)
+            .expect("serde deserialization should succeed");
         // SAFETY: Test-only unwrap with valid cell ID
-        reg.suspend_cell(&cid, "test", 5_000, epoch).expect("serde deserialization should succeed");
+        reg.suspend_cell(&cid, "test", 5_000, epoch)
+            .expect("serde deserialization should succeed");
         // SAFETY: Test-only unwrap with valid cell ID
         reg.decommission_cell(&cid, "permanent removal", 6_000, epoch)
             .expect("serde deserialization should succeed");
         assert_eq!(
             // SAFETY: Test-only unwrap, cell was just created and decommissioned
-            reg.get(&cid).expect("serde deserialization should succeed").lifecycle,
+            reg.get(&cid)
+                .expect("serde deserialization should succeed")
+                .lifecycle,
             CellLifecycle::Decommissioned
         );
     }
@@ -1797,22 +1884,32 @@ mod tests {
 
         // Create and activate cell.
         // SAFETY: Test-only unwrap with valid cell input
-        let cell_id = reg.create_cell(default_cell_input(), 1_000).expect("serde deserialization should succeed");
+        let cell_id = reg
+            .create_cell(default_cell_input(), 1_000)
+            .expect("serde deserialization should succeed");
         let cid = format!("{cell_id}");
         let m = test_measurement(&root);
         // SAFETY: Test-only unwrap with valid cell ID and measurement
-        reg.measure_cell(&cid, m.clone(), 2_000, epoch).expect("serde deserialization should succeed");
+        reg.measure_cell(&cid, m.clone(), 2_000, epoch)
+            .expect("serde deserialization should succeed");
         let q = root.attest(&m, [1u8; 32], 10_000_000, 2_000);
         // SAFETY: Test-only unwrap with valid cell ID and attestation
-        reg.attest_cell(&cid, q, 3_000, epoch).expect("serde deserialization should succeed");
+        reg.attest_cell(&cid, q, 3_000, epoch)
+            .expect("serde deserialization should succeed");
         // SAFETY: Test-only unwrap with valid cell ID
-        reg.activate_cell(&cid, 4_000, epoch).expect("serde deserialization should succeed");
+        reg.activate_cell(&cid, 4_000, epoch)
+            .expect("serde deserialization should succeed");
 
         // Revoke trust root.
         let suspended = reg.revoke_trust_root("test-key-1", 5_000, epoch);
         assert_eq!(suspended.len(), 1);
         // SAFETY: Test-only unwrap, cell was just created and suspended by trust root revocation
-        assert_eq!(reg.get(&cid).expect("serde deserialization should succeed").lifecycle, CellLifecycle::Suspended);
+        assert_eq!(
+            reg.get(&cid)
+                .expect("serde deserialization should succeed")
+                .lifecycle,
+            CellLifecycle::Suspended
+        );
     }
 
     #[test]
@@ -1821,17 +1918,27 @@ mod tests {
         let root = test_trust_root();
         let epoch = test_epoch();
 
-        let cell_id = reg.create_cell(default_cell_input(), 1_000).expect("serde deserialization should succeed");
+        let cell_id = reg
+            .create_cell(default_cell_input(), 1_000)
+            .expect("serde deserialization should succeed");
         let cid = format!("{cell_id}");
         let m = test_measurement(&root);
-        reg.measure_cell(&cid, m.clone(), 2_000, epoch).expect("serde deserialization should succeed");
+        reg.measure_cell(&cid, m.clone(), 2_000, epoch)
+            .expect("serde deserialization should succeed");
         let q = root.attest(&m, [1u8; 32], 10_000_000, 2_000);
-        reg.attest_cell(&cid, q, 3_000, epoch).expect("serde deserialization should succeed");
-        reg.activate_cell(&cid, 4_000, epoch).expect("serde deserialization should succeed");
+        reg.attest_cell(&cid, q, 3_000, epoch)
+            .expect("serde deserialization should succeed");
+        reg.activate_cell(&cid, 4_000, epoch)
+            .expect("serde deserialization should succeed");
 
         let suspended = reg.revoke_trust_root("other-key", 5_000, epoch);
         assert!(suspended.is_empty());
-        assert_eq!(reg.get(&cid).expect("serde deserialization should succeed").lifecycle, CellLifecycle::Active);
+        assert_eq!(
+            reg.get(&cid)
+                .expect("serde deserialization should succeed")
+                .lifecycle,
+            CellLifecycle::Active
+        );
     }
 
     // --- Registry lookups ---
@@ -1839,13 +1946,15 @@ mod tests {
     #[test]
     fn cells_by_function_lookup() {
         let mut reg = CellRegistry::new();
-        reg.create_cell(default_cell_input(), 1_000).expect("serde deserialization should succeed");
+        reg.create_cell(default_cell_input(), 1_000)
+            .expect("serde deserialization should succeed");
 
         let mut input2 = default_cell_input();
         input2.label = "evidence-accumulator-1".to_string();
         input2.function = CellFunction::EvidenceAccumulator;
         // SAFETY: create_cell cannot fail with valid test inputs
-        reg.create_cell(input2, 2_000).expect("serde deserialization should succeed");
+        reg.create_cell(input2, 2_000)
+            .expect("serde deserialization should succeed");
 
         assert_eq!(
             reg.cells_by_function(CellFunction::DecisionReceiptSigner)
@@ -1867,13 +1976,15 @@ mod tests {
     fn cells_in_zone_lookup() {
         let mut reg = CellRegistry::new();
         // SAFETY: create_cell cannot fail with valid test inputs
-        reg.create_cell(default_cell_input(), 1_000).expect("serde deserialization should succeed");
+        reg.create_cell(default_cell_input(), 1_000)
+            .expect("serde deserialization should succeed");
 
         let mut input2 = default_cell_input();
         input2.label = "staging-cell".to_string();
         input2.zone = "staging".to_string();
         // SAFETY: create_cell cannot fail with valid test inputs
-        reg.create_cell(input2, 2_000).expect("serde deserialization should succeed");
+        reg.create_cell(input2, 2_000)
+            .expect("serde deserialization should succeed");
 
         assert_eq!(reg.cells_in_zone("production").len(), 1);
         assert_eq!(reg.cells_in_zone("staging").len(), 1);
@@ -1887,22 +1998,28 @@ mod tests {
         let epoch = test_epoch();
 
         // SAFETY: create_cell cannot fail with valid test inputs
-        let cell_id = reg.create_cell(default_cell_input(), 1_000).expect("serde deserialization should succeed");
+        let cell_id = reg
+            .create_cell(default_cell_input(), 1_000)
+            .expect("serde deserialization should succeed");
         let cid = format!("{cell_id}");
         let m = test_measurement(&root);
         // SAFETY: measure_cell cannot fail with valid test inputs
-        reg.measure_cell(&cid, m.clone(), 2_000, epoch).expect("serde deserialization should succeed");
+        reg.measure_cell(&cid, m.clone(), 2_000, epoch)
+            .expect("serde deserialization should succeed");
         let q = root.attest(&m, [1u8; 32], 10_000_000, 2_000);
         // SAFETY: attest_cell cannot fail with valid test inputs
-        reg.attest_cell(&cid, q, 3_000, epoch).expect("serde deserialization should succeed");
+        reg.attest_cell(&cid, q, 3_000, epoch)
+            .expect("serde deserialization should succeed");
         // SAFETY: activate_cell cannot fail with valid test inputs
-        reg.activate_cell(&cid, 4_000, epoch).expect("serde deserialization should succeed");
+        reg.activate_cell(&cid, 4_000, epoch)
+            .expect("serde deserialization should succeed");
 
         // Create a second cell that stays in Provisioning.
         let mut input2 = default_cell_input();
         input2.label = "other".to_string();
         // SAFETY: create_cell cannot fail with valid test inputs
-        reg.create_cell(input2, 5_000).expect("serde deserialization should succeed");
+        reg.create_cell(input2, 5_000)
+            .expect("serde deserialization should succeed");
 
         assert_eq!(reg.active_cells().len(), 1);
     }
@@ -1915,13 +2032,18 @@ mod tests {
         let root = test_trust_root();
         let epoch = test_epoch();
 
-        let cell_id = reg.create_cell(default_cell_input(), 1_000).expect("serde deserialization should succeed");
+        let cell_id = reg
+            .create_cell(default_cell_input(), 1_000)
+            .expect("serde deserialization should succeed");
         let cid = format!("{cell_id}");
         let m = test_measurement(&root);
-        reg.measure_cell(&cid, m.clone(), 2_000, epoch).expect("serde deserialization should succeed");
+        reg.measure_cell(&cid, m.clone(), 2_000, epoch)
+            .expect("serde deserialization should succeed");
         let q = root.attest(&m, [1u8; 32], 10_000_000, 2_000);
-        reg.attest_cell(&cid, q, 3_000, epoch).expect("serde deserialization should succeed");
-        reg.activate_cell(&cid, 4_000, epoch).expect("serde deserialization should succeed");
+        reg.attest_cell(&cid, q, 3_000, epoch)
+            .expect("serde deserialization should succeed");
+        reg.activate_cell(&cid, 4_000, epoch)
+            .expect("serde deserialization should succeed");
 
         assert_eq!(reg.events().len(), 4);
         assert!(matches!(reg.events()[0].event_type, CellEventType::Created));
@@ -1945,18 +2067,25 @@ mod tests {
         let root = test_trust_root();
         let epoch = test_epoch();
 
-        let cell_id = reg.create_cell(default_cell_input(), 1_000).expect("serde deserialization should succeed");
+        let cell_id = reg
+            .create_cell(default_cell_input(), 1_000)
+            .expect("serde deserialization should succeed");
         let cid = format!("{cell_id}");
         let m = test_measurement(&root);
-        reg.measure_cell(&cid, m.clone(), 2_000, epoch).expect("serde deserialization should succeed");
+        reg.measure_cell(&cid, m.clone(), 2_000, epoch)
+            .expect("serde deserialization should succeed");
         let q = root.attest(&m, [1u8; 32], 10_000_000, 2_000);
-        reg.attest_cell(&cid, q, 3_000, epoch).expect("serde deserialization should succeed");
-        reg.activate_cell(&cid, 4_000, epoch).expect("serde deserialization should succeed");
-        reg.suspend_cell(&cid, "test", 5_000, epoch).expect("serde deserialization should succeed");
+        reg.attest_cell(&cid, q, 3_000, epoch)
+            .expect("serde deserialization should succeed");
+        reg.activate_cell(&cid, 4_000, epoch)
+            .expect("serde deserialization should succeed");
+        reg.suspend_cell(&cid, "test", 5_000, epoch)
+            .expect("serde deserialization should succeed");
 
         // Re-attest from suspended.
         let q2 = root.attest(&m, [2u8; 32], 10_000_000, 5_000);
-        reg.attest_cell(&cid, q2, 6_000, epoch).expect("serde deserialization should succeed");
+        reg.attest_cell(&cid, q2, 6_000, epoch)
+            .expect("serde deserialization should succeed");
 
         let events = reg.events();
         let last = &events[events.len() - 1];
@@ -1974,17 +2103,21 @@ mod tests {
         let root = test_trust_root();
         let epoch = test_epoch();
 
-        let cell_id = reg.create_cell(default_cell_input(), 1_000).expect("serde deserialization should succeed");
+        let cell_id = reg
+            .create_cell(default_cell_input(), 1_000)
+            .expect("serde deserialization should succeed");
         let cid = format!("{cell_id}");
         let m = test_measurement(&root);
-        reg.measure_cell(&cid, m.clone(), 2_000, epoch).expect("serde deserialization should succeed");
+        reg.measure_cell(&cid, m.clone(), 2_000, epoch)
+            .expect("serde deserialization should succeed");
 
         // SAFETY: Test-only unwrap, cell was just created and measured
         let cell = reg.get(&cid).expect("serde deserialization should succeed");
         // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(cell).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let restored: ExecutionCell = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: ExecutionCell =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(*cell, restored);
     }
 
@@ -1992,11 +2125,13 @@ mod tests {
     fn registry_serde_roundtrip() {
         let mut reg = CellRegistry::new();
         // SAFETY: Test-only unwrap with valid cell input
-        reg.create_cell(default_cell_input(), 1_000).expect("serde deserialization should succeed");
+        reg.create_cell(default_cell_input(), 1_000)
+            .expect("serde deserialization should succeed");
         // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&reg).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let restored: CellRegistry = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: CellRegistry =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(restored.cell_count(), 1);
     }
 
@@ -2004,7 +2139,8 @@ mod tests {
     fn software_trust_root_serde_roundtrip() {
         let root = test_trust_root();
         let json = serde_json::to_string(&root).expect("serde deserialization should succeed");
-        let restored: SoftwareTrustRoot = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: SoftwareTrustRoot =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(root.key_id, restored.key_id);
         assert_eq!(root.secret_key_bytes, restored.secret_key_bytes);
     }
@@ -2026,7 +2162,8 @@ mod tests {
         ];
         for r in &results {
             let json = serde_json::to_string(r).expect("serde deserialization should succeed");
-            let restored: VerificationResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: VerificationResult =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*r, restored);
         }
     }
@@ -2045,7 +2182,8 @@ mod tests {
         let mut fp = FallbackPolicy::default();
         fp.high_impact_actions.insert("deploy".to_string());
         let json = serde_json::to_string(&fp).expect("serde deserialization should succeed");
-        let restored: FallbackPolicy = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: FallbackPolicy =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(fp, restored);
     }
 
@@ -2061,7 +2199,8 @@ mod tests {
             },
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let restored: CellEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: CellEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, restored);
     }
 
@@ -2078,7 +2217,8 @@ mod tests {
             CellLifecycle::Decommissioned,
         ] {
             let json = serde_json::to_string(&lc).expect("serde deserialization should succeed");
-            let restored: CellLifecycle = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: CellLifecycle =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(lc, restored);
         }
     }
@@ -2093,7 +2233,8 @@ mod tests {
             CellFunction::ExtensionRuntime,
         ] {
             let json = serde_json::to_string(&cf).expect("serde deserialization should succeed");
-            let restored: CellFunction = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: CellFunction =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(cf, restored);
         }
     }
@@ -2107,7 +2248,8 @@ mod tests {
             PlatformKind::Software,
         ] {
             let json = serde_json::to_string(&pk).expect("serde deserialization should succeed");
-            let restored: PlatformKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: PlatformKind =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(pk, restored);
         }
     }
@@ -2120,7 +2262,8 @@ mod tests {
             TrustLevel::Hardware,
         ] {
             let json = serde_json::to_string(&tl).expect("serde deserialization should succeed");
-            let restored: TrustLevel = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: TrustLevel =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(tl, restored);
         }
     }
@@ -2136,7 +2279,8 @@ mod tests {
             signature_bytes: vec![0u8; 64],
         };
         let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
-        let restored: LifecycleReceipt = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: LifecycleReceipt =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(receipt, restored);
     }
 
@@ -2206,7 +2350,8 @@ mod tests {
         ];
         for et in &event_types {
             let json = serde_json::to_string(et).expect("serde deserialization should succeed");
-            let restored: CellEventType = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: CellEventType =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*et, restored);
         }
     }
@@ -2391,7 +2536,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: CellError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: CellError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }

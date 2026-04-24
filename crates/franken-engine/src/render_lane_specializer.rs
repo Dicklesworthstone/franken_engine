@@ -1052,7 +1052,8 @@ mod tests {
     fn lane_kind_serde_roundtrip() {
         for lk in LaneKind::ALL {
             let json = serde_json::to_string(lk).expect("serde deserialization should succeed");
-            let back: LaneKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: LaneKind =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*lk, back);
         }
     }
@@ -1101,7 +1102,8 @@ mod tests {
     fn component_shape_serde() {
         for s in ComponentShape::ALL {
             let json = serde_json::to_string(s).expect("serde deserialization should succeed");
-            let back: ComponentShape = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ComponentShape =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*s, back);
         }
     }
@@ -1150,7 +1152,8 @@ mod tests {
     fn strategy_serde() {
         for s in SpecializationStrategy::ALL {
             let json = serde_json::to_string(s).expect("serde deserialization should succeed");
-            let back: SpecializationStrategy = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: SpecializationStrategy =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*s, back);
         }
     }
@@ -1216,7 +1219,8 @@ mod tests {
     fn verdict_serde() {
         for v in SpecializationVerdict::ALL {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: SpecializationVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: SpecializationVerdict =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -1437,7 +1441,8 @@ mod tests {
         let cfg = SpecializationConfig::default_config();
         let result = specialize_lane(&req, &cfg).expect("serde deserialization should succeed");
         let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
-        let back: SpecializationResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SpecializationResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, back);
     }
 
@@ -1507,7 +1512,8 @@ mod tests {
         let result = specialize_lane(&req, &cfg).expect("serde deserialization should succeed");
         let r = DecisionReceipt::new(epoch(), &req, &result, DecisionReceipt::genesis_hash());
         let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
-        let back: DecisionReceipt = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DecisionReceipt =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 
@@ -1516,7 +1522,8 @@ mod tests {
     #[test]
     fn batch_empty() {
         let cfg = SpecializationConfig::default_config();
-        let (results, receipts) = specialize_batch(&[], &cfg, epoch()).expect("serde deserialization should succeed");
+        let (results, receipts) =
+            specialize_batch(&[], &cfg, epoch()).expect("serde deserialization should succeed");
         assert!(results.is_empty());
         assert!(receipts.is_empty());
     }
@@ -1525,7 +1532,8 @@ mod tests {
     fn batch_single() {
         let reqs = vec![pure_ssr_request()];
         let cfg = SpecializationConfig::default_config();
-        let (results, receipts) = specialize_batch(&reqs, &cfg, epoch()).expect("serde deserialization should succeed");
+        let (results, receipts) =
+            specialize_batch(&reqs, &cfg, epoch()).expect("serde deserialization should succeed");
         assert_eq!(results.len(), 1);
         assert_eq!(receipts.len(), 1);
         assert!(results[0].is_applied());
@@ -1543,7 +1551,8 @@ mod tests {
             },
         ];
         let cfg = SpecializationConfig::default_config();
-        let (_, receipts) = specialize_batch(&reqs, &cfg, epoch()).expect("serde deserialization should succeed");
+        let (_, receipts) =
+            specialize_batch(&reqs, &cfg, epoch()).expect("serde deserialization should succeed");
         assert_eq!(receipts.len(), 2);
         assert_eq!(receipts[0].previous_hash, DecisionReceipt::genesis_hash());
         assert_eq!(receipts[1].previous_hash, receipts[0].content_hash);
@@ -1583,7 +1592,8 @@ mod tests {
     fn batch_summary_all_applied() {
         let reqs = vec![pure_ssr_request()];
         let cfg = SpecializationConfig::default_config();
-        let (results, _) = specialize_batch(&reqs, &cfg, epoch()).expect("serde deserialization should succeed");
+        let (results, _) =
+            specialize_batch(&reqs, &cfg, epoch()).expect("serde deserialization should succeed");
         let s = BatchSummary::from_results(&results);
         assert_eq!(s.total, 1);
         assert_eq!(s.applied, 1);
@@ -1595,7 +1605,8 @@ mod tests {
     fn batch_summary_deterministic() {
         let reqs = vec![pure_ssr_request()];
         let cfg = SpecializationConfig::default_config();
-        let (results, _) = specialize_batch(&reqs, &cfg, epoch()).expect("serde deserialization should succeed");
+        let (results, _) =
+            specialize_batch(&reqs, &cfg, epoch()).expect("serde deserialization should succeed");
         let s1 = BatchSummary::from_results(&results);
         let s2 = BatchSummary::from_results(&results);
         assert_eq!(s1.content_hash, s2.content_hash);
@@ -1638,7 +1649,8 @@ mod tests {
             detail: "oops".into(),
         };
         let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
-        let back: SpecializationError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SpecializationError =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(e, back);
     }
 }

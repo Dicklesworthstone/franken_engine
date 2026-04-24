@@ -534,8 +534,10 @@ mod tests {
             LockstepRuntime::Node,
             LockstepRuntime::Bun,
         ] {
-            let json = serde_json::to_string(&variant).expect("serde deserialization should succeed");
-            let back: LockstepRuntime = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&variant).expect("serde deserialization should succeed");
+            let back: LockstepRuntime =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(variant, back);
         }
     }
@@ -623,7 +625,8 @@ mod tests {
     fn observation_serde_roundtrip() {
         let o = obs(LockstepRuntime::Bun);
         let json = serde_json::to_string(&o).expect("serde deserialization should succeed");
-        let back: RuntimeObservation = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: RuntimeObservation =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(o, back);
     }
 
@@ -663,7 +666,8 @@ mod tests {
             allowed_error_codes: ["err1"].iter().map(|s| s.to_string()).collect(),
         };
         let json = serde_json::to_string(&t).expect("serde deserialization should succeed");
-        let back: RuntimeTolerance = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: RuntimeTolerance =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(t, back);
     }
 
@@ -703,8 +707,10 @@ mod tests {
             LockstepFailureClass::CapabilityGap,
             LockstepFailureClass::PlatformDivergence,
         ] {
-            let json = serde_json::to_string(&variant).expect("serde deserialization should succeed");
-            let back: LockstepFailureClass = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&variant).expect("serde deserialization should succeed");
+            let back: LockstepFailureClass =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(variant, back);
         }
     }
@@ -725,7 +731,8 @@ mod tests {
             detail: "test".to_string(),
         };
         let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
-        let back: PlasLockstepError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: PlasLockstepError =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, back);
     }
 
@@ -1203,7 +1210,12 @@ mod tests {
             eval.failure_class,
             Some(LockstepFailureClass::PlatformDivergence)
         );
-        assert!(eval.failure_detail.as_ref().expect("serde deserialization should succeed").contains("node"));
+        assert!(
+            eval.failure_detail
+                .as_ref()
+                .expect("serde deserialization should succeed")
+                .contains("node")
+        );
     }
 
     #[test]
@@ -1220,7 +1232,12 @@ mod tests {
             eval.failure_class,
             Some(LockstepFailureClass::PlatformDivergence)
         );
-        assert!(eval.failure_detail.as_ref().expect("serde deserialization should succeed").contains("bun"));
+        assert!(
+            eval.failure_detail
+                .as_ref()
+                .expect("serde deserialization should succeed")
+                .contains("bun")
+        );
     }
 
     #[test]
@@ -1270,7 +1287,8 @@ mod tests {
             mismatch_fields: vec!["output_digest".to_string()],
         };
         let json = serde_json::to_string(&cmp).expect("serde deserialization should succeed");
-        let back: RuntimeComparison = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: RuntimeComparison =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cmp, back);
     }
 
@@ -1288,7 +1306,8 @@ mod tests {
             error_code: None,
         };
         let json = serde_json::to_string(&le).expect("serde deserialization should succeed");
-        let back: PlasLockstepLogEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: PlasLockstepLogEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(le, back);
     }
 
@@ -1299,7 +1318,8 @@ mod tests {
         let c = make_case();
         let eval = evaluate_plas_lockstep_case(c).expect("serde deserialization should succeed");
         let json = serde_json::to_string(&eval).expect("serde deserialization should succeed");
-        let back: PlasLockstepEvaluation = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: PlasLockstepEvaluation =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(eval, back);
     }
 
@@ -1309,7 +1329,8 @@ mod tests {
     fn case_serde_roundtrip() {
         let c = make_case();
         let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
-        let back: PlasLockstepCase = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: PlasLockstepCase =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c, back);
     }
 
@@ -1324,7 +1345,8 @@ mod tests {
             },
         );
         let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
-        let back: PlasLockstepCase = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: PlasLockstepCase =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c, back);
     }
 }

@@ -516,7 +516,8 @@ impl CounterexampleSynthesizer {
         let minimality = self.minimize_scenario(&scenario, cx);
 
         // Compute content hash.
-        let canonical = serde_json::to_vec(&(&cx.property, &cx.policy_id, &scenario)).expect("serde deserialization should succeed");
+        let canonical = serde_json::to_vec(&(&cx.property, &cx.policy_id, &scenario))
+            .expect("serde deserialization should succeed");
         let content_hash = ContentHash::compute(&canonical);
 
         let (expected, actual) = self.describe_outcomes(cx);
@@ -1544,7 +1545,8 @@ mod tests {
     fn config_serde_roundtrip() {
         let cfg = test_config();
         let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
-        let restored: SynthesisConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: SynthesisConfig =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cfg, restored);
     }
 
@@ -1570,10 +1572,14 @@ mod tests {
         let mut corpus = RegressionCorpus::new();
         let compiler = PolicyTheoremCompiler::new();
         let policy = make_monotonicity_violating_policy();
-        let result = compiler.compile(&policy).expect("serde deserialization should succeed");
+        let result = compiler
+            .compile(&policy)
+            .expect("serde deserialization should succeed");
 
         let mut synth = CounterexampleSynthesizer::new(test_config());
-        let counterexamples = synth.synthesize(&result, 1000).expect("serde deserialization should succeed");
+        let counterexamples = synth
+            .synthesize(&result, 1000)
+            .expect("serde deserialization should succeed");
         let cx = counterexamples[0].clone();
         let epoch = SecurityEpoch::from_raw(100);
 
@@ -1588,10 +1594,14 @@ mod tests {
         let mut corpus = RegressionCorpus::new();
         let compiler = PolicyTheoremCompiler::new();
         let policy = make_monotonicity_violating_policy();
-        let result = compiler.compile(&policy).expect("serde deserialization should succeed");
+        let result = compiler
+            .compile(&policy)
+            .expect("serde deserialization should succeed");
 
         let mut synth = CounterexampleSynthesizer::new(test_config());
-        let counterexamples = synth.synthesize(&result, 1000).expect("serde deserialization should succeed");
+        let counterexamples = synth
+            .synthesize(&result, 1000)
+            .expect("serde deserialization should succeed");
         let cx = counterexamples[0].clone();
         let cid = cx.conflict_id.clone();
         let epoch = SecurityEpoch::from_raw(100);
@@ -1625,7 +1635,9 @@ mod tests {
     fn synthesize_no_violations_returns_error() {
         let compiler = PolicyTheoremCompiler::new();
         let policy = make_valid_policy();
-        let result = compiler.compile(&policy).expect("serde deserialization should succeed");
+        let result = compiler
+            .compile(&policy)
+            .expect("serde deserialization should succeed");
 
         let mut synth = CounterexampleSynthesizer::new(test_config());
         let err = synth.synthesize(&result, 1000).unwrap_err();
@@ -1636,7 +1648,9 @@ mod tests {
     fn synthesize_monotonicity_violation() {
         let compiler = PolicyTheoremCompiler::new();
         let policy = make_monotonicity_violating_policy();
-        let result = compiler.compile(&policy).expect("serde deserialization should succeed");
+        let result = compiler
+            .compile(&policy)
+            .expect("serde deserialization should succeed");
 
         assert!(
             !result.counterexamples.is_empty(),
@@ -1644,7 +1658,9 @@ mod tests {
         );
 
         let mut synth = CounterexampleSynthesizer::new(test_config());
-        let counterexamples = synth.synthesize(&result, 1000).expect("serde deserialization should succeed");
+        let counterexamples = synth
+            .synthesize(&result, 1000)
+            .expect("serde deserialization should succeed");
 
         assert!(!counterexamples.is_empty());
         let cx = &counterexamples[0];
@@ -1664,7 +1680,9 @@ mod tests {
     fn synthesize_merge_nondeterminism() {
         let compiler = PolicyTheoremCompiler::new();
         let policy = make_merge_nondeterminism_policy();
-        let result = compiler.compile(&policy).expect("serde deserialization should succeed");
+        let result = compiler
+            .compile(&policy)
+            .expect("serde deserialization should succeed");
 
         if result.counterexamples.is_empty() {
             // If the compiler doesn't detect this as a violation with current
@@ -1673,7 +1691,9 @@ mod tests {
         }
 
         let mut synth = CounterexampleSynthesizer::new(test_config());
-        let counterexamples = synth.synthesize(&result, 2000).expect("serde deserialization should succeed");
+        let counterexamples = synth
+            .synthesize(&result, 2000)
+            .expect("serde deserialization should succeed");
         assert!(!counterexamples.is_empty());
     }
 
@@ -1681,14 +1701,18 @@ mod tests {
     fn synthesize_noninterference_violation() {
         let compiler = PolicyTheoremCompiler::new();
         let policy = make_noninterference_violating_policy();
-        let result = compiler.compile(&policy).expect("serde deserialization should succeed");
+        let result = compiler
+            .compile(&policy)
+            .expect("serde deserialization should succeed");
 
         if result.counterexamples.is_empty() {
             return;
         }
 
         let mut synth = CounterexampleSynthesizer::new(test_config());
-        let counterexamples = synth.synthesize(&result, 3000).expect("serde deserialization should succeed");
+        let counterexamples = synth
+            .synthesize(&result, 3000)
+            .expect("serde deserialization should succeed");
         assert!(!counterexamples.is_empty());
 
         let cx = &counterexamples[0];
@@ -1704,13 +1728,19 @@ mod tests {
     fn counterexample_has_deterministic_id() {
         let compiler = PolicyTheoremCompiler::new();
         let policy = make_monotonicity_violating_policy();
-        let result = compiler.compile(&policy).expect("serde deserialization should succeed");
+        let result = compiler
+            .compile(&policy)
+            .expect("serde deserialization should succeed");
 
         let mut synth1 = CounterexampleSynthesizer::new(test_config());
         let mut synth2 = CounterexampleSynthesizer::new(test_config());
 
-        let cx1 = synth1.synthesize(&result, 5000).expect("serde deserialization should succeed");
-        let cx2 = synth2.synthesize(&result, 5000).expect("serde deserialization should succeed");
+        let cx1 = synth1
+            .synthesize(&result, 5000)
+            .expect("serde deserialization should succeed");
+        let cx2 = synth2
+            .synthesize(&result, 5000)
+            .expect("serde deserialization should succeed");
 
         assert_eq!(cx1[0].conflict_id, cx2[0].conflict_id);
         assert_eq!(cx1[0].content_hash, cx2[0].content_hash);
@@ -1720,10 +1750,14 @@ mod tests {
     fn counterexample_minimality_evidence() {
         let compiler = PolicyTheoremCompiler::new();
         let policy = make_monotonicity_violating_policy();
-        let result = compiler.compile(&policy).expect("serde deserialization should succeed");
+        let result = compiler
+            .compile(&policy)
+            .expect("serde deserialization should succeed");
 
         let mut synth = CounterexampleSynthesizer::new(test_config());
-        let counterexamples = synth.synthesize(&result, 1000).expect("serde deserialization should succeed");
+        let counterexamples = synth
+            .synthesize(&result, 1000)
+            .expect("serde deserialization should succeed");
 
         let min = &counterexamples[0].minimality_evidence;
         assert!(min.starting_size > 0);
@@ -1734,13 +1768,19 @@ mod tests {
     fn counterexample_serde_roundtrip() {
         let compiler = PolicyTheoremCompiler::new();
         let policy = make_monotonicity_violating_policy();
-        let result = compiler.compile(&policy).expect("serde deserialization should succeed");
+        let result = compiler
+            .compile(&policy)
+            .expect("serde deserialization should succeed");
 
         let mut synth = CounterexampleSynthesizer::new(test_config());
-        let counterexamples = synth.synthesize(&result, 1000).expect("serde deserialization should succeed");
+        let counterexamples = synth
+            .synthesize(&result, 1000)
+            .expect("serde deserialization should succeed");
 
-        let json = serde_json::to_string(&counterexamples[0]).expect("serde deserialization should succeed");
-        let restored: SynthesizedCounterexample = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&counterexamples[0])
+            .expect("serde deserialization should succeed");
+        let restored: SynthesizedCounterexample =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(counterexamples[0].conflict_id, restored.conflict_id);
         assert_eq!(
             counterexamples[0].property_violated,
@@ -1756,10 +1796,14 @@ mod tests {
     fn diagnostic_from_counterexample() {
         let compiler = PolicyTheoremCompiler::new();
         let policy = make_monotonicity_violating_policy();
-        let result = compiler.compile(&policy).expect("serde deserialization should succeed");
+        let result = compiler
+            .compile(&policy)
+            .expect("serde deserialization should succeed");
 
         let mut synth = CounterexampleSynthesizer::new(test_config());
-        synth.synthesize(&result, 1000).expect("serde deserialization should succeed");
+        synth
+            .synthesize(&result, 1000)
+            .expect("serde deserialization should succeed");
 
         let diags = synth.diagnostics();
         assert!(!diags.is_empty());
@@ -1774,14 +1818,19 @@ mod tests {
     fn diagnostic_serde_roundtrip() {
         let compiler = PolicyTheoremCompiler::new();
         let policy = make_monotonicity_violating_policy();
-        let result = compiler.compile(&policy).expect("serde deserialization should succeed");
+        let result = compiler
+            .compile(&policy)
+            .expect("serde deserialization should succeed");
 
         let mut synth = CounterexampleSynthesizer::new(test_config());
-        synth.synthesize(&result, 1000).expect("serde deserialization should succeed");
+        synth
+            .synthesize(&result, 1000)
+            .expect("serde deserialization should succeed");
 
         let d = &synth.diagnostics()[0];
         let json = serde_json::to_string(d).expect("serde deserialization should succeed");
-        let restored: ConflictDiagnostic = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: ConflictDiagnostic =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(d.conflict_id, restored.conflict_id);
     }
 
@@ -1815,7 +1864,9 @@ mod tests {
     fn enumerate_finds_violations() {
         let bad = make_monotonicity_violating_policy();
         let mut synth = CounterexampleSynthesizer::new(test_config());
-        let results = synth.synthesize_by_enumeration(&[&bad], 1000).expect("serde deserialization should succeed");
+        let results = synth
+            .synthesize_by_enumeration(&[&bad], 1000)
+            .expect("serde deserialization should succeed");
         assert!(!results.is_empty());
     }
 
@@ -2161,10 +2212,14 @@ mod tests {
     fn replay_fixture_from_counterexample() {
         let compiler = PolicyTheoremCompiler::new();
         let policy = make_monotonicity_violating_policy();
-        let result = compiler.compile(&policy).expect("serde deserialization should succeed");
+        let result = compiler
+            .compile(&policy)
+            .expect("serde deserialization should succeed");
 
         let mut synth = CounterexampleSynthesizer::new(test_config());
-        let counterexamples = synth.synthesize(&result, 1000).expect("serde deserialization should succeed");
+        let counterexamples = synth
+            .synthesize(&result, 1000)
+            .expect("serde deserialization should succeed");
 
         let trace = synth.to_replay_fixture(&counterexamples[0], 5000);
         assert!(trace.trace_id.starts_with("synth-"));
@@ -2177,10 +2232,14 @@ mod tests {
     fn replay_fixture_is_replayable() {
         let compiler = PolicyTheoremCompiler::new();
         let policy = make_monotonicity_violating_policy();
-        let result = compiler.compile(&policy).expect("serde deserialization should succeed");
+        let result = compiler
+            .compile(&policy)
+            .expect("serde deserialization should succeed");
 
         let mut synth = CounterexampleSynthesizer::new(test_config());
-        let counterexamples = synth.synthesize(&result, 1000).expect("serde deserialization should succeed");
+        let counterexamples = synth
+            .synthesize(&result, 1000)
+            .expect("serde deserialization should succeed");
 
         let trace = synth.to_replay_fixture(&counterexamples[0], 5000);
 
@@ -2196,12 +2255,18 @@ mod tests {
     fn evidence_entry_from_counterexample() {
         let compiler = PolicyTheoremCompiler::new();
         let policy = make_monotonicity_violating_policy();
-        let result = compiler.compile(&policy).expect("serde deserialization should succeed");
+        let result = compiler
+            .compile(&policy)
+            .expect("serde deserialization should succeed");
 
         let mut synth = CounterexampleSynthesizer::new(test_config());
-        let counterexamples = synth.synthesize(&result, 1000).expect("serde deserialization should succeed");
+        let counterexamples = synth
+            .synthesize(&result, 1000)
+            .expect("serde deserialization should succeed");
 
-        let entry = synth.to_evidence_entry(&counterexamples[0], 2000).expect("serde deserialization should succeed");
+        let entry = synth
+            .to_evidence_entry(&counterexamples[0], 2000)
+            .expect("serde deserialization should succeed");
         assert_eq!(entry.decision_type, DecisionType::ContractEvaluation);
         assert!(entry.chosen_action.action_name.contains("counterexample"));
         assert!(entry.metadata.contains_key("conflict_id"));
@@ -2222,7 +2287,8 @@ mod tests {
             input_state: BTreeMap::new(),
         };
         let json = serde_json::to_string(&scenario).expect("serde deserialization should succeed");
-        let restored: ConcreteScenario = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: ConcreteScenario =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(scenario, restored);
     }
 
@@ -2236,7 +2302,8 @@ mod tests {
             is_fixed_point: true,
         };
         let json = serde_json::to_string(&min).expect("serde deserialization should succeed");
-        let restored: MinimalityEvidence = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: MinimalityEvidence =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(min, restored);
     }
 
@@ -2251,7 +2318,8 @@ mod tests {
             convergence_steps: Some(100),
         };
         let json = serde_json::to_string(&ci).expect("serde deserialization should succeed");
-        let restored: ControllerInterference = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: ControllerInterference =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ci, restored);
     }
 
@@ -2259,14 +2327,24 @@ mod tests {
     fn regression_entry_serde_roundtrip() {
         let compiler = PolicyTheoremCompiler::new();
         let policy = make_monotonicity_violating_policy();
-        let result = compiler.compile(&policy).expect("serde deserialization should succeed");
+        let result = compiler
+            .compile(&policy)
+            .expect("serde deserialization should succeed");
 
         let mut synth = CounterexampleSynthesizer::new(test_config());
-        let _counterexamples = synth.synthesize(&result, 1000).expect("serde deserialization should succeed");
+        let _counterexamples = synth
+            .synthesize(&result, 1000)
+            .expect("serde deserialization should succeed");
 
-        let entry = &synth.corpus().entries().values().next().expect("serde deserialization should succeed");
+        let entry = &synth
+            .corpus()
+            .entries()
+            .values()
+            .next()
+            .expect("serde deserialization should succeed");
         let json = serde_json::to_string(entry).expect("serde deserialization should succeed");
-        let restored: RegressionEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: RegressionEntry =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry.entry_id, restored.entry_id);
     }
 
@@ -2281,7 +2359,8 @@ mod tests {
             timescale_statement: "reads every 1s; writes every 1s".to_string(),
         };
         let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
-        let restored: ControllerConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: ControllerConfig =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cfg, restored);
     }
 
@@ -2293,7 +2372,8 @@ mod tests {
             new_value: "union".to_string(),
         };
         let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
-        let restored: PolicyMutation = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: PolicyMutation =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(m, restored);
     }
 
@@ -2305,12 +2385,16 @@ mod tests {
     fn synthesizer_tracks_count() {
         let compiler = PolicyTheoremCompiler::new();
         let policy = make_monotonicity_violating_policy();
-        let result = compiler.compile(&policy).expect("serde deserialization should succeed");
+        let result = compiler
+            .compile(&policy)
+            .expect("serde deserialization should succeed");
 
         let mut synth = CounterexampleSynthesizer::new(test_config());
         assert_eq!(synth.synthesis_count(), 0);
 
-        synth.synthesize(&result, 1000).expect("serde deserialization should succeed");
+        synth
+            .synthesize(&result, 1000)
+            .expect("serde deserialization should succeed");
         assert!(synth.synthesis_count() > 0);
     }
 
@@ -2318,7 +2402,8 @@ mod tests {
     fn synthesizer_serde_roundtrip() {
         let synth = CounterexampleSynthesizer::new(test_config());
         let json = serde_json::to_string(&synth).expect("serde deserialization should succeed");
-        let restored: CounterexampleSynthesizer = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: CounterexampleSynthesizer =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(synth.synthesis_count(), restored.synthesis_count());
     }
 
@@ -2415,7 +2500,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let restored: SynthesisError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: SynthesisError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, restored);
         }
     }
@@ -2451,7 +2537,8 @@ mod tests {
             SynthesisOutcome::Incomplete,
         ] {
             let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
-            let restored: SynthesisOutcome = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: SynthesisOutcome =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(v, restored);
         }
     }
@@ -2465,7 +2552,8 @@ mod tests {
             SynthesisStrategy::TimeBounded,
         ] {
             let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
-            let restored: SynthesisStrategy = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: SynthesisStrategy =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(v, restored);
         }
     }
@@ -2478,7 +2566,8 @@ mod tests {
             InterferenceKind::TimescaleConflict,
         ] {
             let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
-            let restored: InterferenceKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: InterferenceKind =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(v, restored);
         }
     }
@@ -2494,7 +2583,8 @@ mod tests {
             MutationKind::DuplicateNode,
         ] {
             let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
-            let restored: MutationKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: MutationKind =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(v, restored);
         }
     }
@@ -2532,7 +2622,8 @@ mod tests {
             timescale_separation_millionths: 50_000,
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let restored: ControllerInterferenceEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: ControllerInterferenceEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, restored);
     }
 
@@ -2645,9 +2736,13 @@ mod tests {
         let mut synth = CounterexampleSynthesizer::new(test_config());
         let policy = make_monotonicity_violating_policy();
         let compiler = PolicyTheoremCompiler::new();
-        let result = compiler.compile(&policy).expect("serde deserialization should succeed");
+        let result = compiler
+            .compile(&policy)
+            .expect("serde deserialization should succeed");
 
-        let scxs = synth.synthesize(&result, 1000).expect("serde deserialization should succeed");
+        let scxs = synth
+            .synthesize(&result, 1000)
+            .expect("serde deserialization should succeed");
         assert!(!scxs.is_empty());
 
         // Resolve the first counterexample.
@@ -2703,8 +2798,12 @@ mod tests {
         let mut synth = CounterexampleSynthesizer::new(test_config());
         let policy = make_monotonicity_violating_policy();
         let compiler = PolicyTheoremCompiler::new();
-        let result = compiler.compile(&policy).expect("serde deserialization should succeed");
-        let scxs = synth.synthesize(&result, 1000).expect("serde deserialization should succeed");
+        let result = compiler
+            .compile(&policy)
+            .expect("serde deserialization should succeed");
+        let scxs = synth
+            .synthesize(&result, 1000)
+            .expect("serde deserialization should succeed");
 
         // Monotonicity/AttenuationLegality -> 900_000, NonInterference -> 1_000_000,
         // MergeDeterminism/PrecedenceStability -> 700_000.
@@ -2754,8 +2853,12 @@ mod tests {
         let mut synth = CounterexampleSynthesizer::new(test_config());
         let policy = make_monotonicity_violating_policy();
         let compiler = PolicyTheoremCompiler::new();
-        let result = compiler.compile(&policy).expect("serde deserialization should succeed");
-        let scxs = synth.synthesize(&result, 1000).expect("serde deserialization should succeed");
+        let result = compiler
+            .compile(&policy)
+            .expect("serde deserialization should succeed");
+        let scxs = synth
+            .synthesize(&result, 1000)
+            .expect("serde deserialization should succeed");
 
         let fixture = synth.to_replay_fixture(&scxs[0], 5000);
         // The fixture should have metadata set for property_violated and strategy.
@@ -2790,8 +2893,12 @@ mod tests {
         let mut synth = CounterexampleSynthesizer::new(test_config());
         let policy = make_monotonicity_violating_policy();
         let compiler = PolicyTheoremCompiler::new();
-        let result = compiler.compile(&policy).expect("serde deserialization should succeed");
-        let scxs = synth.synthesize(&result, 1000).expect("serde deserialization should succeed");
+        let result = compiler
+            .compile(&policy)
+            .expect("serde deserialization should succeed");
+        let scxs = synth
+            .synthesize(&result, 1000)
+            .expect("serde deserialization should succeed");
 
         assert!(synth.corpus().contains(&scxs[0].conflict_id));
     }

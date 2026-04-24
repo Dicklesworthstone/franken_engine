@@ -838,7 +838,8 @@ mod tests {
             ClaimEnvelopeTier::Hypothesis,
         ] {
             let json = serde_json::to_string(&tier).expect("serde deserialization should succeed");
-            let restored: ClaimEnvelopeTier = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: ClaimEnvelopeTier =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(restored, tier);
         }
     }
@@ -852,8 +853,10 @@ mod tests {
             ClaimEnvelopeVerdict::DowngradeToHypothesis,
             ClaimEnvelopeVerdict::Forbid,
         ] {
-            let json = serde_json::to_string(&verdict).expect("serde deserialization should succeed");
-            let restored: ClaimEnvelopeVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&verdict).expect("serde deserialization should succeed");
+            let restored: ClaimEnvelopeVerdict =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(restored, verdict);
         }
     }
@@ -862,7 +865,8 @@ mod tests {
     fn contract_serde_round_trip() {
         let contract = minimal_contract();
         let json = serde_json::to_string(&contract).expect("serde deserialization should succeed");
-        let restored: ClaimEnvelopeContract = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: ClaimEnvelopeContract =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(restored, contract);
     }
 
@@ -871,7 +875,8 @@ mod tests {
         let scenario =
             scenario_all_ready(ClaimEnvelopeTier::PublishableUniversal, "universal test");
         let json = serde_json::to_string(&scenario).expect("serde deserialization should succeed");
-        let restored: ClaimEnvelopeScenario = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: ClaimEnvelopeScenario =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(restored, scenario);
     }
 
@@ -1025,29 +1030,39 @@ mod tests {
 
     #[test]
     fn tier_serde_uses_snake_case() {
-        let json = serde_json::to_string(&ClaimEnvelopeTier::FrontierObjective).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ClaimEnvelopeTier::FrontierObjective)
+            .expect("serde deserialization should succeed");
         assert_eq!(json, "\"frontier_objective\"");
-        let json = serde_json::to_string(&ClaimEnvelopeTier::PublishableUniversal).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ClaimEnvelopeTier::PublishableUniversal)
+            .expect("serde deserialization should succeed");
         assert_eq!(json, "\"publishable_universal\"");
-        let json = serde_json::to_string(&ClaimEnvelopeTier::PublishableScoped).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ClaimEnvelopeTier::PublishableScoped)
+            .expect("serde deserialization should succeed");
         assert_eq!(json, "\"publishable_scoped\"");
-        let json = serde_json::to_string(&ClaimEnvelopeTier::Target).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ClaimEnvelopeTier::Target)
+            .expect("serde deserialization should succeed");
         assert_eq!(json, "\"target\"");
-        let json = serde_json::to_string(&ClaimEnvelopeTier::Hypothesis).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ClaimEnvelopeTier::Hypothesis)
+            .expect("serde deserialization should succeed");
         assert_eq!(json, "\"hypothesis\"");
     }
 
     #[test]
     fn verdict_serde_uses_snake_case() {
-        let json = serde_json::to_string(&ClaimEnvelopeVerdict::AllowRequested).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ClaimEnvelopeVerdict::AllowRequested)
+            .expect("serde deserialization should succeed");
         assert_eq!(json, "\"allow_requested\"");
-        let json = serde_json::to_string(&ClaimEnvelopeVerdict::DowngradeToScoped).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ClaimEnvelopeVerdict::DowngradeToScoped)
+            .expect("serde deserialization should succeed");
         assert_eq!(json, "\"downgrade_to_scoped\"");
-        let json = serde_json::to_string(&ClaimEnvelopeVerdict::DowngradeToTarget).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ClaimEnvelopeVerdict::DowngradeToTarget)
+            .expect("serde deserialization should succeed");
         assert_eq!(json, "\"downgrade_to_target\"");
-        let json = serde_json::to_string(&ClaimEnvelopeVerdict::DowngradeToHypothesis).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ClaimEnvelopeVerdict::DowngradeToHypothesis)
+            .expect("serde deserialization should succeed");
         assert_eq!(json, "\"downgrade_to_hypothesis\"");
-        let json = serde_json::to_string(&ClaimEnvelopeVerdict::Forbid).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ClaimEnvelopeVerdict::Forbid)
+            .expect("serde deserialization should succeed");
         assert_eq!(json, "\"forbid\"");
     }
 
@@ -1405,7 +1420,8 @@ mod tests {
             role: "test role".to_string(),
         };
         let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
-        let restored: ContractInput = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: ContractInput =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(restored, input);
     }
 
@@ -1423,7 +1439,8 @@ mod tests {
             frontier_gap_bead: "bd-gap".to_string(),
         };
         let json = serde_json::to_string(&linkage).expect("serde deserialization should succeed");
-        let restored: BoardLinkage = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: BoardLinkage =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(restored, linkage);
     }
 
@@ -1436,7 +1453,8 @@ mod tests {
             rationale: "because".to_string(),
         };
         let json = serde_json::to_string(&rule).expect("serde deserialization should succeed");
-        let restored: DowngradeRule = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: DowngradeRule =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(restored, rule);
     }
 
@@ -1450,7 +1468,8 @@ mod tests {
             rationale: "testing".to_string(),
         };
         let json = serde_json::to_string(&channel).expect("serde deserialization should succeed");
-        let restored: ConsumerChannel = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: ConsumerChannel =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(restored, channel);
     }
 
@@ -1465,7 +1484,8 @@ mod tests {
             allowed_surfaces: vec!["docs".to_string()],
         };
         let json = serde_json::to_string(&spec).expect("serde deserialization should succeed");
-        let restored: ClaimClassSpec = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: ClaimClassSpec =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(restored, spec);
     }
 
@@ -1476,7 +1496,8 @@ mod tests {
             name: "claim envelope".to_string(),
         };
         let json = serde_json::to_string(&track).expect("serde deserialization should succeed");
-        let restored: ContractTrack = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: ContractTrack =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(restored, track);
     }
 

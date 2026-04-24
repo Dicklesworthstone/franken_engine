@@ -618,7 +618,8 @@ mod tests {
         // observation = 5_000 (0.005), below threshold 10_000
         // lr = 500_000 (0.5)
         // e_new = 1_000_000 * 500_000 / 1_000_000 = 500_000 (0.5)
-        gr.update(5_000).expect("serde deserialization should succeed");
+        gr.update(5_000)
+            .expect("serde deserialization should succeed");
         assert_eq!(gr.e_value(), 500_000);
         assert_eq!(gr.state(), GuardrailState::Active);
         assert_eq!(gr.observation_count(), 1);
@@ -630,7 +631,8 @@ mod tests {
         // observation = 15_000 (0.015), above threshold 10_000
         // lr = 5_000_000 (5.0)
         // e_new = 1_000_000 * 5_000_000 / 1_000_000 = 5_000_000 (5.0)
-        gr.update(15_000).expect("serde deserialization should succeed");
+        gr.update(15_000)
+            .expect("serde deserialization should succeed");
         assert_eq!(gr.e_value(), 5_000_000);
         assert_eq!(gr.state(), GuardrailState::Active);
     }
@@ -640,10 +642,12 @@ mod tests {
         let mut gr = test_guardrail();
         // Each high observation multiplies e by 5.0
         // After 1: 5.0, after 2: 25.0 >= threshold 20.0 -> triggered
-        gr.update(15_000).expect("serde deserialization should succeed"); // e = 5.0
+        gr.update(15_000)
+            .expect("serde deserialization should succeed"); // e = 5.0
         assert_eq!(gr.state(), GuardrailState::Active);
 
-        gr.update(15_000).expect("serde deserialization should succeed"); // e = 25.0 >= 20.0
+        gr.update(15_000)
+            .expect("serde deserialization should succeed"); // e = 25.0 >= 20.0
         assert_eq!(gr.state(), GuardrailState::Triggered);
         assert_eq!(gr.e_value(), 25_000_000);
     }
@@ -651,8 +655,10 @@ mod tests {
     #[test]
     fn triggered_guardrail_rejects_updates() {
         let mut gr = test_guardrail();
-        gr.update(15_000).expect("serde deserialization should succeed");
-        gr.update(15_000).expect("serde deserialization should succeed"); // triggers
+        gr.update(15_000)
+            .expect("serde deserialization should succeed");
+        gr.update(15_000)
+            .expect("serde deserialization should succeed"); // triggers
         assert_eq!(gr.state(), GuardrailState::Triggered);
 
         let err = gr.update(15_000).unwrap_err();
@@ -676,8 +682,10 @@ mod tests {
     #[test]
     fn triggered_guardrail_blocks_specified_actions() {
         let mut gr = test_guardrail();
-        gr.update(15_000).expect("serde deserialization should succeed");
-        gr.update(15_000).expect("serde deserialization should succeed"); // triggers
+        gr.update(15_000)
+            .expect("serde deserialization should succeed");
+        gr.update(15_000)
+            .expect("serde deserialization should succeed"); // triggers
 
         assert!(gr.blocks("low"));
         assert!(gr.blocks("medium"));
@@ -689,15 +697,18 @@ mod tests {
     #[test]
     fn reset_triggered_guardrail() {
         let mut gr = test_guardrail();
-        gr.update(15_000).expect("serde deserialization should succeed");
-        gr.update(15_000).expect("serde deserialization should succeed"); // triggers
+        gr.update(15_000)
+            .expect("serde deserialization should succeed");
+        gr.update(15_000)
+            .expect("serde deserialization should succeed"); // triggers
 
         let receipt = ResetReceipt {
             authorized_by: "operator-1".to_string(),
             rationale: "FNR condition addressed".to_string(),
             epoch: SecurityEpoch::from_raw(1),
         };
-        gr.reset(&receipt).expect("serde deserialization should succeed");
+        gr.reset(&receipt)
+            .expect("serde deserialization should succeed");
 
         assert_eq!(gr.state(), GuardrailState::Active);
         assert_eq!(gr.e_value(), 1_000_000); // reset to 1.0
@@ -724,8 +735,10 @@ mod tests {
     #[test]
     fn reset_with_empty_authorized_by_fails() {
         let mut gr = test_guardrail();
-        gr.update(15_000).expect("serde deserialization should succeed");
-        gr.update(15_000).expect("serde deserialization should succeed"); // triggers
+        gr.update(15_000)
+            .expect("serde deserialization should succeed");
+        gr.update(15_000)
+            .expect("serde deserialization should succeed"); // triggers
 
         let receipt = ResetReceipt {
             authorized_by: "".to_string(),
@@ -764,7 +777,8 @@ mod tests {
         gr.suspend("maintenance");
         gr.resume();
         assert_eq!(gr.state(), GuardrailState::Active);
-        gr.update(15_000).expect("serde deserialization should succeed"); // works again
+        gr.update(15_000)
+            .expect("serde deserialization should succeed"); // works again
     }
 
     // -- Events --
@@ -772,7 +786,8 @@ mod tests {
     #[test]
     fn update_emits_e_value_updated_event() {
         let mut gr = test_guardrail();
-        gr.update(5_000).expect("serde deserialization should succeed");
+        gr.update(5_000)
+            .expect("serde deserialization should succeed");
 
         let events = gr.drain_events();
         assert_eq!(events.len(), 1);
@@ -792,8 +807,10 @@ mod tests {
     #[test]
     fn trigger_emits_triggered_event() {
         let mut gr = test_guardrail();
-        gr.update(15_000).expect("serde deserialization should succeed");
-        gr.update(15_000).expect("serde deserialization should succeed"); // triggers
+        gr.update(15_000)
+            .expect("serde deserialization should succeed");
+        gr.update(15_000)
+            .expect("serde deserialization should succeed"); // triggers
 
         let events = gr.drain_events();
         // Should have 2 update events + 1 triggered event
@@ -816,8 +833,10 @@ mod tests {
     #[test]
     fn reset_emits_reset_event() {
         let mut gr = test_guardrail();
-        gr.update(15_000).expect("serde deserialization should succeed");
-        gr.update(15_000).expect("serde deserialization should succeed");
+        gr.update(15_000)
+            .expect("serde deserialization should succeed");
+        gr.update(15_000)
+            .expect("serde deserialization should succeed");
         gr.drain_events(); // clear
 
         let receipt = ResetReceipt {
@@ -825,7 +844,8 @@ mod tests {
             rationale: "addressed".to_string(),
             epoch: SecurityEpoch::from_raw(1),
         };
-        gr.reset(&receipt).expect("serde deserialization should succeed");
+        gr.reset(&receipt)
+            .expect("serde deserialization should succeed");
 
         let events = gr.drain_events();
         assert_eq!(events.len(), 1);
@@ -875,7 +895,8 @@ mod tests {
             }),
         );
         // Trigger gr1 immediately (ratio=10.0, e=10.0 >= threshold 5.0)
-        gr1.update(1_000_000).expect("serde deserialization should succeed");
+        gr1.update(1_000_000)
+            .expect("serde deserialization should succeed");
 
         let mut blocked2 = BTreeSet::new();
         blocked2.insert("medium".to_string());
@@ -925,12 +946,24 @@ mod tests {
         // Update matching stream
         let errors = registry.update_stream("fnr", 1_000_000);
         assert!(errors.is_empty());
-        assert_eq!(registry.get("gr1").expect("serde deserialization should succeed").observation_count(), 1);
+        assert_eq!(
+            registry
+                .get("gr1")
+                .expect("serde deserialization should succeed")
+                .observation_count(),
+            1
+        );
 
         // Update non-matching stream — no effect
         let errors = registry.update_stream("other", 1_000_000);
         assert!(errors.is_empty());
-        assert_eq!(registry.get("gr1").expect("serde deserialization should succeed").observation_count(), 1);
+        assert_eq!(
+            registry
+                .get("gr1")
+                .expect("serde deserialization should succeed")
+                .observation_count(),
+            1
+        );
     }
 
     #[test]
@@ -952,7 +985,8 @@ mod tests {
                 low_ratio_millionths: 500_000,
             }),
         );
-        gr.update(1_000_000).expect("serde deserialization should succeed"); // triggers
+        gr.update(1_000_000)
+            .expect("serde deserialization should succeed"); // triggers
         registry.add(gr);
 
         let all = vec!["low".to_string(), "medium".to_string(), "high".to_string()];
@@ -980,7 +1014,8 @@ mod tests {
                 low_ratio_millionths: 500_000,
             }),
         );
-        gr.update(1_000_000).expect("serde deserialization should succeed"); // triggers
+        gr.update(1_000_000)
+            .expect("serde deserialization should succeed"); // triggers
         registry.add(gr);
 
         let receipt = ResetReceipt {
@@ -990,7 +1025,13 @@ mod tests {
         };
         let errors = registry.reset_all(&receipt);
         assert!(errors.is_empty());
-        assert_eq!(registry.get("gr1").expect("serde deserialization should succeed").state(), GuardrailState::Active);
+        assert_eq!(
+            registry
+                .get("gr1")
+                .expect("serde deserialization should succeed")
+                .state(),
+            GuardrailState::Active
+        );
     }
 
     // -- Deterministic replay --
@@ -1047,7 +1088,8 @@ mod tests {
         ];
         for state in &states {
             let json = serde_json::to_string(state).expect("serde deserialization should succeed");
-            let restored: GuardrailState = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: GuardrailState =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*state, restored);
         }
     }
@@ -1076,7 +1118,8 @@ mod tests {
         ];
         for err in &errors {
             let json = serde_json::to_string(err).expect("serde deserialization should succeed");
-            let restored: GuardrailError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: GuardrailError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, restored);
         }
     }
@@ -1089,7 +1132,8 @@ mod tests {
             epoch: SecurityEpoch::from_raw(5),
         };
         let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
-        let restored: ResetReceipt = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: ResetReceipt =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(receipt, restored);
     }
 
@@ -1125,7 +1169,8 @@ mod tests {
         ];
         for event in &events {
             let json = serde_json::to_string(event).expect("serde deserialization should succeed");
-            let restored: GuardrailEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: GuardrailEvent =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*event, restored);
         }
     }
@@ -1138,7 +1183,8 @@ mod tests {
             null_mean_millionths: -500_000,
         };
         let json = serde_json::to_string(&ulr).expect("serde deserialization should succeed");
-        let restored: UniversalLikelihoodRatio = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: UniversalLikelihoodRatio =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ulr.null_mean_millionths, restored.null_mean_millionths);
     }
 
@@ -1199,7 +1245,8 @@ mod tests {
             }),
         );
         // First update: e = 1M * 4e12 / 1M = 4e12 (well below i64::MAX)
-        gr.update(1_000_000).expect("serde deserialization should succeed");
+        gr.update(1_000_000)
+            .expect("serde deserialization should succeed");
         // Second update: product = 4e12 * 4e12 = 16e24, / 1e6 = 16e18 > i64::MAX → overflow
         let result = gr.update(1_000_000);
         assert!(matches!(result, Err(GuardrailError::EValueOverflow { .. })));
@@ -1216,7 +1263,8 @@ mod tests {
     #[test]
     fn suspend_preserves_evalue_and_count() {
         let mut gr = test_guardrail();
-        gr.update(5_000).expect("serde deserialization should succeed"); // e = 0.5
+        gr.update(5_000)
+            .expect("serde deserialization should succeed"); // e = 0.5
         let ev_before = gr.e_value();
         let count_before = gr.observation_count();
         gr.suspend("maintenance");
@@ -1237,7 +1285,8 @@ mod tests {
     #[test]
     fn drain_events_idempotent() {
         let mut gr = test_guardrail();
-        gr.update(5_000).expect("serde deserialization should succeed");
+        gr.update(5_000)
+            .expect("serde deserialization should succeed");
         let first = gr.drain_events();
         assert!(!first.is_empty());
         let second = gr.drain_events();
@@ -1288,7 +1337,9 @@ mod tests {
         let lr = UniversalLikelihoodRatio {
             null_mean_millionths: 500_000,
         };
-        let ratio = lr.ratio(-250_000).expect("serde deserialization should succeed");
+        let ratio = lr
+            .ratio(-250_000)
+            .expect("serde deserialization should succeed");
         assert!(ratio < 0); // negative obs / positive mean = negative ratio
     }
 
@@ -1297,7 +1348,8 @@ mod tests {
         let mut gr = test_guardrail();
         for i in 0..5 {
             assert_eq!(gr.observation_count(), i);
-            gr.update(5_000).expect("serde deserialization should succeed");
+            gr.update(5_000)
+                .expect("serde deserialization should succeed");
         }
         assert_eq!(gr.observation_count(), 5);
     }
@@ -1333,7 +1385,8 @@ mod tests {
                 low_ratio_millionths: 500_000,
             }),
         );
-        gr.update(1_000_000).expect("serde deserialization should succeed");
+        gr.update(1_000_000)
+            .expect("serde deserialization should succeed");
         registry.add(gr);
         let events = registry.drain_all_events();
         assert!(!events.is_empty());
@@ -1361,7 +1414,8 @@ mod tests {
                     low_ratio_millionths: 500_000,
                 }),
             );
-            gr.update(1_000_000).expect("serde deserialization should succeed"); // triggers
+            gr.update(1_000_000)
+                .expect("serde deserialization should succeed"); // triggers
             registry.add(gr);
         }
         let blockers = registry.blocking_guardrails("low");
@@ -1387,7 +1441,13 @@ mod tests {
         );
         registry.add(gr);
         registry.update_stream("stream-b", 1_000_000); // different stream
-        assert_eq!(registry.get("gr1").expect("serde deserialization should succeed").observation_count(), 0);
+        assert_eq!(
+            registry
+                .get("gr1")
+                .expect("serde deserialization should succeed")
+                .observation_count(),
+            0
+        );
     }
 
     #[test]
@@ -1416,7 +1476,10 @@ mod tests {
         let errors = registry.reset_all(&receipt);
         assert!(errors.is_empty()); // no triggered guardrails to reset
         assert_eq!(
-            registry.get("active-gr").expect("serde deserialization should succeed").state(),
+            registry
+                .get("active-gr")
+                .expect("serde deserialization should succeed")
+                .state(),
             GuardrailState::Active
         );
     }
@@ -1478,7 +1541,8 @@ mod tests {
             low_ratio_millionths: 500_000,
         };
         let json = serde_json::to_string(&lr).expect("serde deserialization should succeed");
-        let restored: ThresholdLikelihoodRatio = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: ThresholdLikelihoodRatio =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(lr.threshold_millionths, restored.threshold_millionths);
         assert_eq!(lr.high_ratio_millionths, restored.high_ratio_millionths);
     }
@@ -1587,7 +1651,8 @@ mod tests {
             }),
         );
         // Single observation at ratio 10.0: e = 1.0 * 10.0 = 10.0 >= 5.0
-        gr.update(1_000_000).expect("serde deserialization should succeed");
+        gr.update(1_000_000)
+            .expect("serde deserialization should succeed");
         assert_eq!(gr.state(), GuardrailState::Triggered);
     }
 
@@ -1907,7 +1972,9 @@ mod tests {
             epoch: SecurityEpoch::GENESIS,
         };
         let json = serde_json::to_value(&receipt).expect("serde deserialization should succeed");
-        let obj = json.as_object().expect("serde deserialization should succeed");
+        let obj = json
+            .as_object()
+            .expect("serde deserialization should succeed");
         assert!(obj.contains_key("authorized_by"), "missing 'authorized_by'");
         assert!(obj.contains_key("rationale"), "missing 'rationale'");
         assert!(obj.contains_key("epoch"), "missing 'epoch'");
@@ -1922,7 +1989,9 @@ mod tests {
             low_ratio_millionths: 3,
         };
         let json = serde_json::to_value(&lr).expect("serde deserialization should succeed");
-        let obj = json.as_object().expect("serde deserialization should succeed");
+        let obj = json
+            .as_object()
+            .expect("serde deserialization should succeed");
         assert!(obj.contains_key("threshold_millionths"));
         assert!(obj.contains_key("high_ratio_millionths"));
         assert!(obj.contains_key("low_ratio_millionths"));
@@ -1935,7 +2004,9 @@ mod tests {
             null_mean_millionths: 42,
         };
         let json = serde_json::to_value(&lr).expect("serde deserialization should succeed");
-        let obj = json.as_object().expect("serde deserialization should succeed");
+        let obj = json
+            .as_object()
+            .expect("serde deserialization should succeed");
         assert!(obj.contains_key("null_mean_millionths"));
         assert_eq!(obj.len(), 1);
     }
@@ -1950,9 +2021,13 @@ mod tests {
             likelihood_ratio: 4,
         };
         let json = serde_json::to_value(&event).expect("serde deserialization should succeed");
-        let obj = json.as_object().expect("serde deserialization should succeed");
+        let obj = json
+            .as_object()
+            .expect("serde deserialization should succeed");
         assert!(obj.contains_key("EValueUpdated"));
-        let inner = obj["EValueUpdated"].as_object().expect("serde deserialization should succeed");
+        let inner = obj["EValueUpdated"]
+            .as_object()
+            .expect("serde deserialization should succeed");
         assert!(inner.contains_key("guardrail_id"));
         assert!(inner.contains_key("previous_e_value"));
         assert!(inner.contains_key("new_e_value"));
@@ -1969,9 +2044,13 @@ mod tests {
             blocked_actions: vec!["x".into()],
         };
         let json = serde_json::to_value(&event).expect("serde deserialization should succeed");
-        let obj = json.as_object().expect("serde deserialization should succeed");
+        let obj = json
+            .as_object()
+            .expect("serde deserialization should succeed");
         assert!(obj.contains_key("Triggered"));
-        let inner = obj["Triggered"].as_object().expect("serde deserialization should succeed");
+        let inner = obj["Triggered"]
+            .as_object()
+            .expect("serde deserialization should succeed");
         assert!(inner.contains_key("guardrail_id"));
         assert!(inner.contains_key("e_value"));
         assert!(inner.contains_key("threshold"));
@@ -1987,9 +2066,13 @@ mod tests {
             epoch: SecurityEpoch::GENESIS,
         };
         let json = serde_json::to_value(&event).expect("serde deserialization should succeed");
-        let obj = json.as_object().expect("serde deserialization should succeed");
+        let obj = json
+            .as_object()
+            .expect("serde deserialization should succeed");
         assert!(obj.contains_key("Reset"));
-        let inner = obj["Reset"].as_object().expect("serde deserialization should succeed");
+        let inner = obj["Reset"]
+            .as_object()
+            .expect("serde deserialization should succeed");
         assert!(inner.contains_key("guardrail_id"));
         assert!(inner.contains_key("authorized_by"));
         assert!(inner.contains_key("rationale"));
@@ -2105,7 +2188,9 @@ mod tests {
             null_mean_millionths: 1, // very small null mean
         };
         // observation = 1_000_000 (1.0), ratio = 1_000_000 * 1_000_000 / 1 = 1e12
-        let ratio = lr.ratio(1_000_000).expect("serde deserialization should succeed");
+        let ratio = lr
+            .ratio(1_000_000)
+            .expect("serde deserialization should succeed");
         assert_eq!(ratio, 1_000_000_000_000);
     }
 
@@ -2115,7 +2200,9 @@ mod tests {
             null_mean_millionths: -500_000,
         };
         // observation = 1_000_000, ratio = 1M * 1M / -500K = -2M
-        let ratio = lr.ratio(1_000_000).expect("serde deserialization should succeed");
+        let ratio = lr
+            .ratio(1_000_000)
+            .expect("serde deserialization should succeed");
         assert_eq!(ratio, -2_000_000);
     }
 
@@ -2135,7 +2222,8 @@ mod tests {
             epoch: SecurityEpoch::GENESIS,
         };
         let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
-        let restored: ResetReceipt = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: ResetReceipt =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(restored.rationale, "");
     }
 
@@ -2156,7 +2244,8 @@ mod tests {
             }),
         );
         // e = 1_000_000 * 2_000_000 / 1_000_000 = 2_000_000 >= 0, triggers
-        gr.update(100).expect("serde deserialization should succeed");
+        gr.update(100)
+            .expect("serde deserialization should succeed");
         assert_eq!(gr.state(), GuardrailState::Triggered);
     }
 
@@ -2175,7 +2264,8 @@ mod tests {
                 low_ratio_millionths: 500_000,
             }),
         );
-        gr.update(1_000_000).expect("serde deserialization should succeed"); // triggers
+        gr.update(1_000_000)
+            .expect("serde deserialization should succeed"); // triggers
         assert_eq!(gr.state(), GuardrailState::Triggered);
         assert!(gr.blocked_actions().is_empty());
         assert!(!gr.blocks("any_action"));
@@ -2198,7 +2288,8 @@ mod tests {
             }),
         );
         // e = 1M * 2M / 1M = 2M — well below i64::MAX
-        gr.update(1_000_000).expect("serde deserialization should succeed");
+        gr.update(1_000_000)
+            .expect("serde deserialization should succeed");
         assert_eq!(gr.state(), GuardrailState::Active);
     }
 
@@ -2214,7 +2305,8 @@ mod tests {
             likelihood_ratio: -1,
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let restored: GuardrailEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: GuardrailEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, restored);
     }
 
@@ -2227,7 +2319,8 @@ mod tests {
             blocked_actions: (0..20).map(|i| format!("action-{i}")).collect(),
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let restored: GuardrailEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: GuardrailEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, restored);
     }
 
@@ -2238,7 +2331,8 @@ mod tests {
             guardrail_id: long_id.clone(),
         };
         let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
-        let restored: GuardrailError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: GuardrailError =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, restored);
     }
 
@@ -2250,7 +2344,8 @@ mod tests {
             epoch: SecurityEpoch::from_raw(u64::MAX),
         };
         let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
-        let restored: ResetReceipt = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: ResetReceipt =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(receipt, restored);
     }
 
@@ -2262,7 +2357,8 @@ mod tests {
             low_ratio_millionths: -250_000,
         };
         let json = serde_json::to_string(&lr).expect("serde deserialization should succeed");
-        let restored: ThresholdLikelihoodRatio = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: ThresholdLikelihoodRatio =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(lr.threshold_millionths, restored.threshold_millionths);
         assert_eq!(lr.high_ratio_millionths, restored.high_ratio_millionths);
         assert_eq!(lr.low_ratio_millionths, restored.low_ratio_millionths);
@@ -2405,7 +2501,8 @@ mod tests {
 
         // Phase 1: trigger
         assert_eq!(gr.state(), GuardrailState::Active);
-        gr.update(1_000_000).expect("serde deserialization should succeed"); // e = 10.0 >= 5.0
+        gr.update(1_000_000)
+            .expect("serde deserialization should succeed"); // e = 10.0 >= 5.0
         assert_eq!(gr.state(), GuardrailState::Triggered);
         assert!(gr.blocks("deploy"));
 
@@ -2415,13 +2512,15 @@ mod tests {
             rationale: "fixed".into(),
             epoch: SecurityEpoch::from_raw(1),
         };
-        gr.reset(&receipt).expect("serde deserialization should succeed");
+        gr.reset(&receipt)
+            .expect("serde deserialization should succeed");
         assert_eq!(gr.state(), GuardrailState::Active);
         assert!(!gr.blocks("deploy"));
         assert_eq!(gr.e_value(), 1_000_000);
 
         // Phase 3: re-trigger
-        gr.update(1_000_000).expect("serde deserialization should succeed");
+        gr.update(1_000_000)
+            .expect("serde deserialization should succeed");
         assert_eq!(gr.state(), GuardrailState::Triggered);
         assert!(gr.blocks("deploy"));
     }
@@ -2459,10 +2558,15 @@ mod tests {
         );
         registry.add(gr);
 
-        let gr_mut = registry.get_mut("mutable").expect("serde deserialization should succeed");
+        let gr_mut = registry
+            .get_mut("mutable")
+            .expect("serde deserialization should succeed");
         gr_mut.suspend("via registry");
         assert_eq!(
-            registry.get("mutable").expect("serde deserialization should succeed").state(),
+            registry
+                .get("mutable")
+                .expect("serde deserialization should succeed")
+                .state(),
             GuardrailState::Suspended
         );
     }
@@ -2496,8 +2600,20 @@ mod tests {
         }
 
         registry.update_stream("stream-a", 1_000_000);
-        assert_eq!(registry.get("gr-a").expect("serde deserialization should succeed").observation_count(), 1);
-        assert_eq!(registry.get("gr-b").expect("serde deserialization should succeed").observation_count(), 0);
+        assert_eq!(
+            registry
+                .get("gr-a")
+                .expect("serde deserialization should succeed")
+                .observation_count(),
+            1
+        );
+        assert_eq!(
+            registry
+                .get("gr-b")
+                .expect("serde deserialization should succeed")
+                .observation_count(),
+            0
+        );
     }
 
     #[test]

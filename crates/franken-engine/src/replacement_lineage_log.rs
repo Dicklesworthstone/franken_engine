@@ -1805,10 +1805,17 @@ impl<A: StorageAdapter> ReplacementLineageEvidenceIndex<A> {
                     })
                     .cloned();
 
-                let mut joined_evidence = evidence.get(&replacement.receipt_id).cloned().expect("serde deserialization should succeed");
+                let mut joined_evidence = evidence
+                    .get(&replacement.receipt_id)
+                    .cloned()
+                    .expect("serde deserialization should succeed");
                 if let Some(ref demotion_record) = demotion {
-                    joined_evidence
-                        .extend(evidence.get(&demotion_record.receipt_id).cloned().expect("serde deserialization should succeed"));
+                    joined_evidence.extend(
+                        evidence
+                            .get(&demotion_record.receipt_id)
+                            .cloned()
+                            .expect("serde deserialization should succeed"),
+                    );
                 }
                 joined_evidence.sort_by(|a, b| {
                     a.category
@@ -2488,7 +2495,8 @@ mod tests {
             .expect("serde deserialization should succeed");
         log.append(r2, ReplacementKind::DelegateToNative, 200)
             .expect("serde deserialization should succeed");
-        log.append(r3, ReplacementKind::RePromotion, 300).expect("serde deserialization should succeed");
+        log.append(r3, ReplacementKind::RePromotion, 300)
+            .expect("serde deserialization should succeed");
 
         let results = log.query(&LineageQuery::for_slot(test_slot_id("slot-a")));
         assert_eq!(results.len(), 2);
@@ -2501,7 +2509,8 @@ mod tests {
         let r2 = test_receipt("slot-a", "new", "old", 200);
         log.append(r1, ReplacementKind::DelegateToNative, 100)
             .expect("serde deserialization should succeed");
-        log.append(r2, ReplacementKind::Rollback, 200).expect("serde deserialization should succeed");
+        log.append(r2, ReplacementKind::Rollback, 200)
+            .expect("serde deserialization should succeed");
 
         let mut kinds = BTreeSet::new();
         kinds.insert(ReplacementKind::Rollback);
@@ -2561,8 +2570,10 @@ mod tests {
         let r3 = test_receipt("slot-a", "delegate-v1", "native-v2", 300);
         log.append(r1, ReplacementKind::DelegateToNative, 100)
             .expect("serde deserialization should succeed");
-        log.append(r2, ReplacementKind::Demotion, 200).expect("serde deserialization should succeed");
-        log.append(r3, ReplacementKind::RePromotion, 300).expect("serde deserialization should succeed");
+        log.append(r2, ReplacementKind::Demotion, 200)
+            .expect("serde deserialization should succeed");
+        log.append(r3, ReplacementKind::RePromotion, 300)
+            .expect("serde deserialization should succeed");
 
         let lineage = log.slot_lineage(&test_slot_id("slot-a"));
         assert_eq!(lineage.len(), 3);
@@ -2683,7 +2694,8 @@ mod tests {
         ];
         for kind in &kinds {
             let json = serde_json::to_string(kind).expect("serde deserialization should succeed");
-            let decoded: ReplacementKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let decoded: ReplacementKind =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*kind, decoded);
         }
     }
@@ -2698,7 +2710,8 @@ mod tests {
             .expect("serde deserialization should succeed");
         let entry = &log.entries()[0];
         let json = serde_json::to_vec(entry).expect("serde deserialization should succeed");
-        let decoded: LineageLogEntry = serde_json::from_slice(&json).expect("serde deserialization should succeed");
+        let decoded: LineageLogEntry =
+            serde_json::from_slice(&json).expect("serde deserialization should succeed");
         assert_eq!(*entry, decoded);
     }
 
@@ -2712,7 +2725,8 @@ mod tests {
             .expect("serde deserialization should succeed");
         let cp = &log.checkpoints()[0];
         let json = serde_json::to_vec(cp).expect("serde deserialization should succeed");
-        let decoded: LogCheckpoint = serde_json::from_slice(&json).expect("serde deserialization should succeed");
+        let decoded: LogCheckpoint =
+            serde_json::from_slice(&json).expect("serde deserialization should succeed");
         assert_eq!(*cp, decoded);
     }
 
@@ -2726,7 +2740,8 @@ mod tests {
         }
         let proof = log.inclusion_proof(2).expect("proof exists");
         let json = serde_json::to_vec(&proof).expect("serde deserialization should succeed");
-        let decoded: InclusionProof = serde_json::from_slice(&json).expect("serde deserialization should succeed");
+        let decoded: InclusionProof =
+            serde_json::from_slice(&json).expect("serde deserialization should succeed");
         assert_eq!(proof, decoded);
         assert!(verify_inclusion_proof(&decoded));
     }
@@ -2746,7 +2761,8 @@ mod tests {
 
         let proof = log.consistency_proof(0, 1).expect("proof");
         let json = serde_json::to_vec(&proof).expect("serde deserialization should succeed");
-        let decoded: ConsistencyProof = serde_json::from_slice(&json).expect("serde deserialization should succeed");
+        let decoded: ConsistencyProof =
+            serde_json::from_slice(&json).expect("serde deserialization should succeed");
         assert_eq!(proof, decoded);
         assert!(verify_consistency_proof(&decoded));
     }
@@ -2762,7 +2778,8 @@ mod tests {
         log.create_checkpoint(300, SecurityEpoch::from_raw(1))
             .expect("serde deserialization should succeed");
         let json = serde_json::to_vec(&log).expect("serde deserialization should succeed");
-        let decoded: ReplacementLineageLog = serde_json::from_slice(&json).expect("serde deserialization should succeed");
+        let decoded: ReplacementLineageLog =
+            serde_json::from_slice(&json).expect("serde deserialization should succeed");
         assert_eq!(log.len(), decoded.len());
         assert_eq!(log.merkle_root(), decoded.merkle_root());
     }
@@ -2833,7 +2850,8 @@ mod tests {
             .expect("serde deserialization should succeed");
         log.append(r2, ReplacementKind::DelegateToNative, 200)
             .expect("serde deserialization should succeed");
-        log.append(r3, ReplacementKind::RePromotion, 300).expect("serde deserialization should succeed");
+        log.append(r3, ReplacementKind::RePromotion, 300)
+            .expect("serde deserialization should succeed");
 
         let ids = log.slot_ids();
         assert_eq!(ids.len(), 2);
@@ -2850,7 +2868,8 @@ mod tests {
             max_entries_in_memory: 1000,
         };
         let json = serde_json::to_vec(&config).expect("serde deserialization should succeed");
-        let decoded: LineageLogConfig = serde_json::from_slice(&json).expect("serde deserialization should succeed");
+        let decoded: LineageLogConfig =
+            serde_json::from_slice(&json).expect("serde deserialization should succeed");
         assert_eq!(config, decoded);
     }
 
@@ -2872,7 +2891,8 @@ mod tests {
             max_timestamp_ns: Some(500),
         };
         let json = serde_json::to_vec(&query).expect("serde deserialization should succeed");
-        let decoded: LineageQuery = serde_json::from_slice(&json).expect("serde deserialization should succeed");
+        let decoded: LineageQuery =
+            serde_json::from_slice(&json).expect("serde deserialization should succeed");
         assert_eq!(query, decoded);
     }
 
@@ -2888,7 +2908,8 @@ mod tests {
             .expect("serde deserialization should succeed");
         let audit = log.audit();
         let json = serde_json::to_vec(&audit).expect("serde deserialization should succeed");
-        let decoded: AuditResult = serde_json::from_slice(&json).expect("serde deserialization should succeed");
+        let decoded: AuditResult =
+            serde_json::from_slice(&json).expect("serde deserialization should succeed");
         assert_eq!(audit, decoded);
     }
 
@@ -2926,8 +2947,10 @@ mod tests {
             EvidenceCategory::DifferentialExecutionLog,
             EvidenceCategory::Additional,
         ] {
-            let json = serde_json::to_string(&variant).expect("serde deserialization should succeed");
-            let back: EvidenceCategory = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&variant).expect("serde deserialization should succeed");
+            let back: EvidenceCategory =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(variant, back);
         }
     }
@@ -3037,7 +3060,8 @@ mod tests {
             summary: "gate passed".to_string(),
         };
         let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
-        let back: EvidencePointerInput = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: EvidencePointerInput =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(input, back);
     }
 
@@ -3068,7 +3092,8 @@ mod tests {
             summary: "s".to_string(),
         };
         let json = serde_json::to_string(&ptr).expect("serde deserialization should succeed");
-        let back: EvidencePointer = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: EvidencePointer =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ptr, back);
     }
 
@@ -3082,7 +3107,8 @@ mod tests {
             limit: Some(10),
         };
         let json = serde_json::to_string(&query).expect("serde deserialization should succeed");
-        let back: SlotLineageQuery = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SlotLineageQuery =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(query, back);
     }
 
@@ -3095,7 +3121,8 @@ mod tests {
             limit: Some(10),
         };
         let json = serde_json::to_string(&query).expect("serde deserialization should succeed");
-        let back: ReplayJoinQuery = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ReplayJoinQuery =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(query, back);
     }
 
@@ -3113,7 +3140,8 @@ mod tests {
             error_code: None,
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let back: LineageIndexEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: LineageIndexEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
     }
 
@@ -3179,7 +3207,12 @@ mod tests {
             .replacement_by_content_hash(&record.receipt_content_hash, &ctx)
             .expect("serde deserialization should succeed");
         assert!(found.is_some());
-        assert_eq!(found.expect("serde deserialization should succeed").receipt_id, record.receipt_id);
+        assert_eq!(
+            found
+                .expect("serde deserialization should succeed")
+                .receipt_id,
+            record.receipt_id
+        );
     }
 
     #[test]
@@ -3214,7 +3247,9 @@ mod tests {
                 summary: "high risk".to_string(),
             }],
         };
-        let record = idx.index_demotion_receipt(input, &ctx).expect("serde deserialization should succeed");
+        let record = idx
+            .index_demotion_receipt(input, &ctx)
+            .expect("serde deserialization should succeed");
         assert_eq!(record.receipt_id, "demotion-1");
         assert_eq!(record.demotion_reason, "regression detected");
         assert!(!record.receipt_content_hash.is_empty());
@@ -3256,12 +3291,19 @@ mod tests {
             linked_replacement_receipt_id: None,
             evidence: Vec::new(),
         };
-        let record = idx.index_demotion_receipt(input, &ctx).expect("serde deserialization should succeed");
+        let record = idx
+            .index_demotion_receipt(input, &ctx)
+            .expect("serde deserialization should succeed");
         let found = idx
             .demotion_by_content_hash(&record.receipt_content_hash, &ctx)
             .expect("serde deserialization should succeed");
         assert!(found.is_some());
-        assert_eq!(found.expect("serde deserialization should succeed").receipt_id, "dem-hash-test");
+        assert_eq!(
+            found
+                .expect("serde deserialization should succeed")
+                .receipt_id,
+            "dem-hash-test"
+        );
     }
 
     #[test]
@@ -3277,7 +3319,9 @@ mod tests {
             .expect("serde deserialization should succeed");
         let slot_id = test_slot_id("slot-lin");
         let query = SlotLineageQuery::default();
-        let chain = idx.slot_lineage(&slot_id, &query, &ctx).expect("serde deserialization should succeed");
+        let chain = idx
+            .slot_lineage(&slot_id, &query, &ctx)
+            .expect("serde deserialization should succeed");
         assert_eq!(chain.len(), 2);
         assert_eq!(chain[0].from_cell_digest, "old1");
         assert_eq!(chain[1].from_cell_digest, "new1");
@@ -3303,7 +3347,9 @@ mod tests {
             max_timestamp_ns: Some(2500),
             limit: None,
         };
-        let chain = idx.slot_lineage(&slot_id, &query, &ctx).expect("serde deserialization should succeed");
+        let chain = idx
+            .slot_lineage(&slot_id, &query, &ctx)
+            .expect("serde deserialization should succeed");
         assert_eq!(chain.len(), 1);
         assert_eq!(chain[0].timestamp_ns, 2000);
     }
@@ -3331,7 +3377,9 @@ mod tests {
         idx.index_replacement_receipt(&receipt, ReplacementKind::DelegateToNative, &evidence, &ctx)
             .expect("serde deserialization should succeed");
         let query = ReplayJoinQuery::default();
-        let rows = idx.replay_join(&query, &ctx).expect("serde deserialization should succeed");
+        let rows = idx
+            .replay_join(&query, &ctx)
+            .expect("serde deserialization should succeed");
         assert_eq!(rows.len(), 1);
         assert!(!rows[0].gate_results.is_empty());
         assert!(!rows[0].performance_benchmarks.is_empty());
@@ -3367,7 +3415,8 @@ mod tests {
             .index_replacement_receipt(&receipt, ReplacementKind::Rollback, &[], &ctx)
             .expect("serde deserialization should succeed");
         let json = serde_json::to_string(&record).expect("serde deserialization should succeed");
-        let back: ReplacementReceiptRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ReplacementReceiptRecord =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(record, back);
     }
 
@@ -3387,9 +3436,12 @@ mod tests {
             linked_replacement_receipt_id: Some("linked-r".to_string()),
             evidence: Vec::new(),
         };
-        let record = idx.index_demotion_receipt(input, &ctx).expect("serde deserialization should succeed");
+        let record = idx
+            .index_demotion_receipt(input, &ctx)
+            .expect("serde deserialization should succeed");
         let json = serde_json::to_string(&record).expect("serde deserialization should succeed");
-        let back: DemotionReceiptRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DemotionReceiptRecord =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(record, back);
     }
 
@@ -3405,7 +3457,8 @@ mod tests {
             receipt_content_hash: "h".to_string(),
         };
         let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
-        let back: LineageChainEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: LineageChainEntry =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, back);
     }
 
@@ -3423,7 +3476,8 @@ mod tests {
             evidence: Vec::new(),
         };
         let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
-        let back: DemotionReceiptInput = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DemotionReceiptInput =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(input, back);
     }
 
@@ -3435,7 +3489,8 @@ mod tests {
     fn proof_direction_serde_roundtrip() {
         for dir in [ProofDirection::Left, ProofDirection::Right] {
             let json = serde_json::to_string(&dir).expect("serde deserialization should succeed");
-            let restored: ProofDirection = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: ProofDirection =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(dir, restored);
         }
     }
@@ -3465,7 +3520,8 @@ mod tests {
         ];
         for err in &errors {
             let json = serde_json::to_string(err).expect("serde deserialization should succeed");
-            let restored: LineageLogError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: LineageLogError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, restored);
         }
     }
@@ -3499,7 +3555,8 @@ mod tests {
             direction: ProofDirection::Left,
         };
         let json = serde_json::to_string(&step).expect("serde deserialization should succeed");
-        let restored: MerkleProofStep = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: MerkleProofStep =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(step, restored);
     }
 
@@ -3516,7 +3573,8 @@ mod tests {
             validation_artifact_count: 3,
         };
         let json = serde_json::to_string(&step).expect("serde deserialization should succeed");
-        let restored: LineageStep = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: LineageStep =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(step, restored);
     }
 
@@ -3530,7 +3588,8 @@ mod tests {
             issues: vec!["minor note".to_string()],
         };
         let json = serde_json::to_string(&ver).expect("serde deserialization should succeed");
-        let restored: LineageVerification = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: LineageVerification =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ver, restored);
     }
 
@@ -3546,7 +3605,8 @@ mod tests {
             error_code: None,
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let restored: LineageLogEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: LineageLogEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, restored);
     }
 
@@ -3570,7 +3630,8 @@ mod tests {
             additional_evidence: Vec::new(),
         };
         let json = serde_json::to_string(&row).expect("serde deserialization should succeed");
-        let restored: ReplayJoinRow = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: ReplayJoinRow =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(row, restored);
     }
 
@@ -3613,7 +3674,8 @@ mod tests {
         ];
         for err in &errors {
             let json = serde_json::to_string(err).expect("serde deserialization should succeed");
-            let restored: LineageIndexError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: LineageIndexError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, restored);
         }
     }
@@ -3725,7 +3787,8 @@ mod tests {
         let mut names = std::collections::BTreeSet::new();
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: ProofDirection = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ProofDirection =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(v, &back);
             names.insert(json);
         }
@@ -3779,7 +3842,8 @@ mod tests {
             limit: Some(10),
         };
         let json = serde_json::to_string(&query).expect("serde deserialization should succeed");
-        let back: SlotLineageQuery = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SlotLineageQuery =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(query, back);
     }
 
@@ -3792,7 +3856,8 @@ mod tests {
             limit: Some(50),
         };
         let json = serde_json::to_string(&query).expect("serde deserialization should succeed");
-        let back: ReplayJoinQuery = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ReplayJoinQuery =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(query, back);
     }
 
@@ -3892,11 +3957,13 @@ mod tests {
         let r2 = test_receipt("slot-serde", "new", "newer", 200);
         log.append(r1, ReplacementKind::DelegateToNative, 100)
             .expect("serde deserialization should succeed");
-        log.append(r2, ReplacementKind::Demotion, 200).expect("serde deserialization should succeed");
+        log.append(r2, ReplacementKind::Demotion, 200)
+            .expect("serde deserialization should succeed");
         log.create_checkpoint(200, SecurityEpoch::from_raw(1))
             .expect("serde deserialization should succeed");
         let json = serde_json::to_string(&log).expect("serde deserialization should succeed");
-        let restored: ReplacementLineageLog = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: ReplacementLineageLog =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(restored.len(), 2);
         assert_eq!(restored.checkpoints().len(), 1);
         assert_eq!(
@@ -3990,7 +4057,8 @@ mod tests {
             .expect("serde deserialization should succeed");
         log.append(r2, ReplacementKind::DelegateToNative, 200)
             .expect("serde deserialization should succeed");
-        log.append(r3, ReplacementKind::Demotion, 300).expect("serde deserialization should succeed");
+        log.append(r3, ReplacementKind::Demotion, 300)
+            .expect("serde deserialization should succeed");
         let ids = log.slot_ids();
         // BTreeSet guarantees sorted order and deduplication.
         assert_eq!(ids.len(), 2);

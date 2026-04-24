@@ -739,8 +739,12 @@ mod tests {
             .insert("session1".to_string(), trace);
 
         // Generate two reports with identical inputs
-        let report1 = controller.generate_report("session1").expect("serde deserialization should succeed");
-        let report2 = controller.generate_report("session1").expect("serde deserialization should succeed");
+        let report1 = controller
+            .generate_report("session1")
+            .expect("serde deserialization should succeed");
+        let report2 = controller
+            .generate_report("session1")
+            .expect("serde deserialization should succeed");
 
         // Reports should have identical object_id for reproducibility
         assert_eq!(report1.object_id, report2.object_id);
@@ -781,8 +785,12 @@ mod tests {
             .reference_traces
             .insert("session2".to_string(), trace2);
 
-        let report1 = controller.generate_report("session1").expect("serde deserialization should succeed");
-        let report2 = controller.generate_report("session2").expect("serde deserialization should succeed");
+        let report1 = controller
+            .generate_report("session1")
+            .expect("serde deserialization should succeed");
+        let report2 = controller
+            .generate_report("session2")
+            .expect("serde deserialization should succeed");
 
         // Different traces should produce different object_ids
         assert_ne!(report1.object_id, report2.object_id);
@@ -826,8 +834,12 @@ mod tests {
             .reference_traces
             .insert("config-test".to_string(), trace);
 
-        let report1 = controller1.generate_report("config-test").expect("serde deserialization should succeed");
-        let report2 = controller2.generate_report("config-test").expect("serde deserialization should succeed");
+        let report1 = controller1
+            .generate_report("config-test")
+            .expect("serde deserialization should succeed");
+        let report2 = controller2
+            .generate_report("config-test")
+            .expect("serde deserialization should succeed");
 
         // Same trace but different configs should produce different object_ids
         assert_ne!(report1.object_id, report2.object_id);

@@ -1399,7 +1399,8 @@ mod tests {
     #[test]
     fn end_to_end_bounds_sum_stage_budgets_and_observations() {
         // SAFETY: Test-only unwrap with valid stress profile and stage count
-        let report = build_tail_latency_control_plane_report(StressProfile::Balanced, 7).expect("serde deserialization should succeed");
+        let report = build_tail_latency_control_plane_report(StressProfile::Balanced, 7)
+            .expect("serde deserialization should succeed");
         assert_eq!(report.end_to_end_bounds.stage_count, 7);
         assert!(report.end_to_end_bounds.budget_p99_ns > 0);
         assert!(report.end_to_end_bounds.observed_p99_ns > 0);
@@ -1409,7 +1410,8 @@ mod tests {
     #[test]
     fn queue_model_calibration_is_explicit_per_stage() {
         // SAFETY: Test-only unwrap with valid stress profile and stage count
-        let report = build_tail_latency_control_plane_report(StressProfile::Balanced, 9).expect("serde deserialization should succeed");
+        let report = build_tail_latency_control_plane_report(StressProfile::Balanced, 9)
+            .expect("serde deserialization should succeed");
         assert_eq!(report.stage_calibrations.len(), 7);
         assert!(
             report
@@ -1451,7 +1453,8 @@ mod tests {
     #[test]
     fn balanced_profile_stays_out_of_fallback() {
         // SAFETY: Test scenario with valid stress profile and seed; report building should succeed
-        let report = build_tail_latency_control_plane_report(StressProfile::Balanced, 21).expect("serde deserialization should succeed");
+        let report = build_tail_latency_control_plane_report(StressProfile::Balanced, 21)
+            .expect("serde deserialization should succeed");
         assert!(!report.guardrails.fallback_activated);
         assert_ne!(report.guardrails.state, GuardrailState::FallbackEngaged);
         assert_eq!(report.admission_manifest.summary.total_shed, 0);
@@ -1525,7 +1528,10 @@ mod tests {
     fn stress_profile_from_str_roundtrip() {
         for profile in [StressProfile::Balanced, StressProfile::SyntheticContention] {
             // SAFETY: Test-only unwrap parsing known valid profile string
-            let parsed: StressProfile = profile.as_str().parse().expect("serde deserialization should succeed");
+            let parsed: StressProfile = profile
+                .as_str()
+                .parse()
+                .expect("serde deserialization should succeed");
             assert_eq!(parsed, profile);
         }
     }
@@ -1533,7 +1539,9 @@ mod tests {
     #[test]
     fn stress_profile_from_str_accepts_underscore_variant() {
         // SAFETY: Test-only unwrap parsing known valid profile string
-        let parsed: StressProfile = "synthetic_contention".parse().expect("serde deserialization should succeed");
+        let parsed: StressProfile = "synthetic_contention"
+            .parse()
+            .expect("serde deserialization should succeed");
         assert_eq!(parsed, StressProfile::SyntheticContention);
     }
 
@@ -1572,10 +1580,12 @@ mod tests {
         for profile in [StressProfile::Balanced, StressProfile::SyntheticContention] {
             // SAFETY: StressProfile derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json = serde_json::to_string(&profile).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&profile).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by to_string of a valid StressProfile,
             // so from_str back to StressProfile cannot fail (valid format + matching schema).
-            let deserialized: StressProfile = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let deserialized: StressProfile =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(deserialized, profile);
         }
     }
@@ -1584,11 +1594,13 @@ mod tests {
     fn serde_stress_profile_uses_kebab_case() {
         // SAFETY: StressProfile derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&StressProfile::SyntheticContention).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&StressProfile::SyntheticContention)
+            .expect("serde deserialization should succeed");
         assert_eq!(json, "\"synthetic-contention\"");
         // SAFETY: StressProfile derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json_balanced = serde_json::to_string(&StressProfile::Balanced).expect("serde deserialization should succeed");
+        let json_balanced = serde_json::to_string(&StressProfile::Balanced)
+            .expect("serde deserialization should succeed");
         assert_eq!(json_balanced, "\"balanced\"");
     }
 
@@ -1602,7 +1614,8 @@ mod tests {
             // SAFETY: GuardrailState derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(&state).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by valid GuardrailState serialization
-            let deserialized: GuardrailState = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let deserialized: GuardrailState =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(deserialized, state);
         }
     }
@@ -1610,10 +1623,12 @@ mod tests {
     #[test]
     fn serde_guardrail_state_uses_snake_case() {
         // SAFETY: GuardrailState derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&GuardrailState::NearLimit).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&GuardrailState::NearLimit)
+            .expect("serde deserialization should succeed");
         assert_eq!(json, "\"near_limit\"");
         // SAFETY: GuardrailState derives Serialize and has no non-serializable fields
-        let json_fallback = serde_json::to_string(&GuardrailState::FallbackEngaged).expect("serde deserialization should succeed");
+        let json_fallback = serde_json::to_string(&GuardrailState::FallbackEngaged)
+            .expect("serde deserialization should succeed");
         assert_eq!(json_fallback, "\"fallback_engaged\"");
     }
 
@@ -1634,7 +1649,8 @@ mod tests {
             queue_adjusted_p999_ns: 450,
         };
         let json = serde_json::to_string(&bounds).expect("serde deserialization should succeed");
-        let deserialized: EndToEndLatencyBounds = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let deserialized: EndToEndLatencyBounds =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(deserialized, bounds);
     }
 
@@ -1650,8 +1666,10 @@ mod tests {
             gc_p99_ns: 800,
             gc_p999_ns: 1200,
         };
-        let json = serde_json::to_string(&decomposition).expect("serde deserialization should succeed");
-        let deserialized: TailLatencyDecomposition = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json =
+            serde_json::to_string(&decomposition).expect("serde deserialization should succeed");
+        let deserialized: TailLatencyDecomposition =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(deserialized, decomposition);
     }
 
@@ -1672,7 +1690,8 @@ mod tests {
             violated_stage_count: 2,
         };
         let json = serde_json::to_string(&status).expect("serde deserialization should succeed");
-        let deserialized: RuntimeGuardrailStatus = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let deserialized: RuntimeGuardrailStatus =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(deserialized, status);
     }
 
@@ -1707,7 +1726,8 @@ mod tests {
             profile: StressProfile::Balanced,
         };
         let json = serde_json::to_string(&trace_ids).expect("serde deserialization should succeed");
-        let deserialized: TailLatencyControlPlaneTraceIds = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let deserialized: TailLatencyControlPlaneTraceIds =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(deserialized, trace_ids);
     }
 
@@ -1724,8 +1744,10 @@ mod tests {
             stage: Some("parse".to_string()),
             detail: Some("p99=100ns".to_string()),
         };
-        let json = serde_json::to_string(&event_full).expect("serde deserialization should succeed");
-        let deserialized: TailLatencyControlPlaneEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json =
+            serde_json::to_string(&event_full).expect("serde deserialization should succeed");
+        let deserialized: TailLatencyControlPlaneEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(deserialized, event_full);
     }
 
@@ -1746,7 +1768,8 @@ mod tests {
         assert!(!json.contains("stage"));
         assert!(!json.contains("detail"));
         // Roundtrip still works
-        let deserialized: TailLatencyControlPlaneEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let deserialized: TailLatencyControlPlaneEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(deserialized, event);
     }
 
@@ -1797,7 +1820,8 @@ mod tests {
 
     #[test]
     fn balanced_report_has_correct_schema_fields() {
-        let report = build_tail_latency_control_plane_report(StressProfile::Balanced, 1).expect("serde deserialization should succeed");
+        let report = build_tail_latency_control_plane_report(StressProfile::Balanced, 1)
+            .expect("serde deserialization should succeed");
         assert_eq!(
             report.schema_version,
             TAIL_LATENCY_CONTROL_PLANE_SCHEMA_VERSION
@@ -1811,14 +1835,16 @@ mod tests {
 
     #[test]
     fn balanced_report_has_admission_receipts() {
-        let report = build_tail_latency_control_plane_report(StressProfile::Balanced, 3).expect("serde deserialization should succeed");
+        let report = build_tail_latency_control_plane_report(StressProfile::Balanced, 3)
+            .expect("serde deserialization should succeed");
         // Balanced plan: 3 + 4 + 2 = 9 admission invocations
         assert_eq!(report.admission_receipts.len(), 9);
     }
 
     #[test]
     fn balanced_report_has_feedback_decisions() {
-        let report = build_tail_latency_control_plane_report(StressProfile::Balanced, 5).expect("serde deserialization should succeed");
+        let report = build_tail_latency_control_plane_report(StressProfile::Balanced, 5)
+            .expect("serde deserialization should succeed");
         // At least one decision per controller for the tick
         assert!(!report.controller_decisions.is_empty());
     }
@@ -1870,7 +1896,8 @@ mod tests {
     #[test]
     fn decomposition_gc_comes_only_from_gc_pause_stage() {
         // SAFETY: Test scenario with valid stress profile and seed; report building should succeed
-        let report = build_tail_latency_control_plane_report(StressProfile::Balanced, 1).expect("serde deserialization should succeed");
+        let report = build_tail_latency_control_plane_report(StressProfile::Balanced, 1)
+            .expect("serde deserialization should succeed");
         // GC p99 should equal the GcPause observation p99_ns
         // From the balanced scenario: GcPause p99_ns = 8_600_000
         assert_eq!(report.decomposition.gc_p99_ns, 8_600_000);
@@ -1879,7 +1906,8 @@ mod tests {
 
     #[test]
     fn decomposition_synchronization_comes_from_sandbox_init() {
-        let report = build_tail_latency_control_plane_report(StressProfile::Balanced, 1).expect("serde deserialization should succeed");
+        let report = build_tail_latency_control_plane_report(StressProfile::Balanced, 1)
+            .expect("serde deserialization should succeed");
         // From the balanced scenario: SandboxInit p99_ns = 2_600_000, p999_ns = 9_000_000
         assert_eq!(report.decomposition.synchronization_p99_ns, 2_600_000);
         assert_eq!(report.decomposition.synchronization_p999_ns, 9_000_000);
@@ -1904,7 +1932,8 @@ mod tests {
 
     #[test]
     fn end_to_end_bounds_composition_model_is_serial() {
-        let report = build_tail_latency_control_plane_report(StressProfile::Balanced, 1).expect("serde deserialization should succeed");
+        let report = build_tail_latency_control_plane_report(StressProfile::Balanced, 1)
+            .expect("serde deserialization should succeed");
         assert_eq!(
             report.end_to_end_bounds.composition_model,
             "serial_min_plus_sum"
@@ -1913,7 +1942,8 @@ mod tests {
 
     #[test]
     fn end_to_end_bounds_budget_ordering_p50_le_p95_le_p99_le_p999() {
-        let report = build_tail_latency_control_plane_report(StressProfile::Balanced, 1).expect("serde deserialization should succeed");
+        let report = build_tail_latency_control_plane_report(StressProfile::Balanced, 1)
+            .expect("serde deserialization should succeed");
         let b = &report.end_to_end_bounds;
         assert!(b.budget_p50_ns <= b.budget_p95_ns);
         assert!(b.budget_p95_ns <= b.budget_p99_ns);
@@ -1924,9 +1954,12 @@ mod tests {
 
     #[test]
     fn serde_roundtrip_full_report() {
-        let report = build_tail_latency_control_plane_report(StressProfile::Balanced, 1).expect("serde deserialization should succeed");
-        let json = serde_json::to_string_pretty(&report).expect("serde deserialization should succeed");
-        let deserialized: TailLatencyControlPlaneReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let report = build_tail_latency_control_plane_report(StressProfile::Balanced, 1)
+            .expect("serde deserialization should succeed");
+        let json =
+            serde_json::to_string_pretty(&report).expect("serde deserialization should succeed");
+        let deserialized: TailLatencyControlPlaneReport =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(deserialized.schema_version, report.schema_version);
         assert_eq!(deserialized.profile, report.profile);
         assert_eq!(deserialized.bundle_epoch, report.bundle_epoch);
@@ -1939,10 +1972,13 @@ mod tests {
 
     #[test]
     fn serde_roundtrip_stage_queue_calibration() {
-        let report = build_tail_latency_control_plane_report(StressProfile::Balanced, 1).expect("serde deserialization should succeed");
+        let report = build_tail_latency_control_plane_report(StressProfile::Balanced, 1)
+            .expect("serde deserialization should succeed");
         let calibration = &report.stage_calibrations[0];
-        let json = serde_json::to_string(calibration).expect("serde deserialization should succeed");
-        let deserialized: StageQueueCalibration = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json =
+            serde_json::to_string(calibration).expect("serde deserialization should succeed");
+        let deserialized: StageQueueCalibration =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(&deserialized, calibration);
     }
 
@@ -1972,12 +2008,14 @@ mod tests {
 
     #[test]
     fn report_is_deterministic_for_same_inputs() {
-        let report_a =
-            build_tail_latency_control_plane_report(StressProfile::Balanced, 99).expect("serde deserialization should succeed");
-        let report_b =
-            build_tail_latency_control_plane_report(StressProfile::Balanced, 99).expect("serde deserialization should succeed");
-        let json_a = serde_json::to_string(&report_a).expect("serde deserialization should succeed");
-        let json_b = serde_json::to_string(&report_b).expect("serde deserialization should succeed");
+        let report_a = build_tail_latency_control_plane_report(StressProfile::Balanced, 99)
+            .expect("serde deserialization should succeed");
+        let report_b = build_tail_latency_control_plane_report(StressProfile::Balanced, 99)
+            .expect("serde deserialization should succeed");
+        let json_a =
+            serde_json::to_string(&report_a).expect("serde deserialization should succeed");
+        let json_b =
+            serde_json::to_string(&report_b).expect("serde deserialization should succeed");
         assert_eq!(json_a, json_b);
     }
 

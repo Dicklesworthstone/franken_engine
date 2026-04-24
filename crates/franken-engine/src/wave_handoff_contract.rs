@@ -454,7 +454,8 @@ mod tests {
             let json = serde_json::to_string(&wave).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by to_string of a valid WaveId,
             // so from_str back to WaveId cannot fail (valid format + matching schema).
-            let back: WaveId = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: WaveId =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(wave, back);
         }
     }
@@ -463,7 +464,8 @@ mod tests {
     fn wave_id_serde_uses_snake_case() {
         // SAFETY: WaveId derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&WaveId::Wave0).expect("serde deserialization should succeed");
+        let json =
+            serde_json::to_string(&WaveId::Wave0).expect("serde deserialization should succeed");
         assert_eq!(json, "\"wave0\"");
     }
 
@@ -478,10 +480,12 @@ mod tests {
         ] {
             // SAFETY: RequiredBeadStatus derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json = serde_json::to_string(&status).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&status).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by to_string of a valid RequiredBeadStatus,
             // so from_str back to RequiredBeadStatus cannot fail (valid format + matching schema).
-            let back: RequiredBeadStatus = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: RequiredBeadStatus =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(status, back);
         }
     }
@@ -508,7 +512,8 @@ mod tests {
         let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid WaveCriterion,
         // so from_str back to WaveCriterion cannot fail (valid format + matching schema).
-        let back: WaveCriterion = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: WaveCriterion =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c, back);
     }
 
@@ -559,7 +564,8 @@ mod tests {
         let json = serde_json::to_string(&contract).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid WaveTransitionContract,
         // so from_str back to WaveTransitionContract cannot fail (valid format + matching schema).
-        let back: WaveTransitionContract = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: WaveTransitionContract =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(contract, back);
     }
 
@@ -582,7 +588,8 @@ mod tests {
     fn handoff_package_serde_roundtrip() {
         let pkg = HandoffPackage::baseline();
         let json = serde_json::to_string(&pkg).expect("serde deserialization should succeed");
-        let back: HandoffPackage = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: HandoffPackage =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(pkg, back);
     }
 
@@ -597,7 +604,8 @@ mod tests {
             artifact_ref: "artifacts/a.json".to_string(),
         };
         let json = serde_json::to_string(&att).expect("serde deserialization should succeed");
-        let back: CriterionAttestation = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: CriterionAttestation =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(att, back);
     }
 
@@ -615,7 +623,8 @@ mod tests {
         ];
         for code in codes {
             let json = serde_json::to_string(&code).expect("serde deserialization should succeed");
-            let back: HandoffValidationErrorCode = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: HandoffValidationErrorCode =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(code, back);
         }
     }
@@ -629,7 +638,8 @@ mod tests {
             message: "score too low".to_string(),
         };
         let json = serde_json::to_string(&f).expect("serde deserialization should succeed");
-        let back: HandoffValidationFailure = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: HandoffValidationFailure =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(f, back);
     }
 
@@ -650,7 +660,8 @@ mod tests {
             failures: Vec::new(),
         };
         let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
-        let back: HandoffValidationReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: HandoffValidationReport =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report, back);
     }
 
@@ -671,7 +682,8 @@ mod tests {
             packet_id: "pkt-1".to_string(),
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let back: HandoffEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: HandoffEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
     }
 
@@ -690,7 +702,8 @@ mod tests {
             packet_id: "pkt-2".to_string(),
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let back: HandoffEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: HandoffEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
     }
 
@@ -1307,15 +1320,18 @@ mod tests {
     #[test]
     fn required_bead_status_serde_snake_case_values() {
         assert_eq!(
-            serde_json::to_string(&RequiredBeadStatus::Open).expect("serde deserialization should succeed"),
+            serde_json::to_string(&RequiredBeadStatus::Open)
+                .expect("serde deserialization should succeed"),
             "\"open\""
         );
         assert_eq!(
-            serde_json::to_string(&RequiredBeadStatus::InProgress).expect("serde deserialization should succeed"),
+            serde_json::to_string(&RequiredBeadStatus::InProgress)
+                .expect("serde deserialization should succeed"),
             "\"in_progress\""
         );
         assert_eq!(
-            serde_json::to_string(&RequiredBeadStatus::Closed).expect("serde deserialization should succeed"),
+            serde_json::to_string(&RequiredBeadStatus::Closed)
+                .expect("serde deserialization should succeed"),
             "\"closed\""
         );
     }
@@ -1323,11 +1339,13 @@ mod tests {
     #[test]
     fn handoff_validation_error_code_serde_snake_case_values() {
         assert_eq!(
-            serde_json::to_string(&HandoffValidationErrorCode::MissingRequiredField).expect("serde deserialization should succeed"),
+            serde_json::to_string(&HandoffValidationErrorCode::MissingRequiredField)
+                .expect("serde deserialization should succeed"),
             "\"missing_required_field\""
         );
         assert_eq!(
-            serde_json::to_string(&HandoffValidationErrorCode::WeakHandoffPackage).expect("serde deserialization should succeed"),
+            serde_json::to_string(&HandoffValidationErrorCode::WeakHandoffPackage)
+                .expect("serde deserialization should succeed"),
             "\"weak_handoff_package\""
         );
         assert_eq!(
@@ -1336,15 +1354,18 @@ mod tests {
             "\"missing_criterion_attestation\""
         );
         assert_eq!(
-            serde_json::to_string(&HandoffValidationErrorCode::CriterionStatusMismatch).expect("serde deserialization should succeed"),
+            serde_json::to_string(&HandoffValidationErrorCode::CriterionStatusMismatch)
+                .expect("serde deserialization should succeed"),
             "\"criterion_status_mismatch\""
         );
         assert_eq!(
-            serde_json::to_string(&HandoffValidationErrorCode::CriterionArtifactMissing).expect("serde deserialization should succeed"),
+            serde_json::to_string(&HandoffValidationErrorCode::CriterionArtifactMissing)
+                .expect("serde deserialization should succeed"),
             "\"criterion_artifact_missing\""
         );
         assert_eq!(
-            serde_json::to_string(&HandoffValidationErrorCode::CriterionBeadMissing).expect("serde deserialization should succeed"),
+            serde_json::to_string(&HandoffValidationErrorCode::CriterionBeadMissing)
+                .expect("serde deserialization should succeed"),
             "\"criterion_bead_missing\""
         );
     }
@@ -1502,7 +1523,8 @@ mod tests {
             mandatory: false,
         };
         let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
-        let v: serde_json::Value = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let v: serde_json::Value =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         let obj = v.as_object().expect("serde deserialization should succeed");
         assert!(obj.contains_key("criterion_id"));
         assert!(obj.contains_key("bead_id"));
@@ -1516,7 +1538,8 @@ mod tests {
     fn wave_transition_contract_json_field_names() {
         let c = WaveTransitionContract::baseline(WaveId::Wave0);
         let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
-        let v: serde_json::Value = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let v: serde_json::Value =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         let obj = v.as_object().expect("serde deserialization should succeed");
         assert!(obj.contains_key("contract_version"));
         assert!(obj.contains_key("packet_schema_version"));
@@ -1536,7 +1559,8 @@ mod tests {
             artifact_ref: "a".to_string(),
         };
         let json = serde_json::to_string(&a).expect("serde deserialization should succeed");
-        let v: serde_json::Value = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let v: serde_json::Value =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         let obj = v.as_object().expect("serde deserialization should succeed");
         assert!(obj.contains_key("criterion_id"));
         assert!(obj.contains_key("bead_id"));
@@ -1549,7 +1573,8 @@ mod tests {
     fn handoff_package_json_field_names() {
         let pkg = HandoffPackage::baseline();
         let json = serde_json::to_string(&pkg).expect("serde deserialization should succeed");
-        let v: serde_json::Value = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let v: serde_json::Value =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         let obj = v.as_object().expect("serde deserialization should succeed");
         assert!(obj.contains_key("packet_id"));
         assert!(obj.contains_key("wave_id"));
@@ -1571,7 +1596,8 @@ mod tests {
             message: "msg".to_string(),
         };
         let json = serde_json::to_string(&f).expect("serde deserialization should succeed");
-        let v: serde_json::Value = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let v: serde_json::Value =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         let obj = v.as_object().expect("serde deserialization should succeed");
         assert!(obj.contains_key("code"));
         assert!(obj.contains_key("message"));
@@ -1593,7 +1619,8 @@ mod tests {
             failures: Vec::new(),
         };
         let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
-        let v: serde_json::Value = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let v: serde_json::Value =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         let obj = v.as_object().expect("serde deserialization should succeed");
         assert!(obj.contains_key("contract_version"));
         assert!(obj.contains_key("trace_id"));
@@ -1623,7 +1650,8 @@ mod tests {
             packet_id: "pk".to_string(),
         };
         let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
-        let v: serde_json::Value = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let v: serde_json::Value =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         let obj = v.as_object().expect("serde deserialization should succeed");
         assert!(obj.contains_key("schema_version"));
         assert!(obj.contains_key("trace_id"));
@@ -1839,7 +1867,8 @@ mod tests {
         let mut pkg = HandoffPackage::baseline();
         pkg.criteria_attestations.clear();
         let json = serde_json::to_string(&pkg).expect("serde deserialization should succeed");
-        let back: HandoffPackage = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: HandoffPackage =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(pkg, back);
         assert!(back.criteria_attestations.is_empty());
     }
@@ -1850,7 +1879,8 @@ mod tests {
         contract.entry_criteria.clear();
         contract.exit_criteria.clear();
         let json = serde_json::to_string(&contract).expect("serde deserialization should succeed");
-        let back: WaveTransitionContract = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: WaveTransitionContract =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(contract, back);
     }
 
@@ -1861,7 +1891,8 @@ mod tests {
             pkg.changed_beads.push(format!("bd-gen-{}", i));
         }
         let json = serde_json::to_string(&pkg).expect("serde deserialization should succeed");
-        let back: HandoffPackage = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: HandoffPackage =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(pkg, back);
     }
 
@@ -1872,7 +1903,8 @@ mod tests {
             pkg.artifact_links.push(format!("artifacts/gen/{}.json", i));
         }
         let json = serde_json::to_string(&pkg).expect("serde deserialization should succeed");
-        let back: HandoffPackage = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: HandoffPackage =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(pkg, back);
     }
 
@@ -1907,8 +1939,10 @@ mod tests {
                 },
             ],
         };
-        let json = serde_json::to_string_pretty(&report).expect("serde deserialization should succeed");
-        let back: HandoffValidationReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json =
+            serde_json::to_string_pretty(&report).expect("serde deserialization should succeed");
+        let back: HandoffValidationReport =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report, back);
     }
 
@@ -1917,12 +1951,15 @@ mod tests {
         let contract = WaveTransitionContract::baseline(WaveId::Wave1);
         let pkg = HandoffPackage::baseline();
         let (report, events) = simulate_wave_transition("t", "d", "p", &contract, &pkg);
-        let report_json = serde_json::to_string(&report).expect("serde deserialization should succeed");
-        let report_back: HandoffValidationReport = serde_json::from_str(&report_json).expect("serde deserialization should succeed");
+        let report_json =
+            serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let report_back: HandoffValidationReport =
+            serde_json::from_str(&report_json).expect("serde deserialization should succeed");
         assert_eq!(report, report_back);
         for event in &events {
             let ej = serde_json::to_string(event).expect("serde deserialization should succeed");
-            let eb: HandoffEvent = serde_json::from_str(&ej).expect("serde deserialization should succeed");
+            let eb: HandoffEvent =
+                serde_json::from_str(&ej).expect("serde deserialization should succeed");
             assert_eq!(*event, eb);
         }
     }
@@ -1947,7 +1984,8 @@ mod tests {
             });
         }
         let json = serde_json::to_string(&contract).expect("serde deserialization should succeed");
-        let back: WaveTransitionContract = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: WaveTransitionContract =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(contract, back);
     }
 
@@ -1966,7 +2004,8 @@ mod tests {
             packet_id: "pk".to_string(),
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let v: serde_json::Value = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let v: serde_json::Value =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert!(v["error_code"].is_null());
     }
 
@@ -1985,8 +2024,14 @@ mod tests {
             packet_id: "pk".to_string(),
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let v: serde_json::Value = serde_json::from_str(&json).expect("serde deserialization should succeed");
-        assert_eq!(v["error_code"].as_str().expect("serde deserialization should succeed"), "ERR-001");
+        let v: serde_json::Value =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        assert_eq!(
+            v["error_code"]
+                .as_str()
+                .expect("serde deserialization should succeed"),
+            "ERR-001"
+        );
     }
 
     #[test]
@@ -1999,7 +2044,8 @@ mod tests {
             mandatory: true,
         };
         let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
-        let back: WaveCriterion = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: WaveCriterion =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c, back);
     }
 
@@ -2309,20 +2355,22 @@ mod tests {
 
     #[test]
     fn wave_id_deserialize_from_raw_json_string() {
-        let w: WaveId = serde_json::from_str("\"wave2\"").expect("serde deserialization should succeed");
+        let w: WaveId =
+            serde_json::from_str("\"wave2\"").expect("serde deserialization should succeed");
         assert_eq!(w, WaveId::Wave2);
     }
 
     #[test]
     fn required_bead_status_deserialize_from_raw_json_string() {
-        let s: RequiredBeadStatus = serde_json::from_str("\"in_progress\"").expect("serde deserialization should succeed");
+        let s: RequiredBeadStatus =
+            serde_json::from_str("\"in_progress\"").expect("serde deserialization should succeed");
         assert_eq!(s, RequiredBeadStatus::InProgress);
     }
 
     #[test]
     fn handoff_validation_error_code_deserialize_from_raw_json_string() {
-        let c: HandoffValidationErrorCode =
-            serde_json::from_str("\"weak_handoff_package\"").expect("serde deserialization should succeed");
+        let c: HandoffValidationErrorCode = serde_json::from_str("\"weak_handoff_package\"")
+            .expect("serde deserialization should succeed");
         assert_eq!(c, HandoffValidationErrorCode::WeakHandoffPackage);
     }
 

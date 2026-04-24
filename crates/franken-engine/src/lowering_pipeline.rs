@@ -1255,19 +1255,7 @@ fn alloc_pattern_primary_binding(
         }
     }
 
-    if matches!(pattern, BindingPattern::Identifier(_)) {
-        return Ok(first_user_binding.unwrap_or(0));
-    }
-
-    let source_name = make_internal_binding_name("destructure_source", *binding_index);
-    alloc_binding(
-        bindings,
-        binding_lookup,
-        binding_index,
-        scope_id,
-        &source_name,
-        BindingKind::Let,
-    )
+    Ok(first_user_binding.unwrap_or(0))
 }
 
 /// Emit IR1 ops to destructure a value (already stored in `source_bid`) into
@@ -7784,9 +7772,11 @@ mod tests {
 
         assert_eq!(first, second);
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let first_json = serde_json::to_string(&first).expect("serde deserialization should succeed");
+        let first_json =
+            serde_json::to_string(&first).expect("serde deserialization should succeed");
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let second_json = serde_json::to_string(&second).expect("serde deserialization should succeed");
+        let second_json =
+            serde_json::to_string(&second).expect("serde deserialization should succeed");
         assert_eq!(first_json, second_json);
     }
 
@@ -7880,7 +7870,8 @@ mod tests {
         // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&ctx).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let parsed: LoweringContext = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let parsed: LoweringContext =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ctx, parsed);
     }
 
@@ -7900,7 +7891,8 @@ mod tests {
         // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let parsed: LoweringEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let parsed: LoweringEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, parsed);
     }
 
@@ -7916,7 +7908,8 @@ mod tests {
         // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&check).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let parsed: InvariantCheck = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let parsed: InvariantCheck =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(check, parsed);
     }
 
@@ -7936,7 +7929,8 @@ mod tests {
             }],
         };
         let json = serde_json::to_string(&witness).expect("serde deserialization should succeed");
-        let parsed: PassWitness = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let parsed: PassWitness =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(witness, parsed);
     }
 
@@ -7952,7 +7946,8 @@ mod tests {
             output_op_count: 15,
         };
         let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
-        let parsed: IsomorphismLedgerEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let parsed: IsomorphismLedgerEntry =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, parsed);
     }
 
@@ -8151,7 +8146,10 @@ mod tests {
         });
         assert_eq!(effect, EffectBoundary::ReadEffect);
         assert!(cap.is_some());
-        assert_eq!(cap.expect("serde deserialization should succeed").0, "module.import");
+        assert_eq!(
+            cap.expect("serde deserialization should succeed").0,
+            "module.import"
+        );
         assert!(flow.is_some());
     }
 
@@ -8178,7 +8176,10 @@ mod tests {
         });
         assert_eq!(effect, EffectBoundary::HostcallEffect);
         assert!(cap.is_some());
-        assert_eq!(cap.expect("serde deserialization should succeed").0, "fs.read");
+        assert_eq!(
+            cap.expect("serde deserialization should succeed").0,
+            "fs.read"
+        );
     }
 
     #[test]
@@ -9318,7 +9319,8 @@ mod tests {
             runtime_checkpoints: vec![],
         };
         let json = serde_json::to_string(&artifact).expect("serde deserialization should succeed");
-        let back: Ir2FlowProofArtifact = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: Ir2FlowProofArtifact =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(artifact, back);
     }
 
@@ -9328,7 +9330,8 @@ mod tests {
         let ir0 = script_ir0();
         let output = lower_ir0_to_ir3(&ir0, &ctx).expect("serde deserialization should succeed");
         let json = serde_json::to_string(&output).expect("serde deserialization should succeed");
-        let back: LoweringPipelineOutput = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: LoweringPipelineOutput =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(output, back);
     }
 
@@ -9356,7 +9359,8 @@ mod tests {
             },
         };
         let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
-        let back: LoweringPassResult<String> = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: LoweringPassResult<String> =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, back);
     }
 
@@ -9483,7 +9487,10 @@ mod tests {
             .iter()
             .filter(|op| matches!(op, Ir1Op::Pop))
             .count();
-        assert_eq!(pop_count, 4, "conditional lowering should clean up both branches");
+        assert_eq!(
+            pop_count, 4,
+            "conditional lowering should clean up both branches"
+        );
         let label_count = result
             .module
             .ops
@@ -11447,7 +11454,8 @@ mod tests {
             proof_method: ProofMethod::StaticAnalysis,
         };
         let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
-        let back: FlowProofArtifactEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: FlowProofArtifactEntry =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, back);
     }
 
@@ -11462,7 +11470,8 @@ mod tests {
             error_code: "FE-LOWER-IFC-0001".to_string(),
         };
         let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
-        let back: DeniedFlowArtifactEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DeniedFlowArtifactEntry =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, back);
     }
 
@@ -11481,7 +11490,8 @@ mod tests {
             replay_command_hint: REQUIRED_DECLASSIFICATION_REPLAY_COMMAND_HINT.to_string(),
         };
         let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
-        let back: RequiredDeclassificationArtifactEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: RequiredDeclassificationArtifactEntry =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, back);
     }
 
@@ -11498,7 +11508,8 @@ mod tests {
             reason: "dynamic_capability".to_string(),
         };
         let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
-        let back: RuntimeCheckpointArtifactEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: RuntimeCheckpointArtifactEntry =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, back);
     }
 
@@ -11524,7 +11535,8 @@ mod tests {
             reason: "checkpoint serde roundtrip test".to_string(),
         };
         let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
-        let back: RuntimeCheckpointArtifactEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: RuntimeCheckpointArtifactEntry =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, back);
     }
 
@@ -12203,10 +12215,10 @@ mod tests {
         assert!(
             result.module.ops.iter().any(|op| matches!(
                 op,
-                Ir1Op::StoreBinding { binding_id }
+                Ir1Op::LoadBinding { binding_id }
                     if *binding_id == internal_source.binding_id
             )),
-            "destructuring should store the initializer in the internal source binding"
+            "destructuring should read properties from the internal source binding"
         );
     }
 
@@ -12353,11 +12365,15 @@ mod tests {
             "IR0->IR1 lowering should succeed with explicit match arms"
         );
 
-        let ir1 = ir1_result.expect("serde deserialization should succeed").module;
+        let ir1 = ir1_result
+            .expect("serde deserialization should succeed")
+            .module;
         let ir2_result = lower_ir1_to_ir2(&ir1);
         assert!(ir2_result.is_ok(), "IR1->IR2 lowering should succeed");
 
-        let ir2 = ir2_result.expect("serde deserialization should succeed").module;
+        let ir2 = ir2_result
+            .expect("serde deserialization should succeed")
+            .module;
         let ir3_result = lower_ir2_to_ir3(&ir2);
         assert!(
             ir3_result.is_ok(),
@@ -12365,7 +12381,9 @@ mod tests {
         );
 
         // Verify that IR3 contains proper instructions for the literal and return
-        let ir3 = ir3_result.expect("serde deserialization should succeed").module;
+        let ir3 = ir3_result
+            .expect("serde deserialization should succeed")
+            .module;
         assert!(
             !ir3.instructions.is_empty(),
             "IR3 should contain lowered instructions"

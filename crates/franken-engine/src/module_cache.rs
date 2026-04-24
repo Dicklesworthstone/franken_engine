@@ -3140,8 +3140,10 @@ mod tests {
             ],
         };
 
-        let left = CacheTraceCorpusManifest::new("corpus.det", vec![case.clone()]).expect("serde deserialization should succeed");
-        let right = CacheTraceCorpusManifest::new("corpus.det", vec![case]).expect("serde deserialization should succeed");
+        let left = CacheTraceCorpusManifest::new("corpus.det", vec![case.clone()])
+            .expect("serde deserialization should succeed");
+        let right = CacheTraceCorpusManifest::new("corpus.det", vec![case])
+            .expect("serde deserialization should succeed");
 
         assert_eq!(left.corpus_hash, right.corpus_hash);
         assert!(left.validate().is_ok());
@@ -3647,7 +3649,10 @@ mod tests {
         let ctx = context();
         cache.invalidate_trust_revocation("mod:e", 1, &ctx);
 
-        let event = cache.events().last().expect("serde deserialization should succeed");
+        let event = cache
+            .events()
+            .last()
+            .expect("serde deserialization should succeed");
         assert_eq!(event.component, "module_cache");
         assert_eq!(event.trace_id, "trace-cache");
         assert_eq!(event.decision_id, "decision-cache");
@@ -4026,7 +4031,8 @@ mod tests {
         ];
         for code in &codes {
             let json = serde_json::to_string(code).expect("serde deserialization should succeed");
-            let decoded: CacheErrorCode = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let decoded: CacheErrorCode =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&decoded, code);
         }
     }
@@ -4035,7 +4041,8 @@ mod tests {
     fn module_version_fingerprint_serde_round_trip() {
         let fp = ModuleVersionFingerprint::new(source_hash("serde-test"), 42, 7);
         let json = serde_json::to_string(&fp).expect("serde deserialization should succeed");
-        let decoded: ModuleVersionFingerprint = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let decoded: ModuleVersionFingerprint =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(decoded, fp);
     }
 
@@ -4053,7 +4060,8 @@ mod tests {
 
         let snap = cache.snapshot();
         let json = serde_json::to_string(&snap).expect("serde deserialization should succeed");
-        let decoded: CacheSnapshot = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let decoded: CacheSnapshot =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(decoded, snap);
     }
 
@@ -4084,7 +4092,8 @@ mod tests {
             ModuleVersionFingerprint::new(source_hash("k"), 3, 7),
         );
         let json = serde_json::to_string(&key).expect("serde deserialization should succeed");
-        let decoded: ModuleCacheKey = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let decoded: ModuleCacheKey =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(decoded, key);
     }
 
@@ -4101,7 +4110,8 @@ mod tests {
             inserted_seq: 42,
         };
         let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
-        let decoded: ModuleCacheEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let decoded: ModuleCacheEntry =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(decoded, entry);
     }
 
@@ -4114,7 +4124,8 @@ mod tests {
             "/req.js",
         );
         let json = serde_json::to_string(&req).expect("serde deserialization should succeed");
-        let decoded: CacheInsertRequest = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let decoded: CacheInsertRequest =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(decoded, req);
     }
 
@@ -4122,7 +4133,8 @@ mod tests {
     fn cache_context_serde_round_trip() {
         let ctx = CacheContext::new("t1", "d1", "p1");
         let json = serde_json::to_string(&ctx).expect("serde deserialization should succeed");
-        let decoded: CacheContext = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let decoded: CacheContext =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(decoded, ctx);
     }
 
@@ -4130,9 +4142,14 @@ mod tests {
     fn cache_event_serde_round_trip() {
         let mut cache = ModuleCache::new();
         cache.invalidate_source_update("mod:ev-serde", source_hash("x"), &context());
-        let event = cache.events().last().expect("serde deserialization should succeed").clone();
+        let event = cache
+            .events()
+            .last()
+            .expect("serde deserialization should succeed")
+            .clone();
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let decoded: CacheEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let decoded: CacheEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(decoded, event);
     }
 
@@ -4147,7 +4164,8 @@ mod tests {
             )
             .unwrap_err();
         let json = serde_json::to_string(&*err).expect("serde deserialization should succeed");
-        let decoded: CacheError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let decoded: CacheError =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(decoded, *err);
     }
 
@@ -4166,7 +4184,8 @@ mod tests {
         let snap = cache.snapshot();
         // Snapshot roundtrips through JSON (unlike ModuleCache which has non-string map keys)
         let json = serde_json::to_string(&snap).expect("serde deserialization should succeed");
-        let decoded: CacheSnapshot = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let decoded: CacheSnapshot =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(decoded, snap);
         assert_eq!(snap.entries.len(), 1);
         assert!(snap.revoked_modules.contains("mod:revoked"));
@@ -4178,11 +4197,14 @@ mod tests {
 
     #[test]
     fn cache_error_code_serde_uses_snake_case() {
-        let json = serde_json::to_string(&CacheErrorCode::ModuleRevoked).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&CacheErrorCode::ModuleRevoked)
+            .expect("serde deserialization should succeed");
         assert_eq!(json, "\"module_revoked\"");
-        let json = serde_json::to_string(&CacheErrorCode::VersionRegression).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&CacheErrorCode::VersionRegression)
+            .expect("serde deserialization should succeed");
         assert_eq!(json, "\"version_regression\"");
-        let json = serde_json::to_string(&CacheErrorCode::EmptyModuleId).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&CacheErrorCode::EmptyModuleId)
+            .expect("serde deserialization should succeed");
         assert_eq!(json, "\"empty_module_id\"");
     }
 
@@ -4443,7 +4465,10 @@ mod tests {
             CacheInsertRequest::new("", v, ContentHash::compute(b"a"), "/e.js"),
             &context(),
         );
-        let event = cache.events().last().expect("serde deserialization should succeed");
+        let event = cache
+            .events()
+            .last()
+            .expect("serde deserialization should succeed");
         assert_eq!(event.component, "module_cache");
         assert_eq!(event.event, "cache_insert");
         assert_eq!(event.outcome, "deny");
@@ -4565,7 +4590,9 @@ mod tests {
             )
             .expect("serde deserialization should succeed");
 
-        let entry = cache.get("mod:dup", &v).expect("serde deserialization should succeed");
+        let entry = cache
+            .get("mod:dup", &v)
+            .expect("serde deserialization should succeed");
         assert_eq!(
             entry.artifact_hash, art2,
             "second insert should overwrite first"
@@ -4831,7 +4858,10 @@ mod tests {
             .unwrap_err();
         let display = format!("{err}");
         assert_eq!(
-            display.split(": ").next().expect("serde deserialization should succeed"),
+            display
+                .split(": ")
+                .next()
+                .expect("serde deserialization should succeed"),
             "FE-MODCACHE-0001",
             "exact code prefix; got: {display}"
         );
@@ -4885,7 +4915,8 @@ mod tests {
         assert_eq!(fp.policy_version, 0);
         assert_eq!(fp.trust_revision, 0);
         let json = serde_json::to_string(&fp).expect("serde deserialization should succeed");
-        let decoded: ModuleVersionFingerprint = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let decoded: ModuleVersionFingerprint =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(decoded, fp);
     }
 
@@ -4895,7 +4926,8 @@ mod tests {
         assert_eq!(fp.policy_version, u64::MAX);
         assert_eq!(fp.trust_revision, u64::MAX);
         let json = serde_json::to_string(&fp).expect("serde deserialization should succeed");
-        let decoded: ModuleVersionFingerprint = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let decoded: ModuleVersionFingerprint =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(decoded, fp);
     }
 
@@ -4904,7 +4936,10 @@ mod tests {
         let mut cache = ModuleCache::new();
         // Trigger an event to check the event detail field type
         cache.invalidate_source_update("mod:edge", source_hash("e"), &context());
-        let event = cache.events().last().expect("serde deserialization should succeed");
+        let event = cache
+            .events()
+            .last()
+            .expect("serde deserialization should succeed");
         // detail is always a String, even if empty would be allowed
         assert!(event.detail.contains("removed"));
     }
@@ -5006,7 +5041,8 @@ mod tests {
         cache.invalidate_trust_revocation("mod:sn-revoked", 1, &ctx);
         let snap = cache.snapshot();
         let json = serde_json::to_string(&snap).expect("serde deserialization should succeed");
-        let decoded: CacheSnapshot = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let decoded: CacheSnapshot =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(decoded.entries.len(), snap.entries.len());
         assert_eq!(decoded.revoked_modules, snap.revoked_modules);
         assert_eq!(decoded.state_hash, snap.state_hash);
@@ -5029,9 +5065,14 @@ mod tests {
                 &ctx,
             )
             .expect("serde deserialization should succeed");
-        let event = cache.events().last().expect("serde deserialization should succeed").clone();
+        let event = cache
+            .events()
+            .last()
+            .expect("serde deserialization should succeed")
+            .clone();
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let decoded: CacheEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let decoded: CacheEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(decoded.trace_id, "trace-ev-all");
         assert_eq!(decoded.decision_id, "dec-ev-all");
         assert_eq!(decoded.policy_id, "pol-ev-all");
@@ -5091,7 +5132,10 @@ mod tests {
     fn cache_event_debug_nonempty() {
         let mut cache = ModuleCache::new();
         cache.invalidate_trust_revocation("mod:dbg-ev", 1, &context());
-        let event = cache.events().last().expect("serde deserialization should succeed");
+        let event = cache
+            .events()
+            .last()
+            .expect("serde deserialization should succeed");
         assert!(!format!("{event:?}").is_empty());
     }
 
@@ -5217,7 +5261,9 @@ mod tests {
                 &context(),
             )
             .expect("serde deserialization should succeed");
-        let entry = cache.get("mod:seq0", &v).expect("serde deserialization should succeed");
+        let entry = cache
+            .get("mod:seq0", &v)
+            .expect("serde deserialization should succeed");
         assert_eq!(entry.inserted_seq, 0);
     }
 
@@ -5226,7 +5272,10 @@ mod tests {
         let mut cache = ModuleCache::new();
         let ctx = context();
         cache.invalidate_source_update("mod:field-check", source_hash("fc"), &ctx);
-        let event = cache.events().last().expect("serde deserialization should succeed");
+        let event = cache
+            .events()
+            .last()
+            .expect("serde deserialization should succeed");
         let json = serde_json::to_string(event).expect("serde deserialization should succeed");
         assert!(json.contains("\"seq\""), "got: {json}");
         assert!(json.contains("\"trace_id\""), "got: {json}");
@@ -5269,7 +5318,8 @@ mod tests {
     #[test]
     fn adaptive_config_default_validates() {
         let cfg = S3FifoAdaptiveConfig::default();
-        cfg.validate().expect("serde deserialization should succeed");
+        cfg.validate()
+            .expect("serde deserialization should succeed");
     }
 
     #[test]
@@ -5600,7 +5650,8 @@ mod tests {
             admitted: true,
         };
         let json = serde_json::to_string(&verdict).expect("serde deserialization should succeed");
-        let decoded: AdmissionVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let decoded: AdmissionVerdict =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(decoded, verdict);
     }
 
@@ -5620,7 +5671,8 @@ mod tests {
         let cfg = S3FifoAdaptiveConfig::default();
         let metrics = simulate_s3fifo_adaptive(&case, &cfg);
         let json = serde_json::to_string(&metrics).expect("serde deserialization should succeed");
-        let decoded: S3FifoAdaptiveMetrics = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let decoded: S3FifoAdaptiveMetrics =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(decoded.base.total_accesses, metrics.base.total_accesses);
         assert_eq!(decoded.final_small_capacity, metrics.final_small_capacity);
         assert_eq!(decoded.value_admitted_count, metrics.value_admitted_count);
@@ -5630,7 +5682,8 @@ mod tests {
     fn adaptive_config_serde_roundtrip() {
         let cfg = S3FifoAdaptiveConfig::default();
         let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
-        let decoded: S3FifoAdaptiveConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let decoded: S3FifoAdaptiveConfig =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(decoded, cfg);
     }
 

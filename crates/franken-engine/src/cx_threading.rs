@@ -1672,7 +1672,8 @@ mod tests {
             error_code: None,
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let deser: CxThreadedEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let deser: CxThreadedEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, deser);
     }
 
@@ -1686,7 +1687,8 @@ mod tests {
             sequence_number: 5,
         };
         let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
-        let deser: HostcallReceipt = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let deser: HostcallReceipt =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(receipt, deser);
     }
 
@@ -1700,7 +1702,8 @@ mod tests {
             sequence_number: 2,
         };
         let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
-        let deser: LifecycleReceipt = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let deser: LifecycleReceipt =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(receipt, deser);
     }
 
@@ -1718,7 +1721,8 @@ mod tests {
             events: vec![],
         };
         let json = serde_json::to_string(&log).expect("serde deserialization should succeed");
-        let deser: EffectAuditLog = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let deser: EffectAuditLog =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(log, deser);
     }
 
@@ -1753,7 +1757,8 @@ mod tests {
         ];
         for err in &errors {
             let json = serde_json::to_string(err).expect("serde deserialization should succeed");
-            let deser: CxThreadingError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let deser: CxThreadingError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, deser);
         }
     }
@@ -1883,7 +1888,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: EffectCategory = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: EffectCategory =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -1901,7 +1907,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: LifecyclePhase = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: LifecyclePhase =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -1916,7 +1923,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: TelemetryLevel = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: TelemetryLevel =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -1934,7 +1942,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: PolicyVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: PolicyVerdict =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -1983,7 +1992,8 @@ mod tests {
             sequence_number: 1,
         };
         let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
-        let back: PolicyCheckResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: PolicyCheckResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, back);
     }
 
@@ -1999,7 +2009,8 @@ mod tests {
             sequence_number: 3,
         };
         let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
-        let back: TelemetryReceipt = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: TelemetryReceipt =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(receipt, back);
     }
 
@@ -2011,7 +2022,8 @@ mod tests {
             budget_cost_override_ms: Some(10),
         };
         let json = serde_json::to_string(&desc).expect("serde deserialization should succeed");
-        let back: HostcallDescriptor = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: HostcallDescriptor =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(desc, back);
     }
 
@@ -2019,7 +2031,8 @@ mod tests {
     fn policy_check_descriptor_serde_roundtrip() {
         let desc = PolicyCheckDescriptor::new("pre_hostcall", "pol-1", "ext-1");
         let json = serde_json::to_string(&desc).expect("serde deserialization should succeed");
-        let back: PolicyCheckDescriptor = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: PolicyCheckDescriptor =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(desc, back);
     }
 
@@ -2027,7 +2040,8 @@ mod tests {
     fn telemetry_descriptor_serde_roundtrip() {
         let desc = TelemetryDescriptor::new("span", "metric_emit", TelemetryLevel::Warn);
         let json = serde_json::to_string(&desc).expect("serde deserialization should succeed");
-        let back: TelemetryDescriptor = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: TelemetryDescriptor =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(desc, back);
     }
 }

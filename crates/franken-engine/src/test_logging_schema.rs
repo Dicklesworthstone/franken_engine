@@ -588,7 +588,9 @@ pub fn apply_redaction_with_audit(
         audit_entries: &audit_entries,
         detected_secret_patterns: &detected_secret_patterns,
     };
-    let report_hash = stable_sensitive_hash(&serde_json::to_string(&hash_input).expect("serde deserialization should succeed"));
+    let report_hash = stable_sensitive_hash(
+        &serde_json::to_string(&hash_input).expect("serde deserialization should succeed"),
+    );
 
     RedactionAuditReport {
         schema_version: RGC_SECRET_REDACTION_AUDIT_SCHEMA_VERSION.to_string(),
@@ -1026,7 +1028,8 @@ mod tests {
             TestLane::E2e,
         ] {
             let json = serde_json::to_string(&lane).expect("serde deserialization should succeed");
-            let back: TestLane = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: TestLane =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(lane, back);
         }
     }
@@ -1050,7 +1053,8 @@ mod tests {
             FailureTaxonomy::Unknown,
         ] {
             let json = serde_json::to_string(&tax).expect("serde deserialization should succeed");
-            let back: FailureTaxonomy = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: FailureTaxonomy =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(tax, back);
         }
     }
@@ -1063,8 +1067,10 @@ mod tests {
             DataSensitivity::Sensitive,
             DataSensitivity::Secret,
         ] {
-            let json = serde_json::to_string(&sensitivity).expect("serde deserialization should succeed");
-            let back: DataSensitivity = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&sensitivity).expect("serde deserialization should succeed");
+            let back: DataSensitivity =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(sensitivity, back);
         }
     }
@@ -1076,8 +1082,10 @@ mod tests {
             RedactionAction::Hash,
             RedactionAction::Drop,
         ] {
-            let json = serde_json::to_string(&action).expect("serde deserialization should succeed");
-            let back: RedactionAction = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&action).expect("serde deserialization should succeed");
+            let back: RedactionAction =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(action, back);
         }
     }
@@ -1093,7 +1101,8 @@ mod tests {
             ValidationErrorCode::ContractValidationViolation,
         ] {
             let json = serde_json::to_string(&code).expect("serde deserialization should succeed");
-            let back: ValidationErrorCode = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ValidationErrorCode =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(code, back);
         }
     }
@@ -1109,7 +1118,8 @@ mod tests {
             rationale: "must never be retained".to_string(),
         };
         let json = serde_json::to_string(&rule).expect("serde deserialization should succeed");
-        let back: RedactionRule = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: RedactionRule =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(rule, back);
     }
 
@@ -1121,7 +1131,8 @@ mod tests {
             permit_raw_seed_storage: false,
         };
         let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
-        let back: RetentionPolicy = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: RetentionPolicy =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(policy, back);
     }
 
@@ -1129,7 +1140,8 @@ mod tests {
     fn test_log_event_serde_roundtrip() {
         let event = baseline_event();
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let back: TestLogEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: TestLogEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
     }
 
@@ -1138,7 +1150,8 @@ mod tests {
         let mut event = baseline_event();
         event.failure_taxonomy = Some(FailureTaxonomy::DeterminismDrift);
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let back: TestLogEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: TestLogEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
         assert_eq!(
             back.failure_taxonomy,
@@ -1150,7 +1163,8 @@ mod tests {
     fn test_logging_schema_spec_serde_roundtrip() {
         let spec = TestLoggingSchemaSpec::default();
         let json = serde_json::to_string(&spec).expect("serde deserialization should succeed");
-        let back: TestLoggingSchemaSpec = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: TestLoggingSchemaSpec =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(spec, back);
     }
 
@@ -1158,7 +1172,8 @@ mod tests {
     fn validation_failure_serde_roundtrip() {
         let failure = ValidationFailure::missing_field("trace_id");
         let json = serde_json::to_string(&failure).expect("serde deserialization should succeed");
-        let back: ValidationFailure = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ValidationFailure =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(failure, back);
     }
 
@@ -1166,7 +1181,8 @@ mod tests {
     fn validation_report_serde_roundtrip() {
         let report = validate_events(&[baseline_event()]);
         let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
-        let back: ValidationReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ValidationReport =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report, back);
     }
 
@@ -1491,8 +1507,10 @@ mod tests {
         let baseline_report = apply_redaction_with_audit(&record, &baseline_spec);
         let reordered_report = apply_redaction_with_audit(&record, &reordered_spec);
 
-        let baseline_serialized = serialize_redaction_audit_report(&baseline_report).expect("serde deserialization should succeed");
-        let reordered_serialized = serialize_redaction_audit_report(&reordered_report).expect("serde deserialization should succeed");
+        let baseline_serialized = serialize_redaction_audit_report(&baseline_report)
+            .expect("serde deserialization should succeed");
+        let reordered_serialized = serialize_redaction_audit_report(&reordered_report)
+            .expect("serde deserialization should succeed");
 
         assert_eq!(baseline_serialized, reordered_serialized);
     }
@@ -1513,8 +1531,10 @@ mod tests {
         let spec = TestLoggingSchemaSpec::default();
 
         let report = apply_redaction_with_audit(&record, &spec);
-        let serialized = serialize_redaction_audit_report(&report).expect("serde deserialization should succeed");
-        let deserialized = deserialize_redaction_audit_report(&serialized).expect("serde deserialization should succeed");
+        let serialized = serialize_redaction_audit_report(&report)
+            .expect("serde deserialization should succeed");
+        let deserialized = deserialize_redaction_audit_report(&serialized)
+            .expect("serde deserialization should succeed");
 
         assert_eq!(deserialized, report);
     }
@@ -1805,7 +1825,8 @@ mod tests {
             permit_raw_seed_storage: false,
         };
         let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
-        let back: RetentionPolicy = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: RetentionPolicy =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(policy, back);
         assert_eq!(back.retention_days, 0);
     }

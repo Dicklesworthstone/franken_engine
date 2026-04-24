@@ -1827,21 +1827,33 @@ mod tests {
     fn serde_roundtrip_render_surface() {
         let val = RenderSurface::StreamingSSR;
         let json = serde_json::to_string(&val).expect("serde deserialization should succeed");
-        assert_eq!(val, serde_json::from_str::<RenderSurface>(&json).expect("serde deserialization should succeed"));
+        assert_eq!(
+            val,
+            serde_json::from_str::<RenderSurface>(&json)
+                .expect("serde deserialization should succeed")
+        );
     }
 
     #[test]
     fn serde_roundtrip_module_role() {
         let val = ModuleRole::SchedulerHook;
         let json = serde_json::to_string(&val).expect("serde deserialization should succeed");
-        assert_eq!(val, serde_json::from_str::<ModuleRole>(&json).expect("serde deserialization should succeed"));
+        assert_eq!(
+            val,
+            serde_json::from_str::<ModuleRole>(&json)
+                .expect("serde deserialization should succeed")
+        );
     }
 
     #[test]
     fn serde_roundtrip_graph_node_id() {
         let val = GraphNodeId::new("test-serde");
         let json = serde_json::to_string(&val).expect("serde deserialization should succeed");
-        assert_eq!(val, serde_json::from_str::<GraphNodeId>(&json).expect("serde deserialization should succeed"));
+        assert_eq!(
+            val,
+            serde_json::from_str::<GraphNodeId>(&json)
+                .expect("serde deserialization should succeed")
+        );
     }
 
     #[test]
@@ -1850,7 +1862,8 @@ mod tests {
         let json = serde_json::to_string(&val).expect("serde deserialization should succeed");
         assert_eq!(
             val,
-            serde_json::from_str::<GraphVerificationVerdict>(&json).expect("serde deserialization should succeed")
+            serde_json::from_str::<GraphVerificationVerdict>(&json)
+                .expect("serde deserialization should succeed")
         );
     }
 
@@ -1866,7 +1879,8 @@ mod tests {
             RenderSurface::ClientEntry,
         );
         let json = serde_json::to_string(&node).expect("serde deserialization should succeed");
-        let back: ModuleGraphNode = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ModuleGraphNode =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(node.node_id, back.node_id);
         assert_eq!(node.content_hash, back.content_hash);
     }
@@ -1875,7 +1889,8 @@ mod tests {
     fn serde_roundtrip_module_graph_edge() {
         let edge = build_module_edge("s-a", "s-b", "re-exports");
         let json = serde_json::to_string(&edge).expect("serde deserialization should succeed");
-        let back: ModuleGraphEdge = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ModuleGraphEdge =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(edge.from_node, back.from_node);
         assert_eq!(edge.content_hash, back.content_hash);
     }
@@ -1884,7 +1899,8 @@ mod tests {
     fn serde_roundtrip_verification_receipt() {
         let receipt = verify_module_graph(&build_ssr_graph(SecurityEpoch::from_raw(1)));
         let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
-        let back: GraphVerificationReceipt = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GraphVerificationReceipt =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(receipt.receipt_id, back.receipt_id);
         assert_eq!(receipt.content_hash, back.content_hash);
     }
@@ -1893,7 +1909,8 @@ mod tests {
     fn serde_roundtrip_coverage_report() {
         let report = franken_engine_react_module_graph_manifest();
         let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
-        let back: SurfaceCoverageReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SurfaceCoverageReport =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report.report_id, back.report_id);
         assert_eq!(report.content_hash, back.content_hash);
     }
@@ -1987,10 +2004,12 @@ mod tests {
     #[test]
     fn serde_roundtrip_all_render_surfaces() {
         for surface in ALL_SURFACES {
-            let json = serde_json::to_string(surface).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(surface).expect("serde deserialization should succeed");
             assert_eq!(
                 *surface,
-                serde_json::from_str::<RenderSurface>(&json).expect("serde deserialization should succeed")
+                serde_json::from_str::<RenderSurface>(&json)
+                    .expect("serde deserialization should succeed")
             );
         }
     }

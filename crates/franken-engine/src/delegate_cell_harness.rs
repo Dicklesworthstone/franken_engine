@@ -797,7 +797,8 @@ mod tests {
             CellLifecycle::Quarantined,
         ] {
             let json = serde_json::to_string(&state).expect("serde deserialization should succeed");
-            let decoded: CellLifecycle = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let decoded: CellLifecycle =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(state, decoded);
         }
     }
@@ -818,7 +819,9 @@ mod tests {
             ..Default::default()
         };
         let sandbox = test_sandbox();
-        let violation = usage.exceeds_limits(&sandbox).expect("serde deserialization should succeed");
+        let violation = usage
+            .exceeds_limits(&sandbox)
+            .expect("serde deserialization should succeed");
         assert!(matches!(violation, ResourceViolation::HeapExceeded { .. }));
     }
 
@@ -829,7 +832,9 @@ mod tests {
             ..Default::default()
         };
         let sandbox = test_sandbox();
-        let violation = usage.exceeds_limits(&sandbox).expect("serde deserialization should succeed");
+        let violation = usage
+            .exceeds_limits(&sandbox)
+            .expect("serde deserialization should succeed");
         assert!(matches!(
             violation,
             ResourceViolation::ExecutionTimeExceeded { .. }
@@ -843,7 +848,9 @@ mod tests {
             ..Default::default()
         };
         let sandbox = test_sandbox();
-        let violation = usage.exceeds_limits(&sandbox).expect("serde deserialization should succeed");
+        let violation = usage
+            .exceeds_limits(&sandbox)
+            .expect("serde deserialization should succeed");
         assert!(matches!(
             violation,
             ResourceViolation::HostcallLimitExceeded { .. }
@@ -858,7 +865,9 @@ mod tests {
         };
         let sandbox = test_sandbox();
         assert!(!sandbox.network_egress_allowed);
-        let violation = usage.exceeds_limits(&sandbox).expect("serde deserialization should succeed");
+        let violation = usage
+            .exceeds_limits(&sandbox)
+            .expect("serde deserialization should succeed");
         assert!(matches!(
             violation,
             ResourceViolation::NetworkEgressDenied { .. }
@@ -872,7 +881,9 @@ mod tests {
             ..Default::default()
         };
         let sandbox = test_sandbox();
-        let violation = usage.exceeds_limits(&sandbox).expect("serde deserialization should succeed");
+        let violation = usage
+            .exceeds_limits(&sandbox)
+            .expect("serde deserialization should succeed");
         assert!(matches!(
             violation,
             ResourceViolation::FilesystemAccessDenied { .. }
@@ -981,7 +992,13 @@ mod tests {
             .expect("serde deserialization should succeed");
         let events = harness.events_of_type(&HarnessEventType::CapabilityCheck);
         assert_eq!(events.len(), 1);
-        assert_eq!(events[0].fields.get("permitted").expect("serde deserialization should succeed"), "true");
+        assert_eq!(
+            events[0]
+                .fields
+                .get("permitted")
+                .expect("serde deserialization should succeed"),
+            "true"
+        );
     }
 
     // -- DelegateCellHarness invocation tests --
@@ -1086,7 +1103,13 @@ mod tests {
 
         let events = harness.events_of_type(&HarnessEventType::ReplayVerification);
         assert_eq!(events.len(), 1);
-        assert_eq!(events[0].fields.get("match").expect("serde deserialization should succeed"), "true");
+        assert_eq!(
+            events[0]
+                .fields
+                .get("match")
+                .expect("serde deserialization should succeed"),
+            "true"
+        );
     }
 
     // -- PerformanceMetrics tests --
@@ -1154,7 +1177,8 @@ mod tests {
             total_hostcalls: 80,
         };
         let json = serde_json::to_string(&metrics).expect("serde deserialization should succeed");
-        let decoded: PerformanceMetrics = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let decoded: PerformanceMetrics =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(metrics, decoded);
     }
 
@@ -1180,8 +1204,10 @@ mod tests {
             },
         ];
         for outcome in &outcomes {
-            let json = serde_json::to_string(outcome).expect("serde deserialization should succeed");
-            let decoded: InvocationOutcome = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(outcome).expect("serde deserialization should succeed");
+            let decoded: InvocationOutcome =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*outcome, decoded);
         }
     }
@@ -1214,7 +1240,8 @@ mod tests {
         ];
         for err in &errors {
             let json = serde_json::to_string(err).expect("serde deserialization should succeed");
-            let decoded: DelegateCellError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let decoded: DelegateCellError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, decoded);
         }
     }
@@ -1225,7 +1252,8 @@ mod tests {
     fn replay_verification_serde_round_trip() {
         let rv = ReplayVerification::Match { sequence: 42 };
         let json = serde_json::to_string(&rv).expect("serde deserialization should succeed");
-        let decoded: ReplayVerification = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let decoded: ReplayVerification =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(rv, decoded);
     }
 
@@ -1244,7 +1272,8 @@ mod tests {
             },
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let decoded: HarnessEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let decoded: HarnessEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, decoded);
     }
 
@@ -1429,7 +1458,8 @@ mod tests {
     fn resource_usage_serde_roundtrip() {
         let usage = ok_usage();
         let json = serde_json::to_string(&usage).expect("serde deserialization should succeed");
-        let back: ResourceUsage = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ResourceUsage =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(usage, back);
     }
 
@@ -1437,7 +1467,8 @@ mod tests {
     fn sandbox_configuration_serde_roundtrip() {
         let sandbox = test_sandbox();
         let json = serde_json::to_string(&sandbox).expect("serde deserialization should succeed");
-        let back: SandboxConfiguration = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SandboxConfiguration =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(sandbox, back);
     }
 
@@ -1567,7 +1598,8 @@ mod tests {
     fn enrichment_serde_roundtrip_delegate_cell_harness() {
         let harness = test_harness();
         let json = serde_json::to_string(&harness).expect("serde deserialization should succeed");
-        let decoded: DelegateCellHarness = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let decoded: DelegateCellHarness =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(harness.slot_id, decoded.slot_id);
         assert_eq!(harness.lifecycle, decoded.lifecycle);
         assert_eq!(harness.metrics, decoded.metrics);
@@ -1710,7 +1742,8 @@ mod tests {
         ];
         for v in &violations {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let decoded: ResourceViolation = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let decoded: ResourceViolation =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, decoded);
         }
     }
@@ -1820,7 +1853,8 @@ mod tests {
             .expect("serde deserialization should succeed");
 
         let json = serde_json::to_string(&harness).expect("serde deserialization should succeed");
-        let decoded: DelegateCellHarness = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let decoded: DelegateCellHarness =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(decoded.invocation_log().len(), 2);
         assert_eq!(decoded.invocation_count(), 2);
         assert_eq!(decoded.metrics.total_invocations, 2);

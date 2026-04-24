@@ -3605,7 +3605,7 @@ mod tests {
             assert!(detail.contains("affected_objects"), "detail: {detail}");
         } else {
             // Test assertion failure: expected InvalidDeclaration variant but got different error type
-            assert!(false, "expected InvalidDeclaration, got {err:?}");
+            panic!("expected InvalidDeclaration, got {err:?}");
         }
     }
 
@@ -3620,7 +3620,7 @@ mod tests {
             assert!(detail.contains("from_version"), "detail: {detail}");
         } else {
             // Test assertion failure: expected InvalidDeclaration variant but got different error type
-            assert!(false, "expected InvalidDeclaration, got {err:?}");
+            panic!("expected InvalidDeclaration, got {err:?}");
         }
     }
 

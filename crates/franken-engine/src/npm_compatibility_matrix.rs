@@ -1696,7 +1696,9 @@ mod tests {
             100,
         ))
         .expect("serde deserialization should succeed");
-        let result = m.get_test_result("lodash").expect("serde deserialization should succeed");
+        let result = m
+            .get_test_result("lodash")
+            .expect("serde deserialization should succeed");
         assert_eq!(result.outcome, PackageTestOutcome::Compatible);
         assert_eq!(result.pass_rate_millionths(), 1_000_000);
     }
@@ -1720,7 +1722,9 @@ mod tests {
             10,
         ))
         .expect("serde deserialization should succeed");
-        let result = m.get_test_result("lodash").expect("serde deserialization should succeed");
+        let result = m
+            .get_test_result("lodash")
+            .expect("serde deserialization should succeed");
         assert_eq!(result.outcome, PackageTestOutcome::Compatible);
     }
 
@@ -1916,15 +1920,18 @@ mod tests {
         let mut m = NpmCompatibilityMatrix::new();
         let mut inc1 = sample_incompatibility("INC-001", "a", IncompatibilitySeverity::Blocker);
         inc1.root_cause = IncompatibilityRootCause::MissingNodeApi;
-        m.add_incompatibility(inc1).expect("serde deserialization should succeed");
+        m.add_incompatibility(inc1)
+            .expect("serde deserialization should succeed");
 
         let mut inc2 = sample_incompatibility("INC-002", "b", IncompatibilitySeverity::Major);
         inc2.root_cause = IncompatibilityRootCause::MissingNodeApi;
-        m.add_incompatibility(inc2).expect("serde deserialization should succeed");
+        m.add_incompatibility(inc2)
+            .expect("serde deserialization should succeed");
 
         let mut inc3 = sample_incompatibility("INC-003", "c", IncompatibilitySeverity::Minor);
         inc3.root_cause = IncompatibilityRootCause::CjsRequireDivergence;
-        m.add_incompatibility(inc3).expect("serde deserialization should succeed");
+        m.add_incompatibility(inc3)
+            .expect("serde deserialization should succeed");
 
         let dist = m.root_cause_distribution();
         assert_eq!(dist[&IncompatibilityRootCause::MissingNodeApi], 2);
@@ -2033,11 +2040,13 @@ mod tests {
         let mut pkg1 = sample_package("a", CohortTier::Tier1Critical);
         pkg1.node_api_deps.insert("fs".to_string());
         pkg1.node_api_deps.insert("path".to_string());
-        m.add_package(pkg1).expect("serde deserialization should succeed");
+        m.add_package(pkg1)
+            .expect("serde deserialization should succeed");
 
         let mut pkg2 = sample_package("b", CohortTier::Tier1Critical);
         pkg2.node_api_deps.insert("crypto".to_string());
-        m.add_package(pkg2).expect("serde deserialization should succeed");
+        m.add_package(pkg2)
+            .expect("serde deserialization should succeed");
 
         assert_eq!(m.packages_requiring_api("fs").len(), 1);
         assert_eq!(m.packages_requiring_api("crypto").len(), 1);
@@ -2133,7 +2142,8 @@ mod tests {
         .expect("serde deserialization should succeed");
 
         let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
-        let deserialized: NpmCompatibilityMatrix = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let deserialized: NpmCompatibilityMatrix =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(m, deserialized);
     }
 
@@ -2146,7 +2156,8 @@ mod tests {
         ];
         for tier in tiers {
             let json = serde_json::to_string(&tier).expect("serde deserialization should succeed");
-            let back: CohortTier = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: CohortTier =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(tier, back);
         }
 
@@ -2165,7 +2176,8 @@ mod tests {
         ];
         for cat in categories {
             let json = serde_json::to_string(&cat).expect("serde deserialization should succeed");
-            let back: PackageCategory = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: PackageCategory =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(cat, back);
         }
 
@@ -2177,7 +2189,8 @@ mod tests {
         ];
         for sev in severities {
             let json = serde_json::to_string(&sev).expect("serde deserialization should succeed");
-            let back: IncompatibilitySeverity = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: IncompatibilitySeverity =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(sev, back);
         }
     }
@@ -2281,7 +2294,8 @@ mod tests {
         pkg.version = "  1.0.0  ".to_string();
         pkg.node_api_deps.insert("  fs  ".to_string());
         pkg.node_api_deps.insert("".to_string());
-        m.add_package(pkg).expect("serde deserialization should succeed");
+        m.add_package(pkg)
+            .expect("serde deserialization should succeed");
         assert_eq!(m.packages[0].name, "lodash");
         assert_eq!(m.packages[0].version, "1.0.0");
         assert!(m.packages[0].node_api_deps.contains("fs"));
@@ -2297,7 +2311,8 @@ mod tests {
         inc.owner = "  agent  ".to_string();
         inc.related_beads.insert("  bd-123  ".to_string());
         inc.related_beads.insert("".to_string());
-        m.add_incompatibility(inc).expect("serde deserialization should succeed");
+        m.add_incompatibility(inc)
+            .expect("serde deserialization should succeed");
         assert_eq!(m.incompatibilities[0].incompatibility_id, "INC-001");
         assert_eq!(m.incompatibilities[0].package_name, "foo");
         assert_eq!(m.incompatibilities[0].summary, "summary");
@@ -2311,7 +2326,8 @@ mod tests {
         let mut pkg = sample_package("types-node", CohortTier::Tier1Critical);
         pkg.types_only = true;
         let json = serde_json::to_string(&pkg).expect("serde deserialization should succeed");
-        let back: PackageRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: PackageRecord =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert!(back.types_only);
     }
 
@@ -2325,7 +2341,8 @@ mod tests {
         ];
         for v in variants {
             let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
-            let back: ModuleSystemReq = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ModuleSystemReq =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(v, back);
             assert!(!v.as_str().is_empty());
         }
@@ -2340,7 +2357,8 @@ mod tests {
         ];
         for mode in variants {
             let json = serde_json::to_string(&mode).expect("serde deserialization should succeed");
-            let back: NativeAddonMode = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: NativeAddonMode =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(mode, back);
             assert!(!mode.as_str().is_empty());
         }
@@ -2358,7 +2376,8 @@ mod tests {
         ];
         for s in states {
             let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
-            let back: RemediationState = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: RemediationState =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(s, back);
         }
     }
@@ -2373,8 +2392,10 @@ mod tests {
             (PackageTestOutcome::Untested, false),
         ];
         for (outcome, expected_compat) in outcomes {
-            let json = serde_json::to_string(&outcome).expect("serde deserialization should succeed");
-            let back: PackageTestOutcome = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&outcome).expect("serde deserialization should succeed");
+            let back: PackageTestOutcome =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(outcome, back);
             assert_eq!(outcome.counts_as_compatible(), expected_compat);
         }
@@ -2398,7 +2419,8 @@ mod tests {
         ];
         for cause in causes {
             let json = serde_json::to_string(&cause).expect("serde deserialization should succeed");
-            let back: IncompatibilityRootCause = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: IncompatibilityRootCause =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(cause, back);
             assert!(!cause.as_str().is_empty());
         }
@@ -2414,7 +2436,8 @@ mod tests {
         ];
         for v in verdicts {
             let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
-            let back: MatrixVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: MatrixVerdict =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(v, back);
             assert_eq!(format!("{v}"), v.as_str());
         }
@@ -2656,7 +2679,8 @@ mod tests {
     fn seed_tier1_into_matrix() {
         let mut m = NpmCompatibilityMatrix::new();
         for pkg in seed_tier1_critical_packages() {
-            m.add_package(pkg).expect("serde deserialization should succeed");
+            m.add_package(pkg)
+                .expect("serde deserialization should succeed");
         }
         assert_eq!(m.packages_in_tier(CohortTier::Tier1Critical).len(), 10);
         // All should be tier 1
@@ -2669,7 +2693,8 @@ mod tests {
     fn seed_tier2_into_matrix() {
         let mut m = NpmCompatibilityMatrix::new();
         for pkg in seed_tier2_popular_packages() {
-            m.add_package(pkg).expect("serde deserialization should succeed");
+            m.add_package(pkg)
+                .expect("serde deserialization should succeed");
         }
         assert_eq!(m.packages_in_tier(CohortTier::Tier2Popular).len(), 10);
     }
@@ -2678,10 +2703,12 @@ mod tests {
     fn seed_both_tiers_no_overlap() {
         let mut m = NpmCompatibilityMatrix::new();
         for pkg in seed_tier1_critical_packages() {
-            m.add_package(pkg).expect("serde deserialization should succeed");
+            m.add_package(pkg)
+                .expect("serde deserialization should succeed");
         }
         for pkg in seed_tier2_popular_packages() {
-            m.add_package(pkg).expect("serde deserialization should succeed");
+            m.add_package(pkg)
+                .expect("serde deserialization should succeed");
         }
         assert_eq!(m.total_packages(), 20);
     }
@@ -2909,7 +2936,8 @@ mod tests {
             } else {
                 IncompatibilityRootCause::CjsRequireDivergence
             };
-            m.add_incompatibility(inc).expect("serde deserialization should succeed");
+            m.add_incompatibility(inc)
+                .expect("serde deserialization should succeed");
         }
         assert_eq!(m.incompatibilities_for_package("express").len(), 5);
         assert_eq!(
@@ -3058,13 +3086,15 @@ mod tests {
         pkg.node_api_deps.insert("http".to_string());
         pkg.node_api_deps.insert("path".to_string());
         pkg.types_only = false;
-        m.add_package(pkg).expect("serde deserialization should succeed");
+        m.add_package(pkg)
+            .expect("serde deserialization should succeed");
 
         let mut result =
             sample_test_result("express", PackageTestOutcome::PartiallyCompatible, 100, 75);
         result.output_hash = Some("sha256:abcdef".to_string());
         result.test_epoch = 99;
-        m.record_test_result(result).expect("serde deserialization should succeed");
+        m.record_test_result(result)
+            .expect("serde deserialization should succeed");
 
         let mut inc = sample_incompatibility(
             "INC-express-001",
@@ -3076,10 +3106,12 @@ mod tests {
         inc.related_beads.insert("bd-1lsy.5.4".to_string());
         inc.discovered_epoch = 10;
         inc.last_updated_epoch = 20;
-        m.add_incompatibility(inc).expect("serde deserialization should succeed");
+        m.add_incompatibility(inc)
+            .expect("serde deserialization should succeed");
 
         let json = serde_json::to_string_pretty(&m).expect("serde deserialization should succeed");
-        let back: NpmCompatibilityMatrix = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: NpmCompatibilityMatrix =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(m, back);
         assert_eq!(back.snapshot_epoch, 42);
         assert_eq!(back.packages[0].node_api_deps.len(), 2);
@@ -3108,7 +3140,8 @@ mod tests {
             blocker_count: 2,
         };
         let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
-        let back: CohortSummary = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: CohortSummary =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(summary, back);
     }
 
@@ -3147,7 +3180,8 @@ mod tests {
         ];
         for err in &errors {
             let json = serde_json::to_string(err).expect("serde deserialization should succeed");
-            let back: NpmCompatibilityError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: NpmCompatibilityError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, back);
         }
     }
@@ -3534,7 +3568,10 @@ mod tests {
     #[test]
     fn seed_tier1_express_has_node_api_deps() {
         let packages = seed_tier1_critical_packages();
-        let express = packages.iter().find(|p| p.name == "express").expect("serde deserialization should succeed");
+        let express = packages
+            .iter()
+            .find(|p| p.name == "express")
+            .expect("serde deserialization should succeed");
         assert!(express.node_api_deps.contains("http"));
         assert!(express.node_api_deps.contains("path"));
         assert!(express.node_api_deps.contains("fs"));
@@ -3552,10 +3589,16 @@ mod tests {
         assert!(names.contains("vitest"));
         assert!(names.contains("prisma"));
         assert!(names.contains("ws"));
-        let prisma = packages.iter().find(|p| p.name == "prisma").expect("serde deserialization should succeed");
+        let prisma = packages
+            .iter()
+            .find(|p| p.name == "prisma")
+            .expect("serde deserialization should succeed");
         assert_eq!(prisma.native_addon_mode, NativeAddonMode::Required);
         assert!(prisma.capability_safe_membrane_fallback);
-        let ws = packages.iter().find(|p| p.name == "ws").expect("serde deserialization should succeed");
+        let ws = packages
+            .iter()
+            .find(|p| p.name == "ws")
+            .expect("serde deserialization should succeed");
         assert_eq!(ws.native_addon_mode, NativeAddonMode::Optional);
         assert!(!ws.capability_safe_membrane_fallback);
         assert_eq!(packages.len(), 10);
@@ -3565,10 +3608,12 @@ mod tests {
     fn packages_requiring_api_across_tiers() {
         let mut m = NpmCompatibilityMatrix::new();
         for pkg in seed_tier1_critical_packages() {
-            m.add_package(pkg).expect("serde deserialization should succeed");
+            m.add_package(pkg)
+                .expect("serde deserialization should succeed");
         }
         for pkg in seed_tier2_popular_packages() {
-            m.add_package(pkg).expect("serde deserialization should succeed");
+            m.add_package(pkg)
+                .expect("serde deserialization should succeed");
         }
         // "fs" is used by many packages across both tiers
         let fs_pkgs = m.packages_requiring_api("fs");

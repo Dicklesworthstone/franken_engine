@@ -521,7 +521,9 @@ mod tests {
     fn failure_with_budget_triggers_restart() {
         let mut sup = test_supervisor();
         // SAFETY: Test with valid service and error budget should succeed
-        let action = sup.report_failure("svc-a", "crash", 10).expect("serde deserialization should succeed");
+        let action = sup
+            .report_failure("svc-a", "crash", 10)
+            .expect("serde deserialization should succeed");
         assert_eq!(action, SupervisorAction::Restart);
         assert_eq!(sup.service_state("svc-a"), Some(ServiceState::Running));
         assert_eq!(sup.restart_count("svc-a"), Some(1));
@@ -537,7 +539,9 @@ mod tests {
 
         // 4th failure — budget exhausted, escalates
         // SAFETY: Test with valid service should succeed even when escalating
-        let action = sup.report_failure("svc-a", "crash-4", 40).expect("serde deserialization should succeed");
+        let action = sup
+            .report_failure("svc-a", "crash-4", 40)
+            .expect("serde deserialization should succeed");
         assert_eq!(action, SupervisorAction::Escalate);
         assert_eq!(sup.service_state("svc-a"), Some(ServiceState::Isolated));
     }
@@ -553,7 +557,9 @@ mod tests {
         });
         sup.start_service("tmp-svc");
         // SAFETY: Test with valid service should succeed reporting failure
-        let action = sup.report_failure("tmp-svc", "crash", 10).expect("serde deserialization should succeed");
+        let action = sup
+            .report_failure("tmp-svc", "crash", 10)
+            .expect("serde deserialization should succeed");
         assert_eq!(action, SupervisorAction::Terminate);
         assert_eq!(sup.service_state("tmp-svc"), Some(ServiceState::Terminated));
     }
@@ -602,7 +608,11 @@ mod tests {
         // Second failure: budget exhausted -> escalate to Isolate
         sup.report_failure("svc", "crash", 20);
         // SAFETY: Test service was registered and should have severity tracking
-        assert!(sup.service_severity("svc").expect("serde deserialization should succeed") >= Severity::Isolate);
+        assert!(
+            sup.service_severity("svc")
+                .expect("serde deserialization should succeed")
+                >= Severity::Isolate
+        );
     }
 
     // -- Sliding window budget --
@@ -627,7 +637,9 @@ mod tests {
 
         // Next failure at t=200 (outside window of 100) — budget refreshed
         // SAFETY: Test with valid service and refreshed budget should succeed
-        let action = sup.report_failure("svc", "crash", 200).expect("serde deserialization should succeed");
+        let action = sup
+            .report_failure("svc", "crash", 200)
+            .expect("serde deserialization should succeed");
         assert_eq!(action, SupervisorAction::Restart);
     }
 
@@ -764,7 +776,8 @@ mod tests {
             let json = serde_json::to_string(s).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by to_string of a valid Severity,
             // so from_str back to Severity cannot fail (valid format + matching schema).
-            let restored: Severity = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: Severity =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*s, restored);
         }
     }
@@ -777,7 +790,8 @@ mod tests {
         let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid ServiceConfig,
         // so from_str back to ServiceConfig cannot fail (valid format + matching schema).
-        let restored: ServiceConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: ServiceConfig =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, restored);
     }
 
@@ -793,7 +807,8 @@ mod tests {
             severity: Severity::Restart,
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let restored: SupervisorEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: SupervisorEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, restored);
     }
 
@@ -810,7 +825,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let restored: RestartPolicy = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: RestartPolicy =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, restored);
         }
     }
@@ -827,7 +843,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let restored: ServiceState = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: ServiceState =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, restored);
         }
     }
@@ -860,7 +877,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let restored: HealthStatus = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: HealthStatus =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, restored);
         }
     }
@@ -889,7 +907,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let restored: SupervisorAction = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: SupervisorAction =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, restored);
         }
     }
@@ -925,7 +944,8 @@ mod tests {
             window_ticks: 200,
         };
         let json = serde_json::to_string(&b).expect("serde deserialization should succeed");
-        let restored: RestartBudget = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: RestartBudget =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(b, restored);
     }
 
@@ -962,7 +982,9 @@ mod tests {
         sup.report_failure("svc-a", "crash", 40);
 
         // svc-b should still have full budget
-        let action = sup.report_failure("svc-b", "crash", 50).expect("serde deserialization should succeed");
+        let action = sup
+            .report_failure("svc-b", "crash", 50)
+            .expect("serde deserialization should succeed");
         assert_eq!(action, SupervisorAction::Restart);
         assert_eq!(sup.service_state("svc-b"), Some(ServiceState::Running));
         assert_eq!(sup.service_state("svc-a"), Some(ServiceState::Isolated));
@@ -1080,7 +1102,9 @@ mod tests {
         sup.start_service("trans");
 
         // Transient behaves like Permanent when budget available
-        let action = sup.report_failure("trans", "crash", 10).expect("serde deserialization should succeed");
+        let action = sup
+            .report_failure("trans", "crash", 10)
+            .expect("serde deserialization should succeed");
         assert_eq!(action, SupervisorAction::Restart);
         assert_eq!(sup.service_state("trans"), Some(ServiceState::Running));
     }
@@ -1116,7 +1140,8 @@ mod tests {
             shutdown_order: 42,
         };
         let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
-        let restored: ServiceConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: ServiceConfig =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, restored);
     }
 
@@ -1163,7 +1188,9 @@ mod tests {
 
         // Budget is 0, so first failure immediately escalates severity
         // escalate_severity(Restart) = Isolate, and Isolate >= Isolate triggers Escalate action
-        let a1 = sup.report_failure("svc", "crash-1", 10).expect("serde deserialization should succeed");
+        let a1 = sup
+            .report_failure("svc", "crash-1", 10)
+            .expect("serde deserialization should succeed");
         assert_eq!(a1, SupervisorAction::Escalate);
         assert_eq!(sup.service_severity("svc"), Some(Severity::Isolate));
     }
@@ -1182,7 +1209,9 @@ mod tests {
         });
         sup.start_service("svc");
 
-        let action = sup.report_failure("svc", "crash", 5).expect("serde deserialization should succeed");
+        let action = sup
+            .report_failure("svc", "crash", 5)
+            .expect("serde deserialization should succeed");
         assert!(action == SupervisorAction::Isolate || action == SupervisorAction::Escalate);
         assert_eq!(sup.service_state("svc"), Some(ServiceState::Isolated));
         assert_eq!(sup.restart_count("svc"), Some(0));
@@ -1237,7 +1266,9 @@ mod tests {
         sup.add_service(test_config("svc"));
         // Don't call start_service — service is in Starting state
         assert_eq!(sup.service_state("svc"), Some(ServiceState::Starting));
-        let action = sup.report_failure("svc", "crash", 10).expect("serde deserialization should succeed");
+        let action = sup
+            .report_failure("svc", "crash", 10)
+            .expect("serde deserialization should succeed");
         assert_eq!(action, SupervisorAction::Restart);
     }
 
@@ -1259,7 +1290,9 @@ mod tests {
         sup.report_failure("svc", "crash", base);
         sup.report_failure("svc", "crash", base + 50);
         // Within window: budget 3, used 2
-        let action = sup.report_failure("svc", "crash", base + 99).expect("serde deserialization should succeed");
+        let action = sup
+            .report_failure("svc", "crash", base + 99)
+            .expect("serde deserialization should succeed");
         assert_eq!(action, SupervisorAction::Restart);
         assert_eq!(sup.restart_count("svc"), Some(3));
     }
@@ -1282,7 +1315,9 @@ mod tests {
         sup.report_failure("svc", "crash", 10);
         // Failure at t=110: exactly at window boundary (window_start = 110 - 100 = 10)
         // t=10 >= 10, so it counts — budget exhausted
-        let action = sup.report_failure("svc", "crash", 110).expect("serde deserialization should succeed");
+        let action = sup
+            .report_failure("svc", "crash", 110)
+            .expect("serde deserialization should succeed");
         assert!(action == SupervisorAction::Escalate || action == SupervisorAction::Isolate);
     }
 
@@ -1304,7 +1339,9 @@ mod tests {
         sup.report_failure("svc", "crash", 10);
         // Failure at t=111: window_start = 111 - 100 = 11, so t=10 < 11 (outside window)
         // Budget refreshed
-        let action = sup.report_failure("svc", "crash", 111).expect("serde deserialization should succeed");
+        let action = sup
+            .report_failure("svc", "crash", 111)
+            .expect("serde deserialization should succeed");
         assert_eq!(action, SupervisorAction::Restart);
     }
 
@@ -1346,11 +1383,15 @@ mod tests {
         sup.start_service("svc");
 
         // First failure: restart (within budget)
-        let a1 = sup.report_failure("svc", "crash-1", 10).expect("serde deserialization should succeed");
+        let a1 = sup
+            .report_failure("svc", "crash-1", 10)
+            .expect("serde deserialization should succeed");
         assert_eq!(a1, SupervisorAction::Restart);
 
         // Second failure: budget exhausted -> escalate
-        let a2 = sup.report_failure("svc", "crash-2", 20).expect("serde deserialization should succeed");
+        let a2 = sup
+            .report_failure("svc", "crash-2", 20)
+            .expect("serde deserialization should succeed");
         assert!(a2 == SupervisorAction::Escalate || a2 == SupervisorAction::Isolate);
         assert_eq!(sup.service_state("svc"), Some(ServiceState::Isolated));
     }
@@ -1537,7 +1578,8 @@ mod tests {
 
     #[test]
     fn enrichment_severity_json_string_representation() {
-        let json = serde_json::to_string(&Severity::SubtreeRestart).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&Severity::SubtreeRestart)
+            .expect("serde deserialization should succeed");
         // Enum variants serialize as quoted strings
         assert!(json.contains("SubtreeRestart"));
     }
@@ -1729,16 +1771,24 @@ mod tests {
         sup.start_service("svc");
 
         // Three failures all at the same tick
-        let a1 = sup.report_failure("svc", "crash-1", 50).expect("serde deserialization should succeed");
-        let a2 = sup.report_failure("svc", "crash-2", 50).expect("serde deserialization should succeed");
-        let a3 = sup.report_failure("svc", "crash-3", 50).expect("serde deserialization should succeed");
+        let a1 = sup
+            .report_failure("svc", "crash-1", 50)
+            .expect("serde deserialization should succeed");
+        let a2 = sup
+            .report_failure("svc", "crash-2", 50)
+            .expect("serde deserialization should succeed");
+        let a3 = sup
+            .report_failure("svc", "crash-3", 50)
+            .expect("serde deserialization should succeed");
         assert_eq!(a1, SupervisorAction::Restart);
         assert_eq!(a2, SupervisorAction::Restart);
         assert_eq!(a3, SupervisorAction::Restart);
         assert_eq!(sup.restart_count("svc"), Some(3));
 
         // 4th at same tick exhausts budget
-        let a4 = sup.report_failure("svc", "crash-4", 50).expect("serde deserialization should succeed");
+        let a4 = sup
+            .report_failure("svc", "crash-4", 50)
+            .expect("serde deserialization should succeed");
         assert!(a4 == SupervisorAction::Escalate || a4 == SupervisorAction::Isolate);
     }
 
@@ -1764,9 +1814,13 @@ mod tests {
 
         // With window_ticks=0, window_start = now - 0 = now
         // Restarts at ts == now satisfy ts >= window_start, so they count
-        let a1 = sup.report_failure("svc", "crash-1", 100).expect("serde deserialization should succeed");
+        let a1 = sup
+            .report_failure("svc", "crash-1", 100)
+            .expect("serde deserialization should succeed");
         assert_eq!(a1, SupervisorAction::Restart);
-        let a2 = sup.report_failure("svc", "crash-2", 200).expect("serde deserialization should succeed");
+        let a2 = sup
+            .report_failure("svc", "crash-2", 200)
+            .expect("serde deserialization should succeed");
         assert_eq!(a2, SupervisorAction::Restart);
         // At a new tick, old timestamps fall outside the zero-width window
         assert_eq!(sup.restart_count("svc"), Some(2));
@@ -1784,7 +1838,9 @@ mod tests {
         assert_eq!(sup.service_count(), 1);
         assert!(sup.start_service(""));
         assert_eq!(sup.service_state(""), Some(ServiceState::Running));
-        let action = sup.report_failure("", "crash", 10).expect("serde deserialization should succeed");
+        let action = sup
+            .report_failure("", "crash", 10)
+            .expect("serde deserialization should succeed");
         assert_eq!(action, SupervisorAction::Restart);
     }
 
@@ -1803,12 +1859,16 @@ mod tests {
         });
         sup.start_service("svc");
 
-        let a1 = sup.report_failure("svc", "crash-1", 10).expect("serde deserialization should succeed");
+        let a1 = sup
+            .report_failure("svc", "crash-1", 10)
+            .expect("serde deserialization should succeed");
         assert_eq!(a1, SupervisorAction::Restart);
         assert_eq!(sup.restart_count("svc"), Some(1));
         assert_eq!(sup.service_state("svc"), Some(ServiceState::Running));
 
-        let a2 = sup.report_failure("svc", "crash-2", 20).expect("serde deserialization should succeed");
+        let a2 = sup
+            .report_failure("svc", "crash-2", 20)
+            .expect("serde deserialization should succeed");
         assert!(a2 == SupervisorAction::Escalate || a2 == SupervisorAction::Isolate);
         assert_eq!(sup.service_state("svc"), Some(ServiceState::Isolated));
     }

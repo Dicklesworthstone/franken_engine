@@ -729,7 +729,8 @@ mod tests {
         let mut clock = VirtualClock::new();
         clock.advance(42);
         let json = serde_json::to_string(&clock).expect("serde deserialization should succeed");
-        let restored: VirtualClock = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: VirtualClock =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(clock, restored);
     }
 
@@ -741,8 +742,10 @@ mod tests {
         transcript.push(ScheduleAction::InjectCancel {
             region_id: "r".to_string(),
         });
-        let json = serde_json::to_string(&transcript).expect("serde deserialization should succeed");
-        let restored: ScheduleTranscript = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json =
+            serde_json::to_string(&transcript).expect("serde deserialization should succeed");
+        let restored: ScheduleTranscript =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(transcript, restored);
     }
 
@@ -759,7 +762,8 @@ mod tests {
             verdict: Verdict::Pass,
         };
         let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
-        let restored: LabRunResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: LabRunResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, restored);
     }
 
@@ -800,7 +804,8 @@ mod tests {
             outcome: "ok".to_string(),
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let restored: LabEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: LabEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, restored);
     }
 
@@ -814,7 +819,8 @@ mod tests {
             FaultKind::RegionClose,
         ] {
             let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
-            let restored: FaultKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: FaultKind =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(kind, restored);
         }
     }
@@ -1021,7 +1027,8 @@ mod tests {
             },
         ] {
             let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
-            let restored: Verdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: Verdict =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(v, restored);
         }
     }
@@ -1036,7 +1043,8 @@ mod tests {
             TaskState::Cancelled,
         ] {
             let json = serde_json::to_string(&state).expect("serde deserialization should succeed");
-            let restored: TaskState = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: TaskState =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(state, restored);
         }
     }
@@ -1057,7 +1065,8 @@ mod tests {
         ];
         for action in &actions {
             let json = serde_json::to_string(action).expect("serde deserialization should succeed");
-            let restored: ScheduleAction = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: ScheduleAction =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*action, restored);
         }
     }
@@ -1165,7 +1174,8 @@ mod tests {
             outcome: "ok".to_string(),
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let restored: LabEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: LabEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, restored);
     }
 
@@ -1175,7 +1185,8 @@ mod tests {
             reason: "critical error with special chars: <>\"&".to_string(),
         };
         let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
-        let restored: Verdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: Verdict =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, restored);
     }
 
@@ -1282,8 +1293,11 @@ mod tests {
             verdict: Verdict::Pass,
         };
         let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
-        let val: serde_json::Value = serde_json::from_str(&json).expect("serde deserialization should succeed");
-        let obj = val.as_object().expect("serde deserialization should succeed");
+        let val: serde_json::Value =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let obj = val
+            .as_object()
+            .expect("serde deserialization should succeed");
         assert!(obj.contains_key("seed"));
         assert!(obj.contains_key("transcript"));
         assert!(obj.contains_key("events"));
@@ -1303,7 +1317,8 @@ mod tests {
     fn enrichment_schedule_action_json_tag_runtask() {
         let action = ScheduleAction::RunTask { task_id: 5 };
         let json = serde_json::to_string(&action).expect("serde deserialization should succeed");
-        let val: serde_json::Value = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let val: serde_json::Value =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(val["RunTask"]["task_id"], 5);
     }
 
@@ -1314,7 +1329,8 @@ mod tests {
             fault: FaultKind::DeadlineExpired,
         };
         let json = serde_json::to_string(&action).expect("serde deserialization should succeed");
-        let val: serde_json::Value = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let val: serde_json::Value =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(val["InjectFault"]["task_id"], 3);
         assert_eq!(val["InjectFault"]["fault"], "DeadlineExpired");
     }
@@ -1330,8 +1346,11 @@ mod tests {
             outcome: "cancel_injected".to_string(),
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let val: serde_json::Value = serde_json::from_str(&json).expect("serde deserialization should succeed");
-        let obj = val.as_object().expect("serde deserialization should succeed");
+        let val: serde_json::Value =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let obj = val
+            .as_object()
+            .expect("serde deserialization should succeed");
         assert!(obj.contains_key("virtual_time"));
         assert!(obj.contains_key("step_index"));
         assert!(obj.contains_key("action"));

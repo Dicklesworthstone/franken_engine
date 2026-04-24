@@ -442,7 +442,8 @@ mod tests {
     fn leak_diagnostic_serialization_round_trip() {
         let diag = test_diagnostic();
         let json = serde_json::to_string(&diag).expect("serde deserialization should succeed");
-        let restored: LeakDiagnostic = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: LeakDiagnostic =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(diag, restored);
     }
 
@@ -461,7 +462,8 @@ mod tests {
             severity: LeakSeverity::Critical,
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let restored: LeakEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: LeakEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, restored);
     }
 
@@ -470,8 +472,10 @@ mod tests {
     #[test]
     fn obligation_leak_policy_serde_both_variants() {
         for policy in [ObligationLeakPolicy::Lab, ObligationLeakPolicy::Production] {
-            let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
-            let restored: ObligationLeakPolicy = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&policy).expect("serde deserialization should succeed");
+            let restored: ObligationLeakPolicy =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(policy, restored);
         }
     }
@@ -484,7 +488,8 @@ mod tests {
             LeakSeverity::Fatal,
         ] {
             let json = serde_json::to_string(&sev).expect("serde deserialization should succeed");
-            let restored: LeakSeverity = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: LeakSeverity =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(sev, restored);
         }
     }
@@ -498,8 +503,10 @@ mod tests {
             FailoverAction::AlertOnly,
         ];
         for action in actions {
-            let json = serde_json::to_string(&action).expect("serde deserialization should succeed");
-            let restored: FailoverAction = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&action).expect("serde deserialization should succeed");
+            let restored: FailoverAction =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(action, restored);
         }
     }
@@ -510,15 +517,19 @@ mod tests {
         // Lab policy returns Abort
         let mut handler_lab = LeakHandler::new(ObligationLeakPolicy::Lab);
         let abort_resp = handler_lab.handle_leak(diag.clone());
-        let json = serde_json::to_string(&abort_resp).expect("serde deserialization should succeed");
-        let restored: LeakResponse = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json =
+            serde_json::to_string(&abort_resp).expect("serde deserialization should succeed");
+        let restored: LeakResponse =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(abort_resp, restored);
 
         // Production policy returns Handled
         let mut handler_prod = LeakHandler::new(ObligationLeakPolicy::Production);
         let handled_resp = handler_prod.handle_leak(test_diagnostic());
-        let json = serde_json::to_string(&handled_resp).expect("serde deserialization should succeed");
-        let restored: LeakResponse = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json =
+            serde_json::to_string(&handled_resp).expect("serde deserialization should succeed");
+        let restored: LeakResponse =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(handled_resp, restored);
     }
 
@@ -527,7 +538,8 @@ mod tests {
         let mut metrics = LeakMetrics::default();
         metrics.record("r", "c", "comp");
         let json = serde_json::to_string(&metrics).expect("serde deserialization should succeed");
-        let restored: LeakMetrics = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: LeakMetrics =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(metrics, restored);
     }
 
@@ -648,7 +660,8 @@ mod tests {
             severity: LeakSeverity::Warning,
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let restored: LeakEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: LeakEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, restored);
         assert_eq!(restored.failover_action, Some(FailoverAction::AlertOnly));
     }
@@ -666,7 +679,8 @@ mod tests {
             severity: LeakSeverity::Fatal,
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let restored: LeakEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: LeakEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, restored);
         assert!(restored.failover_action.is_none());
     }
@@ -745,7 +759,8 @@ mod tests {
             component: String::new(),
         };
         let json = serde_json::to_string(&diag).expect("serde deserialization should succeed");
-        let restored: LeakDiagnostic = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: LeakDiagnostic =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(diag, restored);
         // Display still works with empty fields
         let s = diag.to_string();
@@ -763,7 +778,8 @@ mod tests {
             component: "comp".to_string(),
         };
         let json = serde_json::to_string(&diag).expect("serde deserialization should succeed");
-        let restored: LeakDiagnostic = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: LeakDiagnostic =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(diag, restored);
         let s = diag.to_string();
         assert!(s.contains(&u64::MAX.to_string()));
@@ -781,7 +797,8 @@ mod tests {
         }
         assert_eq!(metrics.total, 10);
         let json = serde_json::to_string(&metrics).expect("serde deserialization should succeed");
-        let restored: LeakMetrics = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: LeakMetrics =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(metrics, restored);
     }
 
@@ -828,7 +845,8 @@ mod tests {
             severity: LeakSeverity::Warning,
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let restored: LeakEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: LeakEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, restored);
     }
 
@@ -844,7 +862,8 @@ mod tests {
     fn leak_metrics_default_serde_roundtrip() {
         let metrics = LeakMetrics::default();
         let json = serde_json::to_string(&metrics).expect("serde deserialization should succeed");
-        let restored: LeakMetrics = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: LeakMetrics =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(metrics, restored);
         assert_eq!(restored.total, 0);
         assert!(restored.by_region.is_empty());
@@ -903,7 +922,8 @@ mod tests {
             component: "comp\ttab".to_string(),
         };
         let json = serde_json::to_string(&diag).expect("serde deserialization should succeed");
-        let restored: LeakDiagnostic = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: LeakDiagnostic =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(diag, restored);
     }
 
@@ -932,7 +952,8 @@ mod tests {
             failover: None,
         };
         let json = serde_json::to_string(&resp).expect("serde deserialization should succeed");
-        let restored: LeakResponse = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: LeakResponse =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(resp, restored);
     }
 
@@ -1210,8 +1231,10 @@ mod tests {
 
     #[test]
     fn policy_serde_json_string_shape() {
-        let json_lab = serde_json::to_string(&ObligationLeakPolicy::Lab).expect("serde deserialization should succeed");
-        let json_prod = serde_json::to_string(&ObligationLeakPolicy::Production).expect("serde deserialization should succeed");
+        let json_lab = serde_json::to_string(&ObligationLeakPolicy::Lab)
+            .expect("serde deserialization should succeed");
+        let json_prod = serde_json::to_string(&ObligationLeakPolicy::Production)
+            .expect("serde deserialization should succeed");
         assert!(json_lab.starts_with('"'));
         assert!(json_prod.starts_with('"'));
         assert_ne!(json_lab, json_prod);
@@ -1231,7 +1254,8 @@ mod tests {
 
     #[test]
     fn failover_action_serde_tagged_shape() {
-        let alert = serde_json::to_string(&FailoverAction::AlertOnly).expect("serde deserialization should succeed");
+        let alert = serde_json::to_string(&FailoverAction::AlertOnly)
+            .expect("serde deserialization should succeed");
         let scoped = serde_json::to_string(&FailoverAction::ScopedRegionClose {
             region_id: "r".to_string(),
         })
@@ -1514,7 +1538,8 @@ mod tests {
         assert_eq!(metrics.total, 1);
         assert_eq!(metrics.by_region.get("region-\u{1F600}"), Some(&1));
         let json = serde_json::to_string(&metrics).expect("serde deserialization should succeed");
-        let restored: LeakMetrics = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: LeakMetrics =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(metrics, restored);
     }
 
@@ -1530,7 +1555,8 @@ mod tests {
             component: long_string.clone(),
         };
         let json = serde_json::to_string(&diag).expect("serde deserialization should succeed");
-        let restored: LeakDiagnostic = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: LeakDiagnostic =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(diag, restored);
         assert_eq!(restored.channel_id.len(), 10_000);
     }
@@ -1636,8 +1662,10 @@ mod tests {
                     failover_action: None,
                     severity,
                 };
-                let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-                let restored: LeakEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+                let json =
+                    serde_json::to_string(&event).expect("serde deserialization should succeed");
+                let restored: LeakEvent =
+                    serde_json::from_str(&json).expect("serde deserialization should succeed");
                 assert_eq!(event, restored);
             }
         }

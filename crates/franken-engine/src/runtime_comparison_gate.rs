@@ -1189,8 +1189,10 @@ mod tests {
         let higher_runs_input =
             make_passing_input(&results_higher_runs, &methodology, &artifacts, &[], &env);
 
-        let low_runs_bundle = evaluate_gate(&low_runs_input).expect("serde deserialization should succeed");
-        let higher_runs_bundle = evaluate_gate(&higher_runs_input).expect("serde deserialization should succeed");
+        let low_runs_bundle =
+            evaluate_gate(&low_runs_input).expect("serde deserialization should succeed");
+        let higher_runs_bundle =
+            evaluate_gate(&higher_runs_input).expect("serde deserialization should succeed");
 
         assert_ne!(low_runs_bundle.blockers, higher_runs_bundle.blockers);
         assert_ne!(
@@ -1216,8 +1218,10 @@ mod tests {
         }];
         let input_with_repro = make_passing_input(&results, &methodology, &artifacts, &repro, &env);
 
-        let bundle_without_repro = evaluate_gate(&input_without_repro).expect("serde deserialization should succeed");
-        let bundle_with_repro = evaluate_gate(&input_with_repro).expect("serde deserialization should succeed");
+        let bundle_without_repro =
+            evaluate_gate(&input_without_repro).expect("serde deserialization should succeed");
+        let bundle_with_repro =
+            evaluate_gate(&input_with_repro).expect("serde deserialization should succeed");
 
         assert_ne!(
             bundle_without_repro.reproducibility_results,
@@ -1244,8 +1248,10 @@ mod tests {
         let reversed_input =
             make_passing_input(&reversed_results, &methodology, &artifacts, &[], &env);
 
-        let forward_bundle = evaluate_gate(&forward_input).expect("serde deserialization should succeed");
-        let reversed_bundle = evaluate_gate(&reversed_input).expect("serde deserialization should succeed");
+        let forward_bundle =
+            evaluate_gate(&forward_input).expect("serde deserialization should succeed");
+        let reversed_bundle =
+            evaluate_gate(&reversed_input).expect("serde deserialization should succeed");
 
         assert_eq!(forward_bundle.blockers, reversed_bundle.blockers);
         assert_eq!(forward_bundle.evidence_hash, reversed_bundle.evidence_hash);
@@ -1282,8 +1288,10 @@ mod tests {
         let reversed_input =
             make_passing_input(&results, &methodology, &artifacts, &repro_reversed, &env);
 
-        let forward_bundle = evaluate_gate(&forward_input).expect("serde deserialization should succeed");
-        let reversed_bundle = evaluate_gate(&reversed_input).expect("serde deserialization should succeed");
+        let forward_bundle =
+            evaluate_gate(&forward_input).expect("serde deserialization should succeed");
+        let reversed_bundle =
+            evaluate_gate(&reversed_input).expect("serde deserialization should succeed");
 
         assert_eq!(
             forward_bundle.reproducibility_results,
@@ -1589,7 +1597,8 @@ mod tests {
     fn serde_runtime_id_roundtrip() {
         let val = RuntimeId::FrankenEngine;
         let json = serde_json::to_string(&val).expect("serde deserialization should succeed");
-        let back: RuntimeId = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: RuntimeId =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(val, back);
     }
 
@@ -1597,7 +1606,8 @@ mod tests {
     fn serde_category_roundtrip() {
         let val = BenchmarkCategory::Throughput;
         let json = serde_json::to_string(&val).expect("serde deserialization should succeed");
-        let back: BenchmarkCategory = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: BenchmarkCategory =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(val, back);
     }
 
@@ -1611,7 +1621,8 @@ mod tests {
         let bundle = evaluate_gate(&input).expect("serde deserialization should succeed");
 
         let json = serde_json::to_string(&bundle).expect("serde deserialization should succeed");
-        let back: GateEvidenceBundle = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GateEvidenceBundle =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(bundle, back);
     }
 
@@ -1624,7 +1635,8 @@ mod tests {
             max_cv_millionths: 30_000,
         };
         let json = serde_json::to_string(&b).expect("serde deserialization should succeed");
-        let back: GateBlocker = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GateBlocker =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(b, back);
     }
 
@@ -1643,7 +1655,8 @@ mod tests {
             error_code: None,
         };
         let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
-        let back: GateLogEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GateLogEntry =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, back);
     }
 
@@ -1793,7 +1806,8 @@ mod tests {
             cv_millionths: 15_000,
         };
         let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
-        let restored: BenchmarkResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: BenchmarkResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, restored);
     }
 
@@ -1813,7 +1827,8 @@ mod tests {
             fingerprint_hash: ContentHash::compute(b"fp-test"),
         };
         let json = serde_json::to_string(&fp).expect("serde deserialization should succeed");
-        let restored: EnvironmentFingerprint = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: EnvironmentFingerprint =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(fp, restored);
     }
 
@@ -1829,7 +1844,8 @@ mod tests {
             reviewer_ids: vec![],
         };
         let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
-        let restored: MethodologyAudit = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: MethodologyAudit =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(m, restored);
     }
 
@@ -1844,7 +1860,8 @@ mod tests {
             bundle_hash: ContentHash::compute(b"bundle-test"),
         };
         let json = serde_json::to_string(&a).expect("serde deserialization should succeed");
-        let restored: ArtifactBundleAudit = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: ArtifactBundleAudit =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(a, restored);
     }
 
@@ -1859,7 +1876,8 @@ mod tests {
             within_tolerance: true,
         };
         let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
-        let restored: ReproducibilityResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: ReproducibilityResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, restored);
     }
 
@@ -2059,8 +2077,10 @@ mod tests {
         let input = make_passing_input(&results, &methodology, &artifacts, &[], &env);
         let bundle = evaluate_gate(&input).expect("serde deserialization should succeed");
 
-        let json = serde_json::to_string(&bundle.performance_summary).expect("serde deserialization should succeed");
-        let back: PerformanceSummary = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&bundle.performance_summary)
+            .expect("serde deserialization should succeed");
+        let back: PerformanceSummary =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(bundle.performance_summary, back);
     }
 
@@ -2074,7 +2094,8 @@ mod tests {
         ];
         for err in &errors {
             let json = serde_json::to_string(err).expect("serde deserialization should succeed");
-            let back: GateError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: GateError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, back);
         }
     }
@@ -2130,7 +2151,8 @@ mod tests {
         ];
         for b in &blockers {
             let json = serde_json::to_string(b).expect("serde deserialization should succeed");
-            let back: GateBlocker = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: GateBlocker =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*b, back);
         }
     }
@@ -2190,7 +2212,8 @@ mod tests {
             vs_bun_memory_delta_millionths: -10_000,
         };
         let json = serde_json::to_string(&cs).expect("serde deserialization should succeed");
-        let back: CategorySummary = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: CategorySummary =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cs, back);
     }
 

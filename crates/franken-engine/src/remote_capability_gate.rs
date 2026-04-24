@@ -729,7 +729,8 @@ mod tests {
             trace_id: "trace-1".to_string(),
         };
         let json = serde_json::to_string(&denied).expect("serde deserialization should succeed");
-        let restored: RemoteCapabilityDenied = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: RemoteCapabilityDenied =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(denied, restored);
     }
 
@@ -746,7 +747,8 @@ mod tests {
             held_profile: "RemoteCaps".to_string(),
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let restored: RemoteGateEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: RemoteGateEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, restored);
     }
 
@@ -764,7 +766,8 @@ mod tests {
         ];
         for err in &errors {
             let json = serde_json::to_string(err).expect("serde deserialization should succeed");
-            let restored: RemoteTransportError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: RemoteTransportError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, restored);
         }
     }
@@ -800,7 +803,8 @@ mod tests {
         ];
         for op in &all {
             let json = serde_json::to_string(op).expect("serde deserialization should succeed");
-            let restored: RemoteOperationType = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: RemoteOperationType =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*op, restored);
         }
     }
@@ -977,7 +981,8 @@ mod tests {
             message: "internal server error".to_string(),
         };
         let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
-        let restored: RemoteTransportError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: RemoteTransportError =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, restored);
     }
 
@@ -1126,7 +1131,8 @@ mod tests {
         };
         let err = RemoteTransportError::CapabilityDenied(denied);
         let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
-        let restored: RemoteTransportError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: RemoteTransportError =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, restored);
     }
 
@@ -1273,7 +1279,8 @@ mod tests {
         ];
         for op in &ops {
             let json = serde_json::to_string(op).expect("serde deserialization should succeed");
-            let back: RemoteOperationType = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: RemoteOperationType =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*op, back);
         }
     }
@@ -1331,7 +1338,8 @@ mod tests {
             held_profile: "Remote".to_string(),
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let back: RemoteGateEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: RemoteGateEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
     }
 
@@ -1613,7 +1621,8 @@ mod tests {
             trace_id: "t-empty".to_string(),
         };
         let json = serde_json::to_string(&denied).expect("serde deserialization should succeed");
-        let back: RemoteCapabilityDenied = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: RemoteCapabilityDenied =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.required_capabilities.len(), 0);
         // Display still works fine with empty capabilities.
         let msg = denied.to_string();
@@ -1645,7 +1654,8 @@ mod tests {
             reason: "connection timed out".to_string(),
         };
         let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
-        let back: RemoteTransportError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: RemoteTransportError =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, back);
         assert!(json.contains("unreachable.example.com"));
         assert!(json.contains("connection timed out"));

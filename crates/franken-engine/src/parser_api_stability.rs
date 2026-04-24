@@ -183,7 +183,10 @@ impl ApiStabilityManifest {
                 );
                 m.insert(
                     "evolution_rule".into(),
-                    CanonicalValue::String(serde_json::to_string(&e.evolution_rule).expect("serde deserialization should succeed")),
+                    CanonicalValue::String(
+                        serde_json::to_string(&e.evolution_rule)
+                            .expect("serde deserialization should succeed"),
+                    ),
                 );
                 m.insert(
                     "minimum_compatible_version".into(),
@@ -281,7 +284,10 @@ impl CompatibilityReport {
                 m.insert("detail".into(), CanonicalValue::String(r.detail.clone()));
                 m.insert(
                     "verdict".into(),
-                    CanonicalValue::String(serde_json::to_string(&r.verdict).expect("serde deserialization should succeed")),
+                    CanonicalValue::String(
+                        serde_json::to_string(&r.verdict)
+                            .expect("serde deserialization should succeed"),
+                    ),
                 );
                 CanonicalValue::Map(m)
             })
@@ -842,7 +848,9 @@ impl IntegrationLogEntry {
         );
         map.insert(
             "outcome".into(),
-            CanonicalValue::String(serde_json::to_string(&self.outcome).expect("serde deserialization should succeed")),
+            CanonicalValue::String(
+                serde_json::to_string(&self.outcome).expect("serde deserialization should succeed"),
+            ),
         );
         map.insert(
             "source_label".into(),
@@ -917,7 +925,9 @@ mod tests {
     #[test]
     fn manifest_lookup_by_surface_id() {
         let m = ApiStabilityManifest::current();
-        let ast = m.entry("ast.contract").expect("serde deserialization should succeed");
+        let ast = m
+            .entry("ast.contract")
+            .expect("serde deserialization should succeed");
         assert_eq!(ast.current_version, CANONICAL_AST_CONTRACT_VERSION);
         assert_eq!(ast.evolution_rule, EvolutionRule::AdditiveOnly);
     }
@@ -1042,7 +1052,8 @@ mod tests {
 
     #[test]
     fn parse_module_import() {
-        let tree = parse_module("import x from 'y';").expect("serde deserialization should succeed");
+        let tree =
+            parse_module("import x from 'y';").expect("serde deserialization should succeed");
         assert_eq!(tree.goal, ParseGoal::Module);
         assert!(!tree.body.is_empty());
     }
@@ -1121,7 +1132,8 @@ mod tests {
     fn ast_serde_roundtrip() {
         let tree = parse_script("42;").expect("serde deserialization should succeed");
         let json = serde_json::to_string(&tree).expect("serde deserialization should succeed");
-        let restored: SyntaxTree = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: SyntaxTree =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(tree, restored);
     }
 
@@ -1130,7 +1142,8 @@ mod tests {
         let tree = parse_script("42;").expect("serde deserialization should succeed");
         let hash_before = tree.canonical_hash();
         let json = serde_json::to_string(&tree).expect("serde deserialization should succeed");
-        let restored: SyntaxTree = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: SyntaxTree =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(hash_before, restored.canonical_hash());
     }
 
@@ -1140,7 +1153,8 @@ mod tests {
     fn event_ir_serde_roundtrip() {
         let (_, ir) = parse_with_audit("42;", ParseGoal::Script);
         let json = serde_json::to_string(&ir).expect("serde deserialization should succeed");
-        let restored: ParseEventIr = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: ParseEventIr =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ir, restored);
     }
 
@@ -1201,12 +1215,18 @@ mod tests {
         let (_, ir) = parse_with_audit("42;", ParseGoal::Script);
         // SAFETY: parse_with_audit always produces at least one event; first() returns Some
         assert_eq!(
-            ir.events.first().expect("serde deserialization should succeed").kind,
+            ir.events
+                .first()
+                .expect("serde deserialization should succeed")
+                .kind,
             ParseEventKind::ParseStarted
         );
         // SAFETY: parse_with_audit always produces at least one event; last() returns Some
         assert_eq!(
-            ir.events.last().expect("serde deserialization should succeed").kind,
+            ir.events
+                .last()
+                .expect("serde deserialization should succeed")
+                .kind,
             ParseEventKind::ParseCompleted
         );
     }
@@ -1218,7 +1238,8 @@ mod tests {
         let (_, _, mat_result) = parse_with_full_provenance("42;", ParseGoal::Script);
         let mat = mat_result.expect("serde deserialization should succeed");
         let json = serde_json::to_string(&mat).expect("serde deserialization should succeed");
-        let restored: MaterializedSyntaxTree = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: MaterializedSyntaxTree =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(mat, restored);
     }
 
@@ -1242,7 +1263,12 @@ mod tests {
     fn materialised_ast_canonical_hash_deterministic() {
         let (_, _, m1) = parse_with_full_provenance("42;", ParseGoal::Script);
         let (_, _, m2) = parse_with_full_provenance("42;", ParseGoal::Script);
-        assert_eq!(m1.expect("serde deserialization should succeed").canonical_hash(), m2.expect("serde deserialization should succeed").canonical_hash());
+        assert_eq!(
+            m1.expect("serde deserialization should succeed")
+                .canonical_hash(),
+            m2.expect("serde deserialization should succeed")
+                .canonical_hash()
+        );
     }
 
     // -- Diagnostic envelope stability --
@@ -1270,7 +1296,8 @@ mod tests {
         let err = parse_script("").unwrap_err();
         let diag = err.normalized_diagnostic();
         let json = serde_json::to_string(&diag).expect("serde deserialization should succeed");
-        let restored: ParseDiagnosticEnvelope = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: ParseDiagnosticEnvelope =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(diag, restored);
     }
 
@@ -1307,7 +1334,8 @@ mod tests {
 
     #[test]
     fn assess_migration_current_is_compatible() {
-        let a = assess_migration("ast.contract", CANONICAL_AST_CONTRACT_VERSION).expect("serde deserialization should succeed");
+        let a = assess_migration("ast.contract", CANONICAL_AST_CONTRACT_VERSION)
+            .expect("serde deserialization should succeed");
         assert!(a.compatible);
         assert!(!a.needs_migration);
     }
@@ -1366,7 +1394,8 @@ mod tests {
         let tree = result.expect("serde deserialization should succeed");
         let log = IntegrationLogEntry::from_parse_success("test.js", ParseGoal::Script, &tree, &ir);
         let json = serde_json::to_string(&log).expect("serde deserialization should succeed");
-        let restored: IntegrationLogEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: IntegrationLogEntry =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(log, restored);
     }
 
@@ -1382,7 +1411,8 @@ mod tests {
     fn parser_budget_serde_roundtrip() {
         let budget = ParserBudget::default();
         let json = serde_json::to_string(&budget).expect("serde deserialization should succeed");
-        let restored: ParserBudget = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: ParserBudget =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(budget, restored);
     }
 
@@ -1443,7 +1473,8 @@ mod tests {
     fn grammar_matrix_serde_roundtrip() {
         let matrix = GrammarCompletenessMatrix::scalar_reference_es2020();
         let json = serde_json::to_string(&matrix).expect("serde deserialization should succeed");
-        let restored: GrammarCompletenessMatrix = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: GrammarCompletenessMatrix =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(matrix, restored);
     }
 
@@ -1457,7 +1488,8 @@ mod tests {
             EvolutionRule::Internal,
         ] {
             let json = serde_json::to_string(&rule).expect("serde deserialization should succeed");
-            let restored: EvolutionRule = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: EvolutionRule =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(rule, restored);
         }
     }
@@ -1472,7 +1504,8 @@ mod tests {
             minimum_compatible_version: "v1".into(),
         };
         let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
-        let restored: ApiSurfaceEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: ApiSurfaceEntry =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, restored);
     }
 
@@ -1480,7 +1513,8 @@ mod tests {
 
     #[test]
     fn module_export_parses_correctly() {
-        let tree = parse_module("export default 42;").expect("serde deserialization should succeed");
+        let tree =
+            parse_module("export default 42;").expect("serde deserialization should succeed");
         assert_eq!(tree.goal, ParseGoal::Module);
         assert_eq!(tree.body.len(), 1);
     }
@@ -1502,7 +1536,8 @@ mod tests {
             CheckVerdict::Skipped,
         ] {
             let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
-            let restored: CheckVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: CheckVerdict =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(v, restored);
         }
     }
@@ -1516,7 +1551,8 @@ mod tests {
             IntegrationOutcome::VersionMismatch,
         ] {
             let json = serde_json::to_string(&o).expect("serde deserialization should succeed");
-            let restored: IntegrationOutcome = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: IntegrationOutcome =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(o, restored);
         }
     }
@@ -1539,7 +1575,8 @@ mod tests {
     fn source_span_serde_roundtrip() {
         let span = SourceSpan::new(0, 3, 1, 1, 1, 4);
         let json = serde_json::to_string(&span).expect("serde deserialization should succeed");
-        let restored: SourceSpan = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: SourceSpan =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(span, restored);
     }
 
@@ -1606,7 +1643,8 @@ mod tests {
     fn taxonomy_v1_serde_roundtrip() {
         let t = ParseDiagnosticTaxonomy::v1();
         let json = serde_json::to_string(&t).expect("serde deserialization should succeed");
-        let restored: ParseDiagnosticTaxonomy = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: ParseDiagnosticTaxonomy =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(t, restored);
     }
 
@@ -1653,7 +1691,8 @@ mod tests {
     fn api_stability_manifest_serde_roundtrip() {
         let manifest = ApiStabilityManifest::current();
         let json = serde_json::to_string(&manifest).expect("serde deserialization should succeed");
-        let back: ApiStabilityManifest = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ApiStabilityManifest =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(manifest, back);
     }
 }

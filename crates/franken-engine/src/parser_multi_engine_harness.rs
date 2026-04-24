@@ -926,7 +926,11 @@ fn derive_run_id(
         hasher.update(engine.engine_id.as_bytes());
         hasher.update(engine.version_pin.as_bytes());
         // SAFETY: HarnessEngineKind derives Serialize and has no non-serializable fields
-        hasher.update(serde_json::to_string(&engine.kind).expect("serde deserialization should succeed").as_bytes());
+        hasher.update(
+            serde_json::to_string(&engine.kind)
+                .expect("serde deserialization should succeed")
+                .as_bytes(),
+        );
         if let Some(command) = engine.command.as_ref() {
             hasher.update(command.as_bytes());
         }
@@ -2100,7 +2104,8 @@ mod tests {
             // SAFETY: HarnessEngineKind derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
             // SAFETY: JSON was just generated from HarnessEngineKind, deserialization guaranteed to succeed
-            let restored: HarnessEngineKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: HarnessEngineKind =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(kind, restored);
         }
     }
@@ -2108,13 +2113,16 @@ mod tests {
     #[test]
     fn harness_engine_kind_snake_case_format() {
         // SAFETY: HarnessEngineKind derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&HarnessEngineKind::FrankenCanonical).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&HarnessEngineKind::FrankenCanonical)
+            .expect("serde deserialization should succeed");
         assert_eq!(json, "\"franken_canonical\"");
         // SAFETY: HarnessEngineKind derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&HarnessEngineKind::FixtureExpectedHash).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&HarnessEngineKind::FixtureExpectedHash)
+            .expect("serde deserialization should succeed");
         assert_eq!(json, "\"fixture_expected_hash\"");
         // SAFETY: HarnessEngineKind derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&HarnessEngineKind::ExternalCommand).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&HarnessEngineKind::ExternalCommand)
+            .expect("serde deserialization should succeed");
         assert_eq!(json, "\"external_command\"");
     }
 
@@ -2124,7 +2132,8 @@ mod tests {
         // SAFETY: HarnessEngineSpec derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&spec).expect("serde deserialization should succeed");
         // SAFETY: JSON was just generated from HarnessEngineSpec, deserialization guaranteed to succeed
-        let restored: HarnessEngineSpec = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: HarnessEngineSpec =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(spec, restored);
     }
 
@@ -2141,17 +2150,20 @@ mod tests {
         // SAFETY: HarnessEngineSpec derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&spec).expect("serde deserialization should succeed");
         // SAFETY: JSON was just generated from HarnessEngineSpec, deserialization guaranteed to succeed
-        let restored: HarnessEngineSpec = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: HarnessEngineSpec =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(spec, restored);
     }
 
     #[test]
     fn engine_outcome_kind_serialize() {
         // SAFETY: EngineOutcomeKind derives Serialize and has no non-serializable fields
-        let hash_json = serde_json::to_string(&EngineOutcomeKind::Hash).expect("serde deserialization should succeed");
+        let hash_json = serde_json::to_string(&EngineOutcomeKind::Hash)
+            .expect("serde deserialization should succeed");
         assert_eq!(hash_json, "\"hash\"");
         // SAFETY: EngineOutcomeKind derives Serialize and has no non-serializable fields
-        let error_json = serde_json::to_string(&EngineOutcomeKind::Error).expect("serde deserialization should succeed");
+        let error_json = serde_json::to_string(&EngineOutcomeKind::Error)
+            .expect("serde deserialization should succeed");
         assert_eq!(error_json, "\"error\"");
     }
 
@@ -2319,7 +2331,8 @@ mod tests {
             "expected_hash": "sha256:abc"
         }"#;
         // SAFETY: Test uses valid JSON that matches HarnessFixtureSpec schema
-        let spec: HarnessFixtureSpec = serde_json::from_str(json).expect("serde deserialization should succeed");
+        let spec: HarnessFixtureSpec =
+            serde_json::from_str(json).expect("serde deserialization should succeed");
         assert_eq!(spec.id, "fix-1");
         assert_eq!(spec.goal, "script");
     }
@@ -2341,7 +2354,8 @@ mod tests {
             EXPECTED_FIXTURE_SCHEMA_VERSION, EXPECTED_FIXTURE_PARSER_MODE
         );
         // SAFETY: Test uses valid JSON that matches HarnessFixtureCatalog schema
-        let catalog: HarnessFixtureCatalog = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let catalog: HarnessFixtureCatalog =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(catalog.fixtures.len(), 1);
         assert_eq!(catalog.fixtures[0].id, "f-1");
     }
@@ -2680,7 +2694,8 @@ mod tests {
             // SAFETY: DriftCategory derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(&cat).expect("serde deserialization should succeed");
             // SAFETY: JSON was just generated from DriftCategory, deserialization guaranteed to succeed
-            let back: DriftCategory = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: DriftCategory =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(cat, back);
         }
     }
@@ -2735,7 +2750,8 @@ mod tests {
             // SAFETY: DriftSeverity derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(&sev).expect("serde deserialization should succeed");
             // SAFETY: JSON was just generated from DriftSeverity, deserialization guaranteed to succeed
-            let back: DriftSeverity = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: DriftSeverity =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(sev, back);
         }
     }
@@ -2763,7 +2779,8 @@ mod tests {
         // SAFETY: DriftClassification derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&dc).expect("serde deserialization should succeed");
         // SAFETY: JSON was just generated from DriftClassification, deserialization guaranteed to succeed
-        let back: DriftClassification = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DriftClassification =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(dc, back);
     }
 
@@ -2783,7 +2800,8 @@ mod tests {
         // SAFETY: DriftMinimizationStats derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&stats).expect("serde deserialization should succeed");
         // SAFETY: JSON was just generated from DriftMinimizationStats, deserialization guaranteed to succeed
-        let back: DriftMinimizationStats = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DriftMinimizationStats =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(stats, back);
     }
 
@@ -2795,7 +2813,8 @@ mod tests {
         // SAFETY: AstNormalizationAdapter derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&adapter).expect("serde deserialization should succeed");
         // SAFETY: JSON was just generated from AstNormalizationAdapter, deserialization guaranteed to succeed
-        let back: AstNormalizationAdapter = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: AstNormalizationAdapter =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(adapter, back);
     }
 
@@ -2805,7 +2824,8 @@ mod tests {
         // SAFETY: DiagnosticNormalizationAdapter derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&adapter).expect("serde deserialization should succeed");
         // SAFETY: JSON was just generated from DiagnosticNormalizationAdapter, deserialization guaranteed to succeed
-        let back: DiagnosticNormalizationAdapter = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DiagnosticNormalizationAdapter =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(adapter, back);
     }
 
@@ -2821,7 +2841,8 @@ mod tests {
         // SAFETY: NormalizedAstArtifact derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&artifact).expect("serde deserialization should succeed");
         // SAFETY: JSON was just generated from NormalizedAstArtifact, deserialization guaranteed to succeed
-        let back: NormalizedAstArtifact = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: NormalizedAstArtifact =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(artifact, back);
     }
 
@@ -2840,7 +2861,8 @@ mod tests {
         // SAFETY: NormalizedDiagnosticArtifact derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&artifact).expect("serde deserialization should succeed");
         // SAFETY: JSON was just generated from NormalizedDiagnosticArtifact, deserialization guaranteed to succeed
-        let back: NormalizedDiagnosticArtifact = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: NormalizedDiagnosticArtifact =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(artifact, back);
     }
 
@@ -2919,7 +2941,8 @@ mod tests {
         // SAFETY: DriftReproPack derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&pack).expect("serde deserialization should succeed");
         // SAFETY: JSON was just generated from DriftReproPack, deserialization guaranteed to succeed
-        let back: DriftReproPack = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DriftReproPack =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(pack, back);
     }
 
@@ -3277,9 +3300,15 @@ mod tests {
     #[test]
     fn parse_goal_script_and_module() {
         // SAFETY: Test uses known valid goal strings that parse_goal supports
-        assert_eq!(parse_goal("f1", "script").expect("serde deserialization should succeed"), ParseGoal::Script);
+        assert_eq!(
+            parse_goal("f1", "script").expect("serde deserialization should succeed"),
+            ParseGoal::Script
+        );
         // SAFETY: Test uses known valid goal strings that parse_goal supports
-        assert_eq!(parse_goal("f1", "module").expect("serde deserialization should succeed"), ParseGoal::Module);
+        assert_eq!(
+            parse_goal("f1", "module").expect("serde deserialization should succeed"),
+            ParseGoal::Module
+        );
     }
 
     #[test]
@@ -3651,7 +3680,8 @@ mod tests {
         // SAFETY: ExternalCommandRequest derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&request).expect("serde deserialization should succeed");
         // SAFETY: JSON was just generated from ExternalCommandRequest, deserialization guaranteed to succeed
-        let restored: ExternalCommandRequest = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: ExternalCommandRequest =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(restored.goal, "script");
         assert_eq!(restored.seed, 42);
         assert_eq!(restored.engine_id, "ext-1");

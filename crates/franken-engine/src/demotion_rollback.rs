@@ -1295,7 +1295,8 @@ mod tests {
         let key = test_signing_key();
         // SAFETY: Fixed 32-byte array is valid signing key format for test purposes.
         // SigningKey::from_bytes only fails on invalid length (not 32 bytes).
-        let wrong_key = SigningKey::from_bytes([99u8; 32]).expect("serde deserialization should succeed");
+        let wrong_key =
+            SigningKey::from_bytes([99u8; 32]).expect("serde deserialization should succeed");
 
         let receipt = DemotionReceipt::create_signed(
             &key,
@@ -1489,7 +1490,9 @@ mod tests {
 
         // SAFETY: Test verifies demotion trigger conditions were met,
         // so evaluation field must be Some (monitor.is_demotion_triggered() == true).
-        let eval = result.evaluation.expect("serde deserialization should succeed");
+        let eval = result
+            .evaluation
+            .expect("serde deserialization should succeed");
         assert_eq!(eval.severity, DemotionSeverity::Critical);
         // SAFETY: Test verifies critical demotion was triggered,
         // so reason field must be Some (severity is Critical).
@@ -1620,7 +1623,9 @@ mod tests {
 
         // SAFETY: Test verifies trigger_fired and is_demotion_triggered are true,
         // so evaluation field must be Some (demotion was triggered).
-        let eval = result.evaluation.expect("serde deserialization should succeed");
+        let eval = result
+            .evaluation
+            .expect("serde deserialization should succeed");
         // SAFETY: Test verifies performance breach demotion was triggered,
         // so reason field must be Some (evaluation exists with specific reason).
         match eval.reason.expect("serde deserialization should succeed") {
@@ -1743,7 +1748,9 @@ mod tests {
         assert!(result.trigger_fired);
         assert!(monitor.is_demotion_triggered());
 
-        let eval = result.evaluation.expect("serde deserialization should succeed");
+        let eval = result
+            .evaluation
+            .expect("serde deserialization should succeed");
         match eval.reason.expect("serde deserialization should succeed") {
             DemotionReason::CapabilityViolation {
                 attempted_capability,
@@ -1954,7 +1961,8 @@ mod tests {
         // SAFETY: DemotionReceipt derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid DemotionReceipt serialization
-        let restored: DemotionReceipt = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: DemotionReceipt =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(receipt, restored);
     }
 
@@ -1966,7 +1974,8 @@ mod tests {
         // SAFETY: DemotionPolicy derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid DemotionPolicy serialization
-        let restored: DemotionPolicy = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: DemotionPolicy =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(policy, restored);
     }
 
@@ -1982,7 +1991,8 @@ mod tests {
         // SAFETY: AutoDemotionMonitor derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&monitor).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid AutoDemotionMonitor serialization
-        let restored: AutoDemotionMonitor = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: AutoDemotionMonitor =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(monitor, restored);
     }
 
@@ -2161,9 +2171,11 @@ mod tests {
         ];
         for reason in reasons {
             // SAFETY: DemotionReason derives Serialize and has no non-serializable fields
-            let json = serde_json::to_string(&reason).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&reason).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by valid DemotionReason serialization
-            let back: DemotionReason = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: DemotionReason =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(reason, back);
         }
     }
@@ -2178,7 +2190,8 @@ mod tests {
             // SAFETY: to_value cannot fail on derived Serialize enum
             let json = serde_json::to_value(sev).expect("serde deserialization should succeed");
             // SAFETY: from_value cannot fail on valid JSON from to_value roundtrip
-            let back: DemotionSeverity = serde_json::from_value(json).expect("serde deserialization should succeed");
+            let back: DemotionSeverity =
+                serde_json::from_value(json).expect("serde deserialization should succeed");
             assert_eq!(sev, back);
         }
     }
@@ -2207,7 +2220,8 @@ mod tests {
             // SAFETY: to_string cannot fail on derived Serialize enum
             let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
             // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-            let back: DemotionError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: DemotionError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(err, back);
         }
     }
@@ -2223,7 +2237,8 @@ mod tests {
         // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&item).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let back: DemotionEvidenceItem = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DemotionEvidenceItem =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(item, back);
     }
 
@@ -2306,7 +2321,8 @@ mod tests {
             // SAFETY: to_string cannot fail on derived Serialize enum
             let json = serde_json::to_string(obs).expect("serde deserialization should succeed");
             // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-            let restored: MonitoringObservation = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: MonitoringObservation =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&restored, obs);
         }
     }
@@ -2321,7 +2337,8 @@ mod tests {
         // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&pt).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let restored: PerformanceThreshold = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: PerformanceThreshold =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(restored, pt);
     }
 
@@ -2454,7 +2471,8 @@ mod tests {
         // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&te).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let restored: TriggerEvaluation = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: TriggerEvaluation =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(te, restored);
     }
 
@@ -2468,7 +2486,8 @@ mod tests {
         // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&or).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let restored: ObservationResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: ObservationResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(or, restored);
     }
 
@@ -2478,7 +2497,8 @@ mod tests {
         // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&monitor).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let restored: AutoDemotionMonitor = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: AutoDemotionMonitor =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(monitor, restored);
     }
 
@@ -2657,7 +2677,8 @@ mod tests {
         ];
         for reason in &reasons {
             let json = serde_json::to_string(reason).expect("serde deserialization should succeed");
-            let back: DemotionReason = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: DemotionReason =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*reason, back);
         }
     }
@@ -2671,8 +2692,10 @@ mod tests {
             DemotionSeverity::Warning,
             DemotionSeverity::Critical,
         ] {
-            let json = serde_json::to_string(&severity).expect("serde deserialization should succeed");
-            let back: DemotionSeverity = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&severity).expect("serde deserialization should succeed");
+            let back: DemotionSeverity =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(severity, back);
         }
     }
@@ -2696,7 +2719,8 @@ mod tests {
             summary: "Found 3 output differences".into(),
         };
         let json = serde_json::to_string(&item).expect("serde deserialization should succeed");
-        let back: DemotionEvidenceItem = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DemotionEvidenceItem =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(item, back);
     }
 
@@ -2739,7 +2763,8 @@ mod tests {
     fn enrichment_demotion_policy_serde_roundtrip() {
         let policy = test_policy();
         let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
-        let back: DemotionPolicy = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DemotionPolicy =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(policy, back);
     }
 
@@ -2906,7 +2931,8 @@ mod tests {
         assert!(monitor.is_demotion_triggered());
 
         let json = serde_json::to_string(&monitor).expect("serde deserialization should succeed");
-        let restored: AutoDemotionMonitor = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: AutoDemotionMonitor =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert!(restored.is_demotion_triggered());
         assert_eq!(restored.latest_risk_millionths(), 900_000);
         assert_eq!(restored.observations_processed(), 1);
@@ -2965,7 +2991,9 @@ mod tests {
         let result = monitor.process_observation(&obs);
         assert!(result.trigger_fired);
         // SAFETY: Test-only unwrap, trigger_fired=true guarantees evaluation is Some
-        let eval = result.evaluation.expect("serde deserialization should succeed");
+        let eval = result
+            .evaluation
+            .expect("serde deserialization should succeed");
         assert!(!eval.evidence.is_empty());
         assert_eq!(eval.evidence[0].category, "divergence_trace");
         assert!(eval.evidence[0].summary.contains("divergence"));
@@ -2983,7 +3011,9 @@ mod tests {
         let result = monitor.process_observation(&obs);
         assert!(result.trigger_fired);
         // SAFETY: Test-only unwrap, trigger_fired=true guarantees evaluation is Some
-        let eval = result.evaluation.expect("serde deserialization should succeed");
+        let eval = result
+            .evaluation
+            .expect("serde deserialization should succeed");
         assert!(!eval.evidence.is_empty());
         assert_eq!(eval.evidence[0].category, "capability_violation");
         assert!(eval.evidence[0].summary.contains("network_send"));
@@ -2999,7 +3029,9 @@ mod tests {
         let result = monitor.process_observation(&obs);
         assert!(result.trigger_fired);
         // SAFETY: Test-only unwrap, trigger_fired=true guarantees evaluation is Some
-        let eval = result.evaluation.expect("serde deserialization should succeed");
+        let eval = result
+            .evaluation
+            .expect("serde deserialization should succeed");
         assert!(!eval.evidence.is_empty());
         assert_eq!(eval.evidence[0].category, "risk_score");
     }
@@ -3146,7 +3178,10 @@ mod tests {
         assert!(result.trigger_fired);
         assert_eq!(
             // SAFETY: Test-only unwrap, trigger_fired=true guarantees evaluation is Some
-            result.evaluation.expect("serde deserialization should succeed").severity,
+            result
+                .evaluation
+                .expect("serde deserialization should succeed")
+                .severity,
             DemotionSeverity::Advisory
         );
     }
@@ -3213,7 +3248,8 @@ mod tests {
         // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let restored: DemotionReceipt = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: DemotionReceipt =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(restored.evidence.len(), 3);
     }
 
@@ -3570,7 +3606,9 @@ mod tests {
         };
         let result = monitor.process_observation(&obs);
         assert!(result.trigger_fired);
-        let eval = result.evaluation.expect("serde deserialization should succeed");
+        let eval = result
+            .evaluation
+            .expect("serde deserialization should succeed");
         assert_eq!(eval.evidence.len(), 1);
         let summary = &eval.evidence[0].summary;
         assert!(
@@ -3594,7 +3632,9 @@ mod tests {
         };
         let result = monitor.process_observation(&obs);
         assert!(result.trigger_fired);
-        let eval = result.evaluation.expect("serde deserialization should succeed");
+        let eval = result
+            .evaluation
+            .expect("serde deserialization should succeed");
         assert_eq!(eval.evidence.len(), 1);
         let summary = &eval.evidence[0].summary;
         assert!(
@@ -3625,7 +3665,9 @@ mod tests {
         let result = monitor.process_observation(&obs2);
         assert!(result.trigger_fired);
         // SAFETY: Test-only unwrap, trigger_fired=true guarantees evaluation is Some
-        let eval = result.evaluation.expect("serde deserialization should succeed");
+        let eval = result
+            .evaluation
+            .expect("serde deserialization should succeed");
         assert!(!eval.evidence.is_empty());
         assert_eq!(eval.evidence[0].category, "performance_sample");
     }

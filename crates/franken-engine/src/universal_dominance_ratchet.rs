@@ -1133,7 +1133,9 @@ mod tests {
             .is_ok()
         );
 
-        let found = board.find_cell(&cell_id).expect("serde deserialization should succeed");
+        let found = board
+            .find_cell(&cell_id)
+            .expect("serde deserialization should succeed");
         assert_eq!(found.state, CellState::Claimed);
         assert_eq!(found.margin_millionths, 150_000);
         assert_eq!(found.evidence_ids, vec!["ev-1"]);
@@ -1166,7 +1168,9 @@ mod tests {
         )
         .expect("serde deserialization should succeed");
 
-        let found = board.find_cell(&cell_id).expect("serde deserialization should succeed");
+        let found = board
+            .find_cell(&cell_id)
+            .expect("serde deserialization should succeed");
         assert_eq!(found.state, CellState::Proven);
         assert_eq!(found.margin_millionths, 200_000);
         assert_eq!(found.evidence_ids, vec!["ev-a", "ev-b"]);
@@ -1202,7 +1206,13 @@ mod tests {
         .unwrap_err();
         assert!(matches!(err, RatchetError::RegressionRejected { .. }));
         // Cell should remain proven
-        assert_eq!(board.find_cell(&cell_id).expect("serde deserialization should succeed").state, CellState::Proven);
+        assert_eq!(
+            board
+                .find_cell(&cell_id)
+                .expect("serde deserialization should succeed")
+                .state,
+            CellState::Proven
+        );
     }
 
     #[test]
@@ -1305,7 +1315,9 @@ mod tests {
         );
         assert_eq!(ledger.open_count(), 0);
         assert_eq!(ledger.closed_count(), 1);
-        let entry = ledger.find_gap("gap-1").expect("serde deserialization should succeed");
+        let entry = ledger
+            .find_gap("gap-1")
+            .expect("serde deserialization should succeed");
         assert_eq!(entry.state, GapState::Closed);
         assert_eq!(entry.resolution, Some(GapResolution::ProvenOnBoard));
     }
@@ -1590,7 +1602,8 @@ mod tests {
         add_cell(&mut board, &mut log, cell).expect("serde deserialization should succeed");
 
         let json = serde_json::to_string(&board).expect("serde deserialization should succeed");
-        let deser: RatchetBoard = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let deser: RatchetBoard =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(board, deser);
     }
 
@@ -1606,7 +1619,8 @@ mod tests {
         .expect("serde deserialization should succeed");
 
         let json = serde_json::to_string(&ledger).expect("serde deserialization should succeed");
-        let deser: FrontierGapLedger = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let deser: FrontierGapLedger =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ledger, deser);
     }
 
@@ -1628,7 +1642,8 @@ mod tests {
         .expect("serde deserialization should succeed");
 
         let json = serde_json::to_string(&log).expect("serde deserialization should succeed");
-        let deser: RatchetEventLog = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let deser: RatchetEventLog =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(log, deser);
     }
 
@@ -1646,7 +1661,8 @@ mod tests {
 
         let snapshot = compute_dominance_snapshot(&board, &ledger, &mut log);
         let json = serde_json::to_string(&snapshot).expect("serde deserialization should succeed");
-        let deser: DominanceSnapshot = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let deser: DominanceSnapshot =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(snapshot, deser);
     }
 
@@ -1658,7 +1674,8 @@ mod tests {
             "ssr-hydration",
         );
         let json = serde_json::to_string(&id).expect("serde deserialization should succeed");
-        let deser: CellId = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let deser: CellId =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(id, deser);
     }
 
@@ -1862,7 +1879,9 @@ mod tests {
         )
         .expect("serde deserialization should succeed");
 
-        let found = board.find_cell(&cell_id).expect("serde deserialization should succeed");
+        let found = board
+            .find_cell(&cell_id)
+            .expect("serde deserialization should succeed");
         assert_eq!(found.state, CellState::Proven);
         assert_eq!(found.margin_millionths, 750_000);
     }
@@ -1902,7 +1921,9 @@ mod tests {
         )
         .expect("serde deserialization should succeed");
 
-        let found = board.find_cell(&cell_id).expect("serde deserialization should succeed");
+        let found = board
+            .find_cell(&cell_id)
+            .expect("serde deserialization should succeed");
         assert_eq!(found.state, CellState::Proven);
         assert_eq!(found.margin_millionths, 200_000);
     }
@@ -1940,7 +1961,9 @@ mod tests {
         )
         .expect("serde deserialization should succeed");
 
-        let found = board.find_cell(&cell_id).expect("serde deserialization should succeed");
+        let found = board
+            .find_cell(&cell_id)
+            .expect("serde deserialization should succeed");
         assert_eq!(found.margin_millionths, 300_000);
     }
 
@@ -1978,7 +2001,10 @@ mod tests {
         .expect("serde deserialization should succeed");
 
         assert_eq!(
-            board.find_cell(&cell_id).expect("serde deserialization should succeed").margin_millionths,
+            board
+                .find_cell(&cell_id)
+                .expect("serde deserialization should succeed")
+                .margin_millionths,
             250_000
         );
     }
@@ -2010,7 +2036,9 @@ mod tests {
         )
         .expect("serde deserialization should succeed");
 
-        let found = board.find_cell(&cell_id).expect("serde deserialization should succeed");
+        let found = board
+            .find_cell(&cell_id)
+            .expect("serde deserialization should succeed");
         assert_eq!(found.evidence_ids, vec!["ev-a", "ev-b", "ev-c"]);
     }
 
@@ -2037,7 +2065,13 @@ mod tests {
         )
         .expect("serde deserialization should succeed");
 
-        assert_eq!(board.find_cell(&cell_id).expect("serde deserialization should succeed").last_advanced_epoch, 5);
+        assert_eq!(
+            board
+                .find_cell(&cell_id)
+                .expect("serde deserialization should succeed")
+                .last_advanced_epoch,
+            5
+        );
 
         advance_epoch(&mut board, &mut log, 10).expect("serde deserialization should succeed");
         advance_cell(
@@ -2050,7 +2084,13 @@ mod tests {
         )
         .expect("serde deserialization should succeed");
 
-        assert_eq!(board.find_cell(&cell_id).expect("serde deserialization should succeed").last_advanced_epoch, 10);
+        assert_eq!(
+            board
+                .find_cell(&cell_id)
+                .expect("serde deserialization should succeed")
+                .last_advanced_epoch,
+            10
+        );
     }
 
     #[test]
@@ -2081,7 +2121,10 @@ mod tests {
             vec![],
         );
 
-        let last_event = log.events.last().expect("serde deserialization should succeed");
+        let last_event = log
+            .events
+            .last()
+            .expect("serde deserialization should succeed");
         assert!(matches!(
             last_event.kind,
             RatchetEventKind::RegressionRejected { .. }
@@ -2323,8 +2366,10 @@ mod tests {
         let mut gap_closed = make_gap("closed-g", CellDomain::Memory, GapKind::KnownDeficient);
         gap_closed.priority_millionths = 999_000;
 
-        register_gap(&mut ledger, &mut log, gap_open).expect("serde deserialization should succeed");
-        register_gap(&mut ledger, &mut log, gap_closed).expect("serde deserialization should succeed");
+        register_gap(&mut ledger, &mut log, gap_open)
+            .expect("serde deserialization should succeed");
+        register_gap(&mut ledger, &mut log, gap_closed)
+            .expect("serde deserialization should succeed");
         close_gap(
             &mut ledger,
             &mut log,
@@ -2364,7 +2409,9 @@ mod tests {
         )
         .expect("serde deserialization should succeed");
 
-        let entry = ledger.find_gap("res-gap").expect("serde deserialization should succeed");
+        let entry = ledger
+            .find_gap("res-gap")
+            .expect("serde deserialization should succeed");
         assert_eq!(entry.closed_epoch, Some(42));
         assert_eq!(entry.resolution, Some(GapResolution::DimensionInvalidated));
         assert_eq!(entry.state, GapState::Closed);
@@ -2479,7 +2526,8 @@ mod tests {
             attempted_state: CellState::Unproven,
         };
         let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
-        let deser: RatchetError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let deser: RatchetError =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, deser);
     }
 
@@ -2497,7 +2545,8 @@ mod tests {
         cell.owning_bead = "bd-test".to_string();
 
         let json = serde_json::to_string(&cell).expect("serde deserialization should succeed");
-        let deser: RatchetCell = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let deser: RatchetCell =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cell, deser);
     }
 
@@ -2511,7 +2560,8 @@ mod tests {
         entry.priority_millionths = 750_000;
 
         let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
-        let deser: FrontierGapEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let deser: FrontierGapEntry =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, deser);
     }
 
@@ -2677,7 +2727,10 @@ mod tests {
         .expect("serde deserialization should succeed");
 
         assert_eq!(
-            board.find_cell(&cell_id).expect("serde deserialization should succeed").margin_millionths,
+            board
+                .find_cell(&cell_id)
+                .expect("serde deserialization should succeed")
+                .margin_millionths,
             -200_000
         );
     }
@@ -2776,7 +2829,8 @@ mod tests {
         gap.target = Some(ComparisonTarget::Bun);
 
         let json = serde_json::to_string(&gap).expect("serde deserialization should succeed");
-        let deser: FrontierGapEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let deser: FrontierGapEntry =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(gap, deser);
         assert_eq!(deser.target, Some(ComparisonTarget::Bun));
     }
@@ -2785,7 +2839,8 @@ mod tests {
     fn gap_without_target_serde_round_trip() {
         let gap = make_gap("no-target-gap", CellDomain::Memory, GapKind::OutOfScope);
         let json = serde_json::to_string(&gap).expect("serde deserialization should succeed");
-        let deser: FrontierGapEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let deser: FrontierGapEntry =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(deser.target, None);
     }
 
@@ -2808,8 +2863,11 @@ mod tests {
                 make_gap(&gap_id, CellDomain::ColdStart, GapKind::Unknown),
             )
             .expect("serde deserialization should succeed");
-            close_gap(&mut ledger, &mut log, &gap_id, *resolution, 1).expect("serde deserialization should succeed");
-            let entry = ledger.find_gap(&gap_id).expect("serde deserialization should succeed");
+            close_gap(&mut ledger, &mut log, &gap_id, *resolution, 1)
+                .expect("serde deserialization should succeed");
+            let entry = ledger
+                .find_gap(&gap_id)
+                .expect("serde deserialization should succeed");
             assert_eq!(entry.resolution, Some(*resolution));
         }
     }
@@ -2824,7 +2882,10 @@ mod tests {
         add_cell(&mut board, &mut log, cell).expect("serde deserialization should succeed");
 
         // The CellAdded event should be logged at the board's current epoch (5).
-        let last = log.events.last().expect("serde deserialization should succeed");
+        let last = log
+            .events
+            .last()
+            .expect("serde deserialization should succeed");
         assert_eq!(last.epoch, 5);
     }
 
@@ -2834,7 +2895,8 @@ mod tests {
         let mut log = RatchetEventLog::new();
 
         for epoch in [1, 5, 10, 100, 1000, u64::MAX] {
-            advance_epoch(&mut board, &mut log, epoch).expect("serde deserialization should succeed");
+            advance_epoch(&mut board, &mut log, epoch)
+                .expect("serde deserialization should succeed");
             assert_eq!(board.current_epoch, epoch);
         }
     }
@@ -2914,8 +2976,10 @@ mod tests {
         ];
 
         for variant in &variants {
-            let json = serde_json::to_string(variant).expect("serde deserialization should succeed");
-            let deser: RatchetEventKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(variant).expect("serde deserialization should succeed");
+            let deser: RatchetEventKind =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*variant, deser);
         }
     }

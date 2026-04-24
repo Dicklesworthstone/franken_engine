@@ -994,7 +994,8 @@ pub fn build_deopt_witness(
 
     let witness_id = format!("dw_{}_{}", cert.site.site_id, transform_kind);
     // SAFETY: DeoptTrigger enum derives Serialize and BTreeSet serialization cannot fail
-    let triggers_str = serde_json::to_string(&triggers).expect("serde deserialization should succeed");
+    let triggers_str =
+        serde_json::to_string(&triggers).expect("serde deserialization should succeed");
     let hash_input = format!(
         "witness:{}:{}:{}:{}",
         witness_id, transform_kind, triggers_str, cert.certificate_hash
@@ -1776,7 +1777,8 @@ mod tests {
         let layout = make_layout("s1", 4);
         let config = default_config();
         // SAFETY: Test-only unwrap expecting valid inputs to build scalar plan successfully
-        let plan = build_scalar_plan(&cert, &layout, &config).expect("serde deserialization should succeed");
+        let plan = build_scalar_plan(&cert, &layout, &config)
+            .expect("serde deserialization should succeed");
         assert_eq!(plan.site_id, "s1");
         assert_eq!(plan.fields.len(), 4);
         assert_eq!(plan.register_slots, 2); // Even indices are Number (register-safe).
@@ -1867,7 +1869,8 @@ mod tests {
         };
         let config = default_config();
         // SAFETY: Test-only unwrap expecting valid inputs to build scalar plan successfully
-        let plan = build_scalar_plan(&cert, &layout, &config).expect("serde deserialization should succeed");
+        let plan = build_scalar_plan(&cert, &layout, &config)
+            .expect("serde deserialization should succeed");
         assert!(plan.fully_register_safe);
         assert_eq!(plan.register_slots, 2);
         assert_eq!(plan.stack_slots, 0);
@@ -1947,7 +1950,8 @@ mod tests {
             description: "call before use".to_string(),
         }];
         // SAFETY: Test-only unwrap expecting valid inputs to build sinking plan successfully
-        let plan = build_sinking_plan(&cert, &barriers).expect("serde deserialization should succeed");
+        let plan =
+            build_sinking_plan(&cert, &barriers).expect("serde deserialization should succeed");
         assert_eq!(plan.sunk_position, 11); // Just after the barrier.
     }
 
@@ -2529,7 +2533,8 @@ mod tests {
             // SAFETY: TransformKind derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(kind).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by valid TransformKind serialization
-            let back: TransformKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: TransformKind =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*kind, back);
         }
     }
@@ -2550,7 +2555,8 @@ mod tests {
             // SAFETY: ScalarFieldType derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(t).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by valid ScalarFieldType serialization
-            let back: ScalarFieldType = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ScalarFieldType =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*t, back);
         }
     }
@@ -2559,9 +2565,11 @@ mod tests {
     fn deopt_trigger_serde_roundtrip() {
         for trigger in DeoptTrigger::ALL {
             // SAFETY: DeoptTrigger derives Serialize and has no non-serializable fields
-            let json = serde_json::to_string(trigger).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(trigger).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by valid DeoptTrigger serialization
-            let back: DeoptTrigger = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: DeoptTrigger =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*trigger, back);
         }
     }
@@ -2584,7 +2592,8 @@ mod tests {
             // SAFETY: TransformDenialReason derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(r).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by valid TransformDenialReason serialization
-            let back: TransformDenialReason = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: TransformDenialReason =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*r, back);
         }
     }
@@ -2601,7 +2610,8 @@ mod tests {
             // SAFETY: RegionScope derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(s).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by valid RegionScope serialization
-            let back: RegionScope = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: RegionScope =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*s, back);
         }
     }
@@ -2619,7 +2629,8 @@ mod tests {
             // SAFETY: SideEffectKind derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(k).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by valid SideEffectKind serialization
-            let back: SideEffectKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: SideEffectKind =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*k, back);
         }
     }
@@ -2635,7 +2646,8 @@ mod tests {
         );
         let layout = make_layout("s1", 2);
         let config = default_config();
-        let plan = build_scalar_plan(&cert, &layout, &config).expect("serde deserialization should succeed");
+        let plan = build_scalar_plan(&cert, &layout, &config)
+            .expect("serde deserialization should succeed");
         let witness = build_deopt_witness(
             &cert,
             TransformKind::ScalarReplacement,
@@ -2664,7 +2676,8 @@ mod tests {
         // SAFETY: TransformOutcome derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&outcome).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid TransformOutcome serialization
-        let back: TransformOutcome = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: TransformOutcome =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(outcome, back);
     }
 
@@ -2685,7 +2698,8 @@ mod tests {
             summary_hash: "hash".to_string(),
         };
         let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
-        let back: TransformSummary = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: TransformSummary =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(summary, back);
     }
 

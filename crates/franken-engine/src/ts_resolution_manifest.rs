@@ -257,7 +257,11 @@ impl TsResolutionReplayIndex {
         hasher.update(tsconfig_hash.as_bytes());
         // SAFETY: ResolutionMode derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        hasher.update(serde_json::to_string(&mode).expect("serde deserialization should succeed").as_bytes());
+        hasher.update(
+            serde_json::to_string(&mode)
+                .expect("serde deserialization should succeed")
+                .as_bytes(),
+        );
         for (k, v) in &map {
             hasher.update(k.as_bytes());
             hasher.update(v.resolved_path.as_bytes());
@@ -1236,7 +1240,8 @@ mod tests {
         let json = serde_json::to_string(&snap).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid TsconfigSnapshot,
         // so from_str back to TsconfigSnapshot cannot fail (valid format + matching schema).
-        let rt: TsconfigSnapshot = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let rt: TsconfigSnapshot =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(snap, rt);
     }
 
@@ -1299,7 +1304,8 @@ mod tests {
         let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid TsResolutionReplayEntry,
         // so from_str back to TsResolutionReplayEntry cannot fail (valid format + matching schema).
-        let rt: TsResolutionReplayEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let rt: TsResolutionReplayEntry =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, rt);
     }
 
@@ -1327,7 +1333,12 @@ mod tests {
         let found = index.lookup("react", Some("./app.tsx"), TsRequestStyle::Import);
         assert!(found.is_some());
         // SAFETY: Test just verified found.is_some(), so unwrap() cannot panic
-        assert_eq!(found.expect("serde deserialization should succeed").resolved_path, "node_modules/react/index.js");
+        assert_eq!(
+            found
+                .expect("serde deserialization should succeed")
+                .resolved_path,
+            "node_modules/react/index.js"
+        );
     }
 
     #[test]
@@ -1369,7 +1380,8 @@ mod tests {
         let index =
             TsResolutionReplayIndex::build(Vec::new(), "h", TsModuleResolutionMode::Bundler, "t");
         let json = serde_json::to_string(&index).expect("serde deserialization should succeed");
-        let rt: TsResolutionReplayIndex = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let rt: TsResolutionReplayIndex =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(index, rt);
     }
 
@@ -1588,7 +1600,8 @@ mod tests {
             generated_at_utc: "t".into(),
         });
         let json = serde_json::to_string(&manifest).expect("serde deserialization should succeed");
-        let rt: TsExecutionManifest = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let rt: TsExecutionManifest =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(manifest, rt);
     }
 
@@ -1987,7 +2000,12 @@ mod tests {
 
         let react = index.lookup("react", Some("./app.tsx"), TsRequestStyle::Import);
         assert!(react.is_some());
-        assert_eq!(react.expect("serde deserialization should succeed").resolved_path, "node_modules/react/index.js");
+        assert_eq!(
+            react
+                .expect("serde deserialization should succeed")
+                .resolved_path,
+            "node_modules/react/index.js"
+        );
 
         let dom = index.lookup("react-dom", Some("./app.tsx"), TsRequestStyle::Import);
         assert!(dom.is_some());
@@ -1995,7 +2013,10 @@ mod tests {
         let utils = index.lookup("./utils", Some("./app.tsx"), TsRequestStyle::Import);
         assert!(utils.is_some());
         assert_eq!(
-            utils.expect("serde deserialization should succeed").resolved_content_hash.as_deref(),
+            utils
+                .expect("serde deserialization should succeed")
+                .resolved_content_hash
+                .as_deref(),
             Some("sha256:util_hash")
         );
     }
@@ -2032,7 +2053,14 @@ mod tests {
         let from_b = index.lookup("./shared", Some("./b.ts"), TsRequestStyle::Import);
         assert!(from_a.is_some());
         assert!(from_b.is_some());
-        assert_ne!(from_a.expect("serde deserialization should succeed").resolved_path, from_b.expect("serde deserialization should succeed").resolved_path);
+        assert_ne!(
+            from_a
+                .expect("serde deserialization should succeed")
+                .resolved_path,
+            from_b
+                .expect("serde deserialization should succeed")
+                .resolved_path
+        );
     }
 
     #[test]
@@ -2067,7 +2095,12 @@ mod tests {
         let cjs = index.lookup("lodash", None, TsRequestStyle::Require);
         assert!(esm.is_some());
         assert!(cjs.is_some());
-        assert_ne!(esm.expect("serde deserialization should succeed").resolved_path, cjs.expect("serde deserialization should succeed").resolved_path);
+        assert_ne!(
+            esm.expect("serde deserialization should succeed")
+                .resolved_path,
+            cjs.expect("serde deserialization should succeed")
+                .resolved_path
+        );
     }
 
     #[test]
@@ -2100,7 +2133,9 @@ mod tests {
             TsResolutionReplayIndex::build(entries, "h", TsModuleResolutionMode::NodeNext, "t");
         // Only one entry because same key
         assert_eq!(index.entry_count(), 1);
-        let found = index.lookup("./dup", None, TsRequestStyle::Import).expect("serde deserialization should succeed");
+        let found = index
+            .lookup("./dup", None, TsRequestStyle::Import)
+            .expect("serde deserialization should succeed");
         assert_eq!(found.resolved_path, "/second.ts");
     }
 
@@ -2110,7 +2145,8 @@ mod tests {
     fn test_replay_validation_status_serde_roundtrip() {
         for status in ReplayValidationStatus::ALL {
             let json = serde_json::to_string(status).expect("serde deserialization should succeed");
-            let rt: ReplayValidationStatus = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let rt: ReplayValidationStatus =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*status, rt);
         }
     }
@@ -2119,17 +2155,22 @@ mod tests {
     fn test_manifest_feature_family_serde_roundtrip() {
         for family in ManifestFeatureFamily::ALL {
             let json = serde_json::to_string(family).expect("serde deserialization should succeed");
-            let rt: ManifestFeatureFamily = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let rt: ManifestFeatureFamily =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*family, rt);
         }
     }
 
     #[test]
     fn test_manifest_verdict_serde_roundtrip() {
-        let pass_json = serde_json::to_string(&ManifestVerdict::Pass).expect("serde deserialization should succeed");
-        let fail_json = serde_json::to_string(&ManifestVerdict::Fail).expect("serde deserialization should succeed");
-        let pass_rt: ManifestVerdict = serde_json::from_str(&pass_json).expect("serde deserialization should succeed");
-        let fail_rt: ManifestVerdict = serde_json::from_str(&fail_json).expect("serde deserialization should succeed");
+        let pass_json = serde_json::to_string(&ManifestVerdict::Pass)
+            .expect("serde deserialization should succeed");
+        let fail_json = serde_json::to_string(&ManifestVerdict::Fail)
+            .expect("serde deserialization should succeed");
+        let pass_rt: ManifestVerdict =
+            serde_json::from_str(&pass_json).expect("serde deserialization should succeed");
+        let fail_rt: ManifestVerdict =
+            serde_json::from_str(&fail_json).expect("serde deserialization should succeed");
         assert_eq!(pass_rt, ManifestVerdict::Pass);
         assert_eq!(fail_rt, ManifestVerdict::Fail);
     }
@@ -2143,7 +2184,8 @@ mod tests {
             normalization_applied: true,
         };
         let json = serde_json::to_string(&lineage).expect("serde deserialization should succeed");
-        let rt: NormalizationLineage = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let rt: NormalizationLineage =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(lineage, rt);
     }
 
@@ -2157,7 +2199,8 @@ mod tests {
             replay_index_hash: Some("sha256:idx".into()),
         };
         let json = serde_json::to_string(&lineage).expect("serde deserialization should succeed");
-        let rt: ResolutionLineage = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let rt: ResolutionLineage =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(lineage, rt);
     }
 
@@ -2170,7 +2213,8 @@ mod tests {
             ir3_hash: Some("sha256:ir3".into()),
         };
         let json = serde_json::to_string(&lineage).expect("serde deserialization should succeed");
-        let rt: IrPipelineLineage = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let rt: IrPipelineLineage =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(lineage, rt);
     }
 
@@ -2182,7 +2226,8 @@ mod tests {
             ReplayValidationStatus::UnexpectedFailure,
         ]);
         let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
-        let rt: ReplayValidationReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let rt: ReplayValidationReport =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report, rt);
     }
 
@@ -2194,7 +2239,8 @@ mod tests {
             verdict: ManifestVerdict::Pass,
         };
         let json = serde_json::to_string(&evidence).expect("serde deserialization should succeed");
-        let rt: ManifestSpecimenEvidence = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let rt: ManifestSpecimenEvidence =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(evidence, rt);
     }
 

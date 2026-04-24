@@ -1449,9 +1449,11 @@ mod tests {
             VerificationVerdict::Inconclusive,
         ] {
             // SAFETY: Test-only unwrap for serde serialization of known valid enum variants
-            let json = serde_json::to_string(&verdict).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&verdict).expect("serde deserialization should succeed");
             // SAFETY: Test-only unwrap for serde deserialization of valid JSON roundtrip
-            let back: VerificationVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: VerificationVerdict =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(back, verdict);
         }
     }
@@ -1753,7 +1755,8 @@ mod tests {
         let input = make_attestation_input(report.clone(), None);
         // SAFETY: Test uses valid attestation input from helper functions.
         // generate_attestation only fails on malformed inputs (impossible here).
-        let attestation = generate_attestation(&input).expect("serde deserialization should succeed");
+        let attestation =
+            generate_attestation(&input).expect("serde deserialization should succeed");
         assert_eq!(attestation.claim_type, "containment");
         assert_eq!(attestation.verdict, VerificationVerdict::Verified);
         assert_eq!(attestation.verifier_name, "acme-verifier");
@@ -1767,12 +1770,14 @@ mod tests {
         let report = make_report(VerificationVerdict::Verified);
         // SAFETY: Fixed 32-byte array is valid signing key format for test purposes.
         // SigningKey::from_bytes only fails on invalid length (not 32 bytes).
-        let key = SigningKey::from_bytes([42u8; SIGNING_KEY_LEN]).expect("serde deserialization should succeed");
+        let key = SigningKey::from_bytes([42u8; SIGNING_KEY_LEN])
+            .expect("serde deserialization should succeed");
         let key_hex = hex::encode(key.as_bytes());
         let input = make_attestation_input(report.clone(), Some(key_hex));
         // SAFETY: Test uses valid attestation input from helper functions with valid signing key.
         // generate_attestation only fails on malformed inputs (impossible here).
-        let attestation = generate_attestation(&input).expect("serde deserialization should succeed");
+        let attestation =
+            generate_attestation(&input).expect("serde deserialization should succeed");
         assert!(attestation.signature_hex.is_some());
         assert!(attestation.signer_verification_key_hex.is_some());
     }
@@ -1831,7 +1836,8 @@ mod tests {
         input.scope_limitations = vec!["no-crypto-audit".to_string(), "sandbox-only".to_string()];
         // SAFETY: Test uses valid attestation input from helper with additional scope limitations.
         // generate_attestation only fails on malformed inputs (impossible here).
-        let attestation = generate_attestation(&input).expect("serde deserialization should succeed");
+        let attestation =
+            generate_attestation(&input).expect("serde deserialization should succeed");
         assert!(attestation.statement.contains("no-crypto-audit"));
         assert!(attestation.statement.contains("sandbox-only"));
     }
@@ -1841,7 +1847,8 @@ mod tests {
         let report = make_report(VerificationVerdict::Verified);
         let input = make_attestation_input(report, None);
         // SAFETY: Test-only unwrap for generate_attestation with valid inputs and no signing key
-        let attestation = generate_attestation(&input).expect("serde deserialization should succeed");
+        let attestation =
+            generate_attestation(&input).expect("serde deserialization should succeed");
         assert!(attestation.statement.contains("acme-verifier"));
         assert!(attestation.statement.contains("1.0.0"));
         assert!(attestation.statement.contains("verified"));
@@ -1856,7 +1863,8 @@ mod tests {
         let report = make_report(VerificationVerdict::Verified);
         let input = make_attestation_input(report, None);
         // SAFETY: Test-only unwrap for generate_attestation with valid inputs and no signing key
-        let attestation = generate_attestation(&input).expect("serde deserialization should succeed");
+        let attestation =
+            generate_attestation(&input).expect("serde deserialization should succeed");
         let verification = verify_attestation(&attestation);
         // Unsigned → skipped signature check → PartiallyVerified
         assert_eq!(verification.verdict, VerificationVerdict::PartiallyVerified);
@@ -1867,11 +1875,13 @@ mod tests {
     fn verify_attestation_signed_verified() {
         let report = make_report(VerificationVerdict::Verified);
         // SAFETY: Test-only unwrap for SigningKey::from_bytes with valid fixed-size array
-        let key = SigningKey::from_bytes([42u8; SIGNING_KEY_LEN]).expect("serde deserialization should succeed");
+        let key = SigningKey::from_bytes([42u8; SIGNING_KEY_LEN])
+            .expect("serde deserialization should succeed");
         let key_hex = hex::encode(key.as_bytes());
         let input = make_attestation_input(report, Some(key_hex));
         // SAFETY: Test-only unwrap for generate_attestation with valid inputs and signing key
-        let attestation = generate_attestation(&input).expect("serde deserialization should succeed");
+        let attestation =
+            generate_attestation(&input).expect("serde deserialization should succeed");
         let verification = verify_attestation(&attestation);
         assert_eq!(verification.verdict, VerificationVerdict::Verified);
         assert!(verification.checks.iter().all(|c| c.passed));
@@ -1882,7 +1892,8 @@ mod tests {
         let report = make_report(VerificationVerdict::Verified);
         let input = make_attestation_input(report, None);
         // SAFETY: Test-only unwrap for generate_attestation with valid inputs and no signing key
-        let mut attestation = generate_attestation(&input).expect("serde deserialization should succeed");
+        let mut attestation =
+            generate_attestation(&input).expect("serde deserialization should succeed");
         attestation.claim_type = "wrong_type".to_string();
         let verification = verify_attestation(&attestation);
         assert_eq!(verification.verdict, VerificationVerdict::Failed);
@@ -1900,7 +1911,8 @@ mod tests {
         let report = make_report(VerificationVerdict::Verified);
         let input = make_attestation_input(report, None);
         // SAFETY: Test-only unwrap for generate_attestation with valid inputs and no signing key
-        let mut attestation = generate_attestation(&input).expect("serde deserialization should succeed");
+        let mut attestation =
+            generate_attestation(&input).expect("serde deserialization should succeed");
         attestation.verdict = VerificationVerdict::Failed;
         let verification = verify_attestation(&attestation);
         assert_eq!(verification.verdict, VerificationVerdict::Failed);
@@ -1911,7 +1923,8 @@ mod tests {
         let report = make_report(VerificationVerdict::Verified);
         let input = make_attestation_input(report, None);
         // SAFETY: Test-only unwrap for generate_attestation with valid inputs and no signing key
-        let mut attestation = generate_attestation(&input).expect("serde deserialization should succeed");
+        let mut attestation =
+            generate_attestation(&input).expect("serde deserialization should succeed");
         attestation.trace_id = "wrong-trace".to_string();
         let verification = verify_attestation(&attestation);
         assert_eq!(verification.verdict, VerificationVerdict::Failed);
@@ -1929,7 +1942,8 @@ mod tests {
         let report = make_report(VerificationVerdict::Verified);
         let input = make_attestation_input(report, None);
         // SAFETY: Test-only unwrap for generate_attestation with valid inputs and no signing key
-        let mut attestation = generate_attestation(&input).expect("serde deserialization should succeed");
+        let mut attestation =
+            generate_attestation(&input).expect("serde deserialization should succeed");
         attestation.report_digest_hex = "0000000000000000".to_string();
         let verification = verify_attestation(&attestation);
         assert_eq!(verification.verdict, VerificationVerdict::Failed);
@@ -1947,7 +1961,8 @@ mod tests {
         let report = make_report(VerificationVerdict::Verified);
         let input = make_attestation_input(report, None);
         // SAFETY: Test-only unwrap for generate_attestation with valid inputs and no signing key
-        let mut attestation = generate_attestation(&input).expect("serde deserialization should succeed");
+        let mut attestation =
+            generate_attestation(&input).expect("serde deserialization should succeed");
         attestation.statement = "tampered statement".to_string();
         let verification = verify_attestation(&attestation);
         assert_eq!(verification.verdict, VerificationVerdict::Failed);
@@ -1965,7 +1980,8 @@ mod tests {
         let report = make_report(VerificationVerdict::Verified);
         let input = make_attestation_input(report, None);
         // SAFETY: Test-only unwrap for generate_attestation with valid inputs and no signing key
-        let mut attestation = generate_attestation(&input).expect("serde deserialization should succeed");
+        let mut attestation =
+            generate_attestation(&input).expect("serde deserialization should succeed");
         attestation.verifier_name = "".to_string();
         let verification = verify_attestation(&attestation);
         assert_eq!(verification.verdict, VerificationVerdict::Failed);
@@ -1983,7 +1999,8 @@ mod tests {
         let report = make_report(VerificationVerdict::Verified);
         let input = make_attestation_input(report, None);
         // SAFETY: Test-only unwrap for generate_attestation with valid inputs and no signing key
-        let mut attestation = generate_attestation(&input).expect("serde deserialization should succeed");
+        let mut attestation =
+            generate_attestation(&input).expect("serde deserialization should succeed");
         attestation.signer_verification_key_hex = Some("abcd".to_string());
         // signature_hex is still None → inconsistent
         let verification = verify_attestation(&attestation);
@@ -2001,11 +2018,13 @@ mod tests {
     fn verify_attestation_tampered_signature_fails() {
         let report = make_report(VerificationVerdict::Verified);
         // SAFETY: Test-only unwrap for SigningKey::from_bytes with valid fixed-size array
-        let key = SigningKey::from_bytes([42u8; SIGNING_KEY_LEN]).expect("serde deserialization should succeed");
+        let key = SigningKey::from_bytes([42u8; SIGNING_KEY_LEN])
+            .expect("serde deserialization should succeed");
         let key_hex = hex::encode(key.as_bytes());
         let input = make_attestation_input(report, Some(key_hex));
         // SAFETY: Test-only unwrap for generate_attestation with valid inputs and signing key
-        let mut attestation = generate_attestation(&input).expect("serde deserialization should succeed");
+        let mut attestation =
+            generate_attestation(&input).expect("serde deserialization should succeed");
         // Tamper with signature
         attestation.signature_hex = Some(hex::encode([0u8; SIGNATURE_LEN]));
         let verification = verify_attestation(&attestation);
@@ -2042,7 +2061,8 @@ mod tests {
         let report = make_report(VerificationVerdict::Verified);
         let input = make_attestation_input(report, None);
         // SAFETY: Test-only unwrap for generate_attestation with valid inputs and no signing key
-        let attestation = generate_attestation(&input).expect("serde deserialization should succeed");
+        let attestation =
+            generate_attestation(&input).expect("serde deserialization should succeed");
         let summary = render_attestation_summary(&attestation);
         assert!(summary.contains("claim_type=containment"));
         assert!(summary.contains("signed=false"));
@@ -2053,11 +2073,13 @@ mod tests {
     fn render_attestation_summary_signed() {
         let report = make_report(VerificationVerdict::Verified);
         // SAFETY: Test-only unwrap for SigningKey::from_bytes with valid fixed-size array
-        let key = SigningKey::from_bytes([42u8; SIGNING_KEY_LEN]).expect("serde deserialization should succeed");
+        let key = SigningKey::from_bytes([42u8; SIGNING_KEY_LEN])
+            .expect("serde deserialization should succeed");
         let key_hex = hex::encode(key.as_bytes());
         let input = make_attestation_input(report, Some(key_hex));
         // SAFETY: Test-only unwrap for generate_attestation with valid inputs and signing key
-        let attestation = generate_attestation(&input).expect("serde deserialization should succeed");
+        let attestation =
+            generate_attestation(&input).expect("serde deserialization should succeed");
         let summary = render_attestation_summary(&attestation);
         assert!(summary.contains("signed=true"));
     }
@@ -2075,7 +2097,8 @@ mod tests {
         // SAFETY: VerificationCheckResult derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&check).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid VerificationCheckResult serialization
-        let back: VerificationCheckResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: VerificationCheckResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, check);
     }
 
@@ -2093,7 +2116,8 @@ mod tests {
         // SAFETY: VerifierEvent derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid VerifierEvent serialization
-        let back: VerifierEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: VerifierEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, ev);
     }
 
@@ -2103,7 +2127,8 @@ mod tests {
         // SAFETY: ThirdPartyVerificationReport derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid ThirdPartyVerificationReport serialization
-        let back: ThirdPartyVerificationReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ThirdPartyVerificationReport =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, report);
     }
 
@@ -2114,7 +2139,8 @@ mod tests {
         // SAFETY: ContainmentClaimBundle derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&bundle).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid ContainmentClaimBundle serialization
-        let back: ContainmentClaimBundle = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ContainmentClaimBundle =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, bundle);
     }
 
@@ -2125,7 +2151,8 @@ mod tests {
         // SAFETY: VerificationAttestationInput derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid VerificationAttestationInput serialization
-        let back: VerificationAttestationInput = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: VerificationAttestationInput =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, input);
     }
 
@@ -2134,11 +2161,14 @@ mod tests {
         let report = make_report(VerificationVerdict::Verified);
         let input = make_attestation_input(report, None);
         // SAFETY: Test-only unwrap for generate_attestation with valid inputs and no signing key
-        let attestation = generate_attestation(&input).expect("serde deserialization should succeed");
+        let attestation =
+            generate_attestation(&input).expect("serde deserialization should succeed");
         // SAFETY: VerificationAttestation derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&attestation).expect("serde deserialization should succeed");
+        let json =
+            serde_json::to_string(&attestation).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid VerificationAttestation serialization
-        let back: VerificationAttestation = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: VerificationAttestation =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, attestation);
     }
 
@@ -2146,14 +2176,18 @@ mod tests {
     fn attestation_signed_serde() {
         let report = make_report(VerificationVerdict::Verified);
         // SAFETY: Test-only unwrap for SigningKey::from_bytes with valid fixed-size array
-        let key = SigningKey::from_bytes([42u8; SIGNING_KEY_LEN]).expect("serde deserialization should succeed");
+        let key = SigningKey::from_bytes([42u8; SIGNING_KEY_LEN])
+            .expect("serde deserialization should succeed");
         let input = make_attestation_input(report, Some(hex::encode(key.as_bytes())));
         // SAFETY: Test-only unwrap for generate_attestation with valid inputs and signing key
-        let attestation = generate_attestation(&input).expect("serde deserialization should succeed");
+        let attestation =
+            generate_attestation(&input).expect("serde deserialization should succeed");
         // SAFETY: VerificationAttestation derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&attestation).expect("serde deserialization should succeed");
+        let json =
+            serde_json::to_string(&attestation).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid VerificationAttestation serialization
-        let back: VerificationAttestation = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: VerificationAttestation =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, attestation);
     }
 
@@ -2175,9 +2209,11 @@ mod tests {
         let report1 = make_report(VerificationVerdict::Verified);
         let report2 = make_report(VerificationVerdict::Failed);
         // SAFETY: Test-only unwrap for generate_attestation with valid inputs and no signing key
-        let a1 = generate_attestation(&make_attestation_input(report1, None)).expect("serde deserialization should succeed");
+        let a1 = generate_attestation(&make_attestation_input(report1, None))
+            .expect("serde deserialization should succeed");
         // SAFETY: Test-only unwrap for generate_attestation with valid inputs and no signing key
-        let a2 = generate_attestation(&make_attestation_input(report2, None)).expect("serde deserialization should succeed");
+        let a2 = generate_attestation(&make_attestation_input(report2, None))
+            .expect("serde deserialization should succeed");
         assert_ne!(a1.report_digest_hex, a2.report_digest_hex);
     }
 
@@ -2192,7 +2228,8 @@ mod tests {
 
         let input = make_attestation_input(report, None);
         // SAFETY: Test-only unwrap for generate_attestation with valid inputs and no signing key
-        let attestation = generate_attestation(&input).expect("serde deserialization should succeed");
+        let attestation =
+            generate_attestation(&input).expect("serde deserialization should succeed");
         assert_eq!(attestation.verdict, VerificationVerdict::Verified);
 
         let verification = verify_attestation(&attestation);
@@ -2207,10 +2244,12 @@ mod tests {
         let report = verify_containment_claim(&bundle);
 
         // SAFETY: Test-only unwrap for SigningKey::from_bytes with valid fixed-size array
-        let key = SigningKey::from_bytes([99u8; SIGNING_KEY_LEN]).expect("serde deserialization should succeed");
+        let key = SigningKey::from_bytes([99u8; SIGNING_KEY_LEN])
+            .expect("serde deserialization should succeed");
         let input = make_attestation_input(report, Some(hex::encode(key.as_bytes())));
         // SAFETY: Test-only unwrap for generate_attestation with valid inputs and signing key
-        let attestation = generate_attestation(&input).expect("serde deserialization should succeed");
+        let attestation =
+            generate_attestation(&input).expect("serde deserialization should succeed");
 
         let verification = verify_attestation(&attestation);
         assert_eq!(verification.verdict, VerificationVerdict::Verified);
@@ -2245,7 +2284,8 @@ mod tests {
         }"#;
         // SAFETY: Test uses hand-crafted valid JSON matching ContainmentClaimBundle schema.
         // from_str only fails on malformed JSON or schema mismatches (impossible with this literal).
-        let bundle: ContainmentClaimBundle = serde_json::from_str(json).expect("serde deserialization should succeed");
+        let bundle: ContainmentClaimBundle =
+            serde_json::from_str(json).expect("serde deserialization should succeed");
         assert_eq!(
             bundle.detection_latency_sla_ns,
             DEFAULT_CONTAINMENT_LATENCY_SLA_NS
@@ -2260,7 +2300,8 @@ mod tests {
         let json = r#"{"score_vs_node": 0.95, "score_vs_bun": 0.92, "publish_allowed": true}"#;
         // SAFETY: Test uses hand-crafted valid JSON matching ClaimedBenchmarkOutcome schema.
         // from_str only fails on malformed JSON or schema mismatches (impossible with this literal).
-        let outcome: ClaimedBenchmarkOutcome = serde_json::from_str(json).expect("serde deserialization should succeed");
+        let outcome: ClaimedBenchmarkOutcome =
+            serde_json::from_str(json).expect("serde deserialization should succeed");
         assert!(outcome.blockers.is_empty());
         assert!(outcome.publish_allowed);
         assert!((outcome.score_vs_node - 0.95).abs() < 1e-12);
@@ -2282,7 +2323,8 @@ mod tests {
         let json = serde_json::to_string(&outcome).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid ClaimedBenchmarkOutcome,
         // so from_str back to ClaimedBenchmarkOutcome cannot fail (valid format + matching schema).
-        let back: ClaimedBenchmarkOutcome = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ClaimedBenchmarkOutcome =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(outcome.blockers, back.blockers);
         assert_eq!(outcome.publish_allowed, back.publish_allowed);
     }
@@ -2297,7 +2339,8 @@ mod tests {
         };
         let json = serde_json::to_string(&check).expect("serde deserialization should succeed");
         assert!(json.contains("LATENCY_SLA_EXCEEDED"));
-        let back: VerificationCheckResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: VerificationCheckResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert!(!back.passed);
         assert_eq!(back.error_code, Some("LATENCY_SLA_EXCEEDED".to_string()));
     }
@@ -2313,7 +2356,8 @@ mod tests {
         // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&check).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let back: VerificationCheckResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: VerificationCheckResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert!(back.passed);
         assert!(back.error_code.is_none());
     }
@@ -2332,7 +2376,8 @@ mod tests {
         // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let back: VerifierEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: VerifierEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
     }
 
@@ -2443,7 +2488,8 @@ mod tests {
         let report = make_report(VerificationVerdict::Verified);
         let mut input = make_attestation_input(report, None);
         input.scope_limitations = vec!["no-network".to_string(), "synthetic-data".to_string()];
-        let attestation = generate_attestation(&input).expect("serde deserialization should succeed");
+        let attestation =
+            generate_attestation(&input).expect("serde deserialization should succeed");
         assert_eq!(attestation.scope_limitations.len(), 2);
         assert!(
             attestation.statement.contains("no-network")
@@ -2489,7 +2535,8 @@ mod tests {
         let mut bundle = make_containment_bundle(result);
         bundle.detection_latency_sla_ns = 250_000_000;
         let json = serde_json::to_string(&bundle).expect("serde deserialization should succeed");
-        let back: ContainmentClaimBundle = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ContainmentClaimBundle =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.detection_latency_sla_ns, 250_000_000);
     }
 
@@ -2499,11 +2546,14 @@ mod tests {
         let mut input = make_attestation_input(report, None);
         input.scope_limitations = vec!["limited-to-unit-tests".to_string()];
         // SAFETY: Test scenario with valid attestation input; generation should succeed
-        let attestation = generate_attestation(&input).expect("serde deserialization should succeed");
+        let attestation =
+            generate_attestation(&input).expect("serde deserialization should succeed");
         // SAFETY: VerificationAttestation derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&attestation).expect("serde deserialization should succeed");
+        let json =
+            serde_json::to_string(&attestation).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid VerificationAttestation serialization
-        let back: VerificationAttestation = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: VerificationAttestation =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(
             back.scope_limitations,
             vec!["limited-to-unit-tests".to_string()]
@@ -2515,19 +2565,23 @@ mod tests {
     #[test]
     fn verdict_serde_exact_snake_case_all_4() {
         assert_eq!(
-            serde_json::to_string(&VerificationVerdict::Verified).expect("serde deserialization should succeed"),
+            serde_json::to_string(&VerificationVerdict::Verified)
+                .expect("serde deserialization should succeed"),
             "\"verified\""
         );
         assert_eq!(
-            serde_json::to_string(&VerificationVerdict::PartiallyVerified).expect("serde deserialization should succeed"),
+            serde_json::to_string(&VerificationVerdict::PartiallyVerified)
+                .expect("serde deserialization should succeed"),
             "\"partially_verified\""
         );
         assert_eq!(
-            serde_json::to_string(&VerificationVerdict::Failed).expect("serde deserialization should succeed"),
+            serde_json::to_string(&VerificationVerdict::Failed)
+                .expect("serde deserialization should succeed"),
             "\"failed\""
         );
         assert_eq!(
-            serde_json::to_string(&VerificationVerdict::Inconclusive).expect("serde deserialization should succeed"),
+            serde_json::to_string(&VerificationVerdict::Inconclusive)
+                .expect("serde deserialization should succeed"),
             "\"inconclusive\""
         );
     }
@@ -2537,7 +2591,8 @@ mod tests {
         let report = make_report(VerificationVerdict::Failed);
         let input = make_attestation_input(report, None);
         // SAFETY: Test scenario with valid attestation input; generation should succeed
-        let attestation = generate_attestation(&input).expect("serde deserialization should succeed");
+        let attestation =
+            generate_attestation(&input).expect("serde deserialization should succeed");
         let summary = render_attestation_summary(&attestation);
         assert!(summary.contains("verdict=failed"), "summary: {summary}");
         assert!(summary.contains("signed=false"), "summary: {summary}");
@@ -2554,17 +2609,20 @@ mod tests {
             "  ".to_string(),    // empty after trim → filtered
         ];
         // SAFETY: Test scenario with valid attestation input; generation should succeed
-        let attestation = generate_attestation(&input).expect("serde deserialization should succeed");
+        let attestation =
+            generate_attestation(&input).expect("serde deserialization should succeed");
         assert_eq!(attestation.scope_limitations, vec!["alpha", "beta"]);
     }
 
     #[test]
     fn attestation_input_serde_with_signing_key_hex_some() {
         let report = make_report(VerificationVerdict::Verified);
-        let key = SigningKey::from_bytes([7u8; SIGNING_KEY_LEN]).expect("serde deserialization should succeed");
+        let key = SigningKey::from_bytes([7u8; SIGNING_KEY_LEN])
+            .expect("serde deserialization should succeed");
         let input = make_attestation_input(report, Some(hex::encode(key.as_bytes())));
         let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
-        let back: VerificationAttestationInput = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: VerificationAttestationInput =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.signing_key_hex, input.signing_key_hex);
     }
 
@@ -2572,7 +2630,8 @@ mod tests {
     fn verify_attestation_decision_id_mismatch_fails() {
         let report = make_report(VerificationVerdict::Verified);
         let input = make_attestation_input(report, None);
-        let mut attestation = generate_attestation(&input).expect("serde deserialization should succeed");
+        let mut attestation =
+            generate_attestation(&input).expect("serde deserialization should succeed");
         attestation.decision_id = "wrong-decision".to_string();
         let verification = verify_attestation(&attestation);
         assert_eq!(verification.verdict, VerificationVerdict::Failed);
@@ -2588,7 +2647,8 @@ mod tests {
     fn verify_attestation_sig_without_key_fails() {
         let report = make_report(VerificationVerdict::Verified);
         let input = make_attestation_input(report, None);
-        let mut attestation = generate_attestation(&input).expect("serde deserialization should succeed");
+        let mut attestation =
+            generate_attestation(&input).expect("serde deserialization should succeed");
         // Set signature_hex but leave signer_verification_key_hex as None
         attestation.signature_hex = Some(hex::encode([1u8; SIGNATURE_LEN]));
         let verification = verify_attestation(&attestation);
@@ -2637,11 +2697,16 @@ mod tests {
     fn attestation_report_digest_is_valid_hex() {
         let report = make_report(VerificationVerdict::Verified);
         let input = make_attestation_input(report, None);
-        let attestation = generate_attestation(&input).expect("serde deserialization should succeed");
+        let attestation =
+            generate_attestation(&input).expect("serde deserialization should succeed");
         let decoded = hex::decode(&attestation.report_digest_hex);
         assert!(decoded.is_ok(), "digest should be valid hex");
         // SAFETY: test just verified decoded.is_ok() above; unwrap cannot panic
-        assert!(!decoded.expect("serde deserialization should succeed").is_empty());
+        assert!(
+            !decoded
+                .expect("serde deserialization should succeed")
+                .is_empty()
+        );
     }
 
     #[test]

@@ -1354,16 +1354,22 @@ mod tests {
     #[test]
     fn default_matrix_round_trips_and_hashes_deterministically() {
         // SAFETY: Test-only unwrap expecting default JSON to parse successfully
-        let matrix_a = ModuleCompatibilityMatrix::from_default_json().expect("serde deserialization should succeed");
+        let matrix_a = ModuleCompatibilityMatrix::from_default_json()
+            .expect("serde deserialization should succeed");
         // SAFETY: Test-only unwrap expecting default JSON to parse successfully
-        let matrix_b = ModuleCompatibilityMatrix::from_default_json().expect("serde deserialization should succeed");
+        let matrix_b = ModuleCompatibilityMatrix::from_default_json()
+            .expect("serde deserialization should succeed");
 
         assert_eq!(matrix_a.canonical_hash(), matrix_b.canonical_hash());
         assert_eq!(
             // SAFETY: Test-only unwrap expecting matrix to serialize to JSON successfully
-            matrix_a.to_json_pretty().expect("serde deserialization should succeed"),
+            matrix_a
+                .to_json_pretty()
+                .expect("serde deserialization should succeed"),
             // SAFETY: Test-only unwrap expecting matrix to serialize to JSON successfully
-            matrix_b.to_json_pretty().expect("serde deserialization should succeed")
+            matrix_b
+                .to_json_pretty()
+                .expect("serde deserialization should succeed")
         );
     }
 
@@ -1391,7 +1397,8 @@ mod tests {
         };
 
         // SAFETY: Test-only unwrap expecting valid entries to create matrix successfully
-        let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry]).expect("serde deserialization should succeed");
+        let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry])
+            .expect("serde deserialization should succeed");
         let mut waivers = BTreeSet::new();
         waivers.insert("w-hidden".to_string());
 
@@ -1412,7 +1419,8 @@ mod tests {
     #[test]
     fn validation_requires_approved_waiver_for_native_divergence() {
         // SAFETY: Test-only unwrap expecting default JSON to parse successfully
-        let mut matrix = ModuleCompatibilityMatrix::from_default_json().expect("serde deserialization should succeed");
+        let mut matrix = ModuleCompatibilityMatrix::from_default_json()
+            .expect("serde deserialization should succeed");
         let waivers = BTreeSet::new();
 
         let error = matrix
@@ -1438,7 +1446,8 @@ mod tests {
         });
 
         // SAFETY: Test-only unwrap expecting valid entry to create matrix successfully
-        let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry]).expect("serde deserialization should succeed");
+        let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry])
+            .expect("serde deserialization should succeed");
         let waivers = BTreeSet::from(["w-empty-reason".to_string()]);
         let error = matrix
             .validate_with_waivers(&waivers, &context())
@@ -1462,7 +1471,8 @@ mod tests {
         });
 
         // SAFETY: Test-only unwrap expecting valid entry to create matrix successfully
-        let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry]).expect("serde deserialization should succeed");
+        let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry])
+            .expect("serde deserialization should succeed");
         let waivers = BTreeSet::from(["w-empty-impact".to_string()]);
         let error = matrix
             .validate_with_waivers(&waivers, &context())
@@ -1728,7 +1738,8 @@ mod tests {
     #[test]
     fn entry_lookup_found() {
         // SAFETY: Test-only unwrap expecting default JSON to parse successfully
-        let matrix = ModuleCompatibilityMatrix::from_default_json().expect("serde deserialization should succeed");
+        let matrix = ModuleCompatibilityMatrix::from_default_json()
+            .expect("serde deserialization should succeed");
         let entries = matrix.entries();
         assert!(!entries.is_empty());
         let first_id = &entries[0].case_id;
@@ -1738,7 +1749,8 @@ mod tests {
     #[test]
     fn entry_lookup_not_found() {
         // SAFETY: Test-only unwrap expecting default JSON to parse successfully
-        let matrix = ModuleCompatibilityMatrix::from_default_json().expect("serde deserialization should succeed");
+        let matrix = ModuleCompatibilityMatrix::from_default_json()
+            .expect("serde deserialization should succeed");
         assert!(matrix.entry("nonexistent-case-id-xyz").is_none());
     }
 
@@ -1747,9 +1759,11 @@ mod tests {
     #[test]
     fn canonical_bytes_deterministic() {
         // SAFETY: Test-only unwrap expecting default JSON to parse successfully
-        let a = ModuleCompatibilityMatrix::from_default_json().expect("serde deserialization should succeed");
+        let a = ModuleCompatibilityMatrix::from_default_json()
+            .expect("serde deserialization should succeed");
         // SAFETY: Test-only unwrap expecting default JSON to parse successfully
-        let b = ModuleCompatibilityMatrix::from_default_json().expect("serde deserialization should succeed");
+        let b = ModuleCompatibilityMatrix::from_default_json()
+            .expect("serde deserialization should succeed");
         assert_eq!(a.canonical_bytes(), b.canonical_bytes());
     }
 
@@ -1758,7 +1772,8 @@ mod tests {
     #[test]
     fn events_empty_initially() {
         // SAFETY: Test-only unwrap expecting default JSON to parse successfully
-        let matrix = ModuleCompatibilityMatrix::from_default_json().expect("serde deserialization should succeed");
+        let matrix = ModuleCompatibilityMatrix::from_default_json()
+            .expect("serde deserialization should succeed");
         assert!(matrix.events().is_empty());
     }
 
@@ -1774,9 +1789,11 @@ mod tests {
             ModuleFeature::PackageJsonFields,
         ] {
             // SAFETY: ModuleFeature derives Serialize and has no non-serializable fields
-            let json = serde_json::to_string(&variant).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&variant).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by valid ModuleFeature serialization
-            let back: ModuleFeature = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ModuleFeature =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(variant, back);
         }
     }
@@ -1789,9 +1806,11 @@ mod tests {
             CompatibilityRuntime::Bun,
         ] {
             // SAFETY: CompatibilityRuntime derives Serialize and has no non-serializable fields
-            let json = serde_json::to_string(&variant).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&variant).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by valid CompatibilityRuntime serialization
-            let back: CompatibilityRuntime = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: CompatibilityRuntime =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(variant, back);
         }
     }
@@ -1804,9 +1823,11 @@ mod tests {
             CompatibilityMode::BunCompat,
         ] {
             // SAFETY: CompatibilityMode derives Serialize and has no non-serializable fields
-            let json = serde_json::to_string(&variant).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&variant).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by valid CompatibilityMode serialization
-            let back: CompatibilityMode = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: CompatibilityMode =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(variant, back);
         }
     }
@@ -1824,9 +1845,11 @@ mod tests {
             CompatibilityMatrixErrorCode::ObservationMismatch,
         ] {
             // SAFETY: CompatibilityMatrixErrorCode derives Serialize and has no non-serializable fields
-            let json = serde_json::to_string(&variant).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&variant).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by valid CompatibilityMatrixErrorCode serialization
-            let back: CompatibilityMatrixErrorCode = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: CompatibilityMatrixErrorCode =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(variant, back);
         }
     }
@@ -1836,7 +1859,8 @@ mod tests {
     #[test]
     fn evaluate_observation_unknown_case_fails() {
         // SAFETY: Test-only unwrap expecting default JSON to parse successfully
-        let mut matrix = ModuleCompatibilityMatrix::from_default_json().expect("serde deserialization should succeed");
+        let mut matrix = ModuleCompatibilityMatrix::from_default_json()
+            .expect("serde deserialization should succeed");
         let obs = CompatibilityObservation::new(
             "nonexistent-case-xyz",
             CompatibilityRuntime::FrankenEngine,
@@ -1852,7 +1876,8 @@ mod tests {
     #[test]
     fn required_waiver_ids_from_default() {
         // SAFETY: Test-only unwrap expecting default JSON to parse successfully
-        let matrix = ModuleCompatibilityMatrix::from_default_json().expect("serde deserialization should succeed");
+        let matrix = ModuleCompatibilityMatrix::from_default_json()
+            .expect("serde deserialization should succeed");
         let waivers = matrix.required_waiver_ids();
         // Default matrix should have at least one waiver
         assert!(!waivers.is_empty());
@@ -1894,7 +1919,8 @@ mod tests {
         let mut entry = valid_entry("case-1");
         entry.scenario.clear();
         // SAFETY: Test-only unwrap expecting valid entry to create matrix successfully
-        let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry]).expect("serde deserialization should succeed");
+        let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry])
+            .expect("serde deserialization should succeed");
         let err = matrix
             .validate_with_waivers(&BTreeSet::new(), &context())
             .unwrap_err();
@@ -1907,7 +1933,8 @@ mod tests {
         let mut entry = valid_entry("case-1");
         entry.lockstep_case_refs.clear();
         // SAFETY: Test-only unwrap expecting valid entry to create matrix successfully
-        let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry]).expect("serde deserialization should succeed");
+        let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry])
+            .expect("serde deserialization should succeed");
         let err = matrix
             .validate_with_waivers(&BTreeSet::new(), &context())
             .unwrap_err();
@@ -1920,7 +1947,8 @@ mod tests {
         let mut entry = valid_entry("case-1");
         entry.test262_refs.clear();
         // SAFETY: Test-only unwrap expecting valid entry to create matrix successfully
-        let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry]).expect("serde deserialization should succeed");
+        let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry])
+            .expect("serde deserialization should succeed");
         let err = matrix
             .validate_with_waivers(&BTreeSet::new(), &context())
             .unwrap_err();
@@ -1938,7 +1966,8 @@ mod tests {
         shim.shim_id.clear();
         entry.explicit_shims.push(shim);
         // SAFETY: Test-only unwrap expecting valid entry to create matrix successfully
-        let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry]).expect("serde deserialization should succeed");
+        let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry])
+            .expect("serde deserialization should succeed");
         let err = matrix
             .validate_with_waivers(&BTreeSet::new(), &context())
             .unwrap_err();
@@ -1954,7 +1983,8 @@ mod tests {
         shim.description.clear();
         entry.explicit_shims.push(shim);
         // SAFETY: Test-only unwrap expecting valid entry to create matrix successfully
-        let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry]).expect("serde deserialization should succeed");
+        let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry])
+            .expect("serde deserialization should succeed");
         let err = matrix
             .validate_with_waivers(&BTreeSet::new(), &context())
             .unwrap_err();
@@ -1970,7 +2000,8 @@ mod tests {
         shim.test_case_ref.clear();
         entry.explicit_shims.push(shim);
         // SAFETY: Test-only unwrap expecting valid entry to create matrix successfully
-        let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry]).expect("serde deserialization should succeed");
+        let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry])
+            .expect("serde deserialization should succeed");
         let err = matrix
             .validate_with_waivers(&BTreeSet::new(), &context())
             .unwrap_err();
@@ -1986,7 +2017,8 @@ mod tests {
         shim.test_case_ref = "lockstep/unknown-ref".to_string();
         entry.explicit_shims.push(shim);
         // SAFETY: Test-only unwrap expecting valid entry to create matrix successfully
-        let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry]).expect("serde deserialization should succeed");
+        let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry])
+            .expect("serde deserialization should succeed");
         let err = matrix
             .validate_with_waivers(&BTreeSet::new(), &context())
             .unwrap_err();
@@ -2002,7 +2034,8 @@ mod tests {
         shim.removable = false;
         entry.explicit_shims.push(shim);
         // SAFETY: Test-only unwrap expecting valid entry to create matrix successfully
-        let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry]).expect("serde deserialization should succeed");
+        let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry])
+            .expect("serde deserialization should succeed");
         let err = matrix
             .validate_with_waivers(&BTreeSet::new(), &context())
             .unwrap_err();
@@ -2024,7 +2057,8 @@ mod tests {
             migration_guidance: "guidance".to_string(),
         });
         // SAFETY: Test-only unwrap expecting valid entry to create matrix successfully
-        let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry]).expect("serde deserialization should succeed");
+        let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry])
+            .expect("serde deserialization should succeed");
         let err = matrix
             .validate_with_waivers(&BTreeSet::from(["w-1".to_string()]), &context())
             .unwrap_err();
@@ -2049,7 +2083,8 @@ mod tests {
             migration_guidance: "g".to_string(),
         });
         // SAFETY: Test-only unwrap expecting valid entry to create matrix successfully
-        let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry]).expect("serde deserialization should succeed");
+        let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry])
+            .expect("serde deserialization should succeed");
         let err = matrix
             .validate_with_waivers(&BTreeSet::from(["w-1".to_string()]), &context())
             .unwrap_err();
@@ -2073,7 +2108,8 @@ mod tests {
             migration_guidance: "g".to_string(),
         });
         // SAFETY: Test-only unwrap expecting valid entry to create matrix successfully
-        let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry]).expect("serde deserialization should succeed");
+        let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry])
+            .expect("serde deserialization should succeed");
         let err = matrix
             .validate_with_waivers(&BTreeSet::new(), &context())
             .unwrap_err();
@@ -2096,7 +2132,8 @@ mod tests {
             migration_guidance: "".to_string(),
         });
         // SAFETY: Test-only unwrap expecting valid entry to create matrix successfully
-        let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry]).expect("serde deserialization should succeed");
+        let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry])
+            .expect("serde deserialization should succeed");
         let err = matrix
             .validate_with_waivers(&BTreeSet::from(["w-1".to_string()]), &context())
             .unwrap_err();
@@ -2117,7 +2154,8 @@ mod tests {
         // No divergence policy declared
         entry.divergence = None;
         // SAFETY: Test-only unwrap expecting valid entry to create matrix successfully
-        let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry]).expect("serde deserialization should succeed");
+        let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry])
+            .expect("serde deserialization should succeed");
         let err = matrix
             .validate_with_waivers(&BTreeSet::new(), &context())
             .unwrap_err();
@@ -2130,7 +2168,8 @@ mod tests {
     fn validate_entry_fully_valid_passes() {
         let entry = valid_entry("case-ok");
         // SAFETY: Test-only unwrap expecting valid entry to create matrix successfully
-        let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry]).expect("serde deserialization should succeed");
+        let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry])
+            .expect("serde deserialization should succeed");
         matrix
             .validate_with_waivers(&BTreeSet::new(), &context())
             .expect("valid entry should pass validation");
@@ -2153,7 +2192,8 @@ mod tests {
             migration_guidance: "use native API".to_string(),
         });
         // SAFETY: Test-only unwrap expecting valid entry to create matrix successfully
-        let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry]).expect("serde deserialization should succeed");
+        let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry])
+            .expect("serde deserialization should succeed");
         matrix
             .validate_with_waivers(&BTreeSet::from(["w-div".to_string()]), &context())
             .expect("valid divergent entry should pass");
@@ -2165,7 +2205,8 @@ mod tests {
     fn evaluate_observation_behavior_mismatch_fails() {
         let entry = valid_entry("case-obs");
         // SAFETY: Test-only unwrap expecting valid entry to create matrix successfully
-        let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry]).expect("serde deserialization should succeed");
+        let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry])
+            .expect("serde deserialization should succeed");
         let obs = CompatibilityObservation::new(
             "case-obs",
             CompatibilityRuntime::FrankenEngine,
@@ -2181,14 +2222,17 @@ mod tests {
     fn evaluate_observation_matching_behavior_succeeds() {
         let entry = valid_entry("case-obs");
         // SAFETY: Test-only unwrap expecting valid entry to create matrix successfully
-        let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry]).expect("serde deserialization should succeed");
+        let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry])
+            .expect("serde deserialization should succeed");
         let obs = CompatibilityObservation::new(
             "case-obs",
             CompatibilityRuntime::FrankenEngine,
             CompatibilityMode::Native,
             "ok",
         );
-        let outcome = matrix.evaluate_observation(&obs, &context()).expect("serde deserialization should succeed");
+        let outcome = matrix
+            .evaluate_observation(&obs, &context())
+            .expect("serde deserialization should succeed");
         assert!(outcome.matched);
         assert_eq!(outcome.case_id, "case-obs");
         assert_eq!(outcome.expected_behavior, "ok");
@@ -2209,7 +2253,8 @@ mod tests {
             migration_guidance: "use compat mode".to_string(),
         });
         // SAFETY: Test-only unwrap expecting valid entry to create matrix successfully
-        let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry]).expect("serde deserialization should succeed");
+        let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry])
+            .expect("serde deserialization should succeed");
         let obs = CompatibilityObservation::new(
             "case-div-obs",
             CompatibilityRuntime::FrankenEngine,
@@ -2217,7 +2262,9 @@ mod tests {
             "native-behavior",
         );
         // SAFETY: Test-only unwrap expecting observation to match expected behavior
-        let outcome = matrix.evaluate_observation(&obs, &context()).expect("serde deserialization should succeed");
+        let outcome = matrix
+            .evaluate_observation(&obs, &context())
+            .expect("serde deserialization should succeed");
         assert!(outcome.matched);
         assert!(outcome.divergence.is_some());
     }
@@ -2227,7 +2274,8 @@ mod tests {
         let mut entry = valid_entry("case-node");
         entry.node_behavior = "node-ok".to_string();
         // SAFETY: Test-only unwrap expecting valid entry to create matrix successfully
-        let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry]).expect("serde deserialization should succeed");
+        let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry])
+            .expect("serde deserialization should succeed");
         let obs = CompatibilityObservation::new(
             "case-node",
             CompatibilityRuntime::Node,
@@ -2235,7 +2283,9 @@ mod tests {
             "node-ok",
         );
         // SAFETY: Test-only unwrap expecting observation to match expected behavior
-        let outcome = matrix.evaluate_observation(&obs, &context()).expect("serde deserialization should succeed");
+        let outcome = matrix
+            .evaluate_observation(&obs, &context())
+            .expect("serde deserialization should succeed");
         assert!(outcome.matched);
     }
 
@@ -2244,7 +2294,8 @@ mod tests {
         let mut entry = valid_entry("case-bun");
         entry.bun_behavior = "bun-ok".to_string();
         // SAFETY: Test-only unwrap expecting valid entry to create matrix successfully
-        let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry]).expect("serde deserialization should succeed");
+        let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry])
+            .expect("serde deserialization should succeed");
         let obs = CompatibilityObservation::new(
             "case-bun",
             CompatibilityRuntime::Bun,
@@ -2252,7 +2303,9 @@ mod tests {
             "bun-ok",
         );
         // SAFETY: Test-only unwrap expecting observation to match expected behavior
-        let outcome = matrix.evaluate_observation(&obs, &context()).expect("serde deserialization should succeed");
+        let outcome = matrix
+            .evaluate_observation(&obs, &context())
+            .expect("serde deserialization should succeed");
         assert!(outcome.matched);
     }
 
@@ -2261,7 +2314,8 @@ mod tests {
         let mut entry = valid_entry("case-nc");
         entry.franken_node_compat_behavior = "nc-behavior".to_string();
         // SAFETY: Test-only unwrap expecting valid entry to create matrix successfully
-        let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry]).expect("serde deserialization should succeed");
+        let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry])
+            .expect("serde deserialization should succeed");
         let obs = CompatibilityObservation::new(
             "case-nc",
             CompatibilityRuntime::FrankenEngine,
@@ -2269,7 +2323,9 @@ mod tests {
             "nc-behavior",
         );
         // SAFETY: Test-only unwrap expecting observation to match expected behavior
-        let outcome = matrix.evaluate_observation(&obs, &context()).expect("serde deserialization should succeed");
+        let outcome = matrix
+            .evaluate_observation(&obs, &context())
+            .expect("serde deserialization should succeed");
         assert!(outcome.matched);
     }
 
@@ -2278,7 +2334,8 @@ mod tests {
         let mut entry = valid_entry("case-bc");
         entry.franken_bun_compat_behavior = "bc-behavior".to_string();
         // SAFETY: Test-only unwrap expecting valid entry to create matrix successfully
-        let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry]).expect("serde deserialization should succeed");
+        let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry])
+            .expect("serde deserialization should succeed");
         let obs = CompatibilityObservation::new(
             "case-bc",
             CompatibilityRuntime::FrankenEngine,
@@ -2286,7 +2343,9 @@ mod tests {
             "bc-behavior",
         );
         // SAFETY: Test-only unwrap expecting observation to match expected behavior
-        let outcome = matrix.evaluate_observation(&obs, &context()).expect("serde deserialization should succeed");
+        let outcome = matrix
+            .evaluate_observation(&obs, &context())
+            .expect("serde deserialization should succeed");
         assert!(outcome.matched);
     }
 
@@ -2295,11 +2354,15 @@ mod tests {
     #[test]
     fn to_json_pretty_round_trips() {
         // SAFETY: Test-only unwrap expecting default JSON to parse successfully
-        let matrix = ModuleCompatibilityMatrix::from_default_json().expect("serde deserialization should succeed");
+        let matrix = ModuleCompatibilityMatrix::from_default_json()
+            .expect("serde deserialization should succeed");
         // SAFETY: Test-only unwrap expecting matrix to serialize to JSON successfully
-        let json = matrix.to_json_pretty().expect("serde deserialization should succeed");
+        let json = matrix
+            .to_json_pretty()
+            .expect("serde deserialization should succeed");
         // SAFETY: Test-only unwrap expecting pretty JSON to parse back successfully
-        let reparsed = ModuleCompatibilityMatrix::from_json_str(&json).expect("serde deserialization should succeed");
+        let reparsed = ModuleCompatibilityMatrix::from_json_str(&json)
+            .expect("serde deserialization should succeed");
         assert_eq!(matrix.canonical_hash(), reparsed.canonical_hash());
     }
 
@@ -2310,9 +2373,11 @@ mod tests {
         let entry_a = valid_entry("case-a");
         let entry_b = valid_entry("case-b");
         // SAFETY: Test-only unwrap expecting valid entries to create matrices successfully
-        let ma = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry_a]).expect("serde deserialization should succeed");
+        let ma = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry_a])
+            .expect("serde deserialization should succeed");
         // SAFETY: Test-only unwrap expecting valid entries to create matrices successfully
-        let mb = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry_b]).expect("serde deserialization should succeed");
+        let mb = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry_b])
+            .expect("serde deserialization should succeed");
         assert_ne!(ma.canonical_hash(), mb.canonical_hash());
     }
 
@@ -2324,7 +2389,8 @@ mod tests {
         entry.franken_bun_compat_behavior = "different".to_string();
         // No shim declared for BunCompat
         // SAFETY: Test-only unwrap expecting valid entry to create matrix successfully
-        let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry]).expect("serde deserialization should succeed");
+        let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry])
+            .expect("serde deserialization should succeed");
         let err = matrix
             .validate_with_waivers(&BTreeSet::new(), &context())
             .unwrap_err();
@@ -2382,9 +2448,11 @@ mod tests {
     fn reference_runtime_serde_round_trip() {
         for variant in [ReferenceRuntime::Node, ReferenceRuntime::Bun] {
             // SAFETY: ReferenceRuntime derives Serialize and has no non-serializable fields
-            let json = serde_json::to_string(&variant).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&variant).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by valid ReferenceRuntime serialization
-            let back: ReferenceRuntime = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ReferenceRuntime =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(variant, back);
         }
     }
@@ -2395,7 +2463,8 @@ mod tests {
         // SAFETY: ExplicitShim derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&shim).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid ExplicitShim serialization
-        let back: ExplicitShim = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ExplicitShim =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(shim, back);
     }
 
@@ -2411,7 +2480,8 @@ mod tests {
         // SAFETY: DivergencePolicy derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid DivergencePolicy serialization
-        let back: DivergencePolicy = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DivergencePolicy =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(policy, back);
     }
 
@@ -2421,7 +2491,8 @@ mod tests {
         // SAFETY: CompatibilityMatrixEntry derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid CompatibilityMatrixEntry serialization
-        let back: CompatibilityMatrixEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: CompatibilityMatrixEntry =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, back);
     }
 
@@ -2431,7 +2502,8 @@ mod tests {
         // SAFETY: CompatibilityContext derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&ctx).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid CompatibilityContext serialization
-        let back: CompatibilityContext = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: CompatibilityContext =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ctx, back);
     }
 
@@ -2446,7 +2518,8 @@ mod tests {
         // SAFETY: CompatibilityObservation derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&obs).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid CompatibilityObservation serialization
-        let back: CompatibilityObservation = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: CompatibilityObservation =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(obs, back);
     }
 
@@ -2460,7 +2533,8 @@ mod tests {
         // SAFETY: CompatibilityMatrixError derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid CompatibilityMatrixError serialization
-        let back: CompatibilityMatrixError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: CompatibilityMatrixError =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, back);
     }
 
@@ -2587,7 +2661,8 @@ mod tests {
         });
 
         // SAFETY: Test-only unwrap expecting valid entry to create matrix successfully
-        let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry]).expect("serde deserialization should succeed");
+        let mut matrix = ModuleCompatibilityMatrix::from_entries("1.0.0", vec![entry])
+            .expect("serde deserialization should succeed");
         matrix
             .validate_with_waivers(&BTreeSet::from(["waiver-category".to_string()]), &context())
             .expect("entry should validate");
@@ -2599,7 +2674,9 @@ mod tests {
             "native-strict",
         );
         // SAFETY: Test-only unwrap expecting observation to match expected behavior
-        let outcome = matrix.evaluate_observation(&obs, &context()).expect("serde deserialization should succeed");
+        let outcome = matrix
+            .evaluate_observation(&obs, &context())
+            .expect("serde deserialization should succeed");
         assert_eq!(
             outcome.divergence_category,
             Some(DivergenceCategory::IntentionalImprovement)

@@ -1261,7 +1261,8 @@ mod tests {
     fn request_context_serde_roundtrip() {
         let ctx = context();
         let json = serde_json::to_string(&ctx).expect("serde deserialization should succeed");
-        let back: RequestContext = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: RequestContext =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ctx, back);
     }
 
@@ -1269,7 +1270,8 @@ mod tests {
     fn auth_context_serde_roundtrip() {
         let auth = auth_with_scopes(&[SCOPE_HEALTH_READ, SCOPE_CONTROL_WRITE]);
         let json = serde_json::to_string(&auth).expect("serde deserialization should succeed");
-        let back: AuthContext = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: AuthContext =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(auth, back);
     }
 
@@ -1282,7 +1284,8 @@ mod tests {
             ControlAction::Quarantine,
         ] {
             let json = serde_json::to_value(action).expect("serde deserialization should succeed");
-            let back: ControlAction = serde_json::from_value(json).expect("serde deserialization should succeed");
+            let back: ControlAction =
+                serde_json::from_value(json).expect("serde deserialization should succeed");
             assert_eq!(action, back);
         }
     }
@@ -1295,7 +1298,8 @@ mod tests {
             ReplayCommand::Status,
         ] {
             let json = serde_json::to_value(cmd).expect("serde deserialization should succeed");
-            let back: ReplayCommand = serde_json::from_value(json).expect("serde deserialization should succeed");
+            let back: ReplayCommand =
+                serde_json::from_value(json).expect("serde deserialization should succeed");
             assert_eq!(cmd, back);
         }
     }
@@ -1305,7 +1309,8 @@ mod tests {
         let mut f = EndpointFailure::new("E-42", "bad input");
         f.details.insert("key".to_string(), "value".to_string());
         let json = serde_json::to_string(&f).expect("serde deserialization should succeed");
-        let back: EndpointFailure = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: EndpointFailure =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(f, back);
     }
 
@@ -1317,7 +1322,8 @@ mod tests {
             reason: "policy violation".to_string(),
         };
         let json = serde_json::to_string(&req).expect("serde deserialization should succeed");
-        let back: ControlActionRequest = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ControlActionRequest =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(req, back);
     }
 
@@ -1330,7 +1336,8 @@ mod tests {
             cursor: Some("cursor-abc".to_string()),
         };
         let json = serde_json::to_string(&req).expect("serde deserialization should succeed");
-        let back: EvidenceExportRequest = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: EvidenceExportRequest =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(req, back);
     }
 
@@ -1342,7 +1349,8 @@ mod tests {
             session_id: None,
         };
         let json = serde_json::to_string(&req).expect("serde deserialization should succeed");
-        let back: ReplayControlRequest = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ReplayControlRequest =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(req, back);
     }
 
@@ -1355,7 +1363,8 @@ mod tests {
             gc_pressure_basis_points: 500,
         };
         let json = serde_json::to_string(&h).expect("serde deserialization should succeed");
-        let back: HealthStatusResponse = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: HealthStatusResponse =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(h, back);
     }
 
@@ -1371,7 +1380,8 @@ mod tests {
             artifact_ref: "evidence://ref".to_string(),
         };
         let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
-        let back: EvidenceRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: EvidenceRecord =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 
@@ -1387,7 +1397,8 @@ mod tests {
             error_code: Some("E-1".to_string()),
         };
         let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
-        let back: StructuredLogEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: StructuredLogEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(e, back);
     }
 
@@ -1403,7 +1414,8 @@ mod tests {
             details,
         };
         let json = serde_json::to_string(&env).expect("serde deserialization should succeed");
-        let back: ErrorEnvelope = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ErrorEnvelope =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(env, back);
     }
 
@@ -1469,7 +1481,9 @@ mod tests {
     fn request_context_json_field_names() {
         let ctx = context();
         let json = serde_json::to_value(&ctx).expect("serde deserialization should succeed");
-        let obj = json.as_object().expect("serde deserialization should succeed");
+        let obj = json
+            .as_object()
+            .expect("serde deserialization should succeed");
         assert!(obj.contains_key("trace_id"));
         assert!(obj.contains_key("request_id"));
         assert!(obj.contains_key("component"));
@@ -1487,7 +1501,9 @@ mod tests {
             gc_pressure_basis_points: 42,
         };
         let json = serde_json::to_value(&h).expect("serde deserialization should succeed");
-        let obj = json.as_object().expect("serde deserialization should succeed");
+        let obj = json
+            .as_object()
+            .expect("serde deserialization should succeed");
         assert!(obj.contains_key("runtime_status"));
         assert!(obj.contains_key("loaded_extensions"));
         assert!(obj.contains_key("security_epoch"));
@@ -1507,7 +1523,9 @@ mod tests {
             artifact_ref: "ref".to_string(),
         };
         let json = serde_json::to_value(&r).expect("serde deserialization should succeed");
-        let obj = json.as_object().expect("serde deserialization should succeed");
+        let obj = json
+            .as_object()
+            .expect("serde deserialization should succeed");
         assert!(obj.contains_key("trace_id"));
         assert!(obj.contains_key("decision_id"));
         assert!(obj.contains_key("policy_id"));
@@ -1546,7 +1564,8 @@ mod tests {
             next_cursor: Some("cursor-next".to_string()),
         };
         let json = serde_json::to_string(&resp).expect("serde deserialization should succeed");
-        let back: EvidenceExportResponse = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: EvidenceExportResponse =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(resp, back);
     }
 
@@ -1582,7 +1601,8 @@ mod tests {
             cursor: None,
         };
         let json = serde_json::to_string(&req).expect("serde deserialization should succeed");
-        let back: EvidenceExportRequest = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: EvidenceExportRequest =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(req.since_epoch_seconds, back.since_epoch_seconds);
         assert_eq!(back.since_epoch_seconds, u64::MAX);
     }
@@ -1621,7 +1641,8 @@ mod tests {
             decision_id: "d-1".into(),
         };
         let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
-        let back: ControlActionResponse = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ControlActionResponse =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 
@@ -1634,7 +1655,8 @@ mod tests {
             note: "replay in progress".into(),
         };
         let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
-        let back: ReplayControlResponse = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ReplayControlResponse =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 
@@ -1835,7 +1857,8 @@ mod tests {
         assert_eq!(f.details["retry_after_seconds"], "30");
         // serde roundtrip preserves details
         let json = serde_json::to_string(&f).expect("serde deserialization should succeed");
-        let back: EndpointFailure = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: EndpointFailure =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.details.len(), 1);
     }
 
@@ -1964,7 +1987,8 @@ mod tests {
         ];
         for action in &variants {
             let json = serde_json::to_string(action).expect("serde deserialization should succeed");
-            let back: ControlAction = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ControlAction =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*action, back);
         }
     }
@@ -1978,7 +2002,8 @@ mod tests {
         ];
         for cmd in &variants {
             let json = serde_json::to_string(cmd).expect("serde deserialization should succeed");
-            let back: ReplayCommand = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ReplayCommand =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*cmd, back);
         }
     }

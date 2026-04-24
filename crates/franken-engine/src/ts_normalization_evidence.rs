@@ -821,7 +821,8 @@ mod tests {
         let json = serde_json::to_string(&inv).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid TsNormalizationEvidenceInventory,
         // so from_str back to TsNormalizationEvidenceInventory cannot fail (valid format + matching schema).
-        let back: TsNormalizationEvidenceInventory = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: TsNormalizationEvidenceInventory =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(inv, back);
     }
 
@@ -943,7 +944,8 @@ mod tests {
             let json = serde_json::to_string(family).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by to_string of a valid TsFeatureFamily,
             // so from_str back to TsFeatureFamily cannot fail (valid format + matching schema).
-            let back: TsFeatureFamily = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: TsFeatureFamily =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*family, back);
         }
     }
@@ -953,10 +955,12 @@ mod tests {
         for variant in [ActualOutcome::Success, ActualOutcome::Rejected] {
             // SAFETY: ActualOutcome derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json = serde_json::to_string(&variant).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&variant).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by to_string of a valid ActualOutcome,
             // so from_str back to ActualOutcome cannot fail (valid format + matching schema).
-            let back: ActualOutcome = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ActualOutcome =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(variant, back);
         }
     }
@@ -966,10 +970,12 @@ mod tests {
         for variant in [SpecimenVerdict::Pass, SpecimenVerdict::Fail] {
             // SAFETY: SpecimenVerdict derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json = serde_json::to_string(&variant).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&variant).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by to_string of a valid SpecimenVerdict,
             // so from_str back to SpecimenVerdict cannot fail (valid format + matching schema).
-            let back: SpecimenVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: SpecimenVerdict =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(variant, back);
         }
     }
@@ -1020,7 +1026,8 @@ mod tests {
         let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid TsEvidenceEvent,
         // so from_str back to TsEvidenceEvent cannot fail (valid format + matching schema).
-        let back: TsEvidenceEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: TsEvidenceEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ev, back);
     }
 
@@ -1375,7 +1382,8 @@ mod tests {
             description: "serde test".into(),
         };
         let json = serde_json::to_string(&specimen).expect("serde deserialization should succeed");
-        let back: CorpusSpecimen = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: CorpusSpecimen =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(specimen, back);
     }
 
@@ -1393,7 +1401,8 @@ mod tests {
             normalized_source_preview: Some("const x = 1;".into()),
         };
         let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
-        let back: SpecimenEvidence = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SpecimenEvidence =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ev, back);
     }
 
@@ -1411,7 +1420,8 @@ mod tests {
             normalized_source_preview: None,
         };
         let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
-        let back: SpecimenEvidence = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SpecimenEvidence =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ev, back);
     }
 
@@ -1437,7 +1447,8 @@ mod tests {
             },
         };
         let json = serde_json::to_string(&manifest).expect("serde deserialization should succeed");
-        let back: TsEvidenceRunManifest = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: TsEvidenceRunManifest =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(manifest, back);
     }
 
@@ -1450,7 +1461,8 @@ mod tests {
             commands_txt: "commands.txt".into(),
         };
         let json = serde_json::to_string(&paths).expect("serde deserialization should succeed");
-        let back: TsEvidenceArtifactPaths = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: TsEvidenceArtifactPaths =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(paths, back);
     }
 

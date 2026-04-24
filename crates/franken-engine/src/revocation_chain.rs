@@ -1224,7 +1224,8 @@ mod tests {
 
         // Sign the revocation.
         let preimage = rev.preimage_bytes();
-        let sig = sign_preimage(signing_key, &preimage).expect("serde deserialization should succeed");
+        let sig =
+            sign_preimage(signing_key, &preimage).expect("serde deserialization should succeed");
         rev.signature = sig;
         rev
     }
@@ -1251,14 +1252,18 @@ mod tests {
             &test_revocation_key(),
         );
 
-        let seq = chain.append(rev, &sk, "t-genesis").expect("serde deserialization should succeed");
+        let seq = chain
+            .append(rev, &sk, "t-genesis")
+            .expect("serde deserialization should succeed");
         assert_eq!(seq, 0);
         assert_eq!(chain.len(), 1);
         assert!(!chain.is_empty());
         assert_eq!(chain.head_seq(), Some(0));
 
         // Genesis event should have prev_event = None.
-        let event = chain.get_event(0).expect("serde deserialization should succeed");
+        let event = chain
+            .get_event(0)
+            .expect("serde deserialization should succeed");
         assert!(event.prev_event.is_none());
         assert_eq!(event.event_seq, 0);
     }
@@ -1275,7 +1280,9 @@ mod tests {
                 [i + 10; 32],
                 &test_revocation_key(),
             );
-            let seq = chain.append(rev, &sk, &format!("t-{i}")).expect("serde deserialization should succeed");
+            let seq = chain
+                .append(rev, &sk, &format!("t-{i}"))
+                .expect("serde deserialization should succeed");
             assert_eq!(seq, i as u64);
         }
 
@@ -1284,8 +1291,12 @@ mod tests {
 
         // Verify hash linking.
         for i in 1..5 {
-            let event = chain.get_event(i).expect("serde deserialization should succeed");
-            let prev = chain.get_event(i - 1).expect("serde deserialization should succeed");
+            let event = chain
+                .get_event(i)
+                .expect("serde deserialization should succeed");
+            let prev = chain
+                .get_event(i - 1)
+                .expect("serde deserialization should succeed");
             assert_eq!(event.prev_event, Some(prev.event_id.clone()));
         }
     }
@@ -1304,7 +1315,9 @@ mod tests {
             [42; 32],
             &test_revocation_key(),
         );
-        chain.append(rev, &sk, "t-lookup").expect("serde deserialization should succeed");
+        chain
+            .append(rev, &sk, "t-lookup")
+            .expect("serde deserialization should succeed");
 
         assert!(chain.is_revoked(&target));
     }
@@ -1327,9 +1340,13 @@ mod tests {
             [55; 32],
             &test_revocation_key(),
         );
-        chain.append(rev, &sk, "t-detail").expect("serde deserialization should succeed");
+        chain
+            .append(rev, &sk, "t-detail")
+            .expect("serde deserialization should succeed");
 
-        let found = chain.lookup_revocation(&EngineObjectId([55; 32])).expect("serde deserialization should succeed");
+        let found = chain
+            .lookup_revocation(&EngineObjectId([55; 32]))
+            .expect("serde deserialization should succeed");
         assert_eq!(found.target_type, RevocationTargetType::Extension);
         assert_eq!(found.reason, RevocationReason::PolicyViolation);
     }
@@ -1347,7 +1364,9 @@ mod tests {
             [1; 32],
             &test_revocation_key(),
         );
-        chain.append(rev1, &sk, "t-dup-1").expect("serde deserialization should succeed");
+        chain
+            .append(rev1, &sk, "t-dup-1")
+            .expect("serde deserialization should succeed");
 
         let rev2 = make_revocation(
             RevocationTargetType::Key,
@@ -1379,7 +1398,9 @@ mod tests {
                 [i + 100; 32],
                 &test_revocation_key(),
             );
-            chain.append(rev, &sk, &format!("t-v{i}")).expect("serde deserialization should succeed");
+            chain
+                .append(rev, &sk, &format!("t-v{i}"))
+                .expect("serde deserialization should succeed");
         }
 
         assert!(chain.verify_chain("t-verify").is_ok());
@@ -1397,7 +1418,9 @@ mod tests {
                 [i + 200; 32],
                 &test_revocation_key(),
             );
-            chain.append(rev, &sk, &format!("t-t{i}")).expect("serde deserialization should succeed");
+            chain
+                .append(rev, &sk, &format!("t-t{i}"))
+                .expect("serde deserialization should succeed");
         }
 
         // Tamper with the middle event's prev_event link.
@@ -1419,7 +1442,9 @@ mod tests {
                 [i + 210; 32],
                 &test_revocation_key(),
             );
-            chain.append(rev, &sk, &format!("t-s{i}")).expect("serde deserialization should succeed");
+            chain
+                .append(rev, &sk, &format!("t-s{i}"))
+                .expect("serde deserialization should succeed");
         }
 
         // Tamper with event sequence.
@@ -1457,7 +1482,9 @@ mod tests {
             &revocation_sk,
         );
 
-        let seq = chain.append(rev, &head_sk, "t-authorized").expect("serde deserialization should succeed");
+        let seq = chain
+            .append(rev, &head_sk, "t-authorized")
+            .expect("serde deserialization should succeed");
         assert_eq!(seq, 0);
     }
 
@@ -1471,7 +1498,9 @@ mod tests {
             [11; 32],
             &test_revocation_key(),
         );
-        chain.append(rev, &sk, "t-rev-sig").expect("serde deserialization should succeed");
+        chain
+            .append(rev, &sk, "t-rev-sig")
+            .expect("serde deserialization should succeed");
 
         chain.events[0].revocation.reason = RevocationReason::Administrative;
 
@@ -1489,9 +1518,15 @@ mod tests {
             [12; 32],
             &test_revocation_key(),
         );
-        chain.append(rev, &sk, "t-head-sig").expect("serde deserialization should succeed");
+        chain
+            .append(rev, &sk, "t-head-sig")
+            .expect("serde deserialization should succeed");
 
-        chain.head.as_mut().expect("serde deserialization should succeed").signature = Signature::from_bytes([0xAA; 64]);
+        chain
+            .head
+            .as_mut()
+            .expect("serde deserialization should succeed")
+            .signature = Signature::from_bytes([0xAA; 64]);
 
         let err = chain.verify_chain("t-head-sig").unwrap_err();
         assert!(matches!(err, ChainError::SignatureInvalid { .. }));
@@ -1511,7 +1546,9 @@ mod tests {
             [1; 32],
             &test_revocation_key(),
         );
-        chain.append(rev, &sk, "t-sig").expect("serde deserialization should succeed");
+        chain
+            .append(rev, &sk, "t-sig")
+            .expect("serde deserialization should succeed");
 
         assert!(chain.verify_head_signature(&vk).is_ok());
     }
@@ -1527,9 +1564,12 @@ mod tests {
             [1; 32],
             &test_revocation_key(),
         );
-        chain.append(rev, &sk, "t-wrong").expect("serde deserialization should succeed");
+        chain
+            .append(rev, &sk, "t-wrong")
+            .expect("serde deserialization should succeed");
 
-        let wrong_vk = VerificationKey::from_bytes([0xFF; 32]).expect("serde deserialization should succeed");
+        let wrong_vk =
+            VerificationKey::from_bytes([0xFF; 32]).expect("serde deserialization should succeed");
         let err = chain.verify_head_signature(&wrong_vk).unwrap_err();
         assert!(matches!(err, ChainError::SignatureInvalid { .. }));
     }
@@ -1557,8 +1597,12 @@ mod tests {
                 [i + 50; 32],
                 &test_revocation_key(),
             );
-            chain.append(rev, &sk, &format!("t-mono-{i}")).expect("serde deserialization should succeed");
-            let current = chain.head_seq().expect("serde deserialization should succeed");
+            chain
+                .append(rev, &sk, &format!("t-mono-{i}"))
+                .expect("serde deserialization should succeed");
+            let current = chain
+                .head_seq()
+                .expect("serde deserialization should succeed");
             if let Some(prev) = prev_seq {
                 assert!(current > prev, "head seq must be monotonically increasing");
             }
@@ -1588,7 +1632,9 @@ mod tests {
                 [(i as u8) + 30; 32],
                 &test_revocation_key(),
             );
-            chain.append(rev, &sk, &format!("t-type-{i}")).expect("serde deserialization should succeed");
+            chain
+                .append(rev, &sk, &format!("t-type-{i}"))
+                .expect("serde deserialization should succeed");
         }
 
         assert_eq!(chain.len(), 5);
@@ -1619,7 +1665,9 @@ mod tests {
                 [(i as u8) + 60; 32],
                 &test_revocation_key(),
             );
-            chain.append(rev, &sk, &format!("t-reason-{i}")).expect("serde deserialization should succeed");
+            chain
+                .append(rev, &sk, &format!("t-reason-{i}"))
+                .expect("serde deserialization should succeed");
         }
 
         assert_eq!(chain.len(), 5);
@@ -1639,7 +1687,9 @@ mod tests {
             [1; 32],
             &test_revocation_key(),
         );
-        chain.append(rev, &sk, "t-inc-0").expect("serde deserialization should succeed");
+        chain
+            .append(rev, &sk, "t-inc-0")
+            .expect("serde deserialization should succeed");
 
         // Build what the next event would look like.
         let rev2 = make_revocation(
@@ -1649,7 +1699,12 @@ mod tests {
             &test_revocation_key(),
         );
 
-        let prev_id = chain.events.last().expect("serde deserialization should succeed").event_id.clone();
+        let prev_id = chain
+            .events
+            .last()
+            .expect("serde deserialization should succeed")
+            .event_id
+            .clone();
         let next_event = RevocationEvent {
             event_id: EngineObjectId([0xAA; 32]), // doesn't matter for verify
             revocation: rev2,
@@ -1671,7 +1726,9 @@ mod tests {
             [1; 32],
             &test_revocation_key(),
         );
-        chain.append(rev, &sk, "t-seq-bad").expect("serde deserialization should succeed");
+        chain
+            .append(rev, &sk, "t-seq-bad")
+            .expect("serde deserialization should succeed");
 
         let rev2 = make_revocation(
             RevocationTargetType::Token,
@@ -1682,7 +1739,14 @@ mod tests {
         let next_event = RevocationEvent {
             event_id: EngineObjectId([0xBB; 32]),
             revocation: rev2,
-            prev_event: Some(chain.events.last().expect("serde deserialization should succeed").event_id.clone()),
+            prev_event: Some(
+                chain
+                    .events
+                    .last()
+                    .expect("serde deserialization should succeed")
+                    .event_id
+                    .clone(),
+            ),
             event_seq: 99, // wrong
         };
 
@@ -1701,7 +1765,9 @@ mod tests {
             [1; 32],
             &test_revocation_key(),
         );
-        chain.append(rev, &sk, "t-link-bad").expect("serde deserialization should succeed");
+        chain
+            .append(rev, &sk, "t-link-bad")
+            .expect("serde deserialization should succeed");
 
         let rev2 = make_revocation(
             RevocationTargetType::Token,
@@ -1734,7 +1800,9 @@ mod tests {
                 [i + 70; 32],
                 &test_revocation_key(),
             );
-            chain.append(rev, &sk, &format!("t-rb-{i}")).expect("serde deserialization should succeed");
+            chain
+                .append(rev, &sk, &format!("t-rb-{i}"))
+                .expect("serde deserialization should succeed");
         }
 
         let events = chain.events().to_vec();
@@ -1769,7 +1837,9 @@ mod tests {
                 [i + 80; 32],
                 &test_revocation_key(),
             );
-            chain.append(rev, &sk, &format!("t-rt-{i}")).expect("serde deserialization should succeed");
+            chain
+                .append(rev, &sk, &format!("t-rt-{i}"))
+                .expect("serde deserialization should succeed");
         }
 
         let mut events = chain.events().to_vec();
@@ -1791,10 +1861,15 @@ mod tests {
             [90; 32],
             &test_revocation_key(),
         );
-        chain.append(rev, &sk, "t-hm").expect("serde deserialization should succeed");
+        chain
+            .append(rev, &sk, "t-hm")
+            .expect("serde deserialization should succeed");
 
         let events = chain.events().to_vec();
-        let mut head = chain.head().cloned().expect("serde deserialization should succeed");
+        let mut head = chain
+            .head()
+            .cloned()
+            .expect("serde deserialization should succeed");
         head.head_seq = 99; // tamper
 
         let err = RevocationChain::rebuild_from_events(TEST_ZONE, events, Some(head)).unwrap_err();
@@ -1833,7 +1908,9 @@ mod tests {
             [1; 32],
             &test_revocation_key(),
         );
-        chain.append(rev, &sk, "t-audit").expect("serde deserialization should succeed");
+        chain
+            .append(rev, &sk, "t-audit")
+            .expect("serde deserialization should succeed");
 
         let events = chain.drain_events();
         assert!(
@@ -1854,7 +1931,9 @@ mod tests {
             [1; 32],
             &test_revocation_key(),
         );
-        chain.append(rev, &sk, "t-r1").expect("serde deserialization should succeed");
+        chain
+            .append(rev, &sk, "t-r1")
+            .expect("serde deserialization should succeed");
 
         // Duplicate.
         let rev2 = make_revocation(
@@ -1891,7 +1970,9 @@ mod tests {
             [1; 32],
             &test_revocation_key(),
         );
-        chain.append(rev, &sk, "t-drain").expect("serde deserialization should succeed");
+        chain
+            .append(rev, &sk, "t-drain")
+            .expect("serde deserialization should succeed");
 
         assert!(!chain.drain_events().is_empty());
         assert!(chain.drain_events().is_empty());
@@ -1910,7 +1991,8 @@ mod tests {
         ];
         for t in &types {
             let json = serde_json::to_string(t).expect("serde deserialization should succeed");
-            let restored: RevocationTargetType = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: RevocationTargetType =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*t, restored);
         }
     }
@@ -1926,7 +2008,8 @@ mod tests {
         ];
         for r in &reasons {
             let json = serde_json::to_string(r).expect("serde deserialization should succeed");
-            let restored: RevocationReason = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: RevocationReason =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*r, restored);
         }
     }
@@ -1940,7 +2023,8 @@ mod tests {
             &test_revocation_key(),
         );
         let json = serde_json::to_string(&rev).expect("serde deserialization should succeed");
-        let restored: Revocation = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: Revocation =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(rev, restored);
     }
 
@@ -1956,7 +2040,8 @@ mod tests {
         ];
         for err in &errors {
             let json = serde_json::to_string(err).expect("serde deserialization should succeed");
-            let restored: ChainError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: ChainError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, restored);
         }
     }
@@ -2016,7 +2101,9 @@ mod tests {
                 target,
                 &test_revocation_key(),
             );
-            chain.append(rev, &sk, &format!("t-large-{i}")).expect("serde deserialization should succeed");
+            chain
+                .append(rev, &sk, &format!("t-large-{i}"))
+                .expect("serde deserialization should succeed");
         }
 
         assert_eq!(chain.len(), 120);
@@ -2049,7 +2136,9 @@ mod tests {
                     [i + 150; 32],
                     &test_revocation_key(),
                 );
-                chain.append(rev, &sk, &format!("t-det-{i}")).expect("serde deserialization should succeed");
+                chain
+                    .append(rev, &sk, &format!("t-det-{i}"))
+                    .expect("serde deserialization should succeed");
             }
             *chain.chain_hash()
         };
@@ -2072,10 +2161,14 @@ mod tests {
             [1; 32],
             &test_revocation_key(),
         );
-        chain.append(rev, &sk, "t-vm").expect("serde deserialization should succeed");
+        chain
+            .append(rev, &sk, "t-vm")
+            .expect("serde deserialization should succeed");
         chain.drain_events(); // clear append events
 
-        chain.verify_chain_mut("t-vcm").expect("serde deserialization should succeed");
+        chain
+            .verify_chain_mut("t-vcm")
+            .expect("serde deserialization should succeed");
         let counts = chain.event_counts();
         assert_eq!(counts.get("chain_verified"), Some(&1));
     }
@@ -2109,7 +2202,8 @@ mod tests {
         ];
         for err in &errors {
             let json = serde_json::to_string(err).expect("serde deserialization should succeed");
-            let restored: ChainError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: ChainError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, restored);
         }
     }
@@ -2178,7 +2272,8 @@ mod tests {
             event_seq: 5,
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let restored: RevocationEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: RevocationEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, restored);
     }
 
@@ -2193,7 +2288,8 @@ mod tests {
             signature: Signature::from_bytes(SIGNATURE_SENTINEL),
         };
         let json = serde_json::to_string(&head).expect("serde deserialization should succeed");
-        let restored: RevocationHead = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: RevocationHead =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(head, restored);
     }
 
@@ -2220,7 +2316,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let restored: ChainEventType = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: ChainEventType =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, restored);
         }
     }
@@ -2236,7 +2333,8 @@ mod tests {
             trace_id: "t-serde".to_string(),
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let restored: ChainEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: ChainEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, restored);
     }
 
@@ -2282,7 +2380,9 @@ mod tests {
             [1; 32],
             &test_revocation_key(),
         );
-        chain.append(rev1, &sk, "t-h1").expect("serde deserialization should succeed");
+        chain
+            .append(rev1, &sk, "t-h1")
+            .expect("serde deserialization should succeed");
         chain.drain_events();
 
         let rev2 = make_revocation(
@@ -2291,7 +2391,9 @@ mod tests {
             [2; 32],
             &test_revocation_key(),
         );
-        chain.append(rev2, &sk, "t-h2").expect("serde deserialization should succeed");
+        chain
+            .append(rev2, &sk, "t-h2")
+            .expect("serde deserialization should succeed");
 
         let events = chain.drain_events();
         assert!(events.iter().any(|e| matches!(
@@ -2356,7 +2458,8 @@ mod tests {
             &test_revocation_key(),
         );
         let json = serde_json::to_string(&rev).expect("serde deserialization should succeed");
-        let back: Revocation = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: Revocation =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(rev, back);
     }
 
@@ -2371,8 +2474,13 @@ mod tests {
             [1; 32],
             &test_revocation_key(),
         );
-        chain.append(rev1, &sk, "trace-1").expect("serde deserialization should succeed");
-        let hash_after_first = chain.head().expect("serde deserialization should succeed").chain_hash;
+        chain
+            .append(rev1, &sk, "trace-1")
+            .expect("serde deserialization should succeed");
+        let hash_after_first = chain
+            .head()
+            .expect("serde deserialization should succeed")
+            .chain_hash;
 
         let rev2 = make_revocation(
             RevocationTargetType::Token,
@@ -2380,8 +2488,13 @@ mod tests {
             [3; 32],
             &test_revocation_key(),
         );
-        chain.append(rev2, &sk, "trace-2").expect("serde deserialization should succeed");
-        let hash_after_second = chain.head().expect("serde deserialization should succeed").chain_hash;
+        chain
+            .append(rev2, &sk, "trace-2")
+            .expect("serde deserialization should succeed");
+        let hash_after_second = chain
+            .head()
+            .expect("serde deserialization should succeed")
+            .chain_hash;
 
         assert_ne!(
             hash_after_first, hash_after_second,
@@ -2414,7 +2527,8 @@ mod tests {
             RevocationTargetType::Checkpoint,
         ] {
             let json = serde_json::to_string(&t).expect("serde deserialization should succeed");
-            let back: RevocationTargetType = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: RevocationTargetType =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(t, back);
         }
     }
@@ -2429,7 +2543,8 @@ mod tests {
             RevocationReason::Administrative,
         ] {
             let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
-            let back: RevocationReason = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: RevocationReason =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(r, back);
         }
     }
@@ -2454,8 +2569,16 @@ mod tests {
             [77; 32],
             &test_revocation_key(),
         );
-        chain.append(rev, &sk, "t-hash").expect("serde deserialization should succeed");
-        assert_eq!(chain.chain_hash(), &chain.head().expect("serde deserialization should succeed").chain_hash);
+        chain
+            .append(rev, &sk, "t-hash")
+            .expect("serde deserialization should succeed");
+        assert_eq!(
+            chain.chain_hash(),
+            &chain
+                .head()
+                .expect("serde deserialization should succeed")
+                .chain_hash
+        );
     }
 
     #[test]
@@ -2470,7 +2593,9 @@ mod tests {
             [1; 32],
             &test_revocation_key(),
         );
-        chain.append(rev1, &sk, "t-1").expect("serde deserialization should succeed");
+        chain
+            .append(rev1, &sk, "t-1")
+            .expect("serde deserialization should succeed");
 
         let rev2 = make_revocation(
             RevocationTargetType::Token,
@@ -2478,7 +2603,9 @@ mod tests {
             [2; 32],
             &test_revocation_key(),
         );
-        chain.append(rev2, &sk, "t-2").expect("serde deserialization should succeed");
+        chain
+            .append(rev2, &sk, "t-2")
+            .expect("serde deserialization should succeed");
 
         // Trigger a rejection with a duplicate
         let rev_dup = make_revocation(
@@ -2493,7 +2620,9 @@ mod tests {
         chain.is_revoked_audited(&EngineObjectId([1; 32]), "t-lk");
 
         // Verify chain
-        chain.verify_chain_mut("t-verify").expect("serde deserialization should succeed");
+        chain
+            .verify_chain_mut("t-verify")
+            .expect("serde deserialization should succeed");
 
         let counts = chain.event_counts();
         assert_eq!(counts.get("revocation_appended"), Some(&2));
@@ -2534,7 +2663,9 @@ mod tests {
                 [i + 50; 32],
                 &test_revocation_key(),
             );
-            chain.append(rev, &sk, &format!("t-{i}")).expect("serde deserialization should succeed");
+            chain
+                .append(rev, &sk, &format!("t-{i}"))
+                .expect("serde deserialization should succeed");
         }
 
         let events = chain.events();
@@ -2555,7 +2686,9 @@ mod tests {
             [1; 32],
             &test_revocation_key(),
         );
-        chain.append(rev, &sk, "t-1").expect("serde deserialization should succeed");
+        chain
+            .append(rev, &sk, "t-1")
+            .expect("serde deserialization should succeed");
 
         // Tamper: create a second event with same target_id
         let mut events = chain.events().to_vec();
@@ -2594,7 +2727,9 @@ mod tests {
             [1; 32],
             &test_revocation_key(),
         );
-        chain.append(rev1, &sk, "t-1").expect("serde deserialization should succeed");
+        chain
+            .append(rev1, &sk, "t-1")
+            .expect("serde deserialization should succeed");
 
         let rev2 = make_revocation(
             RevocationTargetType::Token,
@@ -2602,10 +2737,18 @@ mod tests {
             [2; 32],
             &test_revocation_key(),
         );
-        chain.append(rev2, &sk, "t-2").expect("serde deserialization should succeed");
+        chain
+            .append(rev2, &sk, "t-2")
+            .expect("serde deserialization should succeed");
 
-        let b1 = chain.get_event(0).expect("serde deserialization should succeed").canonical_bytes();
-        let b2 = chain.get_event(1).expect("serde deserialization should succeed").canonical_bytes();
+        let b1 = chain
+            .get_event(0)
+            .expect("serde deserialization should succeed")
+            .canonical_bytes();
+        let b2 = chain
+            .get_event(1)
+            .expect("serde deserialization should succeed")
+            .canonical_bytes();
         assert_ne!(b1, b2);
     }
 
@@ -2648,7 +2791,8 @@ mod tests {
 
     #[test]
     fn rebuild_from_empty_events_no_head_succeeds() {
-        let chain = RevocationChain::rebuild_from_events(TEST_ZONE, vec![], None).expect("serde deserialization should succeed");
+        let chain = RevocationChain::rebuild_from_events(TEST_ZONE, vec![], None)
+            .expect("serde deserialization should succeed");
         assert!(chain.is_empty());
         assert_eq!(chain.len(), 0);
         assert!(chain.head().is_none());
@@ -2743,7 +2887,9 @@ mod tests {
             [1; 32],
             &test_revocation_key(),
         );
-        chain.append(rev, &sk, "t").expect("serde deserialization should succeed");
+        chain
+            .append(rev, &sk, "t")
+            .expect("serde deserialization should succeed");
 
         let mut events = chain.events().to_vec();
         events[0].event_seq = 5; // should be 0
@@ -2769,10 +2915,15 @@ mod tests {
             [1; 32],
             &test_revocation_key(),
         );
-        chain.append(rev, &sk, "t").expect("serde deserialization should succeed");
+        chain
+            .append(rev, &sk, "t")
+            .expect("serde deserialization should succeed");
 
         let events = chain.events().to_vec();
-        let mut head = chain.head().cloned().expect("serde deserialization should succeed");
+        let mut head = chain
+            .head()
+            .cloned()
+            .expect("serde deserialization should succeed");
         head.chain_hash = ContentHash::compute(b"tampered"); // wrong hash
 
         let err = RevocationChain::rebuild_from_events(TEST_ZONE, events, Some(head)).unwrap_err();

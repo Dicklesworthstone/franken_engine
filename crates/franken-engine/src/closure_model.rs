@@ -722,9 +722,13 @@ mod tests {
         let chain = fresh_chain();
         assert_eq!(chain.depth(), 1);
         // SAFETY: Test has valid chain; current_handle succeeds in controlled test environment.
-        let handle = chain.current_handle().expect("serde deserialization should succeed");
+        let handle = chain
+            .current_handle()
+            .expect("serde deserialization should succeed");
         // SAFETY: Test uses valid handle; get_env succeeds in controlled test environment.
-        let env = chain.get_env(handle).expect("serde deserialization should succeed");
+        let env = chain
+            .get_env(handle)
+            .expect("serde deserialization should succeed");
         assert_eq!(env.scope_kind, ScopeKind::Global);
     }
 
@@ -735,7 +739,9 @@ mod tests {
         let h = chain.push_scope(block_id, ScopeKind::Block);
         assert_eq!(chain.depth(), 2);
         // SAFETY: Test has valid scope chain; pop_scope succeeds in controlled test environment.
-        let popped = chain.pop_scope().expect("serde deserialization should succeed");
+        let popped = chain
+            .pop_scope()
+            .expect("serde deserialization should succeed");
         assert_eq!(popped, h);
         assert_eq!(chain.depth(), 1);
     }
@@ -755,17 +761,25 @@ mod tests {
         let block_id = ScopeId { depth: 1, index: 0 };
         chain.push_scope(block_id, ScopeKind::Block);
         // SAFETY: Test declares valid variable; declare_var succeeds in controlled test environment.
-        chain.declare_var("x".into(), 1).expect("serde deserialization should succeed");
+        chain
+            .declare_var("x".into(), 1)
+            .expect("serde deserialization should succeed");
         // Var should be in the global scope, not the block.
         let global_handle = EnvironmentHandle(0);
         // SAFETY: Test uses valid global handle; get_env succeeds in controlled test environment.
-        let global_env = chain.get_env(global_handle).expect("serde deserialization should succeed");
+        let global_env = chain
+            .get_env(global_handle)
+            .expect("serde deserialization should succeed");
         assert!(global_env.get_binding("x").is_some());
         // Block should not have it.
         // SAFETY: Test has valid chain; current_handle succeeds in controlled test environment.
-        let block_handle = chain.current_handle().expect("serde deserialization should succeed");
+        let block_handle = chain
+            .current_handle()
+            .expect("serde deserialization should succeed");
         // SAFETY: Test uses valid handle; get_env succeeds in controlled test environment.
-        let block_env = chain.get_env(block_handle).expect("serde deserialization should succeed");
+        let block_env = chain
+            .get_env(block_handle)
+            .expect("serde deserialization should succeed");
         assert!(block_env.get_binding("x").is_none());
     }
 
@@ -777,13 +791,19 @@ mod tests {
         let block_id = ScopeId { depth: 2, index: 0 };
         chain.push_scope(block_id, ScopeKind::Block);
         // SAFETY: Test declares valid variable; declare_var succeeds in controlled test environment.
-        chain.declare_var("y".into(), 2).expect("serde deserialization should succeed");
+        chain
+            .declare_var("y".into(), 2)
+            .expect("serde deserialization should succeed");
         // Var should land in function scope, not global.
         // SAFETY: Test uses valid function handle; get_env succeeds in controlled test environment.
-        let fn_env = chain.get_env(fn_handle).expect("serde deserialization should succeed");
+        let fn_env = chain
+            .get_env(fn_handle)
+            .expect("serde deserialization should succeed");
         assert!(fn_env.get_binding("y").is_some());
         // SAFETY: Test uses valid global handle; get_env succeeds in controlled test environment.
-        let global_env = chain.get_env(EnvironmentHandle(0)).expect("serde deserialization should succeed");
+        let global_env = chain
+            .get_env(EnvironmentHandle(0))
+            .expect("serde deserialization should succeed");
         assert!(global_env.get_binding("y").is_none());
     }
 
@@ -791,11 +811,17 @@ mod tests {
     fn var_redeclaration_is_noop() {
         let mut chain = fresh_chain();
         // SAFETY: Test declares valid variable; declare_var succeeds in controlled test environment.
-        chain.declare_var("x".into(), 1).expect("serde deserialization should succeed");
+        chain
+            .declare_var("x".into(), 1)
+            .expect("serde deserialization should succeed");
         // SAFETY: Test redeclares same variable; declare_var succeeds in controlled test environment.
-        chain.declare_var("x".into(), 2).expect("serde deserialization should succeed"); // no error
+        chain
+            .declare_var("x".into(), 2)
+            .expect("serde deserialization should succeed"); // no error
         // SAFETY: Test gets declared variable; get_value succeeds in controlled test environment.
-        let val = chain.get_value("x").expect("serde deserialization should succeed");
+        let val = chain
+            .get_value("x")
+            .expect("serde deserialization should succeed");
         assert_eq!(*val, EnvValue::Undefined);
     }
 
@@ -805,7 +831,9 @@ mod tests {
     fn let_starts_in_tdz() {
         let mut chain = fresh_chain();
         // SAFETY: Test declares valid let variable; declare_let succeeds in controlled test environment.
-        chain.declare_let("a".into(), 10).expect("serde deserialization should succeed");
+        chain
+            .declare_let("a".into(), 10)
+            .expect("serde deserialization should succeed");
         let result = chain.get_value("a");
         assert!(matches!(result, Err(ScopeError::TemporalDeadZone { .. })));
     }
@@ -814,13 +842,17 @@ mod tests {
     fn let_accessible_after_init() {
         let mut chain = fresh_chain();
         // SAFETY: Test declares valid let variable; declare_let succeeds in controlled test environment.
-        chain.declare_let("a".into(), 10).expect("serde deserialization should succeed");
+        chain
+            .declare_let("a".into(), 10)
+            .expect("serde deserialization should succeed");
         // SAFETY: Test initializes valid binding; initialize_binding succeeds in controlled test environment.
         chain
             .initialize_binding("a", EnvValue::Number(42_000_000), Label::Public)
             .expect("serde deserialization should succeed");
         // SAFETY: Test gets initialized variable; get_value succeeds in controlled test environment.
-        let val = chain.get_value("a").expect("serde deserialization should succeed");
+        let val = chain
+            .get_value("a")
+            .expect("serde deserialization should succeed");
         assert_eq!(*val, EnvValue::Number(42_000_000));
     }
 
@@ -828,7 +860,9 @@ mod tests {
     fn const_assignment_after_init_fails() {
         let mut chain = fresh_chain();
         // SAFETY: Test declares valid const variable; declare_const succeeds in controlled test environment.
-        chain.declare_const("PI".into(), 20).expect("serde deserialization should succeed");
+        chain
+            .declare_const("PI".into(), 20)
+            .expect("serde deserialization should succeed");
         // SAFETY: Test initializes valid binding; initialize_binding succeeds in controlled test environment.
         chain
             .initialize_binding("PI", EnvValue::Number(3_141_593), Label::Public)
@@ -841,14 +875,18 @@ mod tests {
     fn const_value_preserved_after_failed_assignment() {
         let mut chain = fresh_chain();
         // SAFETY: Test declares valid const variable; declare_const succeeds in controlled test environment.
-        chain.declare_const("C".into(), 30).expect("serde deserialization should succeed");
+        chain
+            .declare_const("C".into(), 30)
+            .expect("serde deserialization should succeed");
         // SAFETY: Test initializes valid binding; initialize_binding succeeds in controlled test environment.
         chain
             .initialize_binding("C", EnvValue::Number(100), Label::Public)
             .expect("serde deserialization should succeed");
         let _ = chain.set_value("C", EnvValue::Number(999), Label::Public);
         // SAFETY: Test gets const value; get_value succeeds in controlled test environment.
-        let val = chain.get_value("C").expect("serde deserialization should succeed");
+        let val = chain
+            .get_value("C")
+            .expect("serde deserialization should succeed");
         assert_eq!(*val, EnvValue::Number(100));
     }
 
@@ -856,7 +894,9 @@ mod tests {
     fn let_reassignment_works() {
         let mut chain = fresh_chain();
         // SAFETY: Test declares valid let variable; declare_let succeeds in controlled test environment.
-        chain.declare_let("x".into(), 11).expect("serde deserialization should succeed");
+        chain
+            .declare_let("x".into(), 11)
+            .expect("serde deserialization should succeed");
         // SAFETY: Test initializes valid binding; initialize_binding succeeds in controlled test environment.
         chain
             .initialize_binding("x", EnvValue::Number(1), Label::Public)
@@ -866,7 +906,9 @@ mod tests {
             .set_value("x", EnvValue::Number(2), Label::Public)
             .expect("serde deserialization should succeed");
         // SAFETY: Test gets reassigned variable; get_value succeeds in controlled test environment.
-        let val = chain.get_value("x").expect("serde deserialization should succeed");
+        let val = chain
+            .get_value("x")
+            .expect("serde deserialization should succeed");
         assert_eq!(*val, EnvValue::Number(2));
     }
 
@@ -876,7 +918,9 @@ mod tests {
     fn duplicate_let_in_same_scope_fails() {
         let mut chain = fresh_chain();
         // SAFETY: Test declares valid let variable; declare_let succeeds in controlled test environment.
-        chain.declare_let("x".into(), 1).expect("serde deserialization should succeed");
+        chain
+            .declare_let("x".into(), 1)
+            .expect("serde deserialization should succeed");
         let result = chain.declare_let("x".into(), 2);
         assert!(matches!(result, Err(ScopeError::DuplicateBinding { .. })));
     }
@@ -885,7 +929,9 @@ mod tests {
     fn same_name_let_in_different_scopes_ok() {
         let mut chain = fresh_chain();
         // SAFETY: Test declares valid let variable; declare_let succeeds in controlled test environment.
-        chain.declare_let("x".into(), 1).expect("serde deserialization should succeed");
+        chain
+            .declare_let("x".into(), 1)
+            .expect("serde deserialization should succeed");
         // SAFETY: Test initializes valid binding; initialize_binding succeeds in controlled test environment.
         chain
             .initialize_binding("x", EnvValue::Number(10), Label::Public)
@@ -894,21 +940,29 @@ mod tests {
         let block_id = ScopeId { depth: 1, index: 0 };
         chain.push_scope(block_id, ScopeKind::Block);
         // SAFETY: Test declares valid let variable in inner scope; declare_let succeeds in controlled test environment.
-        chain.declare_let("x".into(), 2).expect("serde deserialization should succeed");
+        chain
+            .declare_let("x".into(), 2)
+            .expect("serde deserialization should succeed");
         // SAFETY: Test initializes valid binding; initialize_binding succeeds in controlled test environment.
         chain
             .initialize_binding("x", EnvValue::Number(20), Label::Public)
             .expect("serde deserialization should succeed");
         // Inner x shadows outer x.
         // SAFETY: Test gets inner scope variable; get_value succeeds in controlled test environment.
-        let val = chain.get_value("x").expect("serde deserialization should succeed");
+        let val = chain
+            .get_value("x")
+            .expect("serde deserialization should succeed");
         assert_eq!(*val, EnvValue::Number(20));
 
         // SAFETY: Test has valid scope; pop_scope succeeds in controlled test environment.
-        chain.pop_scope().expect("serde deserialization should succeed");
+        chain
+            .pop_scope()
+            .expect("serde deserialization should succeed");
         // Outer x is visible again.
         // SAFETY: Test gets outer scope variable; get_value succeeds in controlled test environment.
-        let val = chain.get_value("x").expect("serde deserialization should succeed");
+        let val = chain
+            .get_value("x")
+            .expect("serde deserialization should succeed");
         assert_eq!(*val, EnvValue::Number(10));
     }
 
@@ -918,7 +972,9 @@ mod tests {
     fn block_scoped_let_shadows_var() {
         let mut chain = fresh_chain();
         // SAFETY: Test declares valid var variable; declare_var succeeds in controlled test environment.
-        chain.declare_var("x".into(), 1).expect("serde deserialization should succeed");
+        chain
+            .declare_var("x".into(), 1)
+            .expect("serde deserialization should succeed");
         // SAFETY: Test sets valid value; set_value succeeds in controlled test environment.
         chain
             .set_value("x", EnvValue::Number(100), Label::Public)
@@ -927,19 +983,27 @@ mod tests {
         let block_id = ScopeId { depth: 1, index: 0 };
         chain.push_scope(block_id, ScopeKind::Block);
         // SAFETY: Test declares valid let variable in block scope; declare_let succeeds in controlled test environment.
-        chain.declare_let("x".into(), 2).expect("serde deserialization should succeed");
+        chain
+            .declare_let("x".into(), 2)
+            .expect("serde deserialization should succeed");
         // SAFETY: Test initializes valid binding; initialize_binding succeeds in controlled test environment.
         chain
             .initialize_binding("x", EnvValue::Number(200), Label::Public)
             .expect("serde deserialization should succeed");
         // SAFETY: Test gets block-scoped variable; get_value succeeds in controlled test environment.
-        let val = chain.get_value("x").expect("serde deserialization should succeed");
+        let val = chain
+            .get_value("x")
+            .expect("serde deserialization should succeed");
         assert_eq!(*val, EnvValue::Number(200));
 
         // SAFETY: Test has valid scope; pop_scope succeeds in controlled test environment.
-        chain.pop_scope().expect("serde deserialization should succeed");
+        chain
+            .pop_scope()
+            .expect("serde deserialization should succeed");
         // SAFETY: Test gets outer scope variable; get_value succeeds in controlled test environment.
-        let val = chain.get_value("x").expect("serde deserialization should succeed");
+        let val = chain
+            .get_value("x")
+            .expect("serde deserialization should succeed");
         assert_eq!(*val, EnvValue::Number(100));
     }
 
@@ -958,7 +1022,9 @@ mod tests {
     fn capture_from_enclosing_scope() {
         let mut chain = fresh_chain();
         // SAFETY: Test declares valid let variable; declare_let succeeds in controlled test environment.
-        chain.declare_let("outer".into(), 1).expect("serde deserialization should succeed");
+        chain
+            .declare_let("outer".into(), 1)
+            .expect("serde deserialization should succeed");
         // SAFETY: Test initializes valid binding; initialize_binding succeeds in controlled test environment.
         chain
             .initialize_binding("outer", EnvValue::Number(42), Label::Public)
@@ -968,7 +1034,9 @@ mod tests {
         chain.push_scope(fn_id, ScopeKind::Function);
 
         // SAFETY: Test computes valid captures; compute_captures succeeds in controlled test environment.
-        let captures = chain.compute_captures(&["outer".into()]).expect("serde deserialization should succeed");
+        let captures = chain
+            .compute_captures(&["outer".into()])
+            .expect("serde deserialization should succeed");
         assert_eq!(captures.len(), 1);
         assert_eq!(captures[0].name, "outer");
         assert_eq!(captures[0].source_scope, ScopeId { depth: 0, index: 0 });
@@ -978,7 +1046,9 @@ mod tests {
     fn closure_sees_mutations_through_captures() {
         let mut chain = fresh_chain();
         // SAFETY: Test declares valid let variable; declare_let succeeds in controlled test environment.
-        chain.declare_let("counter".into(), 1).expect("serde deserialization should succeed");
+        chain
+            .declare_let("counter".into(), 1)
+            .expect("serde deserialization should succeed");
         // SAFETY: Test initializes valid binding; initialize_binding succeeds in controlled test environment.
         chain
             .initialize_binding("counter", EnvValue::Number(0), Label::Public)
@@ -986,7 +1056,9 @@ mod tests {
 
         // Simulate closure creation — capture resolves to global env.
         // SAFETY: Test computes valid captures; compute_captures succeeds in controlled test environment.
-        let captures = chain.compute_captures(&["counter".into()]).expect("serde deserialization should succeed");
+        let captures = chain
+            .compute_captures(&["counter".into()])
+            .expect("serde deserialization should succeed");
         assert_eq!(captures[0].binding_id, 1);
 
         // Mutate from outer scope.
@@ -997,7 +1069,9 @@ mod tests {
 
         // Re-reading sees the updated value (closures share the binding).
         // SAFETY: Test gets mutated variable; get_value succeeds in controlled test environment.
-        let val = chain.get_value("counter").expect("serde deserialization should succeed");
+        let val = chain
+            .get_value("counter")
+            .expect("serde deserialization should succeed");
         assert_eq!(*val, EnvValue::Number(1));
     }
 
@@ -1019,7 +1093,9 @@ mod tests {
             .declare_function("foo".into(), 50, closure_ref.clone())
             .expect("serde deserialization should succeed");
         // SAFETY: Test gets declared function; get_value succeeds in controlled test environment.
-        let val = chain.get_value("foo").expect("serde deserialization should succeed");
+        let val = chain
+            .get_value("foo")
+            .expect("serde deserialization should succeed");
         assert_eq!(*val, closure_ref);
     }
 
@@ -1027,9 +1103,13 @@ mod tests {
     fn function_decl_overwrites_var() {
         let mut chain = fresh_chain();
         // SAFETY: Test declares valid var; declare_var succeeds in controlled test environment.
-        chain.declare_var("f".into(), 1).expect("serde deserialization should succeed");
+        chain
+            .declare_var("f".into(), 1)
+            .expect("serde deserialization should succeed");
         // SAFETY: Test gets declared var; get_value succeeds in controlled test environment.
-        let val = chain.get_value("f").expect("serde deserialization should succeed");
+        let val = chain
+            .get_value("f")
+            .expect("serde deserialization should succeed");
         assert_eq!(*val, EnvValue::Undefined);
 
         let closure_ref = EnvValue::ClosureRef(ClosureHandle(7));
@@ -1038,7 +1118,9 @@ mod tests {
             .declare_function("f".into(), 2, closure_ref.clone())
             .expect("serde deserialization should succeed");
         // SAFETY: Test gets declared function; get_value succeeds in controlled test environment.
-        let val = chain.get_value("f").expect("serde deserialization should succeed");
+        let val = chain
+            .get_value("f")
+            .expect("serde deserialization should succeed");
         assert_eq!(*val, closure_ref);
     }
 
@@ -1054,14 +1136,18 @@ mod tests {
             .declare_parameter("arg".into(), 100, EnvValue::Number(5), Label::Public)
             .expect("serde deserialization should succeed");
         // SAFETY: Test gets declared parameter; get_value succeeds in controlled test environment.
-        let val = chain.get_value("arg").expect("serde deserialization should succeed");
+        let val = chain
+            .get_value("arg")
+            .expect("serde deserialization should succeed");
         assert_eq!(*val, EnvValue::Number(5));
         // SAFETY: Test sets valid parameter value; set_value succeeds in controlled test environment.
         chain
             .set_value("arg", EnvValue::Number(10), Label::Public)
             .expect("serde deserialization should succeed");
         // SAFETY: Test gets updated parameter; get_value succeeds in controlled test environment.
-        let val = chain.get_value("arg").expect("serde deserialization should succeed");
+        let val = chain
+            .get_value("arg")
+            .expect("serde deserialization should succeed");
         assert_eq!(*val, EnvValue::Number(10));
     }
 
@@ -1071,18 +1157,26 @@ mod tests {
     fn ifc_label_propagates_on_init() {
         let mut chain = fresh_chain();
         // SAFETY: Test declares valid let variable; declare_let succeeds in controlled test environment.
-        chain.declare_let("secret".into(), 1).expect("serde deserialization should succeed");
+        chain
+            .declare_let("secret".into(), 1)
+            .expect("serde deserialization should succeed");
         // SAFETY: Test initializes valid binding with secret label; initialize_binding succeeds in controlled test environment.
         chain
             .initialize_binding("secret", EnvValue::Str("key".into()), Label::Secret)
             .expect("serde deserialization should succeed");
         // SAFETY: Test has valid chain; current_handle succeeds in controlled test environment.
-        let handle = chain.current_handle().expect("serde deserialization should succeed");
+        let handle = chain
+            .current_handle()
+            .expect("serde deserialization should succeed");
         // SAFETY: Test uses valid handle; get_env succeeds in controlled test environment.
-        let env = chain.get_env(handle).expect("serde deserialization should succeed");
+        let env = chain
+            .get_env(handle)
+            .expect("serde deserialization should succeed");
         assert!(env.max_label >= Label::Secret);
         // SAFETY: Test gets declared binding; get_binding succeeds in controlled test environment.
-        let slot = env.get_binding("secret").expect("serde deserialization should succeed");
+        let slot = env
+            .get_binding("secret")
+            .expect("serde deserialization should succeed");
         assert_eq!(slot.label, Label::Secret);
     }
 
@@ -1090,7 +1184,9 @@ mod tests {
     fn ifc_label_propagates_on_set() {
         let mut chain = fresh_chain();
         // SAFETY: Test declares valid var; declare_var succeeds in controlled test environment.
-        chain.declare_var("data".into(), 1).expect("serde deserialization should succeed");
+        chain
+            .declare_var("data".into(), 1)
+            .expect("serde deserialization should succeed");
         // SAFETY: Test sets valid confidential value; set_value succeeds in controlled test environment.
         chain
             .set_value(
@@ -1100,7 +1196,9 @@ mod tests {
             )
             .expect("serde deserialization should succeed");
         // SAFETY: Test gets global environment; get_env succeeds in controlled test environment.
-        let global = chain.get_env(EnvironmentHandle(0)).expect("serde deserialization should succeed");
+        let global = chain
+            .get_env(EnvironmentHandle(0))
+            .expect("serde deserialization should succeed");
         assert!(global.max_label >= Label::Confidential);
     }
 
@@ -1108,7 +1206,9 @@ mod tests {
     fn capture_carries_ifc_label() {
         let mut chain = fresh_chain();
         // SAFETY: Test declares valid let variable; declare_let succeeds in controlled test environment.
-        chain.declare_let("classified".into(), 1).expect("serde deserialization should succeed");
+        chain
+            .declare_let("classified".into(), 1)
+            .expect("serde deserialization should succeed");
         // SAFETY: Test initializes valid confidential binding; initialize_binding succeeds in controlled test environment.
         chain
             .initialize_binding(
@@ -1121,7 +1221,9 @@ mod tests {
         let fn_id = ScopeId { depth: 1, index: 0 };
         chain.push_scope(fn_id, ScopeKind::Function);
         // SAFETY: Test computes valid captures; compute_captures succeeds in controlled test environment.
-        let captures = chain.compute_captures(&["classified".into()]).expect("serde deserialization should succeed");
+        let captures = chain
+            .compute_captures(&["classified".into()])
+            .expect("serde deserialization should succeed");
         assert_eq!(captures[0].label, Label::Confidential);
     }
 
@@ -1131,7 +1233,9 @@ mod tests {
     fn nested_scope_chain_traversal() {
         let mut chain = fresh_chain();
         // SAFETY: Test declares valid var; declare_var succeeds in controlled test environment.
-        chain.declare_var("a".into(), 1).expect("serde deserialization should succeed");
+        chain
+            .declare_var("a".into(), 1)
+            .expect("serde deserialization should succeed");
         // SAFETY: Test sets valid value; set_value succeeds in controlled test environment.
         chain
             .set_value("a", EnvValue::Number(1), Label::Public)
@@ -1140,7 +1244,9 @@ mod tests {
         let fn_id = ScopeId { depth: 1, index: 0 };
         chain.push_scope(fn_id, ScopeKind::Function);
         // SAFETY: Test declares valid let variable in function scope; declare_let succeeds in controlled test environment.
-        chain.declare_let("b".into(), 2).expect("serde deserialization should succeed");
+        chain
+            .declare_let("b".into(), 2)
+            .expect("serde deserialization should succeed");
         // SAFETY: Test initializes valid binding; initialize_binding succeeds in controlled test environment.
         chain
             .initialize_binding("b", EnvValue::Number(2), Label::Public)
@@ -1149,7 +1255,9 @@ mod tests {
         let block_id = ScopeId { depth: 2, index: 0 };
         chain.push_scope(block_id, ScopeKind::Block);
         // SAFETY: Test declares valid let variable in block scope; declare_let succeeds in controlled test environment.
-        chain.declare_let("c".into(), 3).expect("serde deserialization should succeed");
+        chain
+            .declare_let("c".into(), 3)
+            .expect("serde deserialization should succeed");
         // SAFETY: Test initializes valid binding; initialize_binding succeeds in controlled test environment.
         chain
             .initialize_binding("c", EnvValue::Number(3), Label::Public)
@@ -1157,18 +1265,35 @@ mod tests {
 
         // All three variables visible from innermost scope.
         // SAFETY: Test gets variable from outer scope; get_value succeeds in controlled test environment.
-        assert_eq!(*chain.get_value("a").expect("serde deserialization should succeed"), EnvValue::Number(1));
+        assert_eq!(
+            *chain
+                .get_value("a")
+                .expect("serde deserialization should succeed"),
+            EnvValue::Number(1)
+        );
         // SAFETY: Test gets variable from function scope; get_value succeeds in controlled test environment.
-        assert_eq!(*chain.get_value("b").expect("serde deserialization should succeed"), EnvValue::Number(2));
+        assert_eq!(
+            *chain
+                .get_value("b")
+                .expect("serde deserialization should succeed"),
+            EnvValue::Number(2)
+        );
         // SAFETY: Test gets variable from current scope; get_value succeeds in controlled test environment.
-        assert_eq!(*chain.get_value("c").expect("serde deserialization should succeed"), EnvValue::Number(3));
+        assert_eq!(
+            *chain
+                .get_value("c")
+                .expect("serde deserialization should succeed"),
+            EnvValue::Number(3)
+        );
     }
 
     #[test]
     fn nested_closure_captures_multiple_scopes() {
         let mut chain = fresh_chain();
         // SAFETY: Test declares valid let variable; declare_let succeeds in controlled test environment.
-        chain.declare_let("outer".into(), 1).expect("serde deserialization should succeed");
+        chain
+            .declare_let("outer".into(), 1)
+            .expect("serde deserialization should succeed");
         // SAFETY: Test initializes valid binding; initialize_binding succeeds in controlled test environment.
         chain
             .initialize_binding("outer", EnvValue::Number(10), Label::Public)
@@ -1177,7 +1302,9 @@ mod tests {
         let fn_id = ScopeId { depth: 1, index: 0 };
         chain.push_scope(fn_id, ScopeKind::Function);
         // SAFETY: Test declares valid let variable in function scope; declare_let succeeds in controlled test environment.
-        chain.declare_let("middle".into(), 2).expect("serde deserialization should succeed");
+        chain
+            .declare_let("middle".into(), 2)
+            .expect("serde deserialization should succeed");
         // SAFETY: Test initializes valid binding with internal label; initialize_binding succeeds in controlled test environment.
         chain
             .initialize_binding("middle", EnvValue::Number(20), Label::Internal)
@@ -1264,7 +1391,8 @@ mod tests {
             // SAFETY: Test serializes known-valid EnvValue; to_string succeeds in controlled test environment.
             let json = serde_json::to_string(val).expect("serde deserialization should succeed");
             // SAFETY: Test deserializes self-generated JSON; from_str succeeds in controlled test environment.
-            let back: EnvValue = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: EnvValue =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, val);
         }
     }
@@ -1275,7 +1403,8 @@ mod tests {
         // SAFETY: Test serializes known-valid BindingSlot; to_string succeeds in controlled test environment.
         let json = serde_json::to_string(&slot).expect("serde deserialization should succeed");
         // SAFETY: Test deserializes self-generated JSON; from_str succeeds in controlled test environment.
-        let back: BindingSlot = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: BindingSlot =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, slot);
     }
 
@@ -1298,7 +1427,8 @@ mod tests {
         // SAFETY: Test serializes known-valid Closure; to_string succeeds in controlled test environment.
         let json = serde_json::to_string(&closure).expect("serde deserialization should succeed");
         // SAFETY: Test deserializes self-generated JSON; from_str succeeds in controlled test environment.
-        let back: Closure = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: Closure =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, closure);
     }
 
@@ -1361,10 +1491,14 @@ mod tests {
         let fn_id = ScopeId { depth: 1, index: 0 };
         let fn_handle = chain.push_scope(fn_id, ScopeKind::Function);
         // SAFETY: Test gets valid environment handle; get_env_mut succeeds in controlled test environment.
-        let env = chain.get_env_mut(fn_handle).expect("serde deserialization should succeed");
+        let env = chain
+            .get_env_mut(fn_handle)
+            .expect("serde deserialization should succeed");
         env.this_binding = Some(EnvValue::ObjectRef(99));
         // SAFETY: Test gets valid environment handle; get_env succeeds in controlled test environment.
-        let env = chain.get_env(fn_handle).expect("serde deserialization should succeed");
+        let env = chain
+            .get_env(fn_handle)
+            .expect("serde deserialization should succeed");
         assert_eq!(env.this_binding, Some(EnvValue::ObjectRef(99)));
     }
 
@@ -1376,17 +1510,23 @@ mod tests {
         let catch_id = ScopeId { depth: 1, index: 0 };
         chain.push_scope(catch_id, ScopeKind::Catch);
         // SAFETY: Test declares valid let binding; declare_let succeeds in controlled test environment.
-        chain.declare_let("err".into(), 1).expect("serde deserialization should succeed");
+        chain
+            .declare_let("err".into(), 1)
+            .expect("serde deserialization should succeed");
         // SAFETY: Test initializes valid declared binding; initialize_binding succeeds in controlled test environment.
         chain
             .initialize_binding("err", EnvValue::Str("oops".into()), Label::Public)
             .expect("serde deserialization should succeed");
         // SAFETY: Test gets valid initialized binding; get_value succeeds in controlled test environment.
-        let val = chain.get_value("err").expect("serde deserialization should succeed");
+        let val = chain
+            .get_value("err")
+            .expect("serde deserialization should succeed");
         assert_eq!(*val, EnvValue::Str("oops".into()));
         // Catch is not a var scope.
         // SAFETY: Test pops valid non-empty scope chain; pop_scope succeeds in controlled test environment.
-        chain.pop_scope().expect("serde deserialization should succeed");
+        chain
+            .pop_scope()
+            .expect("serde deserialization should succeed");
         let result = chain.get_value("err");
         assert!(result.is_err());
     }
@@ -1401,11 +1541,15 @@ mod tests {
         let block_id = ScopeId { depth: 2, index: 0 };
         chain.push_scope(block_id, ScopeKind::Block);
         // SAFETY: Test declares valid var binding; declare_var succeeds in controlled test environment.
-        chain.declare_var("modVar".into(), 1).expect("serde deserialization should succeed");
+        chain
+            .declare_var("modVar".into(), 1)
+            .expect("serde deserialization should succeed");
         // Should be in the module scope, not global.
         let mod_handle = EnvironmentHandle(1);
         // SAFETY: Test gets valid environment handle; get_env succeeds in controlled test environment.
-        let mod_env = chain.get_env(mod_handle).expect("serde deserialization should succeed");
+        let mod_env = chain
+            .get_env(mod_handle)
+            .expect("serde deserialization should succeed");
         assert!(mod_env.get_binding("modVar").is_some());
     }
 
@@ -1415,7 +1559,9 @@ mod tests {
     fn write_to_tdz_binding_fails() {
         let mut chain = fresh_chain();
         // SAFETY: Test declares valid let binding; declare_let succeeds in controlled test environment.
-        chain.declare_let("x".into(), 1).expect("serde deserialization should succeed");
+        chain
+            .declare_let("x".into(), 1)
+            .expect("serde deserialization should succeed");
         let result = chain.set_value("x", EnvValue::Number(1), Label::Public);
         assert!(matches!(result, Err(ScopeError::TemporalDeadZone { .. })));
     }
@@ -1434,23 +1580,31 @@ mod tests {
     fn resolve_binding_identifies_correct_scope() {
         let mut chain = fresh_chain();
         // SAFETY: Test declares valid var binding; declare_var succeeds in controlled test environment.
-        chain.declare_var("global_var".into(), 1).expect("serde deserialization should succeed");
+        chain
+            .declare_var("global_var".into(), 1)
+            .expect("serde deserialization should succeed");
 
         let fn_id = ScopeId { depth: 1, index: 0 };
         chain.push_scope(fn_id, ScopeKind::Function);
         // SAFETY: Test declares valid let binding; declare_let succeeds in controlled test environment.
-        chain.declare_let("fn_local".into(), 2).expect("serde deserialization should succeed");
+        chain
+            .declare_let("fn_local".into(), 2)
+            .expect("serde deserialization should succeed");
         // SAFETY: Test initializes valid declared binding; initialize_binding succeeds in controlled test environment.
         chain
             .initialize_binding("fn_local", EnvValue::Number(1), Label::Public)
             .expect("serde deserialization should succeed");
 
         // SAFETY: Test resolves valid declared binding; resolve_binding succeeds in controlled test environment.
-        let (_, scope) = chain.resolve_binding("global_var").expect("serde deserialization should succeed");
+        let (_, scope) = chain
+            .resolve_binding("global_var")
+            .expect("serde deserialization should succeed");
         assert_eq!(scope, ScopeId { depth: 0, index: 0 });
 
         // SAFETY: Test resolves valid declared binding; resolve_binding succeeds in controlled test environment.
-        let (_, scope) = chain.resolve_binding("fn_local").expect("serde deserialization should succeed");
+        let (_, scope) = chain
+            .resolve_binding("fn_local")
+            .expect("serde deserialization should succeed");
         assert_eq!(scope, fn_id);
     }
 
@@ -1493,7 +1647,8 @@ mod tests {
             // SAFETY: Test serializes known-valid ScopeError; to_string succeeds in controlled test environment.
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
             // SAFETY: Test deserializes self-generated JSON; from_str succeeds in controlled test environment.
-            let back: ScopeError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ScopeError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -1539,9 +1694,21 @@ mod tests {
         assert_eq!(store.len(), 2);
         assert_ne!(h1, h2);
         // SAFETY: Test gets valid closure handle; get succeeds in controlled test environment.
-        assert_eq!(store.get(h1).expect("serde deserialization should succeed").name, "f1");
+        assert_eq!(
+            store
+                .get(h1)
+                .expect("serde deserialization should succeed")
+                .name,
+            "f1"
+        );
         // SAFETY: Test gets valid closure handle; get succeeds in controlled test environment.
-        assert_eq!(store.get(h2).expect("serde deserialization should succeed").name, "f2");
+        assert_eq!(
+            store
+                .get(h2)
+                .expect("serde deserialization should succeed")
+                .name,
+            "f2"
+        );
     }
 
     #[test]
@@ -1555,7 +1722,8 @@ mod tests {
         // SAFETY: Test serializes known-valid EnvironmentRecord; to_string succeeds in controlled test environment.
         let json = serde_json::to_string(&env).expect("serde deserialization should succeed");
         // SAFETY: Test deserializes self-generated JSON; from_str succeeds in controlled test environment.
-        let back: EnvironmentRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: EnvironmentRecord =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(env.scope_kind, back.scope_kind);
         assert_eq!(env.env_kind, back.env_kind);
     }
@@ -1573,7 +1741,8 @@ mod tests {
         // SAFETY: Test serializes known-valid ClosureHandle; to_string succeeds in controlled test environment.
         let json = serde_json::to_string(&h).expect("serde deserialization should succeed");
         // SAFETY: Test deserializes self-generated JSON; from_str succeeds in controlled test environment.
-        let back: ClosureHandle = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ClosureHandle =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(h, back);
     }
 
@@ -1708,7 +1877,9 @@ mod tests {
     fn enrichment_scope_chain_serde_roundtrip() {
         let mut chain = fresh_chain();
         // SAFETY: Test declares valid var binding; declare_var succeeds in controlled test environment.
-        chain.declare_var("g".into(), 1).expect("serde deserialization should succeed");
+        chain
+            .declare_var("g".into(), 1)
+            .expect("serde deserialization should succeed");
         // SAFETY: Test sets value for valid declared binding; set_value succeeds in controlled test environment.
         chain
             .set_value("g", EnvValue::Number(1_000_000), Label::Public)
@@ -1716,7 +1887,9 @@ mod tests {
         let fn_id = ScopeId { depth: 1, index: 0 };
         chain.push_scope(fn_id, ScopeKind::Function);
         // SAFETY: Test declares valid let binding; declare_let succeeds in controlled test environment.
-        chain.declare_let("local".into(), 2).expect("serde deserialization should succeed");
+        chain
+            .declare_let("local".into(), 2)
+            .expect("serde deserialization should succeed");
         // SAFETY: Test initializes valid declared binding; initialize_binding succeeds in controlled test environment.
         chain
             .initialize_binding("local", EnvValue::Str("hello".into()), Label::Internal)
@@ -1724,14 +1897,19 @@ mod tests {
         // SAFETY: Test serializes known-valid ScopeChain; to_string succeeds in controlled test environment.
         let json = serde_json::to_string(&chain).expect("serde deserialization should succeed");
         // SAFETY: Test deserializes self-generated JSON; from_str succeeds in controlled test environment.
-        let back: ScopeChain = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ScopeChain =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.depth(), chain.depth());
         // Verify bindings survived the round-trip.
         // SAFETY: Test gets valid round-tripped binding; get_value succeeds in controlled test environment.
-        let val = back.get_value("g").expect("serde deserialization should succeed");
+        let val = back
+            .get_value("g")
+            .expect("serde deserialization should succeed");
         assert_eq!(*val, EnvValue::Number(1_000_000));
         // SAFETY: Test gets valid round-tripped binding; get_value succeeds in controlled test environment.
-        let val = back.get_value("local").expect("serde deserialization should succeed");
+        let val = back
+            .get_value("local")
+            .expect("serde deserialization should succeed");
         assert_eq!(*val, EnvValue::Str("hello".into()));
     }
 
@@ -2108,10 +2286,12 @@ mod tests {
     fn clone_independence_scope_chain() {
         let mut a = fresh_chain();
         // SAFETY: Test declares valid var binding; declare_var succeeds in controlled test environment.
-        a.declare_var("v".into(), 1).expect("serde deserialization should succeed");
+        a.declare_var("v".into(), 1)
+            .expect("serde deserialization should succeed");
         let mut b = a.clone();
         // SAFETY: Test declares valid let binding; declare_let succeeds in controlled test environment.
-        b.declare_let("extra".into(), 2).expect("serde deserialization should succeed");
+        b.declare_let("extra".into(), 2)
+            .expect("serde deserialization should succeed");
         // a should not have the new binding
         assert!(a.get_value("extra").is_err());
         assert!(b.get_value("v").is_ok());
@@ -2175,7 +2355,8 @@ mod tests {
             // SAFETY: Test serializes known-valid EnvironmentKind; to_string succeeds in controlled test environment.
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
             // SAFETY: Test deserializes self-generated JSON; from_str succeeds in controlled test environment.
-            let back: EnvironmentKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: EnvironmentKind =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -2191,7 +2372,8 @@ mod tests {
         // SAFETY: Test serializes known-valid ClosureCapture; to_string succeeds in controlled test environment.
         let json = serde_json::to_string(&cap).expect("serde deserialization should succeed");
         // SAFETY: Test deserializes self-generated JSON; from_str succeeds in controlled test environment.
-        let back: ClosureCapture = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ClosureCapture =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cap, back);
     }
 
@@ -2214,15 +2396,28 @@ mod tests {
         // SAFETY: Test serializes known-valid ClosureStore; to_string succeeds in controlled test environment.
         let json = serde_json::to_string(&store).expect("serde deserialization should succeed");
         // SAFETY: Test deserializes self-generated JSON; from_str succeeds in controlled test environment.
-        let back: ClosureStore = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ClosureStore =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.len(), 2);
         // SAFETY: Test gets valid closure handle from round-tripped store; get succeeds in controlled test environment.
-        assert_eq!(back.get(ClosureHandle(0)).expect("serde deserialization should succeed").name, "f");
-        // SAFETY: Test gets valid closure handle from round-tripped store; get succeeds in controlled test environment.
-        assert_eq!(back.get(ClosureHandle(1)).expect("serde deserialization should succeed").name, "g");
+        assert_eq!(
+            back.get(ClosureHandle(0))
+                .expect("serde deserialization should succeed")
+                .name,
+            "f"
+        );
         // SAFETY: Test gets valid closure handle from round-tripped store; get succeeds in controlled test environment.
         assert_eq!(
-            back.get(ClosureHandle(1)).expect("serde deserialization should succeed").max_capture_label,
+            back.get(ClosureHandle(1))
+                .expect("serde deserialization should succeed")
+                .name,
+            "g"
+        );
+        // SAFETY: Test gets valid closure handle from round-tripped store; get succeeds in controlled test environment.
+        assert_eq!(
+            back.get(ClosureHandle(1))
+                .expect("serde deserialization should succeed")
+                .max_capture_label,
             Label::Confidential
         );
     }
@@ -2237,7 +2432,8 @@ mod tests {
         // SAFETY: Test serializes known-valid ScopeError; to_string succeeds in controlled test environment.
         let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
         // SAFETY: Test deserializes self-generated JSON; from_str succeeds in controlled test environment.
-        let back: ScopeError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ScopeError =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, back);
     }
 
@@ -2256,13 +2452,17 @@ mod tests {
         let min_val = EnvValue::Number(i64::MIN);
         let max_val = EnvValue::Number(i64::MAX);
         // SAFETY: Test serializes known-valid EnvValue; to_string succeeds in controlled test environment.
-        let json_min = serde_json::to_string(&min_val).expect("serde deserialization should succeed");
+        let json_min =
+            serde_json::to_string(&min_val).expect("serde deserialization should succeed");
         // SAFETY: Test serializes known-valid EnvValue; to_string succeeds in controlled test environment.
-        let json_max = serde_json::to_string(&max_val).expect("serde deserialization should succeed");
+        let json_max =
+            serde_json::to_string(&max_val).expect("serde deserialization should succeed");
         // SAFETY: Test deserializes self-generated JSON; from_str succeeds in controlled test environment.
-        let back_min: EnvValue = serde_json::from_str(&json_min).expect("serde deserialization should succeed");
+        let back_min: EnvValue =
+            serde_json::from_str(&json_min).expect("serde deserialization should succeed");
         // SAFETY: Test deserializes self-generated JSON; from_str succeeds in controlled test environment.
-        let back_max: EnvValue = serde_json::from_str(&json_max).expect("serde deserialization should succeed");
+        let back_max: EnvValue =
+            serde_json::from_str(&json_max).expect("serde deserialization should succeed");
         assert_eq!(back_min, min_val);
         assert_eq!(back_max, max_val);
     }
@@ -2290,7 +2490,8 @@ mod tests {
         // SAFETY: Test serializes known-valid ClosureHandle; to_string succeeds in controlled test environment.
         let json = serde_json::to_string(&h).expect("serde deserialization should succeed");
         // SAFETY: Test deserializes self-generated JSON; from_str succeeds in controlled test environment.
-        let back: ClosureHandle = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ClosureHandle =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(h, back);
     }
 
@@ -2301,7 +2502,8 @@ mod tests {
         // SAFETY: Test serializes known-valid ClosureHandle; to_string succeeds in controlled test environment.
         let json = serde_json::to_string(&h).expect("serde deserialization should succeed");
         // SAFETY: Test deserializes self-generated JSON; from_str succeeds in controlled test environment.
-        let back: ClosureHandle = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ClosureHandle =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(h, back);
     }
 
@@ -2321,14 +2523,20 @@ mod tests {
         assert_eq!(chain.depth(), 51); // 1 global + 50 blocks
         // Declare var in deepest — should hoist to global
         // SAFETY: Test declares valid var binding; declare_var succeeds in controlled test environment.
-        chain.declare_var("deep".into(), 1).expect("serde deserialization should succeed");
+        chain
+            .declare_var("deep".into(), 1)
+            .expect("serde deserialization should succeed");
         // SAFETY: Test gets valid global environment handle; get_env succeeds in controlled test environment.
-        let global = chain.get_env(EnvironmentHandle(0)).expect("serde deserialization should succeed");
+        let global = chain
+            .get_env(EnvironmentHandle(0))
+            .expect("serde deserialization should succeed");
         assert!(global.get_binding("deep").is_some());
         // Pop all
         for _ in 0..50 {
             // SAFETY: Test pops valid non-empty scope chain; pop_scope succeeds in controlled test environment.
-            chain.pop_scope().expect("serde deserialization should succeed");
+            chain
+                .pop_scope()
+                .expect("serde deserialization should succeed");
         }
         assert_eq!(chain.depth(), 1);
     }
@@ -2339,14 +2547,22 @@ mod tests {
         for i in 0..100u32 {
             let name = format!("v{i}");
             // SAFETY: Test declares valid var binding; declare_var succeeds in controlled test environment.
-            chain.declare_var(name, i).expect("serde deserialization should succeed");
+            chain
+                .declare_var(name, i)
+                .expect("serde deserialization should succeed");
         }
         // SAFETY: Test gets valid global environment handle; get_env succeeds in controlled test environment.
-        let global = chain.get_env(EnvironmentHandle(0)).expect("serde deserialization should succeed");
+        let global = chain
+            .get_env(EnvironmentHandle(0))
+            .expect("serde deserialization should succeed");
         assert_eq!(global.bindings.len(), 100);
         // BTreeMap keeps them sorted
         // SAFETY: Test gets first key from non-empty BTreeMap; next succeeds in controlled test environment.
-        let first_key = global.bindings.keys().next().expect("serde deserialization should succeed");
+        let first_key = global
+            .bindings
+            .keys()
+            .next()
+            .expect("serde deserialization should succeed");
         assert_eq!(first_key, "v0");
     }
 
@@ -2356,7 +2572,8 @@ mod tests {
         // SAFETY: Test serializes known-valid ScopeId; to_string succeeds in controlled test environment.
         let json = serde_json::to_string(&sid).expect("serde deserialization should succeed");
         // SAFETY: Test deserializes self-generated JSON; from_str succeeds in controlled test environment.
-        let back: ScopeId = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ScopeId =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(sid, back);
     }
 
@@ -2366,7 +2583,9 @@ mod tests {
     fn duplicate_const_in_same_scope_fails() {
         let mut chain = fresh_chain();
         // SAFETY: Test declares valid const binding; declare_const succeeds in controlled test environment.
-        chain.declare_const("C".into(), 1).expect("serde deserialization should succeed");
+        chain
+            .declare_const("C".into(), 1)
+            .expect("serde deserialization should succeed");
         let result = chain.declare_const("C".into(), 2);
         assert!(matches!(result, Err(ScopeError::DuplicateBinding { .. })));
     }

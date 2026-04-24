@@ -749,7 +749,8 @@ mod tests {
     fn surface_serde_all() {
         for s in SupportSurface::ALL {
             let json = serde_json::to_string(s).expect("serde deserialization should succeed");
-            let back: SupportSurface = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: SupportSurface =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*s, back);
         }
     }
@@ -778,7 +779,8 @@ mod tests {
     fn obstruction_kind_serde() {
         for k in ObstructionKind::ALL {
             let json = serde_json::to_string(k).expect("serde deserialization should succeed");
-            let back: ObstructionKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ObstructionKind =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*k, back);
         }
     }
@@ -823,7 +825,8 @@ mod tests {
     fn cert_serde() {
         let c = clean_cert(SupportSurface::Throughput);
         let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
-        let back: DescentCertificate = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DescentCertificate =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c, back);
     }
 
@@ -869,7 +872,8 @@ mod tests {
     fn rejection_serde() {
         let r = GateRejection::ActiveObstructions { count: 3 };
         let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
-        let back: GateRejection = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GateRejection =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 
@@ -912,7 +916,8 @@ mod tests {
             reasons: vec![GateRejection::NoCertificate],
         };
         let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
-        let back: GateVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GateVerdict =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, back);
     }
 
@@ -1034,7 +1039,8 @@ mod tests {
         ];
         let r = GateReport::new(epoch(), verdicts);
         let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
-        let back: GateReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GateReport =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 
@@ -1108,7 +1114,8 @@ mod tests {
             description: "stuck".into(),
         };
         let json = serde_json::to_string(&obs).expect("serde deserialization should succeed");
-        let back: Obstruction = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: Obstruction =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(obs, back);
     }
 
@@ -1116,7 +1123,8 @@ mod tests {
     fn support_claim_serde() {
         let claim = latency_claim();
         let json = serde_json::to_string(&claim).expect("serde deserialization should succeed");
-        let back: SupportClaim = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SupportClaim =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(claim, back);
     }
 
@@ -1126,7 +1134,8 @@ mod tests {
             claim_id: "test".into(),
         };
         let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
-        let back: GateVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GateVerdict =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, back);
     }
 
@@ -1213,7 +1222,8 @@ mod tests {
             GateRejection::ActiveObstructions { count: 5 },
         ] {
             let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
-            let back: GateRejection = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: GateRejection =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(r, back);
         }
     }
@@ -1236,7 +1246,8 @@ mod tests {
     fn gate_serde() {
         let gate = DescentGate::with_defaults();
         let json = serde_json::to_string(&gate).expect("serde deserialization should succeed");
-        let back: DescentGate = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DescentGate =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(gate, back);
     }
 }

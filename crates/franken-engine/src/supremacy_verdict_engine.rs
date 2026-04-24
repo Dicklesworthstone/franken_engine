@@ -1322,7 +1322,8 @@ mod tests {
         let measurements: Vec<_> = (0..5)
             .map(|_| make_measurement("cell_a", 500, 1000))
             .collect();
-        let report = evaluate_supremacy(&measurements, &config, &epoch(), 1000).expect("serde deserialization should succeed");
+        let report = evaluate_supremacy(&measurements, &config, &epoch(), 1000)
+            .expect("serde deserialization should succeed");
         assert_eq!(report.cell_verdicts.len(), 1);
         assert_eq!(
             report.cell_verdicts[0].verdict,
@@ -1341,7 +1342,8 @@ mod tests {
         let measurements: Vec<_> = (0..50)
             .map(|_| make_measurement("cell_a", 500, 1000))
             .collect();
-        let report = evaluate_supremacy(&measurements, &config, &epoch(), 1000).expect("serde deserialization should succeed");
+        let report = evaluate_supremacy(&measurements, &config, &epoch(), 1000)
+            .expect("serde deserialization should succeed");
         let cv = &report.cell_verdicts[0];
         assert_eq!(cv.verdict, SupremacyVerdict::Confirmed);
         assert!(cv.effect_size > 0);
@@ -1356,7 +1358,8 @@ mod tests {
         let measurements: Vec<_> = (0..50)
             .map(|_| make_measurement("cell_a", 1000, 500))
             .collect();
-        let report = evaluate_supremacy(&measurements, &config, &epoch(), 1000).expect("serde deserialization should succeed");
+        let report = evaluate_supremacy(&measurements, &config, &epoch(), 1000)
+            .expect("serde deserialization should succeed");
         let cv = &report.cell_verdicts[0];
         assert_eq!(cv.verdict, SupremacyVerdict::Rejected);
         assert!(
@@ -1377,7 +1380,8 @@ mod tests {
         for m in measurements.iter_mut().take(3) {
             m.crash_observed = true;
         }
-        let report = evaluate_supremacy(&measurements, &config, &epoch(), 1000).expect("serde deserialization should succeed");
+        let report = evaluate_supremacy(&measurements, &config, &epoch(), 1000)
+            .expect("serde deserialization should succeed");
         let cv = &report.cell_verdicts[0];
         assert!(!cv.violations.is_empty());
         assert!(
@@ -1396,7 +1400,8 @@ mod tests {
         let measurements: Vec<_> = (0..30)
             .map(|_| make_measurement("cell_a", 500, 1000))
             .collect();
-        let report = evaluate_supremacy(&measurements, &config, &epoch(), 1000).expect("serde deserialization should succeed");
+        let report = evaluate_supremacy(&measurements, &config, &epoch(), 1000)
+            .expect("serde deserialization should succeed");
         let cv = &report.cell_verdicts[0];
         assert!(
             cv.violations
@@ -1421,7 +1426,8 @@ mod tests {
             measurements.push(make_measurement("cell_a", 500, 1000));
             measurements.push(make_measurement("cell_b", 500, 1000));
         }
-        let report = evaluate_supremacy(&measurements, &config, &epoch(), 1000).expect("serde deserialization should succeed");
+        let report = evaluate_supremacy(&measurements, &config, &epoch(), 1000)
+            .expect("serde deserialization should succeed");
         assert_eq!(report.cell_verdicts.len(), 2);
         assert_eq!(report.board_verdict, SupremacyVerdict::Confirmed);
         assert_eq!(report.confirmed_fraction, MILLIONTHS);
@@ -1446,7 +1452,8 @@ mod tests {
         for _ in 0..30 {
             measurements.push(make_measurement("cell_c", 2000, 1000));
         }
-        let report = evaluate_supremacy(&measurements, &config, &epoch(), 1000).expect("serde deserialization should succeed");
+        let report = evaluate_supremacy(&measurements, &config, &epoch(), 1000)
+            .expect("serde deserialization should succeed");
         // Only 1/3 confirmed = 33%, below 80%
         assert_eq!(report.board_verdict, SupremacyVerdict::Rejected);
         assert!(
@@ -1462,7 +1469,8 @@ mod tests {
         let measurements: Vec<_> = (0..5)
             .map(|_| make_measurement("cell_a", 500, 1000))
             .collect();
-        let report = evaluate_supremacy(&measurements, &config, &epoch(), 12345).expect("serde deserialization should succeed");
+        let report = evaluate_supremacy(&measurements, &config, &epoch(), 12345)
+            .expect("serde deserialization should succeed");
         assert_eq!(report.receipt.schema_version, SCHEMA_VERSION);
         assert_eq!(report.receipt.component, COMPONENT);
         assert_eq!(report.receipt.bead_id, BEAD_ID);
@@ -1477,8 +1485,10 @@ mod tests {
         let measurements: Vec<_> = (0..10)
             .map(|_| make_measurement("cell_a", 500, 1000))
             .collect();
-        let r1 = evaluate_supremacy(&measurements, &config, &epoch(), 1000).expect("serde deserialization should succeed");
-        let r2 = evaluate_supremacy(&measurements, &config, &epoch(), 1000).expect("serde deserialization should succeed");
+        let r1 = evaluate_supremacy(&measurements, &config, &epoch(), 1000)
+            .expect("serde deserialization should succeed");
+        let r2 = evaluate_supremacy(&measurements, &config, &epoch(), 1000)
+            .expect("serde deserialization should succeed");
         assert_eq!(r1.receipt.input_hash, r2.receipt.input_hash);
         assert_eq!(r1.receipt.verdict_hash, r2.receipt.verdict_hash);
     }
@@ -1507,7 +1517,8 @@ mod tests {
         let measurements: Vec<_> = (0..5)
             .map(|_| make_measurement("cell_a", 500, 1000))
             .collect();
-        let report = evaluate_supremacy(&measurements, &config, &epoch(), 1000).expect("serde deserialization should succeed");
+        let report = evaluate_supremacy(&measurements, &config, &epoch(), 1000)
+            .expect("serde deserialization should succeed");
         let summary = summarize_report(&report);
         assert!(summary.contains("Board verdict:"));
         assert!(summary.contains("cell_a"));
@@ -1540,7 +1551,8 @@ mod tests {
     fn test_cell_measurement_serde_roundtrip() {
         let m = make_measurement("cell_a", 500, 1000);
         let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
-        let m2: CellMeasurement = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let m2: CellMeasurement =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(m, m2);
     }
 
@@ -1552,9 +1564,11 @@ mod tests {
         let measurements: Vec<_> = (0..10)
             .map(|_| make_measurement("cell_a", 500, 1000))
             .collect();
-        let report = evaluate_supremacy(&measurements, &config, &epoch(), 1000).expect("serde deserialization should succeed");
+        let report = evaluate_supremacy(&measurements, &config, &epoch(), 1000)
+            .expect("serde deserialization should succeed");
         let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
-        let report2: VerdictReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let report2: VerdictReport =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report, report2);
     }
 
@@ -1576,7 +1590,8 @@ mod tests {
             detail: "crash rate too high".into(),
         };
         let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
-        let v2: SideConstraintViolation = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let v2: SideConstraintViolation =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, v2);
     }
 
@@ -1594,7 +1609,8 @@ mod tests {
             mean_improvement_ratio: 400_000,
         };
         let json = serde_json::to_string(&cv).expect("serde deserialization should succeed");
-        let cv2: CellVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let cv2: CellVerdict =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cv, cv2);
     }
 
@@ -1612,7 +1628,8 @@ mod tests {
             m.baseline_tail_p99_ns = 1000;
             measurements.push(m);
         }
-        let report = evaluate_supremacy(&measurements, &config, &epoch(), 1000).expect("serde deserialization should succeed");
+        let report = evaluate_supremacy(&measurements, &config, &epoch(), 1000)
+            .expect("serde deserialization should succeed");
         let cv = &report.cell_verdicts[0];
         assert!(
             cv.violations
@@ -1630,7 +1647,8 @@ mod tests {
         let measurements: Vec<_> = (0..50)
             .map(|_| make_measurement("cell_a", 1000, 1000))
             .collect();
-        let report = evaluate_supremacy(&measurements, &config, &epoch(), 1000).expect("serde deserialization should succeed");
+        let report = evaluate_supremacy(&measurements, &config, &epoch(), 1000)
+            .expect("serde deserialization should succeed");
         let cv = &report.cell_verdicts[0];
         assert!(
             cv.rejection_reasons

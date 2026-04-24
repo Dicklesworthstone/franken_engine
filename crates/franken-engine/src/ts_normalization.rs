@@ -580,7 +580,8 @@ pub fn normalize_typescript_to_es2020(
         compiler_options_hash: sha256_hex(
             // SAFETY: CompilerOptions derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            &serde_json::to_string(&config.compiler_options).expect("serde deserialization should succeed"),
+            &serde_json::to_string(&config.compiler_options)
+                .expect("serde deserialization should succeed"),
         ),
         decisions,
         capability_intents: capability_intents.clone(),
@@ -1893,7 +1894,9 @@ fn lower_simple_namespaces(source: &str) -> Result<String, TsNormalizationError>
             &namespace_name,
             // SAFETY: namespace_order contains only keys that exist in namespace_assignments
             // (built together in the same parsing pass)
-            &namespace_assignments.remove(&namespace_name).expect("serde deserialization should succeed"),
+            &namespace_assignments
+                .remove(&namespace_name)
+                .expect("serde deserialization should succeed"),
         )
         .join("\n");
         rendered = rendered.replacen(&placeholder, &namespace_block, 1);
@@ -3161,8 +3164,8 @@ export const version = 1;
         let mut config = TsNormalizationConfig::default();
         config.compiler_options.module = "commonjs".to_string();
         // SAFETY: Test with valid TypeScript source and config should succeed normalization
-        let output =
-            normalize_typescript_to_es2020("const x = 1;", &config, "t", "d", "p").expect("serde deserialization should succeed");
+        let output = normalize_typescript_to_es2020("const x = 1;", &config, "t", "d", "p")
+            .expect("serde deserialization should succeed");
         assert!(output.normalized_source.contains("const x = 1"));
     }
 
@@ -3185,8 +3188,8 @@ export const version = 1;
     fn accepts_react_jsx_mode() {
         let mut config = TsNormalizationConfig::default();
         config.compiler_options.jsx = "react".to_string();
-        let output =
-            normalize_typescript_to_es2020("const x = 1;", &config, "t", "d", "p").expect("serde deserialization should succeed");
+        let output = normalize_typescript_to_es2020("const x = 1;", &config, "t", "d", "p")
+            .expect("serde deserialization should succeed");
         assert!(output.normalized_source.contains("const x = 1"));
     }
 
@@ -3194,7 +3197,8 @@ export const version = 1;
     fn jsx_preserve_skips_lowering() {
         let mut config = TsNormalizationConfig::default();
         config.compiler_options.jsx = "preserve".to_string();
-        let output = normalize_typescript_to_es2020("<Widget />", &config, "t", "d", "p").expect("serde deserialization should succeed");
+        let output = normalize_typescript_to_es2020("<Widget />", &config, "t", "d", "p")
+            .expect("serde deserialization should succeed");
         // In preserve mode, JSX is NOT lowered to createElement
         assert!(!output.normalized_source.contains("createElement"));
     }
@@ -3883,7 +3887,8 @@ abstract class Base { }"#;
         let json = serde_json::to_string(&opts).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid TsCompilerOptions,
         // so from_str back to TsCompilerOptions cannot fail (valid format + matching schema).
-        let back: TsCompilerOptions = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: TsCompilerOptions =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(opts, back);
     }
 
@@ -3895,7 +3900,8 @@ abstract class Base { }"#;
         let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid TsNormalizationConfig,
         // so from_str back to TsNormalizationConfig cannot fail (valid format + matching schema).
-        let back: TsNormalizationConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: TsNormalizationConfig =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, back);
     }
 
@@ -3911,7 +3917,8 @@ abstract class Base { }"#;
         let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid NormalizationDecision,
         // so from_str back to NormalizationDecision cannot fail (valid format + matching schema).
-        let back: NormalizationDecision = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: NormalizationDecision =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(d, back);
     }
 
@@ -3931,7 +3938,8 @@ abstract class Base { }"#;
         let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid NormalizationEvent,
         // so from_str back to NormalizationEvent cannot fail (valid format + matching schema).
-        let back: NormalizationEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: NormalizationEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(e, back);
     }
 
@@ -3946,7 +3954,8 @@ abstract class Base { }"#;
         let json = serde_json::to_string(&ci).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid CapabilityIntent,
         // so from_str back to CapabilityIntent cannot fail (valid format + matching schema).
-        let back: CapabilityIntent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: CapabilityIntent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ci, back);
     }
 
@@ -3957,7 +3966,8 @@ abstract class Base { }"#;
             original_line: 1,
         };
         let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
-        let back: SourceMapEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SourceMapEntry =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(e, back);
     }
 
@@ -4144,7 +4154,8 @@ abstract class Base { }"#;
     fn ts_compiler_options_default_serde_roundtrip() {
         let opts = TsCompilerOptions::default();
         let json = serde_json::to_string(&opts).expect("serde deserialization should succeed");
-        let back: TsCompilerOptions = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: TsCompilerOptions =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(opts, back);
     }
 
@@ -4152,7 +4163,8 @@ abstract class Base { }"#;
     fn ts_normalization_config_default_serde_roundtrip() {
         let config = TsNormalizationConfig::default();
         let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
-        let back: TsNormalizationConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: TsNormalizationConfig =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, back);
     }
 
@@ -4164,7 +4176,8 @@ abstract class Base { }"#;
             detail: "removed 5 annotations".into(),
         };
         let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
-        let back: NormalizationDecision = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: NormalizationDecision =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(d, back);
     }
 

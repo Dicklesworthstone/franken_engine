@@ -2309,7 +2309,8 @@ mod tests {
         // SAFETY: Test-only unwrap for serde serialization of known valid config struct
         let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
         // SAFETY: Test-only unwrap for serde deserialization of valid JSON roundtrip
-        let back: ParallelConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ParallelConfig =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, back);
     }
 
@@ -2433,9 +2434,21 @@ mod tests {
         let input = b"line1\nline2\nline3\nline4\nline5\n";
         let plan = compute_chunk_plan(input, 3);
         // SAFETY: Test setup ensures compute_chunk_plan produces non-empty chunks
-        assert_eq!(plan.chunks.first().expect("serde deserialization should succeed").0, 0);
+        assert_eq!(
+            plan.chunks
+                .first()
+                .expect("serde deserialization should succeed")
+                .0,
+            0
+        );
         // SAFETY: Test setup ensures compute_chunk_plan produces non-empty chunks
-        assert_eq!(plan.chunks.last().expect("serde deserialization should succeed").1, input.len() as u64);
+        assert_eq!(
+            plan.chunks
+                .last()
+                .expect("serde deserialization should succeed")
+                .1,
+            input.len() as u64
+        );
         // Chunks are contiguous.
         for w in plan.chunks.windows(2) {
             assert_eq!(w[0].1, w[1].0);
@@ -2449,7 +2462,13 @@ mod tests {
         // No deterministic split points => single deterministic chunk.
         assert_eq!(plan.chunks.len(), 1);
         // SAFETY: Just verified plan.chunks.len() == 1 above, so last() is guaranteed to be Some
-        assert_eq!(plan.chunks.last().expect("serde deserialization should succeed").1, 10);
+        assert_eq!(
+            plan.chunks
+                .last()
+                .expect("serde deserialization should succeed")
+                .1,
+            10
+        );
     }
 
     #[test]
@@ -2461,7 +2480,8 @@ mod tests {
 
         let split = plan.chunks[0].1 as usize;
         // SAFETY: Test input is valid UTF-8 JavaScript source code
-        let first_chunk = std::str::from_utf8(&source[..split]).expect("serde deserialization should succeed");
+        let first_chunk =
+            std::str::from_utf8(&source[..split]).expect("serde deserialization should succeed");
         assert!(
             first_chunk.contains("}\n"),
             "expected split to occur on/after a block boundary, got: {first_chunk:?}"
@@ -2847,9 +2867,11 @@ mod tests {
             ),
         };
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&transcript).expect("serde deserialization should succeed");
+        let json =
+            serde_json::to_string(&transcript).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let back: ScheduleTranscript = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ScheduleTranscript =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(transcript, back);
     }
 
@@ -2859,7 +2881,8 @@ mod tests {
         let chunk_plan = compute_chunk_plan(source.as_bytes(), 4);
         let transcript = build_schedule_transcript(&chunk_plan, 1234);
         // SAFETY: Test-only unwrap with valid transcript and chunk plan
-        let replay_order = replay_schedule_transcript(&transcript, &chunk_plan).expect("serde deserialization should succeed");
+        let replay_order = replay_schedule_transcript(&transcript, &chunk_plan)
+            .expect("serde deserialization should succeed");
         assert_eq!(replay_order, transcript.execution_order);
         assert_eq!(replay_order.len(), chunk_plan.chunks.len());
     }
@@ -2923,7 +2946,8 @@ mod tests {
         // SAFETY: MergeWitness derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&witness).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid MergeWitness serialization
-        let back: MergeWitness = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: MergeWitness =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(witness, back);
     }
 
@@ -2959,7 +2983,8 @@ mod tests {
         // SAFETY: ParityResult derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid ParityResult serialization
-        let back: ParityResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ParityResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, back);
     }
 
@@ -2978,7 +3003,8 @@ mod tests {
         // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&output).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let back: ParseOutput = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ParseOutput =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(output, back);
     }
 
@@ -3063,7 +3089,8 @@ mod tests {
         // SAFETY: to_string cannot fail on derived Serialize enum
         let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let back: ParseError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ParseError =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(e, back);
     }
 
@@ -3142,7 +3169,8 @@ mod tests {
         // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&tp).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let back: TimeoutPolicy = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: TimeoutPolicy =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(tp, back);
     }
 
@@ -3174,7 +3202,8 @@ mod tests {
         let json = serde_json::to_string(&cr).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid CancellationRecord,
         // so from_str back to CancellationRecord cannot fail (valid format + matching schema).
-        let back: CancellationRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: CancellationRecord =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cr, back);
     }
 
@@ -3192,7 +3221,8 @@ mod tests {
         assert!(json.contains("\"trigger_chunk\":null"));
         // SAFETY: JSON was just produced by to_string of a valid CancellationRecord,
         // so from_str back to CancellationRecord cannot fail (valid format + matching schema).
-        let back: CancellationRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: CancellationRecord =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cr, back);
     }
 
@@ -3223,7 +3253,8 @@ mod tests {
         let json = serde_json::to_string(&bp).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid BackpressureSnapshot,
         // so from_str back to BackpressureSnapshot cannot fail (valid format + matching schema).
-        let back: BackpressureSnapshot = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: BackpressureSnapshot =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(bp, back);
     }
 
@@ -3394,7 +3425,8 @@ mod tests {
         let json = serde_json::to_string(&digest).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid RoutingDigest,
         // so from_str back to RoutingDigest cannot fail (valid format + matching schema).
-        let back: RoutingDigest = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: RoutingDigest =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(digest, back);
     }
 
@@ -3439,7 +3471,8 @@ mod tests {
         let json = serde_json::to_string(&sample).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid ThroughputSample,
         // so from_str back to ThroughputSample cannot fail (valid format + matching schema).
-        let back: ThroughputSample = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ThroughputSample =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(sample, back);
     }
 
@@ -3459,7 +3492,8 @@ mod tests {
             elapsed_us: 3500,
         };
         let json = serde_json::to_string(&ct).expect("serde deserialization should succeed");
-        let back: ChunkTiming = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ChunkTiming =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ct, back);
     }
 
@@ -3485,7 +3519,8 @@ mod tests {
             parity_check_elapsed_us: 300,
         };
         let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
-        let back: PerformanceReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: PerformanceReport =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report, back);
     }
 
@@ -3527,7 +3562,8 @@ mod tests {
         // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&envelope).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let back: ReplayEnvelope = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ReplayEnvelope =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(envelope, back);
     }
 
@@ -3617,7 +3653,8 @@ mod tests {
         // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&rc).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let back: RollbackControl = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: RollbackControl =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(rc, back);
     }
 
@@ -3779,7 +3816,8 @@ mod tests {
             // SAFETY: ParserMode derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by valid ParserMode serialization
-            let back: ParserMode = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ParserMode =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -3798,7 +3836,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: SerialReason = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: SerialReason =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -3815,7 +3854,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: FailoverTriggerClass = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: FailoverTriggerClass =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -3830,7 +3870,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: FailoverState = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: FailoverState =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -3844,7 +3885,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: BackpressureLevel = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: BackpressureLevel =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -3861,7 +3903,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: FallbackCause = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: FallbackCause =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -4042,7 +4085,11 @@ mod tests {
         // Chunks must cover entire input.
         assert!(!plan.chunks.is_empty());
         let first_start = plan.chunks[0].0;
-        let last_end = plan.chunks.last().expect("serde deserialization should succeed").1;
+        let last_end = plan
+            .chunks
+            .last()
+            .expect("serde deserialization should succeed")
+            .1;
         assert_eq!(first_start, 0);
         assert_eq!(last_end, 6);
     }
@@ -4129,7 +4176,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: SerialReason = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: SerialReason =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -4247,7 +4295,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: TranscriptReplayError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: TranscriptReplayError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -4266,7 +4315,8 @@ mod tests {
             token_count: 1,
         };
         let json = serde_json::to_string(&cr).expect("serde deserialization should succeed");
-        let back: ChunkResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ChunkResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cr, back);
     }
 
@@ -4278,7 +4328,8 @@ mod tests {
             worker_slot: 2,
         };
         let json = serde_json::to_string(&dispatch).expect("serde deserialization should succeed");
-        let back: ScheduleDispatch = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ScheduleDispatch =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(dispatch, back);
     }
 
@@ -4289,7 +4340,8 @@ mod tests {
             detail: "chunk 0 exceeded budget".to_string(),
         };
         let json = serde_json::to_string(&trigger).expect("serde deserialization should succeed");
-        let back: FailoverTrigger = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: FailoverTrigger =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(trigger, back);
     }
 
@@ -4310,7 +4362,8 @@ mod tests {
             replay_command: "franken-engine replay --trace t1".to_string(),
         };
         let json = serde_json::to_string(&decision).expect("serde deserialization should succeed");
-        let back: FailoverDecision = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: FailoverDecision =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(decision, back);
     }
 
@@ -4338,7 +4391,8 @@ mod tests {
             error_code: None,
         };
         let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
-        let back: ParseLogEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ParseLogEntry =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, back);
     }
 
@@ -4430,7 +4484,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: ParseError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ParseError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }

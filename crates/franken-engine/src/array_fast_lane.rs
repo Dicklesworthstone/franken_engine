@@ -578,9 +578,17 @@ impl TransitionReceipt {
         data.extend_from_slice(array_id.as_bytes());
         data.push(b'|');
         // SAFETY: FastLaneState derives Serialize and has no non-serializable fields
-        data.extend_from_slice(serde_json::to_string(&transition.from).expect("serde deserialization should succeed").as_bytes());
+        data.extend_from_slice(
+            serde_json::to_string(&transition.from)
+                .expect("serde deserialization should succeed")
+                .as_bytes(),
+        );
         // SAFETY: FastLaneState derives Serialize and has no non-serializable fields
-        data.extend_from_slice(serde_json::to_string(&transition.to).expect("serde deserialization should succeed").as_bytes());
+        data.extend_from_slice(
+            serde_json::to_string(&transition.to)
+                .expect("serde deserialization should succeed")
+                .as_bytes(),
+        );
         data.extend_from_slice(
             // SAFETY: StateTransitionReason derives Serialize and has no non-serializable fields
             serde_json::to_string(&transition.reason)
@@ -1277,7 +1285,9 @@ mod tests {
         );
         assert!(receipt.is_some());
         // SAFETY: Array arr-1 was just registered above, so get_array will succeed
-        let lane = engine.get_array("arr-1").expect("serde deserialization should succeed");
+        let lane = engine
+            .get_array("arr-1")
+            .expect("serde deserialization should succeed");
         assert_eq!(lane.element_kind, ElementKind::PackedDouble);
     }
 
@@ -1293,7 +1303,9 @@ mod tests {
         );
         assert!(receipt.is_none());
         // SAFETY: Array arr-1 was registered at start of test, so get_array will succeed
-        let lane = engine.get_array("arr-1").expect("serde deserialization should succeed");
+        let lane = engine
+            .get_array("arr-1")
+            .expect("serde deserialization should succeed");
         assert!(!lane.fast_lane_active);
     }
 
@@ -1324,7 +1336,12 @@ mod tests {
         );
         assert!(receipt.is_none());
         // SAFETY: Array arr-1 was registered at start of test, so get_array will succeed
-        assert!(!engine.get_array("arr-1").expect("serde deserialization should succeed").fast_lane_active);
+        assert!(
+            !engine
+                .get_array("arr-1")
+                .expect("serde deserialization should succeed")
+                .fast_lane_active
+        );
     }
 
     #[test]
@@ -1333,7 +1350,9 @@ mod tests {
         engine.register_array("arr-1", ElementKind::PackedSmi, 10);
         assert!(engine.record_access("arr-1"));
         assert!(engine.record_store("arr-1"));
-        let lane = engine.get_array("arr-1").expect("serde deserialization should succeed");
+        let lane = engine
+            .get_array("arr-1")
+            .expect("serde deserialization should succeed");
         assert_eq!(lane.access_count, 1);
         assert_eq!(lane.store_count, 1);
     }
@@ -1352,7 +1371,9 @@ mod tests {
         engine.record_oob("arr-1", 0);
         engine.record_oob("arr-1", 0);
 
-        let lane = engine.get_array("arr-1").expect("serde deserialization should succeed");
+        let lane = engine
+            .get_array("arr-1")
+            .expect("serde deserialization should succeed");
         assert!(!lane.fast_lane_active);
     }
 
@@ -1362,7 +1383,9 @@ mod tests {
         engine.register_typed_array("ta-1", ElementKind::TypedFloat32, 50);
         assert!(engine.record_typed_access("ta-1"));
         assert!(engine.record_bounds_elim("ta-1"));
-        let ta = engine.get_typed_array("ta-1").expect("serde deserialization should succeed");
+        let ta = engine
+            .get_typed_array("ta-1")
+            .expect("serde deserialization should succeed");
         assert_eq!(ta.access_count, 1);
         assert_eq!(ta.bounds_check_eliminated, 1);
     }
@@ -1372,7 +1395,9 @@ mod tests {
         let mut engine = ArrayFastLaneEngine::new(epoch(1));
         engine.register_typed_array("ta-1", ElementKind::TypedInt32, 100);
         assert!(engine.detach_typed_array("ta-1"));
-        let ta = engine.get_typed_array("ta-1").expect("serde deserialization should succeed");
+        let ta = engine
+            .get_typed_array("ta-1")
+            .expect("serde deserialization should succeed");
         assert!(ta.buffer_detached);
         assert!(!ta.fast_lane_active);
     }
@@ -1384,8 +1409,20 @@ mod tests {
         engine.register_array("arr-2", ElementKind::PackedSmi, 20);
         engine.register_array("arr-3", ElementKind::PackedDouble, 30);
         let by_kind = engine.arrays_by_kind();
-        assert_eq!(by_kind.get(&ElementKind::PackedSmi).expect("serde deserialization should succeed").len(), 2);
-        assert_eq!(by_kind.get(&ElementKind::PackedDouble).expect("serde deserialization should succeed").len(), 1);
+        assert_eq!(
+            by_kind
+                .get(&ElementKind::PackedSmi)
+                .expect("serde deserialization should succeed")
+                .len(),
+            2
+        );
+        assert_eq!(
+            by_kind
+                .get(&ElementKind::PackedDouble)
+                .expect("serde deserialization should succeed")
+                .len(),
+            1
+        );
     }
 
     #[test]
@@ -1430,7 +1467,8 @@ mod tests {
         ];
         for kind in kinds {
             let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
-            let decoded: ElementKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let decoded: ElementKind =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(kind, decoded);
         }
     }
@@ -1439,7 +1477,8 @@ mod tests {
     fn test_array_lane_serde() {
         let lane = ArrayLaneDescriptor::new("arr-1", ElementKind::PackedSmi, 10);
         let json = serde_json::to_string(&lane).expect("serde deserialization should succeed");
-        let decoded: ArrayLaneDescriptor = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let decoded: ArrayLaneDescriptor =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(lane, decoded);
     }
 
@@ -1447,7 +1486,8 @@ mod tests {
     fn test_typed_array_serde() {
         let ta = TypedArrayDescriptor::new("ta-1", ElementKind::TypedFloat64, 100);
         let json = serde_json::to_string(&ta).expect("serde deserialization should succeed");
-        let decoded: TypedArrayDescriptor = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let decoded: TypedArrayDescriptor =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ta, decoded);
     }
 
@@ -1465,8 +1505,10 @@ mod tests {
             DeoptReason::BufferDetached,
         ];
         for reason in reasons {
-            let json = serde_json::to_string(&reason).expect("serde deserialization should succeed");
-            let decoded: DeoptReason = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&reason).expect("serde deserialization should succeed");
+            let decoded: DeoptReason =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(reason, decoded);
         }
     }
@@ -1476,7 +1518,8 @@ mod tests {
         let engine = ArrayFastLaneEngine::new(epoch(1));
         let diag = engine.diagnostics();
         let json = serde_json::to_string(&diag).expect("serde deserialization should succeed");
-        let decoded: ArrayFastLaneDiagnostics = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let decoded: ArrayFastLaneDiagnostics =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(diag, decoded);
     }
 
@@ -1484,7 +1527,8 @@ mod tests {
     fn test_policy_serde() {
         let policy = FastLanePolicy::default();
         let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
-        let decoded: FastLanePolicy = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let decoded: FastLanePolicy =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(policy, decoded);
     }
 

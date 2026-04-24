@@ -675,7 +675,9 @@ mod tests {
             .record_assumption(make_assumption("a1", ViolationSeverity::Warning))
             .expect("serde deserialization should succeed");
         // SAFETY: Test-only unwrap for monitor registration with valid monitor and existing assumption
-        ledger.register_monitor(make_monitor("m1", "a1")).expect("serde deserialization should succeed");
+        ledger
+            .register_monitor(make_monitor("m1", "a1"))
+            .expect("serde deserialization should succeed");
         assert_eq!(ledger.monitors().len(), 1);
     }
 
@@ -696,7 +698,9 @@ mod tests {
             .record_assumption(make_assumption("a1", ViolationSeverity::Warning))
             .expect("serde deserialization should succeed");
         // SAFETY: Test-only unwrap for monitor registration with valid monitor and existing assumption
-        ledger.register_monitor(make_monitor("m1", "a1")).expect("serde deserialization should succeed");
+        ledger
+            .register_monitor(make_monitor("m1", "a1"))
+            .expect("serde deserialization should succeed");
         let err = ledger
             .register_monitor(make_monitor("m1", "a1"))
             .unwrap_err();
@@ -711,7 +715,9 @@ mod tests {
             .record_assumption(make_assumption("a1", ViolationSeverity::Warning))
             .expect("serde deserialization should succeed");
         // SAFETY: Test-only unwrap for monitor registration with valid monitor and existing assumption
-        ledger.register_monitor(make_monitor("m1", "a1")).expect("serde deserialization should succeed");
+        ledger
+            .register_monitor(make_monitor("m1", "a1"))
+            .expect("serde deserialization should succeed");
         // Value below threshold → no violation
         let actions = ledger.observe("risk", 400_000, 1, 0);
         assert!(actions.is_empty());
@@ -726,7 +732,9 @@ mod tests {
             .record_assumption(make_assumption("a1", ViolationSeverity::Warning))
             .expect("serde deserialization should succeed");
         // SAFETY: Test-only unwrap for monitor registration with valid monitor and existing assumption
-        ledger.register_monitor(make_monitor("m1", "a1")).expect("serde deserialization should succeed");
+        ledger
+            .register_monitor(make_monitor("m1", "a1"))
+            .expect("serde deserialization should succeed");
         // Value above threshold → violation
         let actions = ledger.observe("risk", 600_000, 1, 0);
         assert_eq!(actions.len(), 1);
@@ -742,7 +750,9 @@ mod tests {
             .record_assumption(make_assumption("a1", ViolationSeverity::Critical))
             .expect("serde deserialization should succeed");
         // SAFETY: Test-only unwrap for monitor registration with valid monitor and existing assumption
-        ledger.register_monitor(make_monitor("m1", "a1")).expect("serde deserialization should succeed");
+        ledger
+            .register_monitor(make_monitor("m1", "a1"))
+            .expect("serde deserialization should succeed");
         let actions = ledger.observe("risk", 600_000, 1, 0);
         assert_eq!(actions.len(), 1);
         assert!(matches!(actions[0], DemotionAction::EnterSafeMode { .. }));
@@ -756,7 +766,9 @@ mod tests {
             .record_assumption(make_assumption("a1", ViolationSeverity::Fatal))
             .expect("serde deserialization should succeed");
         // SAFETY: Test-only unwrap for monitor registration with valid monitor and existing assumption
-        ledger.register_monitor(make_monitor("m1", "a1")).expect("serde deserialization should succeed");
+        ledger
+            .register_monitor(make_monitor("m1", "a1"))
+            .expect("serde deserialization should succeed");
         let actions = ledger.observe("risk", 600_000, 1, 0);
         assert_eq!(actions.len(), 1);
         assert!(matches!(actions[0], DemotionAction::EnterSafeMode { .. }));
@@ -770,7 +782,9 @@ mod tests {
             .record_assumption(make_assumption("a1", ViolationSeverity::Advisory))
             .expect("serde deserialization should succeed");
         // SAFETY: Test-only unwrap for monitor registration with valid monitor and existing assumption
-        ledger.register_monitor(make_monitor("m1", "a1")).expect("serde deserialization should succeed");
+        ledger
+            .register_monitor(make_monitor("m1", "a1"))
+            .expect("serde deserialization should succeed");
         let actions = ledger.observe("risk", 600_000, 1, 0);
         assert_eq!(actions.len(), 1);
         assert!(matches!(actions[0], DemotionAction::NoAction));
@@ -786,7 +800,9 @@ mod tests {
         let mut monitor = make_monitor("m1", "a1");
         monitor.trigger_count = 3; // Require 3 consecutive violations
         // SAFETY: Test-only unwrap for monitor registration with valid monitor and existing assumption
-        ledger.register_monitor(monitor).expect("serde deserialization should succeed");
+        ledger
+            .register_monitor(monitor)
+            .expect("serde deserialization should succeed");
 
         // First two violations don't trigger
         assert!(ledger.observe("risk", 600_000, 1, 0).is_empty());
@@ -806,7 +822,9 @@ mod tests {
         let mut monitor = make_monitor("m1", "a1");
         monitor.trigger_count = 3;
         // SAFETY: Test-only unwrap for monitor registration with valid monitor and existing assumption
-        ledger.register_monitor(monitor).expect("serde deserialization should succeed");
+        ledger
+            .register_monitor(monitor)
+            .expect("serde deserialization should succeed");
 
         // Two violations then a pass
         assert!(ledger.observe("risk", 600_000, 1, 0).is_empty());
@@ -828,7 +846,9 @@ mod tests {
             .record_assumption(make_assumption("a1", ViolationSeverity::Warning))
             .expect("serde deserialization should succeed");
         // SAFETY: Test-only unwrap for monitor registration with valid monitor and existing assumption
-        ledger.register_monitor(make_monitor("m1", "a1")).expect("serde deserialization should succeed");
+        ledger
+            .register_monitor(make_monitor("m1", "a1"))
+            .expect("serde deserialization should succeed");
         // First violation triggers
         assert_eq!(ledger.observe("risk", 600_000, 1, 0).len(), 1);
         // Second violation should NOT trigger again (monitor already triggered)
@@ -843,7 +863,9 @@ mod tests {
             .record_assumption(make_assumption("a1", ViolationSeverity::Warning))
             .expect("serde deserialization should succeed");
         // SAFETY: Test helper with valid monitor data for existing assumption should succeed
-        ledger.register_monitor(make_monitor("m1", "a1")).expect("serde deserialization should succeed");
+        ledger
+            .register_monitor(make_monitor("m1", "a1"))
+            .expect("serde deserialization should succeed");
         ledger.observe("risk", 600_000, 1, 0);
         assert_eq!(ledger.falsification_history().len(), 1);
         let ev = &ledger.falsification_history()[0];
@@ -859,7 +881,9 @@ mod tests {
             .record_assumption(make_assumption("a1", ViolationSeverity::Critical))
             .expect("serde deserialization should succeed");
         // SAFETY: Test helper with valid monitor data for existing assumption should succeed
-        ledger.register_monitor(make_monitor("m1", "a1")).expect("serde deserialization should succeed");
+        ledger
+            .register_monitor(make_monitor("m1", "a1"))
+            .expect("serde deserialization should succeed");
         ledger.observe("risk", 600_000, 1, 0);
         assert_eq!(ledger.demotion_records().len(), 1);
         assert_eq!(ledger.demotion_records()[0].assumption_id, "a1");
@@ -873,10 +897,15 @@ mod tests {
             .record_assumption(make_assumption("a1", ViolationSeverity::Warning))
             .expect("serde deserialization should succeed");
         // SAFETY: Test just recorded assumption "a1", so retire should succeed
-        ledger.retire_assumption("a1").expect("serde deserialization should succeed");
+        ledger
+            .retire_assumption("a1")
+            .expect("serde deserialization should succeed");
         assert_eq!(
             // SAFETY: Test just retired assumption "a1", so lookup should succeed
-            ledger.assumption("a1").expect("serde deserialization should succeed").status,
+            ledger
+                .assumption("a1")
+                .expect("serde deserialization should succeed")
+                .status,
             AssumptionStatus::Retired
         );
     }
@@ -893,7 +922,9 @@ mod tests {
         ledger
             .record_assumption(make_assumption("a1", ViolationSeverity::Warning))
             .expect("serde deserialization should succeed");
-        ledger.register_monitor(make_monitor("m1", "a1")).expect("serde deserialization should succeed");
+        ledger
+            .register_monitor(make_monitor("m1", "a1"))
+            .expect("serde deserialization should succeed");
         ledger.observe("risk", 600_000, 1, 0);
         let err = ledger.retire_assumption("a1").unwrap_err();
         assert!(matches!(err, LedgerError::InvalidTransition { .. }));
@@ -905,9 +936,14 @@ mod tests {
         ledger
             .record_assumption(make_assumption("a1", ViolationSeverity::Warning))
             .expect("serde deserialization should succeed");
-        ledger.suspend_assumption("a1").expect("serde deserialization should succeed");
+        ledger
+            .suspend_assumption("a1")
+            .expect("serde deserialization should succeed");
         assert_eq!(
-            ledger.assumption("a1").expect("serde deserialization should succeed").status,
+            ledger
+                .assumption("a1")
+                .expect("serde deserialization should succeed")
+                .status,
             AssumptionStatus::Suspended
         );
     }
@@ -918,7 +954,9 @@ mod tests {
         ledger
             .record_assumption(make_assumption("a1", ViolationSeverity::Warning))
             .expect("serde deserialization should succeed");
-        ledger.register_monitor(make_monitor("m1", "a1")).expect("serde deserialization should succeed");
+        ledger
+            .register_monitor(make_monitor("m1", "a1"))
+            .expect("serde deserialization should succeed");
         ledger.observe("risk", 600_000, 1, 0);
         assert!(ledger.suspend_assumption("a1").is_err());
     }
@@ -932,7 +970,9 @@ mod tests {
         ledger
             .record_assumption(make_assumption("a2", ViolationSeverity::Critical))
             .expect("serde deserialization should succeed");
-        ledger.register_monitor(make_monitor("m1", "a1")).expect("serde deserialization should succeed");
+        ledger
+            .register_monitor(make_monitor("m1", "a1"))
+            .expect("serde deserialization should succeed");
         ledger.observe("risk", 600_000, 1, 0); // violates a1
         assert_eq!(ledger.active_assumptions().len(), 1);
         assert_eq!(ledger.active_assumptions()[0].id, "a2");
@@ -944,7 +984,9 @@ mod tests {
         ledger
             .record_assumption(make_assumption("a1", ViolationSeverity::Warning))
             .expect("serde deserialization should succeed");
-        ledger.register_monitor(make_monitor("m1", "a1")).expect("serde deserialization should succeed");
+        ledger
+            .register_monitor(make_monitor("m1", "a1"))
+            .expect("serde deserialization should succeed");
         ledger.observe("risk", 600_000, 1, 0);
         assert_eq!(ledger.violated_assumptions().len(), 1);
         assert_eq!(ledger.violated_assumptions()[0].id, "a1");
@@ -959,7 +1001,9 @@ mod tests {
             .expect("serde deserialization should succeed");
         let h1 = ledger.chain_hash().to_string();
         assert_ne!(h0, h1);
-        ledger.register_monitor(make_monitor("m1", "a1")).expect("serde deserialization should succeed");
+        ledger
+            .register_monitor(make_monitor("m1", "a1"))
+            .expect("serde deserialization should succeed");
         ledger.observe("risk", 600_000, 1, 0);
         let h2 = ledger.chain_hash().to_string();
         assert_ne!(h1, h2);
@@ -971,7 +1015,9 @@ mod tests {
         ledger
             .record_assumption(make_assumption("a1", ViolationSeverity::Warning))
             .expect("serde deserialization should succeed");
-        ledger.register_monitor(make_monitor("m1", "a1")).expect("serde deserialization should succeed");
+        ledger
+            .register_monitor(make_monitor("m1", "a1"))
+            .expect("serde deserialization should succeed");
         // Wrong variable → no monitors match
         let actions = ledger.observe("latency", 999_999, 1, 0);
         assert!(actions.is_empty());
@@ -983,10 +1029,14 @@ mod tests {
         ledger
             .record_assumption(make_assumption("a1", ViolationSeverity::Warning))
             .expect("serde deserialization should succeed");
-        ledger.register_monitor(make_monitor("m1", "a1")).expect("serde deserialization should succeed");
+        ledger
+            .register_monitor(make_monitor("m1", "a1"))
+            .expect("serde deserialization should succeed");
         let mut m2 = make_monitor("m2", "a1");
         m2.threshold_millionths = 700_000; // Higher threshold
-        ledger.register_monitor(m2).expect("serde deserialization should succeed");
+        ledger
+            .register_monitor(m2)
+            .expect("serde deserialization should succeed");
         // Value 600_000 violates m1 (threshold 500_000) but not m2 (threshold 700_000)
         let actions = ledger.observe("risk", 600_000, 1, 0);
         // m1 triggers; m2 does not because assumption is already violated
@@ -1058,7 +1108,9 @@ mod tests {
         ledger
             .record_assumption(make_assumption("a1", ViolationSeverity::Warning))
             .expect("serde deserialization should succeed");
-        ledger.register_monitor(make_monitor("m1", "a1")).expect("serde deserialization should succeed");
+        ledger
+            .register_monitor(make_monitor("m1", "a1"))
+            .expect("serde deserialization should succeed");
         ledger.observe("risk", 600_000, 1, 0);
         let report = ledger.report();
         assert!(report.contains("Falsifications: 1"));
@@ -1073,7 +1125,8 @@ mod tests {
         let json = serde_json::to_string(&a).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid Assumption,
         // so from_str back to Assumption cannot fail (valid format + matching schema).
-        let back: Assumption = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: Assumption =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(a, back);
     }
 
@@ -1085,7 +1138,8 @@ mod tests {
         let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid FalsificationMonitor,
         // so from_str back to FalsificationMonitor cannot fail (valid format + matching schema).
-        let back: FalsificationMonitor = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: FalsificationMonitor =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(m, back);
     }
 
@@ -1106,7 +1160,8 @@ mod tests {
         let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid FalsificationEvidence,
         // so from_str back to FalsificationEvidence cannot fail (valid format + matching schema).
-        let back: FalsificationEvidence = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: FalsificationEvidence =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ev, back);
     }
 
@@ -1136,7 +1191,8 @@ mod tests {
         let json = serde_json::to_string(&record).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid DemotionRecord,
         // so from_str back to DemotionRecord cannot fail (valid format + matching schema).
-        let back: DemotionRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DemotionRecord =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(record, back);
     }
 
@@ -1151,7 +1207,8 @@ mod tests {
         let json = serde_json::to_string(&ledger).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid AssumptionLedger,
         // so from_str back to AssumptionLedger cannot fail (valid format + matching schema).
-        let back: AssumptionLedger = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: AssumptionLedger =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ledger, back);
     }
 
@@ -1161,7 +1218,8 @@ mod tests {
         // SAFETY: LedgerError derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
         // SAFETY: JSON was just generated from LedgerError, deserialization guaranteed to succeed
-        let back: LedgerError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: LedgerError =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, back);
     }
 
@@ -1268,7 +1326,9 @@ mod tests {
         ledger
             .record_assumption(make_assumption("a1", ViolationSeverity::Warning))
             .expect("serde deserialization should succeed");
-        ledger.register_monitor(make_monitor("m1", "a1")).expect("serde deserialization should succeed");
+        ledger
+            .register_monitor(make_monitor("m1", "a1"))
+            .expect("serde deserialization should succeed");
         let actions = ledger.observe("risk", 600_000, 1, 0);
         assert!(matches!(
             actions[0],
@@ -1317,7 +1377,8 @@ mod tests {
             // SAFETY: DemotionAction derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(action).expect("serde deserialization should succeed");
             // SAFETY: JSON was just generated from DemotionAction, deserialization guaranteed to succeed
-            let back: DemotionAction = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: DemotionAction =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*action, back);
         }
     }
@@ -1335,7 +1396,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: AssumptionCategory = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: AssumptionCategory =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -1350,7 +1412,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: AssumptionOrigin = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: AssumptionOrigin =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -1365,7 +1428,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: AssumptionStatus = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: AssumptionStatus =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -1380,7 +1444,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: ViolationSeverity = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ViolationSeverity =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -1396,7 +1461,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: MonitorKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: MonitorKind =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -1406,7 +1472,8 @@ mod tests {
         let variants = [MonitorOp::Le, MonitorOp::Ge, MonitorOp::Eq];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: MonitorOp = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: MonitorOp =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -1426,7 +1493,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: LedgerError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: LedgerError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -1697,8 +1765,11 @@ mod tests {
     #[test]
     fn assumption_json_field_names() {
         let a = make_assumption("a1", ViolationSeverity::Warning);
-        let val: serde_json::Value = serde_json::to_value(&a).expect("serde deserialization should succeed");
-        let obj = val.as_object().expect("serde deserialization should succeed");
+        let val: serde_json::Value =
+            serde_json::to_value(&a).expect("serde deserialization should succeed");
+        let obj = val
+            .as_object()
+            .expect("serde deserialization should succeed");
         assert!(obj.contains_key("id"));
         assert!(obj.contains_key("category"));
         assert!(obj.contains_key("origin"));
@@ -1724,8 +1795,11 @@ mod tests {
             explanation: "test".into(),
             evidence_hash: "abc".into(),
         };
-        let val: serde_json::Value = serde_json::to_value(&ev).expect("serde deserialization should succeed");
-        let obj = val.as_object().expect("serde deserialization should succeed");
+        let val: serde_json::Value =
+            serde_json::to_value(&ev).expect("serde deserialization should succeed");
+        let obj = val
+            .as_object()
+            .expect("serde deserialization should succeed");
         assert!(obj.contains_key("assumption_id"));
         assert!(obj.contains_key("monitor_id"));
         assert!(obj.contains_key("epoch"));
@@ -1740,8 +1814,11 @@ mod tests {
     #[test]
     fn falsification_monitor_json_field_names() {
         let m = make_monitor("m1", "a1");
-        let val: serde_json::Value = serde_json::to_value(&m).expect("serde deserialization should succeed");
-        let obj = val.as_object().expect("serde deserialization should succeed");
+        let val: serde_json::Value =
+            serde_json::to_value(&m).expect("serde deserialization should succeed");
+        let obj = val
+            .as_object()
+            .expect("serde deserialization should succeed");
         assert!(obj.contains_key("monitor_id"));
         assert!(obj.contains_key("assumption_id"));
         assert!(obj.contains_key("kind"));
@@ -1773,8 +1850,11 @@ mod tests {
             epoch: 1,
             severity: ViolationSeverity::Critical,
         };
-        let val: serde_json::Value = serde_json::to_value(&record).expect("serde deserialization should succeed");
-        let obj = val.as_object().expect("serde deserialization should succeed");
+        let val: serde_json::Value =
+            serde_json::to_value(&record).expect("serde deserialization should succeed");
+        let obj = val
+            .as_object()
+            .expect("serde deserialization should succeed");
         assert!(obj.contains_key("record_id"));
         assert!(obj.contains_key("assumption_id"));
         assert!(obj.contains_key("evidence"));
@@ -1787,8 +1867,11 @@ mod tests {
     #[test]
     fn demotion_policy_json_field_names() {
         let policy = DemotionPolicy::default();
-        let val: serde_json::Value = serde_json::to_value(&policy).expect("serde deserialization should succeed");
-        let obj = val.as_object().expect("serde deserialization should succeed");
+        let val: serde_json::Value =
+            serde_json::to_value(&policy).expect("serde deserialization should succeed");
+        let obj = val
+            .as_object()
+            .expect("serde deserialization should succeed");
         assert!(obj.contains_key("advisory_action"));
         assert!(obj.contains_key("warning_action"));
         assert!(obj.contains_key("critical_action"));
@@ -2043,7 +2126,8 @@ mod tests {
         assert_eq!(jsons.len(), 5);
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: LedgerError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: LedgerError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -2058,12 +2142,15 @@ mod tests {
             .record_assumption(make_assumption("a1", ViolationSeverity::Critical))
             .expect("serde deserialization should succeed");
         // SAFETY: Test helper with valid monitor data for existing assumption should succeed
-        ledger.register_monitor(make_monitor("m1", "a1")).expect("serde deserialization should succeed");
+        ledger
+            .register_monitor(make_monitor("m1", "a1"))
+            .expect("serde deserialization should succeed");
         ledger.observe("risk", 600_000, 1, 0);
         // SAFETY: AssumptionLedger derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&ledger).expect("serde deserialization should succeed");
         // SAFETY: JSON was just generated from AssumptionLedger, deserialization guaranteed to succeed
-        let back: AssumptionLedger = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: AssumptionLedger =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ledger, back);
         assert_eq!(back.violated_count(), 1);
         assert_eq!(back.demotion_records().len(), 1);

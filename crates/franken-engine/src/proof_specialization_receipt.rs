@@ -449,7 +449,9 @@ impl SignaturePreimage for SpecializationReceipt {
     fn unsigned_view(&self) -> CanonicalValue {
         let mut copy = self.clone();
         copy.signature = Signature::from_bytes(SIGNATURE_SENTINEL);
-        CanonicalValue::Bytes(serde_json::to_vec(&copy).expect("serde deserialization should succeed"))
+        CanonicalValue::Bytes(
+            serde_json::to_vec(&copy).expect("serde deserialization should succeed"),
+        )
     }
 }
 
@@ -905,7 +907,8 @@ mod tests {
             ProofType::ReplayMotif,
         ] {
             let json = serde_json::to_string(&pt).expect("serde deserialization should succeed");
-            let back: ProofType = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ProofType =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(pt, back);
         }
     }
@@ -919,7 +922,8 @@ mod tests {
             OptimizationClass::PathElimination,
         ] {
             let json = serde_json::to_string(&oc).expect("serde deserialization should succeed");
-            let back: OptimizationClass = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: OptimizationClass =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(oc, back);
         }
     }
@@ -932,7 +936,8 @@ mod tests {
             EquivalenceMethod::Bisimulation,
         ] {
             let json = serde_json::to_string(&em).expect("serde deserialization should succeed");
-            let back: EquivalenceMethod = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: EquivalenceMethod =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(em, back);
         }
     }
@@ -941,7 +946,8 @@ mod tests {
     fn receipt_serde_roundtrip() {
         let receipt = test_receipt(epoch());
         let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
-        let back: SpecializationReceipt = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SpecializationReceipt =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(receipt, back);
     }
 
@@ -1111,7 +1117,9 @@ mod tests {
         let key = signing_key();
         let vk = key.verification_key();
         let mut receipt = test_receipt(epoch());
-        receipt.sign(&key).expect("serde deserialization should succeed");
+        receipt
+            .sign(&key)
+            .expect("serde deserialization should succeed");
         assert!(receipt.verify(&vk).is_ok());
     }
 
@@ -1122,7 +1130,9 @@ mod tests {
             .expect("serde deserialization should succeed")
             .verification_key();
         let mut receipt = test_receipt(epoch());
-        receipt.sign(&key).expect("serde deserialization should succeed");
+        receipt
+            .sign(&key)
+            .expect("serde deserialization should succeed");
         assert!(receipt.verify(&wrong_vk).is_err());
     }
 
@@ -1131,7 +1141,9 @@ mod tests {
         let key = signing_key();
         let vk = key.verification_key();
         let mut receipt = test_receipt(epoch());
-        receipt.sign(&key).expect("serde deserialization should succeed");
+        receipt
+            .sign(&key)
+            .expect("serde deserialization should succeed");
         receipt.timestamp_ns = 999;
         assert!(receipt.verify(&vk).is_err());
     }
@@ -1214,8 +1226,20 @@ mod tests {
             .metadata("version", "3")
             .build()
             .expect("serde deserialization should succeed");
-        assert_eq!(receipt.metadata.get("author").expect("serde deserialization should succeed"), "plas");
-        assert_eq!(receipt.metadata.get("version").expect("serde deserialization should succeed"), "3");
+        assert_eq!(
+            receipt
+                .metadata
+                .get("author")
+                .expect("serde deserialization should succeed"),
+            "plas"
+        );
+        assert_eq!(
+            receipt
+                .metadata
+                .get("version")
+                .expect("serde deserialization should succeed"),
+            "3"
+        );
     }
 
     // -- Index / aggregation tests --
@@ -1224,7 +1248,8 @@ mod tests {
     fn index_insert_and_len() {
         let mut idx = ReceiptIndex::new();
         assert!(idx.is_empty());
-        idx.insert(test_receipt(epoch())).expect("serde deserialization should succeed");
+        idx.insert(test_receipt(epoch()))
+            .expect("serde deserialization should succeed");
         assert_eq!(idx.len(), 1);
     }
 
@@ -1233,7 +1258,8 @@ mod tests {
         let mut idx = ReceiptIndex::new();
         let receipt = test_receipt(epoch());
         let proof_id = receipt.proof_inputs[0].proof_id.clone();
-        idx.insert(receipt).expect("serde deserialization should succeed");
+        idx.insert(receipt)
+            .expect("serde deserialization should succeed");
 
         let found = idx.specializations_from_proof(&proof_id);
         assert_eq!(found.len(), 1);
@@ -1247,7 +1273,8 @@ mod tests {
         let mut idx = ReceiptIndex::new();
         let receipt = test_receipt(epoch());
         let rid = receipt.receipt_id.clone();
-        idx.insert(receipt).expect("serde deserialization should succeed");
+        idx.insert(receipt)
+            .expect("serde deserialization should succeed");
 
         let proofs = idx.proofs_for_specialization(&rid);
         assert_eq!(proofs.len(), 2); // two proof inputs in test_receipt
@@ -1259,7 +1286,8 @@ mod tests {
     #[test]
     fn index_by_optimization_class() {
         let mut idx = ReceiptIndex::new();
-        idx.insert(test_receipt(epoch())).expect("serde deserialization should succeed"); // HostcallDispatchSpecialization
+        idx.insert(test_receipt(epoch()))
+            .expect("serde deserialization should succeed"); // HostcallDispatchSpecialization
         let found = idx.by_optimization_class(OptimizationClass::HostcallDispatchSpecialization);
         assert_eq!(found.len(), 1);
         let empty = idx.by_optimization_class(OptimizationClass::PathElimination);
@@ -1271,7 +1299,8 @@ mod tests {
         let mut idx = ReceiptIndex::new();
         let e42 = SecurityEpoch::from_raw(42);
         let e99 = SecurityEpoch::from_raw(99);
-        idx.insert(test_receipt(e42)).expect("serde deserialization should succeed");
+        idx.insert(test_receipt(e42))
+            .expect("serde deserialization should succeed");
         assert_eq!(idx.by_epoch(e42).len(), 1);
         assert!(idx.by_epoch(e99).is_empty());
     }
@@ -1281,7 +1310,8 @@ mod tests {
         let mut idx = ReceiptIndex::new();
         let e42 = SecurityEpoch::from_raw(42);
         let e43 = SecurityEpoch::from_raw(43);
-        idx.insert(test_receipt(e42)).expect("serde deserialization should succeed");
+        idx.insert(test_receipt(e42))
+            .expect("serde deserialization should succeed");
         let stale = idx.invalidate_stale(e43);
         assert_eq!(stale.len(), 1);
         assert!(idx.is_empty());
@@ -1291,7 +1321,8 @@ mod tests {
     fn index_invalidate_stale_keeps_matching_epoch() {
         let mut idx = ReceiptIndex::new();
         let e42 = SecurityEpoch::from_raw(42);
-        idx.insert(test_receipt(e42)).expect("serde deserialization should succeed");
+        idx.insert(test_receipt(e42))
+            .expect("serde deserialization should succeed");
         let stale = idx.invalidate_stale(e42);
         assert!(stale.is_empty());
         assert_eq!(idx.len(), 1);
@@ -1320,7 +1351,8 @@ mod tests {
             outcome: "success".to_string(),
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let back: ReceiptEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ReceiptEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
     }
 
@@ -1469,8 +1501,10 @@ mod tests {
             .build()
             .expect("serde deserialization should succeed");
 
-        idx.insert(r1).expect("serde deserialization should succeed");
-        idx.insert(r2).expect("serde deserialization should succeed");
+        idx.insert(r1)
+            .expect("serde deserialization should succeed");
+        idx.insert(r2)
+            .expect("serde deserialization should succeed");
 
         let found = idx.specializations_from_proof(&pi.proof_id);
         assert_eq!(found.len(), 2);
@@ -1503,9 +1537,11 @@ mod tests {
     #[test]
     fn receipt_index_serde_roundtrip() {
         let mut idx = ReceiptIndex::new();
-        idx.insert(test_receipt(epoch())).expect("serde deserialization should succeed");
+        idx.insert(test_receipt(epoch()))
+            .expect("serde deserialization should succeed");
         let json = serde_json::to_string(&idx).expect("serde deserialization should succeed");
-        let back: ReceiptIndex = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ReceiptIndex =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.len(), 1);
     }
 
@@ -1524,7 +1560,9 @@ mod tests {
             .build()
             .expect("serde deserialization should succeed");
         assert_eq!(receipt.proof_inputs.len(), 1);
-        receipt.validate().expect("serde deserialization should succeed");
+        receipt
+            .validate()
+            .expect("serde deserialization should succeed");
     }
 
     // -- ReceiptError serde --
@@ -1536,7 +1574,8 @@ mod tests {
             proof_epoch: 99,
         };
         let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
-        let back: ReceiptError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ReceiptError =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, back);
     }
 
@@ -1937,7 +1976,9 @@ mod tests {
     #[test]
     fn receipt_index_clone_independence() {
         let mut original = ReceiptIndex::new();
-        original.insert(test_receipt(epoch())).expect("serde deserialization should succeed");
+        original
+            .insert(test_receipt(epoch()))
+            .expect("serde deserialization should succeed");
         let mut cloned = original.clone();
         cloned
             .insert(test_receipt(SecurityEpoch::from_raw(99)))
@@ -2236,7 +2277,8 @@ mod tests {
         let v = ReceiptSchemaVersion { major: 0, minor: 0 };
         assert_eq!(v.to_string(), "0.0");
         let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
-        let back: ReceiptSchemaVersion = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ReceiptSchemaVersion =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, back);
     }
 
@@ -2247,7 +2289,8 @@ mod tests {
             minor: u32::MAX,
         };
         let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
-        let back: ReceiptSchemaVersion = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ReceiptSchemaVersion =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, back);
         let display = v.to_string();
         assert!(display.contains(&u32::MAX.to_string()));
@@ -2267,7 +2310,8 @@ mod tests {
             sample_count: u64::MAX,
         };
         let json = serde_json::to_string(&pd).expect("serde deserialization should succeed");
-        let back: PerformanceDelta = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: PerformanceDelta =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(pd, back);
         assert!(pd.validate().is_ok());
     }
@@ -2281,7 +2325,8 @@ mod tests {
             validity_window_ticks: u64::MAX,
         };
         let json = serde_json::to_string(&pi).expect("serde deserialization should succeed");
-        let back: ProofInput = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ProofInput =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(pi, back);
     }
 
@@ -2298,7 +2343,9 @@ mod tests {
             .build()
             .expect("serde deserialization should succeed");
         assert!(receipt.metadata.is_empty());
-        receipt.validate().expect("serde deserialization should succeed");
+        receipt
+            .validate()
+            .expect("serde deserialization should succeed");
     }
 
     #[test]
@@ -2314,7 +2361,9 @@ mod tests {
         for i in 0..50 {
             builder = builder.metadata(format!("key_{i}"), format!("val_{i}"));
         }
-        let receipt = builder.build().expect("serde deserialization should succeed");
+        let receipt = builder
+            .build()
+            .expect("serde deserialization should succeed");
         assert_eq!(receipt.metadata.len(), 50);
     }
 
@@ -2422,7 +2471,8 @@ mod tests {
     fn proof_input_serde_roundtrip() {
         let pi = test_proof_input(ProofType::ReplayMotif, epoch());
         let json = serde_json::to_string(&pi).expect("serde deserialization should succeed");
-        let back: ProofInput = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ProofInput =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(pi, back);
     }
 
@@ -2430,7 +2480,8 @@ mod tests {
     fn transformation_witness_serde_roundtrip() {
         let tw = test_transformation_witness();
         let json = serde_json::to_string(&tw).expect("serde deserialization should succeed");
-        let back: TransformationWitness = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: TransformationWitness =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(tw, back);
     }
 
@@ -2438,7 +2489,8 @@ mod tests {
     fn equivalence_evidence_serde_roundtrip() {
         let ee = test_equivalence_evidence();
         let json = serde_json::to_string(&ee).expect("serde deserialization should succeed");
-        let back: EquivalenceEvidence = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: EquivalenceEvidence =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ee, back);
     }
 
@@ -2446,7 +2498,8 @@ mod tests {
     fn rollback_token_serde_roundtrip() {
         let rt = test_rollback_token();
         let json = serde_json::to_string(&rt).expect("serde deserialization should succeed");
-        let back: RollbackToken = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: RollbackToken =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(rt, back);
     }
 
@@ -2454,7 +2507,8 @@ mod tests {
     fn performance_delta_serde_roundtrip() {
         let pd = test_performance_delta();
         let json = serde_json::to_string(&pd).expect("serde deserialization should succeed");
-        let back: PerformanceDelta = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: PerformanceDelta =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(pd, back);
     }
 
@@ -2462,7 +2516,8 @@ mod tests {
     fn receipt_schema_version_serde_roundtrip() {
         let v = ReceiptSchemaVersion::CURRENT;
         let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
-        let back: ReceiptSchemaVersion = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ReceiptSchemaVersion =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, back);
     }
 
@@ -2477,7 +2532,8 @@ mod tests {
             outcome: "stale".to_string(),
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let back: ReceiptEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ReceiptEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
     }
 
@@ -2519,8 +2575,10 @@ mod tests {
             },
         ];
         for variant in &variants {
-            let json = serde_json::to_string(variant).expect("serde deserialization should succeed");
-            let back: ReceiptError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(variant).expect("serde deserialization should succeed");
+            let back: ReceiptError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*variant, back, "roundtrip failed for {variant:?}");
         }
     }
@@ -2543,8 +2601,10 @@ mod tests {
                 .performance_delta(test_performance_delta())
                 .build()
                 .expect("serde deserialization should succeed");
-            let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
-            let back: SpecializationReceipt = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&receipt).expect("serde deserialization should succeed");
+            let back: SpecializationReceipt =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(receipt, back);
         }
     }
@@ -2563,7 +2623,8 @@ mod tests {
                 pass_rate_millionths: MILLIONTHS,
             };
             let json = serde_json::to_string(&ee).expect("serde deserialization should succeed");
-            let back: EquivalenceEvidence = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: EquivalenceEvidence =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(ee, back);
         }
     }
@@ -2572,9 +2633,12 @@ mod tests {
     fn signed_receipt_serde_roundtrip() {
         let key = signing_key();
         let mut receipt = test_receipt(epoch());
-        receipt.sign(&key).expect("serde deserialization should succeed");
+        receipt
+            .sign(&key)
+            .expect("serde deserialization should succeed");
         let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
-        let back: SpecializationReceipt = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SpecializationReceipt =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(receipt, back);
         // verify the deserialized receipt still passes verification
         let vk = key.verification_key();
@@ -2586,10 +2650,12 @@ mod tests {
         let mut idx = ReceiptIndex::new();
         for raw in [10u64, 20, 30] {
             let e = SecurityEpoch::from_raw(raw);
-            idx.insert(test_receipt(e)).expect("serde deserialization should succeed");
+            idx.insert(test_receipt(e))
+                .expect("serde deserialization should succeed");
         }
         let json = serde_json::to_string(&idx).expect("serde deserialization should succeed");
-        let back: ReceiptIndex = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ReceiptIndex =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.len(), 3);
     }
 
@@ -2674,8 +2740,10 @@ mod tests {
             .performance_delta(test_performance_delta())
             .build()
             .expect("serde deserialization should succeed");
-        idx.insert(r1).expect("serde deserialization should succeed");
-        idx.insert(r2).expect("serde deserialization should succeed");
+        idx.insert(r1)
+            .expect("serde deserialization should succeed");
+        idx.insert(r2)
+            .expect("serde deserialization should succeed");
         assert_eq!(idx.by_epoch(e42).len(), 2);
     }
 
@@ -2684,8 +2752,10 @@ mod tests {
         let mut idx = ReceiptIndex::new();
         let e1 = SecurityEpoch::from_raw(1);
         let e2 = SecurityEpoch::from_raw(2);
-        idx.insert(test_receipt(e1)).expect("serde deserialization should succeed");
-        idx.insert(test_receipt(e2)).expect("serde deserialization should succeed");
+        idx.insert(test_receipt(e1))
+            .expect("serde deserialization should succeed");
+        idx.insert(test_receipt(e2))
+            .expect("serde deserialization should succeed");
         assert_eq!(idx.len(), 2);
         let stale = idx.invalidate_stale(e2);
         assert_eq!(stale.len(), 1); // e1 receipt removed

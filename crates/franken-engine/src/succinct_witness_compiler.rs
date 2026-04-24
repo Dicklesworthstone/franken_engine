@@ -963,7 +963,8 @@ mod tests {
     fn sufficiency_dimension_serde_roundtrip() {
         for dim in &SufficiencyDimension::ALL {
             let json = serde_json::to_string(dim).expect("serde deserialization should succeed");
-            let back: SufficiencyDimension = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: SufficiencyDimension =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*dim, back);
         }
     }
@@ -1024,7 +1025,8 @@ mod tests {
     fn schema_serde_roundtrip() {
         let schema = test_schema();
         let json = serde_json::to_string(&schema).expect("serde deserialization should succeed");
-        let back: WitnessSchema = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: WitnessSchema =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(schema, back);
     }
 
@@ -1113,7 +1115,9 @@ mod tests {
     fn inclusion_proof_single_leaf() {
         let leaf = EvidenceChunk::new(0, "a", b"only".to_vec()).leaf_hash();
         let tree = MerkleTree::build(&[leaf]);
-        let proof = tree.inclusion_proof(0).expect("serde deserialization should succeed");
+        let proof = tree
+            .inclusion_proof(0)
+            .expect("serde deserialization should succeed");
         assert!(proof.verify());
     }
 
@@ -1122,8 +1126,16 @@ mod tests {
         let l1 = EvidenceChunk::new(0, "a", b"one".to_vec()).leaf_hash();
         let l2 = EvidenceChunk::new(1, "b", b"two".to_vec()).leaf_hash();
         let tree = MerkleTree::build(&[l1, l2]);
-        assert!(tree.inclusion_proof(0).expect("serde deserialization should succeed").verify());
-        assert!(tree.inclusion_proof(1).expect("serde deserialization should succeed").verify());
+        assert!(
+            tree.inclusion_proof(0)
+                .expect("serde deserialization should succeed")
+                .verify()
+        );
+        assert!(
+            tree.inclusion_proof(1)
+                .expect("serde deserialization should succeed")
+                .verify()
+        );
     }
 
     #[test]
@@ -1134,7 +1146,9 @@ mod tests {
         let tree = MerkleTree::build(&leaves);
         for i in 0..4 {
             assert!(
-                tree.inclusion_proof(i).expect("serde deserialization should succeed").verify(),
+                tree.inclusion_proof(i)
+                    .expect("serde deserialization should succeed")
+                    .verify(),
                 "proof for leaf {i} failed"
             );
         }
@@ -1164,9 +1178,13 @@ mod tests {
         let l1 = EvidenceChunk::new(0, "a", b"one".to_vec()).leaf_hash();
         let l2 = EvidenceChunk::new(1, "b", b"two".to_vec()).leaf_hash();
         let tree = MerkleTree::build(&[l1, l2]);
-        let proof = tree.inclusion_proof(0).expect("serde deserialization should succeed");
-        let back: InclusionProof =
-            serde_json::from_str(&serde_json::to_string(&proof).expect("serde deserialization should succeed")).expect("serde deserialization should succeed");
+        let proof = tree
+            .inclusion_proof(0)
+            .expect("serde deserialization should succeed");
+        let back: InclusionProof = serde_json::from_str(
+            &serde_json::to_string(&proof).expect("serde deserialization should succeed"),
+        )
+        .expect("serde deserialization should succeed");
         assert_eq!(proof, back);
         assert!(back.verify());
     }
@@ -1189,8 +1207,10 @@ mod tests {
     #[test]
     fn provenance_serde_roundtrip() {
         let prov = test_provenance();
-        let back: ProvenanceAttachment =
-            serde_json::from_str(&serde_json::to_string(&prov).expect("serde deserialization should succeed")).expect("serde deserialization should succeed");
+        let back: ProvenanceAttachment = serde_json::from_str(
+            &serde_json::to_string(&prov).expect("serde deserialization should succeed"),
+        )
+        .expect("serde deserialization should succeed");
         assert_eq!(prov, back);
     }
 
@@ -1216,8 +1236,10 @@ mod tests {
             ReconstructionKind::DeterministicReplay,
             ReconstructionKind::Hybrid,
         ] {
-            let back: ReconstructionKind =
-                serde_json::from_str(&serde_json::to_string(&kind).expect("serde deserialization should succeed")).expect("serde deserialization should succeed");
+            let back: ReconstructionKind = serde_json::from_str(
+                &serde_json::to_string(&kind).expect("serde deserialization should succeed"),
+            )
+            .expect("serde deserialization should succeed");
             assert_eq!(kind, back);
         }
     }
@@ -1350,8 +1372,10 @@ mod tests {
             .provenance(test_provenance())
             .compile(test_epoch())
             .expect("serde deserialization should succeed");
-        let back: WitnessPack =
-            serde_json::from_str(&serde_json::to_string(&result.pack).expect("serde deserialization should succeed")).expect("serde deserialization should succeed");
+        let back: WitnessPack = serde_json::from_str(
+            &serde_json::to_string(&result.pack).expect("serde deserialization should succeed"),
+        )
+        .expect("serde deserialization should succeed");
         assert_eq!(result.pack, back);
     }
 
@@ -1373,7 +1397,9 @@ mod tests {
         let l1 = EvidenceChunk::new(0, "a", b"one".to_vec()).leaf_hash();
         let l2 = EvidenceChunk::new(1, "b", b"two".to_vec()).leaf_hash();
         let tree = MerkleTree::build(&[l1, l2]);
-        let proof = tree.inclusion_proof(0).expect("serde deserialization should succeed");
+        let proof = tree
+            .inclusion_proof(0)
+            .expect("serde deserialization should succeed");
         assert!(PackVerifier::verify_inclusion(
             &proof,
             &hex::encode(tree.root_hash)
@@ -1496,8 +1522,10 @@ mod tests {
             .compile(test_epoch())
             .expect("serde deserialization should succeed");
         let report = generate_report(&[&result]);
-        let back: WitnessPackReport =
-            serde_json::from_str(&serde_json::to_string(&report).expect("serde deserialization should succeed")).expect("serde deserialization should succeed");
+        let back: WitnessPackReport = serde_json::from_str(
+            &serde_json::to_string(&report).expect("serde deserialization should succeed"),
+        )
+        .expect("serde deserialization should succeed");
         assert_eq!(report, back);
     }
 
@@ -1526,7 +1554,9 @@ mod tests {
         let tree = MerkleTree::build(&leaves);
         for i in 0..32 {
             assert!(
-                tree.inclusion_proof(i).expect("serde deserialization should succeed").verify(),
+                tree.inclusion_proof(i)
+                    .expect("serde deserialization should succeed")
+                    .verify(),
                 "proof for leaf {i} failed"
             );
         }
@@ -1601,7 +1631,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: CompilationError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: CompilationError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -1634,7 +1665,9 @@ mod tests {
         let tree = MerkleTree::build(&leaves);
         for i in 0..63 {
             assert!(
-                tree.inclusion_proof(i).expect("serde deserialization should succeed").verify(),
+                tree.inclusion_proof(i)
+                    .expect("serde deserialization should succeed")
+                    .verify(),
                 "proof for leaf {i} failed"
             );
         }
@@ -1664,7 +1697,8 @@ mod tests {
         let mut prov = test_provenance();
         prov.legal_summary = Some("Retained per 7-year policy".into());
         let json = serde_json::to_string(&prov).expect("serde deserialization should succeed");
-        let back: ProvenanceAttachment = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ProvenanceAttachment =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(prov, back);
         assert_eq!(
             back.legal_summary,
@@ -1700,7 +1734,8 @@ mod tests {
             rationale: "causal chain must be intact".into(),
         };
         let json = serde_json::to_string(&sc).expect("serde deserialization should succeed");
-        let back: SufficiencyConstraint = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SufficiencyConstraint =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(sc, back);
     }
 
@@ -1716,7 +1751,8 @@ mod tests {
             }],
         };
         let json = serde_json::to_string(&sr).expect("serde deserialization should succeed");
-        let back: SufficiencyResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SufficiencyResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(sr, back);
     }
 
@@ -1728,7 +1764,8 @@ mod tests {
             actual_millionths: 0,
         };
         let json = serde_json::to_string(&sv).expect("serde deserialization should succeed");
-        let back: SufficiencyViolation = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SufficiencyViolation =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(sv, back);
     }
 
@@ -1736,7 +1773,8 @@ mod tests {
     fn evidence_chunk_serde_roundtrip() {
         let chunk = EvidenceChunk::new(7, "security", b"payload bytes".to_vec());
         let json = serde_json::to_string(&chunk).expect("serde deserialization should succeed");
-        let back: EvidenceChunk = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: EvidenceChunk =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(chunk, back);
     }
 
@@ -1747,7 +1785,8 @@ mod tests {
             .collect();
         let tree = MerkleTree::build(&leaves);
         let json = serde_json::to_string(&tree).expect("serde deserialization should succeed");
-        let back: MerkleTree = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: MerkleTree =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(tree, back);
     }
 
@@ -1758,7 +1797,8 @@ mod tests {
             is_right: true,
         };
         let json = serde_json::to_string(&step).expect("serde deserialization should succeed");
-        let back: ProofStep = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ProofStep =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(step, back);
     }
 
@@ -1771,7 +1811,8 @@ mod tests {
             replay_session_id: Some("sess-99".into()),
         };
         let json = serde_json::to_string(&hint).expect("serde deserialization should succeed");
-        let back: ReconstructionHint = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ReconstructionHint =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(hint, back);
     }
 
@@ -1785,7 +1826,8 @@ mod tests {
             leaf_hash: "cafebabe".into(),
         };
         let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
-        let back: ChunkManifestEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ChunkManifestEntry =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, back);
     }
 
@@ -1801,7 +1843,8 @@ mod tests {
             sufficiency_score: Some(900_000),
         };
         let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
-        let back: PackReportEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: PackReportEntry =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, back);
     }
 
@@ -1812,7 +1855,8 @@ mod tests {
             issues: vec!["merkle root mismatch".into()],
         };
         let json = serde_json::to_string(&pvr).expect("serde deserialization should succeed");
-        let back: PackVerificationResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: PackVerificationResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(pvr, back);
     }
 
@@ -1831,7 +1875,8 @@ mod tests {
             epoch: test_epoch(),
         };
         let json = serde_json::to_string(&cert).expect("serde deserialization should succeed");
-        let back: SufficiencyCertificate = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SufficiencyCertificate =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cert, back);
     }
 
@@ -1843,7 +1888,8 @@ mod tests {
             .compile(test_epoch())
             .expect("serde deserialization should succeed");
         let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
-        let back: CompilationResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: CompilationResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, back);
         assert!(back.verify_all_proofs());
     }
@@ -2012,7 +2058,9 @@ mod tests {
     fn verifier_inclusion_bad_hex_returns_false() {
         let l1 = EvidenceChunk::new(0, "a", b"one".to_vec()).leaf_hash();
         let tree = MerkleTree::build(&[l1]);
-        let proof = tree.inclusion_proof(0).expect("serde deserialization should succeed");
+        let proof = tree
+            .inclusion_proof(0)
+            .expect("serde deserialization should succeed");
         assert!(!PackVerifier::verify_inclusion(&proof, "not-hex!!"));
     }
 
@@ -2020,7 +2068,9 @@ mod tests {
     fn verifier_inclusion_wrong_length_hex_returns_false() {
         let l1 = EvidenceChunk::new(0, "a", b"one".to_vec()).leaf_hash();
         let tree = MerkleTree::build(&[l1]);
-        let proof = tree.inclusion_proof(0).expect("serde deserialization should succeed");
+        let proof = tree
+            .inclusion_proof(0)
+            .expect("serde deserialization should succeed");
         // Valid hex but only 16 bytes (not 32)
         assert!(!PackVerifier::verify_inclusion(
             &proof,
@@ -2040,7 +2090,9 @@ mod tests {
         // Spot-check first, middle, last
         for &idx in &[0, 63, 127] {
             assert!(
-                tree.inclusion_proof(idx).expect("serde deserialization should succeed").verify(),
+                tree.inclusion_proof(idx)
+                    .expect("serde deserialization should succeed")
+                    .verify(),
                 "proof for leaf {idx} failed"
             );
         }
@@ -2256,7 +2308,9 @@ mod tests {
             .compile(test_epoch())
             .expect("serde deserialization should succeed");
         for i in 0..3 {
-            let proof = result.proof_for_chunk(i).expect("serde deserialization should succeed");
+            let proof = result
+                .proof_for_chunk(i)
+                .expect("serde deserialization should succeed");
             assert_eq!(proof.leaf_index, i);
             assert!(proof.verify());
         }

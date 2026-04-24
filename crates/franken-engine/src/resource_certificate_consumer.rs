@@ -1391,7 +1391,9 @@ mod tests {
     fn test_enforce_allow() {
         let mut enforcer = make_enforcer();
         let digest = make_digest("cert-1", CertificateVerdict::Certified);
-        enforcer.install_certificate("ext-1", digest).expect("serde deserialization should succeed");
+        enforcer
+            .install_certificate("ext-1", digest)
+            .expect("serde deserialization should succeed");
         let receipt = enforcer.enforce(
             "ext-1",
             EnforcementScope::General {
@@ -1406,7 +1408,9 @@ mod tests {
     fn test_enforce_throttle() {
         let mut enforcer = make_enforcer();
         let digest = make_digest("cert-1", CertificateVerdict::Certified);
-        enforcer.install_certificate("ext-1", digest).expect("serde deserialization should succeed");
+        enforcer
+            .install_certificate("ext-1", digest)
+            .expect("serde deserialization should succeed");
 
         // Use 91% of time budget (above 90% throttle threshold).
         let receipt = enforcer.enforce(
@@ -1426,7 +1430,9 @@ mod tests {
     fn test_enforce_reject_exceeded() {
         let mut enforcer = make_enforcer();
         let digest = make_digest("cert-1", CertificateVerdict::Certified);
-        enforcer.install_certificate("ext-1", digest).expect("serde deserialization should succeed");
+        enforcer
+            .install_certificate("ext-1", digest)
+            .expect("serde deserialization should succeed");
 
         // Exceed time budget.
         let receipt = enforcer.enforce(
@@ -1501,7 +1507,9 @@ mod tests {
         digest
             .bounds
             .retain(|bound| bound.dimension == EnforcedDimension::Time);
-        enforcer.install_certificate("ext-1", digest).expect("serde deserialization should succeed");
+        enforcer
+            .install_certificate("ext-1", digest)
+            .expect("serde deserialization should succeed");
 
         let receipt = enforcer.enforce(
             "ext-1",
@@ -1529,7 +1537,9 @@ mod tests {
         digest
             .bounds
             .retain(|bound| bound.dimension == EnforcedDimension::Time);
-        enforcer.install_certificate("ext-1", digest).expect("serde deserialization should succeed");
+        enforcer
+            .install_certificate("ext-1", digest)
+            .expect("serde deserialization should succeed");
 
         let receipt = enforcer.enforce(
             "ext-1",
@@ -1545,7 +1555,9 @@ mod tests {
     fn test_enforce_multiple_dimensions_exceeded() {
         let mut enforcer = make_enforcer();
         let digest = make_digest("cert-1", CertificateVerdict::Certified);
-        enforcer.install_certificate("ext-1", digest).expect("serde deserialization should succeed");
+        enforcer
+            .install_certificate("ext-1", digest)
+            .expect("serde deserialization should succeed");
 
         let receipt = enforcer.enforce(
             "ext-1",
@@ -1569,7 +1581,9 @@ mod tests {
     fn test_enforce_usage_accumulates() {
         let mut enforcer = make_enforcer();
         let digest = make_digest("cert-1", CertificateVerdict::Certified);
-        enforcer.install_certificate("ext-1", digest).expect("serde deserialization should succeed");
+        enforcer
+            .install_certificate("ext-1", digest)
+            .expect("serde deserialization should succeed");
 
         // First call: 50%.
         enforcer.enforce(
@@ -1598,7 +1612,9 @@ mod tests {
     fn test_enforce_reject_does_not_accumulate() {
         let mut enforcer = make_enforcer();
         let digest = make_digest("cert-1", CertificateVerdict::Certified);
-        enforcer.install_certificate("ext-1", digest).expect("serde deserialization should succeed");
+        enforcer
+            .install_certificate("ext-1", digest)
+            .expect("serde deserialization should succeed");
 
         // Reject: over budget.
         enforcer.enforce(
@@ -1610,8 +1626,13 @@ mod tests {
         );
 
         // Usage should NOT have been recorded.
-        let state = enforcer.extension_state("ext-1").expect("serde deserialization should succeed");
-        let time_budget = state.budgets.get(&EnforcedDimension::Time).expect("serde deserialization should succeed");
+        let state = enforcer
+            .extension_state("ext-1")
+            .expect("serde deserialization should succeed");
+        let time_budget = state
+            .budgets
+            .get(&EnforcedDimension::Time)
+            .expect("serde deserialization should succeed");
         assert_eq!(time_budget.current_usage_millionths, 0);
     }
 
@@ -1621,7 +1642,9 @@ mod tests {
     fn test_scheduler_scope() {
         let mut enforcer = make_enforcer();
         let digest = make_digest("cert-1", CertificateVerdict::Certified);
-        enforcer.install_certificate("ext-1", digest).expect("serde deserialization should succeed");
+        enforcer
+            .install_certificate("ext-1", digest)
+            .expect("serde deserialization should succeed");
 
         let receipt = enforcer.enforce(
             "ext-1",
@@ -1638,7 +1661,9 @@ mod tests {
     fn test_gc_scope() {
         let mut enforcer = make_enforcer();
         let digest = make_digest("cert-1", CertificateVerdict::Certified);
-        enforcer.install_certificate("ext-1", digest).expect("serde deserialization should succeed");
+        enforcer
+            .install_certificate("ext-1", digest)
+            .expect("serde deserialization should succeed");
 
         // GcPressure has no budget in the certificate and fail_closed_on_missing
         // is true, so the enforcer rejects with MissingBudgetDimensions.
@@ -1659,7 +1684,9 @@ mod tests {
     fn test_module_load_scope() {
         let mut enforcer = make_enforcer();
         let digest = make_digest("cert-1", CertificateVerdict::Certified);
-        enforcer.install_certificate("ext-1", digest).expect("serde deserialization should succeed");
+        enforcer
+            .install_certificate("ext-1", digest)
+            .expect("serde deserialization should succeed");
 
         // ModuleLoadCount has no budget in the certificate and fail_closed_on_missing
         // is true, so the enforcer rejects with MissingBudgetDimensions.
@@ -1680,7 +1707,9 @@ mod tests {
     fn test_hostcall_scope() {
         let mut enforcer = make_enforcer();
         let digest = make_digest("cert-1", CertificateVerdict::Certified);
-        enforcer.install_certificate("ext-1", digest).expect("serde deserialization should succeed");
+        enforcer
+            .install_certificate("ext-1", digest)
+            .expect("serde deserialization should succeed");
 
         let receipt = enforcer.enforce(
             "ext-1",
@@ -1696,7 +1725,9 @@ mod tests {
     fn test_specialization_scope() {
         let mut enforcer = make_enforcer();
         let digest = make_digest("cert-1", CertificateVerdict::Certified);
-        enforcer.install_certificate("ext-1", digest).expect("serde deserialization should succeed");
+        enforcer
+            .install_certificate("ext-1", digest)
+            .expect("serde deserialization should succeed");
 
         let receipt = enforcer.enforce(
             "ext-1",
@@ -1714,7 +1745,9 @@ mod tests {
     fn test_receipt_has_id() {
         let mut enforcer = make_enforcer();
         let digest = make_digest("cert-1", CertificateVerdict::Certified);
-        enforcer.install_certificate("ext-1", digest).expect("serde deserialization should succeed");
+        enforcer
+            .install_certificate("ext-1", digest)
+            .expect("serde deserialization should succeed");
 
         let receipt = enforcer.enforce(
             "ext-1",
@@ -1731,7 +1764,9 @@ mod tests {
     fn test_receipt_display() {
         let mut enforcer = make_enforcer();
         let digest = make_digest("cert-1", CertificateVerdict::Certified);
-        enforcer.install_certificate("ext-1", digest).expect("serde deserialization should succeed");
+        enforcer
+            .install_certificate("ext-1", digest)
+            .expect("serde deserialization should succeed");
 
         let receipt = enforcer.enforce(
             "ext-1",
@@ -1753,7 +1788,9 @@ mod tests {
         };
         let mut enforcer = BudgetEnforcer::new(policy, test_epoch());
         let digest = make_digest("cert-1", CertificateVerdict::Certified);
-        enforcer.install_certificate("ext-1", digest).expect("serde deserialization should succeed");
+        enforcer
+            .install_certificate("ext-1", digest)
+            .expect("serde deserialization should succeed");
 
         for i in 0..5 {
             enforcer.enforce(
@@ -1773,7 +1810,9 @@ mod tests {
     fn test_is_throttled() {
         let mut enforcer = make_enforcer();
         let digest = make_digest("cert-1", CertificateVerdict::Certified);
-        enforcer.install_certificate("ext-1", digest).expect("serde deserialization should succeed");
+        enforcer
+            .install_certificate("ext-1", digest)
+            .expect("serde deserialization should succeed");
 
         assert!(!enforcer.is_throttled("ext-1"));
         enforcer.enforce(
@@ -1790,7 +1829,9 @@ mod tests {
     fn test_is_exhausted() {
         let mut enforcer = make_enforcer();
         let digest = make_digest("cert-1", CertificateVerdict::Certified);
-        enforcer.install_certificate("ext-1", digest).expect("serde deserialization should succeed");
+        enforcer
+            .install_certificate("ext-1", digest)
+            .expect("serde deserialization should succeed");
 
         assert!(!enforcer.is_exhausted("ext-1"));
         // Enforcement rejects when projected ratio >= reject_threshold, so usage
@@ -1806,7 +1847,9 @@ mod tests {
     fn test_enforcement_summary() {
         let mut enforcer = make_enforcer();
         let digest = make_digest("cert-1", CertificateVerdict::Certified);
-        enforcer.install_certificate("ext-1", digest).expect("serde deserialization should succeed");
+        enforcer
+            .install_certificate("ext-1", digest)
+            .expect("serde deserialization should succeed");
 
         enforcer.enforce(
             "ext-1",
@@ -1835,7 +1878,9 @@ mod tests {
     fn test_extension_decision_counts() {
         let mut enforcer = make_enforcer();
         let digest = make_digest("cert-1", CertificateVerdict::Certified);
-        enforcer.install_certificate("ext-1", digest).expect("serde deserialization should succeed");
+        enforcer
+            .install_certificate("ext-1", digest)
+            .expect("serde deserialization should succeed");
 
         // One allow.
         enforcer.enforce(
@@ -1846,7 +1891,9 @@ mod tests {
             &[(EnforcedDimension::Time, 1_000)],
         );
 
-        let state = enforcer.extension_state("ext-1").expect("serde deserialization should succeed");
+        let state = enforcer
+            .extension_state("ext-1")
+            .expect("serde deserialization should succeed");
         assert_eq!(state.allow_count, 1);
         assert_eq!(state.throttle_count, 0);
         assert_eq!(state.reject_count, 0);
@@ -1859,7 +1906,9 @@ mod tests {
     fn test_manifest_creation() {
         let mut enforcer = make_enforcer();
         let digest = make_digest("cert-1", CertificateVerdict::Certified);
-        enforcer.install_certificate("ext-1", digest).expect("serde deserialization should succeed");
+        enforcer
+            .install_certificate("ext-1", digest)
+            .expect("serde deserialization should succeed");
         enforcer.enforce(
             "ext-1",
             EnforcementScope::General {
@@ -1889,7 +1938,9 @@ mod tests {
     fn test_receipt_uses_live_policy_hash_after_policy_mutation() {
         let mut enforcer = make_enforcer();
         let digest = make_digest("cert-1", CertificateVerdict::Certified);
-        enforcer.install_certificate("ext-1", digest).expect("serde deserialization should succeed");
+        enforcer
+            .install_certificate("ext-1", digest)
+            .expect("serde deserialization should succeed");
         enforcer.policy.emit_violation_details = false;
 
         let receipt = enforcer.enforce(
@@ -1908,7 +1959,9 @@ mod tests {
         let build_receipt = |emit_violation_details| {
             let mut enforcer = make_enforcer();
             let digest = make_digest("cert-1", CertificateVerdict::Certified);
-            enforcer.install_certificate("ext-1", digest).expect("serde deserialization should succeed");
+            enforcer
+                .install_certificate("ext-1", digest)
+                .expect("serde deserialization should succeed");
             enforcer.policy.emit_violation_details = emit_violation_details;
             enforcer.enforce(
                 "ext-1",
@@ -2120,7 +2173,10 @@ mod tests {
         let digest = make_digest("cert-1", CertificateVerdict::Certified);
         state.install_certificate(digest);
         state.record_usage(EnforcedDimension::Time, 1_000_000);
-        let budget = state.budgets.get(&EnforcedDimension::Time).expect("serde deserialization should succeed");
+        let budget = state
+            .budgets
+            .get(&EnforcedDimension::Time)
+            .expect("serde deserialization should succeed");
         assert_eq!(budget.current_usage_millionths, 1_000_000);
     }
 

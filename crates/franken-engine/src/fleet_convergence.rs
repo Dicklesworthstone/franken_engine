@@ -1265,7 +1265,8 @@ mod tests {
     fn thresholds_serde_round_trip() {
         let t = ContainmentThresholds::default();
         let json = serde_json::to_string(&t).expect("serde deserialization should succeed");
-        let decoded: ContainmentThresholds = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let decoded: ContainmentThresholds =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(t, decoded);
     }
 
@@ -1451,7 +1452,8 @@ mod tests {
             signature: AuthenticityHash::compute_keyed(b"k", b"v"),
         };
         let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
-        let decoded: ContainmentReceipt = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let decoded: ContainmentReceipt =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(receipt, decoded);
     }
 
@@ -1528,7 +1530,9 @@ mod tests {
             degraded_mode: false,
             evidence_count: 20,
         };
-        engine.execute_decision(&terminate, 1_000_000_000).expect("serde deserialization should succeed");
+        engine
+            .execute_decision(&terminate, 1_000_000_000)
+            .expect("serde deserialization should succeed");
 
         // Attempt sandbox (lower severity) — should be rejected.
         let sandbox = ConvergenceDecision {
@@ -1685,10 +1689,14 @@ mod tests {
             degraded_mode: false,
             evidence_count: 5,
         };
-        engine.execute_decision(&decision, 1_000_000_000).expect("serde deserialization should succeed");
+        engine
+            .execute_decision(&decision, 1_000_000_000)
+            .expect("serde deserialization should succeed");
 
         // Escalate due to sandbox failure.
-        let receipt = engine.escalate("ext-1", 300_000, 5, 2_000_000_000).expect("serde deserialization should succeed");
+        let receipt = engine
+            .escalate("ext-1", 300_000, 5, 2_000_000_000)
+            .expect("serde deserialization should succeed");
         assert_eq!(receipt.action_type, ContainmentAction::Suspend);
         assert_eq!(receipt.escalation_depth, 1);
     }
@@ -1707,10 +1715,14 @@ mod tests {
             degraded_mode: false,
             evidence_count: 5,
         };
-        engine.execute_decision(&sandbox, 1_000_000_000).expect("serde deserialization should succeed");
+        engine
+            .execute_decision(&sandbox, 1_000_000_000)
+            .expect("serde deserialization should succeed");
 
         // First escalation succeeds.
-        engine.escalate("ext-1", 300_000, 5, 2_000_000_000).expect("serde deserialization should succeed");
+        engine
+            .escalate("ext-1", 300_000, 5, 2_000_000_000)
+            .expect("serde deserialization should succeed");
 
         // Second escalation exceeds max depth.
         let err = engine
@@ -1732,7 +1744,9 @@ mod tests {
             degraded_mode: false,
             evidence_count: 50,
         };
-        engine.execute_decision(&quarantine, 1_000_000_000).expect("serde deserialization should succeed");
+        engine
+            .execute_decision(&quarantine, 1_000_000_000)
+            .expect("serde deserialization should succeed");
 
         let err = engine
             .escalate("ext-1", 1_000_000, 50, 2_000_000_000)
@@ -1821,7 +1835,9 @@ mod tests {
             degraded_mode: true,
             evidence_count: 50,
         };
-        engine.execute_decision(&quarantine, 1_000_000_000).expect("serde deserialization should succeed");
+        engine
+            .execute_decision(&quarantine, 1_000_000_000)
+            .expect("serde deserialization should succeed");
 
         // Checkpoint from other partition says sandbox.
         let decisions = vec![ResolvedContainmentDecision {
@@ -1883,8 +1899,20 @@ mod tests {
 
         let events = engine.events_of_type(&ConvergenceEventType::ActionExecuted);
         assert_eq!(events.len(), 1);
-        assert_eq!(events[0].fields.get("extension_id").expect("serde deserialization should succeed"), "ext-1");
-        assert_eq!(events[0].fields.get("action").expect("serde deserialization should succeed"), "sandbox");
+        assert_eq!(
+            events[0]
+                .fields
+                .get("extension_id")
+                .expect("serde deserialization should succeed"),
+            "ext-1"
+        );
+        assert_eq!(
+            events[0]
+                .fields
+                .get("action")
+                .expect("serde deserialization should succeed"),
+            "sandbox"
+        );
     }
 
     #[test]
@@ -1932,7 +1960,13 @@ mod tests {
 
         let events = engine.events_of_type(&ConvergenceEventType::SpectralHealthComputed);
         assert_eq!(events.len(), 1);
-        assert_eq!(events[0].fields.get("healthy_nodes").expect("serde deserialization should succeed"), "3");
+        assert_eq!(
+            events[0]
+                .fields
+                .get("healthy_nodes")
+                .expect("serde deserialization should succeed"),
+            "3"
+        );
         assert!(events[0].fields.contains_key("spectral_gap_millionths"));
         assert!(events[0].fields.contains_key("lambda_max_millionths"));
         assert!(events[0].fields.contains_key("fiedler_iterations"));
@@ -1956,7 +1990,8 @@ mod tests {
             },
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let decoded: ConvergenceEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let decoded: ConvergenceEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, decoded);
     }
 
@@ -1995,7 +2030,8 @@ mod tests {
             extension_id: "ext-1".into(),
         };
         let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
-        let decoded: ConvergenceError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let decoded: ConvergenceError =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, decoded);
     }
 
@@ -2012,7 +2048,8 @@ mod tests {
     fn convergence_verification_serde_round_trip() {
         let v = ConvergenceVerification::Converged { checkpoint_seq: 42 };
         let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
-        let decoded: ConvergenceVerification = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let decoded: ConvergenceVerification =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, decoded);
     }
 
@@ -2022,7 +2059,8 @@ mod tests {
     fn convergence_config_serde_round_trip() {
         let config = ConvergenceConfig::default();
         let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
-        let decoded: ConvergenceConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let decoded: ConvergenceConfig =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config.thresholds, decoded.thresholds);
         assert_eq!(
             config.degraded_tightening_factor,
@@ -2115,19 +2153,27 @@ mod tests {
             degraded_mode: false,
             evidence_count: 5,
         };
-        let r0 = engine.execute_decision(&sandbox, 1_000_000_000).expect("serde deserialization should succeed");
+        let r0 = engine
+            .execute_decision(&sandbox, 1_000_000_000)
+            .expect("serde deserialization should succeed");
         assert_eq!(r0.action_type, ContainmentAction::Sandbox);
 
         // Escalate: sandbox → suspend.
-        let r1 = engine.escalate("ext-1", 300_000, 5, 2_000_000_000).expect("serde deserialization should succeed");
+        let r1 = engine
+            .escalate("ext-1", 300_000, 5, 2_000_000_000)
+            .expect("serde deserialization should succeed");
         assert_eq!(r1.action_type, ContainmentAction::Suspend);
 
         // Escalate: suspend → terminate.
-        let r2 = engine.escalate("ext-1", 300_000, 5, 3_000_000_000).expect("serde deserialization should succeed");
+        let r2 = engine
+            .escalate("ext-1", 300_000, 5, 3_000_000_000)
+            .expect("serde deserialization should succeed");
         assert_eq!(r2.action_type, ContainmentAction::Terminate);
 
         // Escalate: terminate → quarantine.
-        let r3 = engine.escalate("ext-1", 300_000, 5, 4_000_000_000).expect("serde deserialization should succeed");
+        let r3 = engine
+            .escalate("ext-1", 300_000, 5, 4_000_000_000)
+            .expect("serde deserialization should succeed");
         assert_eq!(r3.action_type, ContainmentAction::Quarantine);
 
         // No further escalation possible.
@@ -2153,7 +2199,8 @@ mod tests {
             total_fleet_size: 5,
         };
         let json = serde_json::to_string(&info).expect("serde deserialization should succeed");
-        let decoded: PartitionInfo = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let decoded: PartitionInfo =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(info, decoded);
     }
 
@@ -2170,7 +2217,8 @@ mod tests {
             merged_evidence_count: 42,
         };
         let json = serde_json::to_string(&info).expect("serde deserialization should succeed");
-        let decoded: HealingInfo = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let decoded: HealingInfo =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(info, decoded);
     }
 
@@ -2191,7 +2239,8 @@ mod tests {
         });
         for mode in [normal, degraded, healing] {
             let json = serde_json::to_string(&mode).expect("serde deserialization should succeed");
-            let decoded: PartitionMode = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let decoded: PartitionMode =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(mode, decoded);
         }
     }
@@ -2207,7 +2256,8 @@ mod tests {
             evidence_count: 20,
         };
         let json = serde_json::to_string(&decision).expect("serde deserialization should succeed");
-        let decoded: ConvergenceDecision = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let decoded: ConvergenceDecision =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(decision, decoded);
     }
 
@@ -2231,7 +2281,8 @@ mod tests {
         reg.increment_escalation("ext-1");
 
         let json = serde_json::to_string(&reg).expect("serde deserialization should succeed");
-        let decoded: ActionRegistry = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let decoded: ActionRegistry =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(decoded.total_actions(), 1);
         assert!(decoded.is_executed("ext-1", ContainmentAction::Suspend));
         assert_eq!(decoded.escalation_depth("ext-1"), 1);
@@ -2411,7 +2462,8 @@ mod tests {
     fn convergence_engine_serde_roundtrip() {
         let engine = test_engine("local");
         let json = serde_json::to_string(&engine).expect("serde deserialization should succeed");
-        let decoded: ConvergenceEngine = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let decoded: ConvergenceEngine =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(decoded.node_id, engine.node_id);
         assert_eq!(decoded.policy_version, engine.policy_version);
         assert_eq!(decoded.config.thresholds, engine.config.thresholds);
@@ -2438,7 +2490,8 @@ mod tests {
             checkpoint_summary_hash: ContentHash::compute(b"remote"),
         };
         let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
-        let decoded: ConvergenceVerification = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let decoded: ConvergenceVerification =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, decoded);
     }
 
@@ -2461,7 +2514,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let decoded: ConvergenceError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let decoded: ConvergenceError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, decoded);
         }
     }
@@ -2522,7 +2576,13 @@ mod tests {
 
         assert_eq!(engine.events.len(), 5);
         // The first events should have been evicted.
-        assert!(engine.events[0].fields.get("extension_id").expect("serde deserialization should succeed") != "ext-0");
+        assert!(
+            engine.events[0]
+                .fields
+                .get("extension_id")
+                .expect("serde deserialization should succeed")
+                != "ext-0"
+        );
     }
 
     #[test]
@@ -2601,12 +2661,24 @@ mod tests {
 
         let conflicts = engine.events_of_type(&ConvergenceEventType::ReconciliationConflict);
         assert_eq!(
-            conflicts[0].fields.get("resolved_action").expect("serde deserialization should succeed"),
+            conflicts[0]
+                .fields
+                .get("resolved_action")
+                .expect("serde deserialization should succeed"),
             "terminate"
         );
-        assert_eq!(conflicts[0].fields.get("local_action").expect("serde deserialization should succeed"), "sandbox");
         assert_eq!(
-            conflicts[0].fields.get("remote_action").expect("serde deserialization should succeed"),
+            conflicts[0]
+                .fields
+                .get("local_action")
+                .expect("serde deserialization should succeed"),
+            "sandbox"
+        );
+        assert_eq!(
+            conflicts[0]
+                .fields
+                .get("remote_action")
+                .expect("serde deserialization should succeed"),
             "terminate"
         );
     }
@@ -2652,7 +2724,13 @@ mod tests {
 
         let events = engine.events_of_type(&ConvergenceEventType::ConvergenceVerified);
         assert_eq!(events.len(), 1);
-        assert_eq!(events[0].fields.get("checkpoint_seq").expect("serde deserialization should succeed"), "42");
+        assert_eq!(
+            events[0]
+                .fields
+                .get("checkpoint_seq")
+                .expect("serde deserialization should succeed"),
+            "42"
+        );
     }
 
     #[test]
@@ -2667,7 +2745,13 @@ mod tests {
 
         let events = engine.events_of_type(&ConvergenceEventType::ConvergenceDiverged);
         assert_eq!(events.len(), 1);
-        assert_eq!(events[0].fields.get("checkpoint_seq").expect("serde deserialization should succeed"), "99");
+        assert_eq!(
+            events[0]
+                .fields
+                .get("checkpoint_seq")
+                .expect("serde deserialization should succeed"),
+            "99"
+        );
         assert!(events[0].fields.contains_key("local_hash"));
     }
 
@@ -2676,10 +2760,14 @@ mod tests {
         let mut engine = test_engine("local");
 
         let d1 = engine.evaluate_extension("ext-1", 300_000, 5);
-        let r1 = engine.execute_decision(&d1, 1_000_000_000).expect("serde deserialization should succeed");
+        let r1 = engine
+            .execute_decision(&d1, 1_000_000_000)
+            .expect("serde deserialization should succeed");
 
         let d2 = engine.evaluate_extension("ext-2", 600_000, 10);
-        let r2 = engine.execute_decision(&d2, 2_000_000_000).expect("serde deserialization should succeed");
+        let r2 = engine
+            .execute_decision(&d2, 2_000_000_000)
+            .expect("serde deserialization should succeed");
 
         assert_ne!(r1.action_id, r2.action_id);
         assert!(r1.action_id.contains("local"));
@@ -2698,16 +2786,44 @@ mod tests {
             degraded_mode: false,
             evidence_count: 5,
         };
-        engine.execute_decision(&sandbox, 1_000_000_000).expect("serde deserialization should succeed");
+        engine
+            .execute_decision(&sandbox, 1_000_000_000)
+            .expect("serde deserialization should succeed");
 
-        engine.escalate("ext-1", 300_000, 5, 2_000_000_000).expect("serde deserialization should succeed");
+        engine
+            .escalate("ext-1", 300_000, 5, 2_000_000_000)
+            .expect("serde deserialization should succeed");
 
         let events = engine.events_of_type(&ConvergenceEventType::EscalationTriggered);
         assert_eq!(events.len(), 1);
-        assert_eq!(events[0].fields.get("extension_id").expect("serde deserialization should succeed"), "ext-1");
-        assert_eq!(events[0].fields.get("from_action").expect("serde deserialization should succeed"), "sandbox");
-        assert_eq!(events[0].fields.get("to_action").expect("serde deserialization should succeed"), "suspend");
-        assert_eq!(events[0].fields.get("depth").expect("serde deserialization should succeed"), "1");
+        assert_eq!(
+            events[0]
+                .fields
+                .get("extension_id")
+                .expect("serde deserialization should succeed"),
+            "ext-1"
+        );
+        assert_eq!(
+            events[0]
+                .fields
+                .get("from_action")
+                .expect("serde deserialization should succeed"),
+            "sandbox"
+        );
+        assert_eq!(
+            events[0]
+                .fields
+                .get("to_action")
+                .expect("serde deserialization should succeed"),
+            "suspend"
+        );
+        assert_eq!(
+            events[0]
+                .fields
+                .get("depth")
+                .expect("serde deserialization should succeed"),
+            "1"
+        );
     }
 
     #[test]
@@ -2724,7 +2840,9 @@ mod tests {
     fn escalation_from_allow_to_sandbox() {
         let mut engine = test_engine("local");
         // No prior action — escalation from Allow to Sandbox.
-        let receipt = engine.escalate("ext-1", 100_000, 2, 1_000_000_000).expect("serde deserialization should succeed");
+        let receipt = engine
+            .escalate("ext-1", 100_000, 2, 1_000_000_000)
+            .expect("serde deserialization should succeed");
         assert_eq!(receipt.action_type, ContainmentAction::Sandbox);
         assert_eq!(receipt.escalation_depth, 1);
     }

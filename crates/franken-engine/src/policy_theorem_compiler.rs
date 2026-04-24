@@ -510,9 +510,15 @@ impl PolicyTheoremCompiler {
             for constraint in &node.constraints {
                 if let Constraint::NonInterferenceClaim { domain_a, domain_b } = constraint {
                     // SAFETY: domain_a was registered in domain_caps during earlier pass
-                    let subs_a = domain_caps.get(domain_a).cloned().expect("serde deserialization should succeed");
+                    let subs_a = domain_caps
+                        .get(domain_a)
+                        .cloned()
+                        .expect("serde deserialization should succeed");
                     // SAFETY: domain_b was registered in domain_caps during earlier pass
-                    let subs_b = domain_caps.get(domain_b).cloned().expect("serde deserialization should succeed");
+                    let subs_b = domain_caps
+                        .get(domain_b)
+                        .cloned()
+                        .expect("serde deserialization should succeed");
                     let overlap: BTreeSet<_> = subs_a.intersection(&subs_b).cloned().collect();
                     if !overlap.is_empty() {
                         violations.push(node.node_id.clone());
@@ -918,7 +924,9 @@ impl SignaturePreimage for PolicyValidationReceipt {
         let mut copy = self.clone();
         copy.signature = Signature::from_bytes(SIGNATURE_SENTINEL);
         // SAFETY: PolicyValidationRecord derives Serialize and has no non-serializable fields
-        CanonicalValue::Bytes(serde_json::to_vec(&copy).expect("serde deserialization should succeed"))
+        CanonicalValue::Bytes(
+            serde_json::to_vec(&copy).expect("serde deserialization should succeed"),
+        )
     }
 }
 
@@ -1364,7 +1372,9 @@ mod tests {
         let compiler = PolicyTheoremCompiler::new();
         let ir = valid_policy();
         // SAFETY: Test with valid policy IR should compile successfully
-        let result = compiler.compile(&ir).expect("serde deserialization should succeed");
+        let result = compiler
+            .compile(&ir)
+            .expect("serde deserialization should succeed");
         assert!(result.all_passed);
         assert!(!result.witnesses.is_empty());
         assert!(result.counterexamples.is_empty());
@@ -1420,7 +1430,9 @@ mod tests {
             ..valid_policy()
         };
         // SAFETY: Test with policy IR containing monotonicity violation should compile successfully
-        let result = compiler.compile(&ir).expect("serde deserialization should succeed");
+        let result = compiler
+            .compile(&ir)
+            .expect("serde deserialization should succeed");
         assert!(!result.all_passed);
         assert!(
             result
@@ -1435,7 +1447,9 @@ mod tests {
         let compiler = PolicyTheoremCompiler::with_limits(10_000, false);
         let ir = valid_policy();
         // SAFETY: Test with valid policy IR and disabled precedence should compile successfully
-        let result = compiler.compile(&ir).expect("serde deserialization should succeed");
+        let result = compiler
+            .compile(&ir)
+            .expect("serde deserialization should succeed");
         // Should have fewer passes.
         assert!(result.all_passed);
         // SAFETY: Test with valid policy IR and default compiler should compile successfully
@@ -1459,7 +1473,9 @@ mod tests {
             ..valid_policy()
         };
         // SAFETY: Test pre-merge check with two valid policies should succeed
-        let result = hooks.pre_merge_check(&a, &b).expect("serde deserialization should succeed");
+        let result = hooks
+            .pre_merge_check(&a, &b)
+            .expect("serde deserialization should succeed");
         assert!(result.passed);
         assert_eq!(hooks.hook_history().len(), 1);
     }
@@ -1479,7 +1495,9 @@ mod tests {
             ..valid_policy()
         };
         // SAFETY: Test pre-merge check with valid and violating policy should succeed execution
-        let result = hooks.pre_merge_check(&a, &b).expect("serde deserialization should succeed");
+        let result = hooks
+            .pre_merge_check(&a, &b)
+            .expect("serde deserialization should succeed");
         assert!(!result.passed);
     }
 
@@ -1489,7 +1507,9 @@ mod tests {
         let mut hooks = MachineCheckHooks::new(compiler);
         let ir = valid_policy();
         // SAFETY: Test pre-deployment check with valid policy should succeed
-        let result = hooks.pre_deployment_check(&ir).expect("serde deserialization should succeed");
+        let result = hooks
+            .pre_deployment_check(&ir)
+            .expect("serde deserialization should succeed");
         assert!(result.passed);
     }
 
@@ -1498,7 +1518,9 @@ mod tests {
         let compiler = PolicyTheoremCompiler::new();
         let mut hooks = MachineCheckHooks::new(compiler);
         let ir = valid_policy();
-        let result = hooks.runtime_check(&ir).expect("serde deserialization should succeed");
+        let result = hooks
+            .runtime_check(&ir)
+            .expect("serde deserialization should succeed");
         assert!(result.passed);
     }
 
@@ -1532,7 +1554,9 @@ mod tests {
             nodes: vec![base, escalation],
             ..valid_policy()
         };
-        let result = hooks.runtime_check(&ir).expect("serde deserialization should succeed");
+        let result = hooks
+            .runtime_check(&ir)
+            .expect("serde deserialization should succeed");
         assert!(!result.passed);
         assert!(
             result
@@ -1548,7 +1572,9 @@ mod tests {
     fn receipt_from_compilation() {
         let compiler = PolicyTheoremCompiler::new();
         let ir = valid_policy();
-        let result = compiler.compile(&ir).expect("serde deserialization should succeed");
+        let result = compiler
+            .compile(&ir)
+            .expect("serde deserialization should succeed");
         let sk = SigningKey::from_bytes([42u8; 32]).expect("serde deserialization should succeed");
         let vk = sk.verification_key();
 
@@ -1570,7 +1596,9 @@ mod tests {
     fn receipt_signature_detects_tampering() {
         let compiler = PolicyTheoremCompiler::new();
         let ir = valid_policy();
-        let result = compiler.compile(&ir).expect("serde deserialization should succeed");
+        let result = compiler
+            .compile(&ir)
+            .expect("serde deserialization should succeed");
         let sk = SigningKey::from_bytes([42u8; 32]).expect("serde deserialization should succeed");
         let vk = sk.verification_key();
 
@@ -1593,7 +1621,9 @@ mod tests {
     fn receipt_serde_roundtrip() {
         let compiler = PolicyTheoremCompiler::new();
         let ir = valid_policy();
-        let result = compiler.compile(&ir).expect("serde deserialization should succeed");
+        let result = compiler
+            .compile(&ir)
+            .expect("serde deserialization should succeed");
         let sk = SigningKey::from_bytes([42u8; 32]).expect("serde deserialization should succeed");
         let vk = sk.verification_key();
 
@@ -1607,7 +1637,8 @@ mod tests {
         receipt.sign(&sk);
 
         let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
-        let restored: PolicyValidationReceipt = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: PolicyValidationReceipt =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(receipt, restored);
         assert!(restored.verify());
     }
@@ -1643,7 +1674,8 @@ mod tests {
     fn policy_ir_serde_roundtrip() {
         let ir = valid_policy();
         let json = serde_json::to_string(&ir).expect("serde deserialization should succeed");
-        let restored: PolicyIr = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: PolicyIr =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ir, restored);
     }
 
@@ -1651,9 +1683,12 @@ mod tests {
     fn compilation_result_serde_roundtrip() {
         let compiler = PolicyTheoremCompiler::new();
         let ir = valid_policy();
-        let result = compiler.compile(&ir).expect("serde deserialization should succeed");
+        let result = compiler
+            .compile(&ir)
+            .expect("serde deserialization should succeed");
         let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
-        let restored: CompilationResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: CompilationResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, restored);
     }
 
@@ -1742,7 +1777,8 @@ mod tests {
         ];
         for c in &constraints {
             let json = serde_json::to_string(c).expect("serde deserialization should succeed");
-            let restored: Constraint = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: Constraint =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(c, &restored);
         }
     }
@@ -1762,7 +1798,8 @@ mod tests {
             fallback: "deny".into(),
         };
         let json = serde_json::to_string(&dp).expect("serde deserialization should succeed");
-        let restored: DecisionPoint = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: DecisionPoint =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(dp, restored);
     }
 
@@ -1773,8 +1810,12 @@ mod tests {
         let compiler = PolicyTheoremCompiler::new();
         let mut hooks = MachineCheckHooks::new(compiler);
         let ir = valid_policy();
-        hooks.pre_deployment_check(&ir).expect("serde deserialization should succeed");
-        hooks.runtime_check(&ir).expect("serde deserialization should succeed");
+        hooks
+            .pre_deployment_check(&ir)
+            .expect("serde deserialization should succeed");
+        hooks
+            .runtime_check(&ir)
+            .expect("serde deserialization should succeed");
         assert_eq!(hooks.hook_history().len(), 2);
     }
 
@@ -1784,8 +1825,12 @@ mod tests {
     fn compilation_deterministic() {
         let compiler = PolicyTheoremCompiler::new();
         let ir = valid_policy();
-        let r1 = compiler.compile(&ir).expect("serde deserialization should succeed");
-        let r2 = compiler.compile(&ir).expect("serde deserialization should succeed");
+        let r1 = compiler
+            .compile(&ir)
+            .expect("serde deserialization should succeed");
+        let r2 = compiler
+            .compile(&ir)
+            .expect("serde deserialization should succeed");
         assert_eq!(
             serde_json::to_string(&r1).expect("serde deserialization should succeed"),
             serde_json::to_string(&r2).expect("serde deserialization should succeed")
@@ -1837,7 +1882,8 @@ mod tests {
             lifetime_epochs: 10,
         };
         let json = serde_json::to_string(&grant).expect("serde deserialization should succeed");
-        let restored: AuthorityGrant = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: AuthorityGrant =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(grant, restored);
     }
 
@@ -1851,7 +1897,8 @@ mod tests {
             pass_name: "monotonicity_check".to_string(),
         };
         let json = serde_json::to_string(&pw).expect("serde deserialization should succeed");
-        let restored: PropertyWitness = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: PropertyWitness =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(pw, restored);
     }
 
@@ -1865,7 +1912,8 @@ mod tests {
             merge_path: vec!["n1".to_string()],
         };
         let json = serde_json::to_string(&ce).expect("serde deserialization should succeed");
-        let restored: Counterexample = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: Counterexample =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ce, restored);
     }
 
@@ -1878,7 +1926,8 @@ mod tests {
             severity: DiagnosticSeverity::Warning,
         };
         let json = serde_json::to_string(&hd).expect("serde deserialization should succeed");
-        let restored: HookDiagnostic = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: HookDiagnostic =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(hd, restored);
     }
 
@@ -1890,7 +1939,8 @@ mod tests {
             diagnostics: Vec::new(),
         };
         let json = serde_json::to_string(&hcr).expect("serde deserialization should succeed");
-        let restored: HookCheckResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: HookCheckResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(hcr, restored);
     }
 
@@ -1986,7 +2036,8 @@ mod tests {
             MergeOperator::Precedence,
         ] {
             let json = serde_json::to_string(&op).expect("serde deserialization should succeed");
-            let back: MergeOperator = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: MergeOperator =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(op, back);
         }
     }
@@ -2001,7 +2052,8 @@ mod tests {
             FormalProperty::PrecedenceStability,
         ] {
             let json = serde_json::to_string(&fp).expect("serde deserialization should succeed");
-            let back: FormalProperty = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: FormalProperty =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(fp, back);
         }
     }
@@ -2014,7 +2066,8 @@ mod tests {
             DiagnosticSeverity::Fatal,
         ] {
             let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
-            let back: DiagnosticSeverity = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: DiagnosticSeverity =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(s, back);
         }
     }
@@ -2037,7 +2090,8 @@ mod tests {
         ];
         for err in &errs {
             let json = serde_json::to_string(err).expect("serde deserialization should succeed");
-            let back: CompilerError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: CompilerError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, back);
         }
     }
@@ -2090,7 +2144,9 @@ mod tests {
     #[test]
     fn compile_all_passed_true_when_valid() {
         let compiler = PolicyTheoremCompiler::new();
-        let result = compiler.compile(&valid_policy()).expect("serde deserialization should succeed");
+        let result = compiler
+            .compile(&valid_policy())
+            .expect("serde deserialization should succeed");
         assert!(result.all_passed);
         assert!(result.counterexamples.is_empty());
         assert!(!result.witnesses.is_empty());
@@ -2107,7 +2163,9 @@ mod tests {
             )],
             ..valid_policy()
         };
-        let result = compiler.compile(&ir).expect("serde deserialization should succeed");
+        let result = compiler
+            .compile(&ir)
+            .expect("serde deserialization should succeed");
         assert!(!result.all_passed);
         assert!(!result.counterexamples.is_empty());
     }
@@ -2124,7 +2182,9 @@ mod tests {
             )],
             ..valid_policy()
         };
-        let result = hooks.runtime_check(&ir).expect("serde deserialization should succeed");
+        let result = hooks
+            .runtime_check(&ir)
+            .expect("serde deserialization should succeed");
         assert!(!result.passed);
         assert!(
             result
@@ -2152,7 +2212,9 @@ mod tests {
             )],
             ..valid_policy()
         };
-        let result = hooks.pre_deployment_check(&ir).expect("serde deserialization should succeed");
+        let result = hooks
+            .pre_deployment_check(&ir)
+            .expect("serde deserialization should succeed");
         assert!(!result.passed);
     }
 
@@ -2169,7 +2231,8 @@ mod tests {
         ];
         for c in &constraints {
             let json = serde_json::to_string(c).expect("serde deserialization should succeed");
-            let back: Constraint = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: Constraint =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*c, back);
         }
     }
@@ -2194,7 +2257,8 @@ mod tests {
             priority: 5,
         };
         let json = serde_json::to_string(&node).expect("serde deserialization should succeed");
-        let back: PolicyIrNode = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: PolicyIrNode =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(node, back);
     }
 
@@ -2202,7 +2266,9 @@ mod tests {
     fn receipt_verify_valid_signature() {
         let compiler = PolicyTheoremCompiler::new();
         let ir = valid_policy();
-        let result = compiler.compile(&ir).expect("serde deserialization should succeed");
+        let result = compiler
+            .compile(&ir)
+            .expect("serde deserialization should succeed");
 
         let sk = SigningKey::from_bytes([42u8; 32]).expect("serde deserialization should succeed");
         let vk = sk.verification_key();
@@ -2221,7 +2287,9 @@ mod tests {
     fn receipt_properties_match_compilation_witnesses() {
         let compiler = PolicyTheoremCompiler::new();
         let ir = valid_policy();
-        let result = compiler.compile(&ir).expect("serde deserialization should succeed");
+        let result = compiler
+            .compile(&ir)
+            .expect("serde deserialization should succeed");
 
         let sk = SigningKey::from_bytes([42u8; 32]).expect("serde deserialization should succeed");
         let vk = sk.verification_key();
@@ -2278,8 +2346,12 @@ mod tests {
         let mut hooks = MachineCheckHooks::new(compiler);
         let ir = valid_policy();
 
-        hooks.runtime_check(&ir).expect("serde deserialization should succeed");
-        hooks.pre_deployment_check(&ir).expect("serde deserialization should succeed");
+        hooks
+            .runtime_check(&ir)
+            .expect("serde deserialization should succeed");
+        hooks
+            .pre_deployment_check(&ir)
+            .expect("serde deserialization should succeed");
         assert_eq!(hooks.hook_history().len(), 2);
         assert_eq!(hooks.hook_history()[0].hook_name, "runtime");
         assert_eq!(hooks.hook_history()[1].hook_name, "pre-deployment");

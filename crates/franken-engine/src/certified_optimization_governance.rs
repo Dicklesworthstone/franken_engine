@@ -2526,7 +2526,7 @@ mod tests {
             None,
         );
 
-        let original_hash = check.content_hash.clone();
+        let original_hash = check.content_hash;
         check.commit().unwrap();
         assert_ne!(check.content_hash, original_hash);
     }

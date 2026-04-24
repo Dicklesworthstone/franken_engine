@@ -873,7 +873,10 @@ impl GovernanceEvaluator {
             let categories: BTreeSet<GovernanceVerdict> =
                 violations.iter().map(|v| v.category).collect();
             if categories.len() == 1 {
-                *categories.iter().next().expect("serde deserialization should succeed")
+                *categories
+                    .iter()
+                    .next()
+                    .expect("serde deserialization should succeed")
             } else {
                 GovernanceVerdict::MultipleViolations
             }

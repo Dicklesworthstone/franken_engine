@@ -1941,7 +1941,8 @@ mod tests {
         let tier = CohortTier::Critical;
         let json = serde_json::to_string(&tier).expect("serde deserialization should succeed");
         assert_eq!(json, "\"critical\"");
-        let parsed: CohortTier = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let parsed: CohortTier =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(parsed, tier);
     }
 
@@ -1950,7 +1951,8 @@ mod tests {
         let verdict = GateVerdict::ConditionalPass;
         let json = serde_json::to_string(&verdict).expect("serde deserialization should succeed");
         assert_eq!(json, "\"conditional_pass\"");
-        let parsed: GateVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let parsed: GateVerdict =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(parsed, verdict);
     }
 

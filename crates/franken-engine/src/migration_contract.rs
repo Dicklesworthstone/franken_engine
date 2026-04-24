@@ -1009,15 +1009,21 @@ mod tests {
             .dry_run(mid, passing_dry_run(mid), "trace-1")
             .expect("serde deserialization should succeed");
         // SAFETY: Test helper uses valid checkpoint; create_checkpoint succeeds in controlled test environment.
-        runner.create_checkpoint(mid, 42, "trace-1").expect("serde deserialization should succeed");
+        runner
+            .create_checkpoint(mid, 42, "trace-1")
+            .expect("serde deserialization should succeed");
         // SAFETY: Test helper uses valid execution; complete_execution succeeds in controlled test environment.
-        runner.complete_execution(mid, 100, "trace-1").expect("serde deserialization should succeed");
+        runner
+            .complete_execution(mid, 100, "trace-1")
+            .expect("serde deserialization should succeed");
         // SAFETY: Test helper uses valid verification; verify succeeds in controlled test environment.
         runner
             .verify(mid, passing_verification(mid), "trace-1")
             .expect("serde deserialization should succeed");
         // SAFETY: Test helper uses valid commit; commit succeeds in controlled test environment.
-        runner.commit(mid, "trace-1").expect("serde deserialization should succeed");
+        runner
+            .commit(mid, "trace-1")
+            .expect("serde deserialization should succeed");
     }
 
     // -- declaration ------------------------------------------------------
@@ -1059,7 +1065,9 @@ mod tests {
             .declare(make_declaration("m-1", CutoverType::HardCutover), "t")
             .expect("serde deserialization should succeed");
         // SAFETY: Test uses valid dry run; dry_run succeeds in controlled test environment.
-        runner.dry_run("m-1", passing_dry_run("m-1"), "t").expect("serde deserialization should succeed");
+        runner
+            .dry_run("m-1", passing_dry_run("m-1"), "t")
+            .expect("serde deserialization should succeed");
         assert_eq!(runner.state("m-1"), Some(MigrationState::DryRunPassed));
     }
 
@@ -1083,7 +1091,9 @@ mod tests {
         runner
             .declare(make_declaration("m-1", CutoverType::HardCutover), "t")
             .expect("serde deserialization should succeed");
-        runner.dry_run("m-1", passing_dry_run("m-1"), "t").expect("serde deserialization should succeed");
+        runner
+            .dry_run("m-1", passing_dry_run("m-1"), "t")
+            .expect("serde deserialization should succeed");
         let err = runner
             .dry_run("m-1", passing_dry_run("m-1"), "t")
             .unwrap_err();
@@ -1103,9 +1113,13 @@ mod tests {
             .declare(make_declaration("m-1", CutoverType::HardCutover), "t")
             .expect("serde deserialization should succeed");
         // SAFETY: Test uses valid dry run; dry_run succeeds in controlled test environment.
-        runner.dry_run("m-1", passing_dry_run("m-1"), "t").expect("serde deserialization should succeed");
+        runner
+            .dry_run("m-1", passing_dry_run("m-1"), "t")
+            .expect("serde deserialization should succeed");
         // SAFETY: Test uses valid checkpoint; create_checkpoint succeeds in controlled test environment.
-        runner.create_checkpoint("m-1", 42, "t").expect("serde deserialization should succeed");
+        runner
+            .create_checkpoint("m-1", 42, "t")
+            .expect("serde deserialization should succeed");
         assert_eq!(runner.state("m-1"), Some(MigrationState::Executing));
     }
 
@@ -1131,9 +1145,15 @@ mod tests {
         runner
             .declare(make_declaration("m-1", CutoverType::HardCutover), "t")
             .expect("serde deserialization should succeed");
-        runner.dry_run("m-1", passing_dry_run("m-1"), "t").expect("serde deserialization should succeed");
-        runner.create_checkpoint("m-1", 42, "t").expect("serde deserialization should succeed");
-        runner.complete_execution("m-1", 100, "t").expect("serde deserialization should succeed");
+        runner
+            .dry_run("m-1", passing_dry_run("m-1"), "t")
+            .expect("serde deserialization should succeed");
+        runner
+            .create_checkpoint("m-1", 42, "t")
+            .expect("serde deserialization should succeed");
+        runner
+            .complete_execution("m-1", 100, "t")
+            .expect("serde deserialization should succeed");
         assert_eq!(runner.state("m-1"), Some(MigrationState::Verifying));
     }
 
@@ -1147,11 +1167,17 @@ mod tests {
             .declare(make_declaration("m-1", CutoverType::HardCutover), "t")
             .expect("serde deserialization should succeed");
         // SAFETY: Test uses valid dry run; dry_run succeeds in controlled test environment.
-        runner.dry_run("m-1", passing_dry_run("m-1"), "t").expect("serde deserialization should succeed");
+        runner
+            .dry_run("m-1", passing_dry_run("m-1"), "t")
+            .expect("serde deserialization should succeed");
         // SAFETY: Test uses valid checkpoint; create_checkpoint succeeds in controlled test environment.
-        runner.create_checkpoint("m-1", 42, "t").expect("serde deserialization should succeed");
+        runner
+            .create_checkpoint("m-1", 42, "t")
+            .expect("serde deserialization should succeed");
         // SAFETY: Test uses valid execution; complete_execution succeeds in controlled test environment.
-        runner.complete_execution("m-1", 100, "t").expect("serde deserialization should succeed");
+        runner
+            .complete_execution("m-1", 100, "t")
+            .expect("serde deserialization should succeed");
         // SAFETY: Test uses valid verification; verify succeeds in controlled test environment.
         runner
             .verify("m-1", passing_verification("m-1"), "t")
@@ -1165,9 +1191,15 @@ mod tests {
         runner
             .declare(make_declaration("m-1", CutoverType::HardCutover), "t")
             .expect("serde deserialization should succeed");
-        runner.dry_run("m-1", passing_dry_run("m-1"), "t").expect("serde deserialization should succeed");
-        runner.create_checkpoint("m-1", 42, "t").expect("serde deserialization should succeed");
-        runner.complete_execution("m-1", 100, "t").expect("serde deserialization should succeed");
+        runner
+            .dry_run("m-1", passing_dry_run("m-1"), "t")
+            .expect("serde deserialization should succeed");
+        runner
+            .create_checkpoint("m-1", 42, "t")
+            .expect("serde deserialization should succeed");
+        runner
+            .complete_execution("m-1", 100, "t")
+            .expect("serde deserialization should succeed");
         let err = runner
             .verify("m-1", failing_verification("m-1"), "t")
             .unwrap_err();
@@ -1215,9 +1247,15 @@ mod tests {
         runner
             .declare(make_declaration("m-1", CutoverType::HardCutover), "t")
             .expect("serde deserialization should succeed");
-        runner.dry_run("m-1", passing_dry_run("m-1"), "t").expect("serde deserialization should succeed");
-        runner.create_checkpoint("m-1", 42, "t").expect("serde deserialization should succeed");
-        runner.rollback("m-1", "t").expect("serde deserialization should succeed");
+        runner
+            .dry_run("m-1", passing_dry_run("m-1"), "t")
+            .expect("serde deserialization should succeed");
+        runner
+            .create_checkpoint("m-1", 42, "t")
+            .expect("serde deserialization should succeed");
+        runner
+            .rollback("m-1", "t")
+            .expect("serde deserialization should succeed");
         assert_eq!(runner.state("m-1"), Some(MigrationState::RolledBack));
     }
 
@@ -1227,10 +1265,18 @@ mod tests {
         runner
             .declare(make_declaration("m-1", CutoverType::HardCutover), "t")
             .expect("serde deserialization should succeed");
-        runner.dry_run("m-1", passing_dry_run("m-1"), "t").expect("serde deserialization should succeed");
-        runner.create_checkpoint("m-1", 42, "t").expect("serde deserialization should succeed");
-        runner.complete_execution("m-1", 100, "t").expect("serde deserialization should succeed");
-        runner.rollback("m-1", "t").expect("serde deserialization should succeed");
+        runner
+            .dry_run("m-1", passing_dry_run("m-1"), "t")
+            .expect("serde deserialization should succeed");
+        runner
+            .create_checkpoint("m-1", 42, "t")
+            .expect("serde deserialization should succeed");
+        runner
+            .complete_execution("m-1", 100, "t")
+            .expect("serde deserialization should succeed");
+        runner
+            .rollback("m-1", "t")
+            .expect("serde deserialization should succeed");
         assert_eq!(runner.state("m-1"), Some(MigrationState::RolledBack));
     }
 
@@ -1355,9 +1401,15 @@ mod tests {
         runner
             .declare(make_declaration("m-1", CutoverType::HardCutover), "t")
             .expect("serde deserialization should succeed");
-        runner.dry_run("m-1", passing_dry_run("m-1"), "t").expect("serde deserialization should succeed");
-        runner.create_checkpoint("m-1", 42, "t").expect("serde deserialization should succeed");
-        runner.rollback("m-1", "t").expect("serde deserialization should succeed");
+        runner
+            .dry_run("m-1", passing_dry_run("m-1"), "t")
+            .expect("serde deserialization should succeed");
+        runner
+            .create_checkpoint("m-1", 42, "t")
+            .expect("serde deserialization should succeed");
+        runner
+            .rollback("m-1", "t")
+            .expect("serde deserialization should succeed");
 
         let events = runner.drain_events();
         let event_names: Vec<&str> = events.iter().map(|e| e.event.as_str()).collect();
@@ -1414,7 +1466,8 @@ mod tests {
             CutoverType::ParallelRun,
         ] {
             let json = serde_json::to_string(&ct).expect("serde deserialization should succeed");
-            let deser: CutoverType = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let deser: CutoverType =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(ct, deser);
         }
     }
@@ -1423,7 +1476,8 @@ mod tests {
     fn object_class_serde_roundtrip() {
         for oc in ObjectClass::ALL {
             let json = serde_json::to_string(&oc).expect("serde deserialization should succeed");
-            let deser: ObjectClass = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let deser: ObjectClass =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(oc, deser);
         }
     }
@@ -1444,7 +1498,8 @@ mod tests {
             MigrationState::RolledBack,
         ] {
             let json = serde_json::to_string(&state).expect("serde deserialization should succeed");
-            let deser: MigrationState = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let deser: MigrationState =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(state, deser);
         }
     }
@@ -1453,7 +1508,8 @@ mod tests {
     fn migration_declaration_serde_roundtrip() {
         let decl = make_declaration("m-1", CutoverType::HardCutover);
         let json = serde_json::to_string(&decl).expect("serde deserialization should succeed");
-        let deser: MigrationDeclaration = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let deser: MigrationDeclaration =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(decl, deser);
     }
 
@@ -1473,7 +1529,8 @@ mod tests {
             timestamp: DeterministicTimestamp(42),
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let deser: MigrationEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let deser: MigrationEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, deser);
     }
 
@@ -1507,7 +1564,8 @@ mod tests {
         ];
         for err in &errors {
             let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
-            let deser: MigrationContractError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let deser: MigrationContractError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, deser);
         }
     }
@@ -1524,7 +1582,8 @@ mod tests {
             checkpoint_seq: 10,
         };
         let json = serde_json::to_string(&record).expect("serde deserialization should succeed");
-        let deser: AppliedMigrationRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let deser: AppliedMigrationRecord =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(record, deser);
     }
 
@@ -1682,7 +1741,9 @@ mod tests {
         runner
             .declare(make_declaration("m-1", CutoverType::HardCutover), "t")
             .expect("serde deserialization should succeed");
-        let decl = runner.declaration("m-1").expect("serde deserialization should succeed");
+        let decl = runner
+            .declaration("m-1")
+            .expect("serde deserialization should succeed");
         assert_eq!(decl.migration_id, "m-1");
         assert_eq!(decl.cutover_type, CutoverType::HardCutover);
     }
@@ -1711,27 +1772,47 @@ mod tests {
         let mut d1 = make_declaration("m-1", CutoverType::HardCutover);
         d1.from_version = "v1".to_string();
         d1.to_version = "v2".to_string();
-        runner.declare(d1, "t").expect("serde deserialization should succeed");
-        runner.dry_run("m-1", passing_dry_run("m-1"), "t").expect("serde deserialization should succeed");
-        runner.create_checkpoint("m-1", 10, "t").expect("serde deserialization should succeed");
-        runner.complete_execution("m-1", 50, "t").expect("serde deserialization should succeed");
+        runner
+            .declare(d1, "t")
+            .expect("serde deserialization should succeed");
+        runner
+            .dry_run("m-1", passing_dry_run("m-1"), "t")
+            .expect("serde deserialization should succeed");
+        runner
+            .create_checkpoint("m-1", 10, "t")
+            .expect("serde deserialization should succeed");
+        runner
+            .complete_execution("m-1", 50, "t")
+            .expect("serde deserialization should succeed");
         runner
             .verify("m-1", passing_verification("m-1"), "t")
             .expect("serde deserialization should succeed");
-        runner.commit("m-1", "t").expect("serde deserialization should succeed");
+        runner
+            .commit("m-1", "t")
+            .expect("serde deserialization should succeed");
 
         runner.set_tick(100);
         let mut d2 = make_declaration("m-2", CutoverType::SoftMigration);
         d2.from_version = "v2".to_string();
         d2.to_version = "v3".to_string();
-        runner.declare(d2, "t").expect("serde deserialization should succeed");
-        runner.dry_run("m-2", passing_dry_run("m-2"), "t").expect("serde deserialization should succeed");
-        runner.create_checkpoint("m-2", 20, "t").expect("serde deserialization should succeed");
-        runner.complete_execution("m-2", 50, "t").expect("serde deserialization should succeed");
+        runner
+            .declare(d2, "t")
+            .expect("serde deserialization should succeed");
+        runner
+            .dry_run("m-2", passing_dry_run("m-2"), "t")
+            .expect("serde deserialization should succeed");
+        runner
+            .create_checkpoint("m-2", 20, "t")
+            .expect("serde deserialization should succeed");
+        runner
+            .complete_execution("m-2", 50, "t")
+            .expect("serde deserialization should succeed");
         runner
             .verify("m-2", passing_verification("m-2"), "t")
             .expect("serde deserialization should succeed");
-        runner.commit("m-2", "t").expect("serde deserialization should succeed");
+        runner
+            .commit("m-2", "t")
+            .expect("serde deserialization should succeed");
 
         assert_eq!(runner.applied_count(), 2);
         assert_eq!(runner.applied_migrations()[0].from_version, "v1");
@@ -1868,15 +1949,21 @@ mod tests {
         runner
             .dry_run("m-vf", passing_dry_run("m-vf"), "t")
             .expect("serde deserialization should succeed");
-        runner.create_checkpoint("m-vf", 42, "t").expect("serde deserialization should succeed");
-        runner.complete_execution("m-vf", 100, "t").expect("serde deserialization should succeed");
+        runner
+            .create_checkpoint("m-vf", 42, "t")
+            .expect("serde deserialization should succeed");
+        runner
+            .complete_execution("m-vf", 100, "t")
+            .expect("serde deserialization should succeed");
         let _ = runner.verify("m-vf", failing_verification("m-vf"), "t");
         assert_eq!(
             runner.state("m-vf"),
             Some(MigrationState::VerificationFailed)
         );
         // VerificationFailed is not terminal — rollback should succeed
-        runner.rollback("m-vf", "t").expect("serde deserialization should succeed");
+        runner
+            .rollback("m-vf", "t")
+            .expect("serde deserialization should succeed");
         assert_eq!(runner.state("m-vf"), Some(MigrationState::RolledBack));
     }
 
@@ -2457,7 +2544,8 @@ mod tests {
             transition_end_tick: None,
         };
         let json = serde_json::to_string(&decl).expect("serde deserialization should succeed");
-        let deser: MigrationDeclaration = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let deser: MigrationDeclaration =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(decl, deser);
     }
 
@@ -2475,7 +2563,8 @@ mod tests {
             transition_end_tick: Some(u64::MAX),
         };
         let json = serde_json::to_string(&decl).expect("serde deserialization should succeed");
-        let deser: MigrationDeclaration = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let deser: MigrationDeclaration =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(deser.transition_end_tick, Some(u64::MAX));
     }
 
@@ -2496,7 +2585,9 @@ mod tests {
         runner
             .dry_run("m-max", passing_dry_run("m-max"), "t")
             .expect("serde deserialization should succeed");
-        runner.create_checkpoint("m-max", u64::MAX, "t").expect("serde deserialization should succeed");
+        runner
+            .create_checkpoint("m-max", u64::MAX, "t")
+            .expect("serde deserialization should succeed");
         assert_eq!(runner.state("m-max"), Some(MigrationState::Executing));
     }
 
@@ -2585,7 +2676,8 @@ mod tests {
             details: vec!["err1".to_string(), "err2".to_string()],
         };
         let json = serde_json::to_string(&dr).expect("serde deserialization should succeed");
-        let deser: DryRunResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let deser: DryRunResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(dr, deser);
     }
 
@@ -2598,7 +2690,8 @@ mod tests {
             details: vec!["mismatch at obj-7".to_string()],
         };
         let json = serde_json::to_string(&vr).expect("serde deserialization should succeed");
-        let deser: VerificationResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let deser: VerificationResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(vr, deser);
     }
 
@@ -2606,7 +2699,8 @@ mod tests {
     fn migration_declaration_soft_serde_roundtrip() {
         let decl = make_declaration("m-soft", CutoverType::SoftMigration);
         let json = serde_json::to_string(&decl).expect("serde deserialization should succeed");
-        let deser: MigrationDeclaration = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let deser: MigrationDeclaration =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(decl, deser);
         assert_eq!(deser.transition_end_tick, Some(1000));
     }
@@ -2627,7 +2721,8 @@ mod tests {
             timestamp: DeterministicTimestamp(0),
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let deser: MigrationEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let deser: MigrationEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, deser);
     }
 
@@ -2635,12 +2730,15 @@ mod tests {
     fn migration_step_serde_roundtrip() {
         for step in MigrationStep::FORWARD_PIPELINE {
             let json = serde_json::to_string(&step).expect("serde deserialization should succeed");
-            let deser: MigrationStep = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let deser: MigrationStep =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(step, deser);
         }
         // Also test Rollback
-        let json = serde_json::to_string(&MigrationStep::Rollback).expect("serde deserialization should succeed");
-        let deser: MigrationStep = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&MigrationStep::Rollback)
+            .expect("serde deserialization should succeed");
+        let deser: MigrationStep =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(MigrationStep::Rollback, deser);
     }
 
@@ -2652,7 +2750,8 @@ mod tests {
             detail: "field mismatch".to_string(),
         };
         let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
-        let deser: MigrationContractError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let deser: MigrationContractError =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, deser);
     }
 
@@ -2663,7 +2762,8 @@ mod tests {
             discrepancy_count: 99,
         };
         let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
-        let deser: MigrationContractError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let deser: MigrationContractError =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, deser);
     }
 
@@ -2833,7 +2933,9 @@ mod tests {
             .dry_run("m-drp", passing_dry_run("m-drp"), "t")
             .expect("serde deserialization should succeed");
         assert_eq!(runner.state("m-drp"), Some(MigrationState::DryRunPassed));
-        runner.rollback("m-drp", "t").expect("serde deserialization should succeed");
+        runner
+            .rollback("m-drp", "t")
+            .expect("serde deserialization should succeed");
         assert_eq!(runner.state("m-drp"), Some(MigrationState::RolledBack));
     }
 
@@ -2846,8 +2948,12 @@ mod tests {
         runner
             .dry_run("m-rb", passing_dry_run("m-rb"), "t")
             .expect("serde deserialization should succeed");
-        runner.create_checkpoint("m-rb", 1, "t").expect("serde deserialization should succeed");
-        runner.rollback("m-rb", "t").expect("serde deserialization should succeed");
+        runner
+            .create_checkpoint("m-rb", 1, "t")
+            .expect("serde deserialization should succeed");
+        runner
+            .rollback("m-rb", "t")
+            .expect("serde deserialization should succeed");
         // RolledBack is terminal — cannot rollback again
         let err = runner.rollback("m-rb", "t").unwrap_err();
         assert!(matches!(

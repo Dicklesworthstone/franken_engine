@@ -1729,20 +1729,23 @@ mod tests {
 
     #[test]
     fn scalar_empty_input() {
-        let result = ScalarLexer::lex(b"", &default_config()).expect("serde deserialization should succeed");
+        let result =
+            ScalarLexer::lex(b"", &default_config()).expect("serde deserialization should succeed");
         assert_eq!(result.token_count, 0);
         assert!(result.tokens.is_empty());
     }
 
     #[test]
     fn scalar_whitespace_only() {
-        let result = ScalarLexer::lex(b"   \t\n\r  ", &default_config()).expect("serde deserialization should succeed");
+        let result = ScalarLexer::lex(b"   \t\n\r  ", &default_config())
+            .expect("serde deserialization should succeed");
         assert_eq!(result.token_count, 0);
     }
 
     #[test]
     fn scalar_single_identifier() {
-        let result = ScalarLexer::lex(b"hello", &default_config()).expect("serde deserialization should succeed");
+        let result = ScalarLexer::lex(b"hello", &default_config())
+            .expect("serde deserialization should succeed");
         assert_eq!(result.token_count, 1);
         assert_eq!(result.tokens[0].kind, TokenKind::Identifier);
         assert_eq!(result.tokens[0].start, 0);
@@ -1751,42 +1754,48 @@ mod tests {
 
     #[test]
     fn scalar_dollar_identifier() {
-        let result = ScalarLexer::lex(b"$foo_bar123", &default_config()).expect("serde deserialization should succeed");
+        let result = ScalarLexer::lex(b"$foo_bar123", &default_config())
+            .expect("serde deserialization should succeed");
         assert_eq!(result.token_count, 1);
         assert_eq!(result.tokens[0].kind, TokenKind::Identifier);
     }
 
     #[test]
     fn scalar_numeric_literal() {
-        let result = ScalarLexer::lex(b"42", &default_config()).expect("serde deserialization should succeed");
+        let result = ScalarLexer::lex(b"42", &default_config())
+            .expect("serde deserialization should succeed");
         assert_eq!(result.token_count, 1);
         assert_eq!(result.tokens[0].kind, TokenKind::NumericLiteral);
     }
 
     #[test]
     fn scalar_string_literal_double_quote() {
-        let result = ScalarLexer::lex(b"\"hello world\"", &default_config()).expect("serde deserialization should succeed");
+        let result = ScalarLexer::lex(b"\"hello world\"", &default_config())
+            .expect("serde deserialization should succeed");
         assert_eq!(result.token_count, 1);
         assert_eq!(result.tokens[0].kind, TokenKind::StringLiteral);
     }
 
     #[test]
     fn scalar_string_literal_single_quote() {
-        let result = ScalarLexer::lex(b"'hello'", &default_config()).expect("serde deserialization should succeed");
+        let result = ScalarLexer::lex(b"'hello'", &default_config())
+            .expect("serde deserialization should succeed");
         assert_eq!(result.token_count, 1);
         assert_eq!(result.tokens[0].kind, TokenKind::StringLiteral);
     }
 
     #[test]
     fn scalar_string_with_escape() {
-        let result = ScalarLexer::lex(b"\"he\\\"llo\"", &default_config()).expect("serde deserialization should succeed");
+        let result = ScalarLexer::lex(b"\"he\\\"llo\"", &default_config())
+            .expect("serde deserialization should succeed");
         assert_eq!(result.token_count, 1);
         assert_eq!(result.tokens[0].kind, TokenKind::StringLiteral);
     }
 
     #[test]
     fn scalar_unterminated_string() {
-        let result = ScalarLexer::lex(b"\"hello\nworld\"", &default_config()).expect("serde deserialization should succeed");
+        let result = ScalarLexer::lex(b"\"hello\nworld\"", &default_config())
+            .expect("serde deserialization should succeed");
         // The first string is unterminated at newline, then 'world' is ident, then '"' is punct
         assert_eq!(result.tokens[0].kind, TokenKind::UnterminatedString);
     }
@@ -1794,7 +1803,8 @@ mod tests {
     #[test]
     fn scalar_two_char_operators() {
         let input = b"== != <= >= && || ?? =>";
-        let result = ScalarLexer::lex(input, &default_config()).expect("serde deserialization should succeed");
+        let result = ScalarLexer::lex(input, &default_config())
+            .expect("serde deserialization should succeed");
         assert_eq!(result.token_count, 8);
         for tok in &result.tokens {
             assert_eq!(tok.kind, TokenKind::TwoCharOperator);
@@ -1803,7 +1813,8 @@ mod tests {
 
     #[test]
     fn scalar_punctuation() {
-        let result = ScalarLexer::lex(b"+ - * / ( )", &default_config()).expect("serde deserialization should succeed");
+        let result = ScalarLexer::lex(b"+ - * / ( )", &default_config())
+            .expect("serde deserialization should succeed");
         assert_eq!(result.token_count, 6);
         for tok in &result.tokens {
             assert_eq!(tok.kind, TokenKind::Punctuation);
@@ -1813,7 +1824,8 @@ mod tests {
     #[test]
     fn scalar_mixed_expression() {
         let input = b"foo + bar * 123";
-        let result = ScalarLexer::lex(input, &default_config()).expect("serde deserialization should succeed");
+        let result = ScalarLexer::lex(input, &default_config())
+            .expect("serde deserialization should succeed");
         assert_eq!(result.token_count, 5);
         assert_eq!(result.tokens[0].kind, TokenKind::Identifier);
         assert_eq!(result.tokens[1].kind, TokenKind::Punctuation); // +
@@ -1828,7 +1840,8 @@ mod tests {
             max_tokens: 3,
             ..default_config()
         };
-        let result = ScalarLexer::lex(b"a b c d e", &config).expect("serde deserialization should succeed");
+        let result =
+            ScalarLexer::lex(b"a b c d e", &config).expect("serde deserialization should succeed");
         assert!(result.budget_exceeded);
         assert_eq!(result.token_count, 3);
     }
@@ -1851,7 +1864,8 @@ mod tests {
             swar_min_input_bytes: 64,
             ..default_config()
         };
-        let result = SwarLexer::lex(b"hello", &config).expect("serde deserialization should succeed");
+        let result =
+            SwarLexer::lex(b"hello", &config).expect("serde deserialization should succeed");
         assert!(result.swar_disable_reason.is_some());
         assert!(matches!(
             result.swar_disable_reason,
@@ -1866,7 +1880,8 @@ mod tests {
             swar_min_input_bytes: 8,
             ..default_config()
         };
-        let result = SwarLexer::lex(input.as_bytes(), &config).expect("serde deserialization should succeed");
+        let result = SwarLexer::lex(input.as_bytes(), &config)
+            .expect("serde deserialization should succeed");
         assert_eq!(result.token_count, 1);
         assert_eq!(result.tokens[0].kind, TokenKind::Identifier);
         assert_eq!(result.actual_mode, LexerMode::Swar);
@@ -1879,7 +1894,8 @@ mod tests {
             swar_min_input_bytes: 8,
             ..default_config()
         };
-        let result = SwarLexer::lex(input.as_bytes(), &config).expect("serde deserialization should succeed");
+        let result = SwarLexer::lex(input.as_bytes(), &config)
+            .expect("serde deserialization should succeed");
         assert_eq!(result.token_count, 1);
         assert_eq!(result.tokens[0].kind, TokenKind::Identifier);
         assert_eq!(result.tokens[0].start, 0);
@@ -1893,7 +1909,8 @@ mod tests {
             swar_min_input_bytes: 8,
             ..default_config()
         };
-        let result = SwarLexer::lex(input.as_bytes(), &config).expect("serde deserialization should succeed");
+        let result = SwarLexer::lex(input.as_bytes(), &config)
+            .expect("serde deserialization should succeed");
         assert_eq!(result.token_count, 1);
         assert_eq!(result.tokens[0].kind, TokenKind::NumericLiteral);
     }
@@ -1905,7 +1922,8 @@ mod tests {
             swar_min_input_bytes: 8,
             ..default_config()
         };
-        let result = SwarLexer::lex(input.as_bytes(), &config).expect("serde deserialization should succeed");
+        let result = SwarLexer::lex(input.as_bytes(), &config)
+            .expect("serde deserialization should succeed");
         assert_eq!(result.token_count, 1);
         assert_eq!(result.tokens[0].kind, TokenKind::StringLiteral);
     }
@@ -1918,8 +1936,10 @@ mod tests {
             swar_min_input_bytes: 8,
             ..default_config()
         };
-        let swar_result = SwarLexer::lex(input.as_bytes(), &config).expect("serde deserialization should succeed");
-        let scalar_result = ScalarLexer::lex(input.as_bytes(), &config).expect("serde deserialization should succeed");
+        let swar_result = SwarLexer::lex(input.as_bytes(), &config)
+            .expect("serde deserialization should succeed");
+        let scalar_result = ScalarLexer::lex(input.as_bytes(), &config)
+            .expect("serde deserialization should succeed");
         assert_eq!(swar_result.token_count, scalar_result.token_count);
     }
 
@@ -1932,7 +1952,8 @@ mod tests {
             ..default_config()
         };
         let input = "var x = 42; function foo() { return x + 1; }";
-        let result = DifferentialLexer::lex(input.as_bytes(), &config).expect("serde deserialization should succeed");
+        let result = DifferentialLexer::lex(input.as_bytes(), &config)
+            .expect("serde deserialization should succeed");
         assert!(result.parity_ok);
         assert!(result.mismatch.is_none());
     }
@@ -1944,7 +1965,8 @@ mod tests {
             ..default_config()
         };
         let input = "a == b && c != d || e <= f >= g ?? h => i";
-        let result = DifferentialLexer::lex(input.as_bytes(), &config).expect("serde deserialization should succeed");
+        let result = DifferentialLexer::lex(input.as_bytes(), &config)
+            .expect("serde deserialization should succeed");
         assert!(result.parity_ok);
         assert_eq!(
             result.swar_output.token_count,
@@ -1959,7 +1981,8 @@ mod tests {
             ..default_config()
         };
         let input = r#"var s = "hello \"world\""; var t = 'it\'s';"#;
-        let result = DifferentialLexer::lex(input.as_bytes(), &config).expect("serde deserialization should succeed");
+        let result = DifferentialLexer::lex(input.as_bytes(), &config)
+            .expect("serde deserialization should succeed");
         assert!(result.parity_ok);
     }
 
@@ -1975,7 +1998,8 @@ mod tests {
             "\t".repeat(50),
             "\n".repeat(30)
         );
-        let result = DifferentialLexer::lex(input.as_bytes(), &config).expect("serde deserialization should succeed");
+        let result = DifferentialLexer::lex(input.as_bytes(), &config)
+            .expect("serde deserialization should succeed");
         assert!(result.parity_ok);
         assert_eq!(result.swar_output.token_count, 3);
     }
@@ -1987,7 +2011,8 @@ mod tests {
             ..default_config()
         };
         let input = "\"hello\nworld\"";
-        let result = DifferentialLexer::lex(input.as_bytes(), &config).expect("serde deserialization should succeed");
+        let result = DifferentialLexer::lex(input.as_bytes(), &config)
+            .expect("serde deserialization should succeed");
         assert!(result.parity_ok);
     }
 
@@ -1997,7 +2022,8 @@ mod tests {
             swar_min_input_bytes: 0,
             ..default_config()
         };
-        let result = DifferentialLexer::lex(b"", &config).expect("serde deserialization should succeed");
+        let result =
+            DifferentialLexer::lex(b"", &config).expect("serde deserialization should succeed");
         assert!(result.parity_ok);
         assert_eq!(result.swar_output.token_count, 0);
     }
@@ -2014,7 +2040,8 @@ mod tests {
             "b".repeat(100),
             "c".repeat(100)
         );
-        let result = DifferentialLexer::lex(input.as_bytes(), &config).expect("serde deserialization should succeed");
+        let result = DifferentialLexer::lex(input.as_bytes(), &config)
+            .expect("serde deserialization should succeed");
         assert!(result.parity_ok);
         assert_eq!(result.swar_output.token_count, 5); // 3 idents + 2 punctuation
     }
@@ -2027,7 +2054,8 @@ mod tests {
         };
         // Multi-byte UTF-8 treated as individual non-ASCII bytes
         let input = "var x = \u{00e9}\u{00f1}\u{00fc};";
-        let result = DifferentialLexer::lex(input.as_bytes(), &config).expect("serde deserialization should succeed");
+        let result = DifferentialLexer::lex(input.as_bytes(), &config)
+            .expect("serde deserialization should succeed");
         assert!(result.parity_ok);
     }
 
@@ -2035,7 +2063,8 @@ mod tests {
 
     #[test]
     fn lex_with_scalar_mode() {
-        let output = lex("hello world", &scalar_config()).expect("serde deserialization should succeed");
+        let output =
+            lex("hello world", &scalar_config()).expect("serde deserialization should succeed");
         assert_eq!(output.token_count, 2);
         assert_eq!(output.actual_mode, LexerMode::Scalar);
         assert_eq!(
@@ -2073,7 +2102,8 @@ mod tests {
     #[test]
     fn count_tokens_matches_scalar() {
         let input = "var x = foo(1, 2, 3); if (a == b) { return; }";
-        let count = count_tokens(input, &scalar_config()).expect("serde deserialization should succeed");
+        let count =
+            count_tokens(input, &scalar_config()).expect("serde deserialization should succeed");
         let output = lex(input, &scalar_config()).expect("serde deserialization should succeed");
         assert_eq!(count, output.token_count);
     }
@@ -2095,7 +2125,8 @@ mod tests {
     fn fallback_matrix_rejects_unsupported_architecture() {
         let profile = profile_for_tests(ArchFamily::Other, false, false, false, false);
         let config = LexerConfig::default();
-        let reason = evaluate_swar_fallback_matrix(4096, &config, &profile).expect("serde deserialization should succeed");
+        let reason = evaluate_swar_fallback_matrix(4096, &config, &profile)
+            .expect("serde deserialization should succeed");
         assert_eq!(
             reason,
             SwarDisableReason::ArchitectureUnsupported {
@@ -2112,7 +2143,8 @@ mod tests {
             feature_gate: SwarFeatureGate::RequireAvx2,
             ..LexerConfig::default()
         };
-        let reason = evaluate_swar_fallback_matrix(4096, &config, &profile).expect("serde deserialization should succeed");
+        let reason = evaluate_swar_fallback_matrix(4096, &config, &profile)
+            .expect("serde deserialization should succeed");
         assert_eq!(
             reason,
             SwarDisableReason::FeatureGateUnavailable {
@@ -2222,15 +2254,18 @@ mod tests {
             TokenKind::Punctuation,
         ];
         let json = serde_json::to_string(&kinds).expect("serde deserialization should succeed");
-        let back: Vec<TokenKind> = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: Vec<TokenKind> =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(kinds, back);
     }
 
     #[test]
     fn lexer_output_serde_round_trip() {
-        let output = lex("var x = 42;", &scalar_config()).expect("serde deserialization should succeed");
+        let output =
+            lex("var x = 42;", &scalar_config()).expect("serde deserialization should succeed");
         let json = serde_json::to_string(&output).expect("serde deserialization should succeed");
-        let back: LexerOutput = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: LexerOutput =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(output, back);
     }
 
@@ -2238,7 +2273,8 @@ mod tests {
     fn lexer_config_serde_round_trip() {
         let config = LexerConfig::default();
         let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
-        let back: LexerConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: LexerConfig =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, back);
     }
 
@@ -2248,9 +2284,11 @@ mod tests {
             swar_min_input_bytes: 0,
             ..default_config()
         };
-        let result = DifferentialLexer::lex(b"a + b", &config).expect("serde deserialization should succeed");
+        let result = DifferentialLexer::lex(b"a + b", &config)
+            .expect("serde deserialization should succeed");
         let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
-        let back: DifferentialResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DifferentialResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, back);
     }
 
@@ -2468,7 +2506,8 @@ mod tests {
                 input.push_str("== != && || ");
             }
         }
-        let result = DifferentialLexer::lex(input.as_bytes(), &config).expect("serde deserialization should succeed");
+        let result = DifferentialLexer::lex(input.as_bytes(), &config)
+            .expect("serde deserialization should succeed");
         assert!(result.parity_ok, "parity mismatch: {:?}", result.mismatch);
     }
 
@@ -2481,7 +2520,8 @@ mod tests {
             ..default_config()
         };
         let input = " ".repeat(1024);
-        let result = SwarLexer::lex(input.as_bytes(), &config).expect("serde deserialization should succeed");
+        let result = SwarLexer::lex(input.as_bytes(), &config)
+            .expect("serde deserialization should succeed");
         assert_eq!(result.token_count, 0);
         assert_eq!(result.bytes_scanned, 1024);
     }
@@ -2496,7 +2536,8 @@ mod tests {
             ..default_config()
         };
         let input = "+-*/(){}[];,.:<>!@#%^~".repeat(20);
-        let result = DifferentialLexer::lex(input.as_bytes(), &config).expect("serde deserialization should succeed");
+        let result = DifferentialLexer::lex(input.as_bytes(), &config)
+            .expect("serde deserialization should succeed");
         assert!(result.parity_ok);
     }
 
@@ -2520,7 +2561,8 @@ mod tests {
             schema_version: LexerSchemaVersion::V1,
         };
         let json = serde_json::to_string(&artifact).expect("serde deserialization should succeed");
-        let back: LexerArtifact = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: LexerArtifact =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(artifact, back);
     }
 
@@ -2544,7 +2586,8 @@ mod tests {
     fn lexer_schema_version_serde_roundtrip() {
         let v = LexerSchemaVersion::V1;
         let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
-        let back: LexerSchemaVersion = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: LexerSchemaVersion =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, v);
     }
 
@@ -2553,7 +2596,8 @@ mod tests {
         let variants = [LexerMode::Swar, LexerMode::Scalar, LexerMode::Differential];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: LexerMode = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: LexerMode =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, v);
         }
     }
@@ -2568,7 +2612,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: SwarFeatureGate = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: SwarFeatureGate =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, v);
         }
     }
@@ -2583,7 +2628,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: ArchFamily = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ArchFamily =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, v);
         }
     }
@@ -2624,7 +2670,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: SwarDisableReason = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: SwarDisableReason =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, v);
         }
         assert_eq!(variants.len(), 6);
@@ -2645,7 +2692,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: LexerError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: LexerError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, v);
         }
     }

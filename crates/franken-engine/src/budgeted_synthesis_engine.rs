@@ -692,7 +692,8 @@ mod tests {
             // SAFETY: to_string cannot fail on derived Serialize enum
             let json = serde_json::to_string(s).expect("serde deserialization should succeed");
             // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-            let back: ProofStatus = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ProofStatus =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*s, back);
         }
     }
@@ -723,7 +724,8 @@ mod tests {
             // SAFETY: to_string cannot fail on derived Serialize enum
             let json = serde_json::to_string(o).expect("serde deserialization should succeed");
             // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-            let back: CandidateOrigin = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: CandidateOrigin =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*o, back);
         }
     }
@@ -758,7 +760,8 @@ mod tests {
         // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let back: EquivalenceProof = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: EquivalenceProof =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(p, back);
     }
 
@@ -800,7 +803,8 @@ mod tests {
         // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let back: SynthesisCandidate = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SynthesisCandidate =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c, back);
     }
 
@@ -825,7 +829,8 @@ mod tests {
         // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&b).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let back: SynthesisBudget = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SynthesisBudget =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(b, back);
     }
 
@@ -870,7 +875,9 @@ mod tests {
         ];
         let r = SynthesisReport::new(epoch(), "k1", SynthesisBudget::default(), candidates);
         // SAFETY: test setup guarantees report has verified candidates
-        let best = r.best_candidate().expect("serde deserialization should succeed");
+        let best = r
+            .best_candidate()
+            .expect("serde deserialization should succeed");
         assert_eq!(best.candidate_id, "c2");
         assert_eq!(best.speedup_millionths, 1_300_000);
     }
@@ -895,7 +902,8 @@ mod tests {
         // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let back: SynthesisReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SynthesisReport =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 
@@ -940,7 +948,8 @@ mod tests {
         // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&a).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let back: CounterexampleArchive = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: CounterexampleArchive =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(a, back);
     }
 
@@ -982,10 +991,12 @@ mod tests {
     #[test]
     fn origin_serde_snake_case_format() {
         // SAFETY: to_string cannot fail on derived Serialize enum
-        let json = serde_json::to_string(&CandidateOrigin::AlgebraicSimplification).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&CandidateOrigin::AlgebraicSimplification)
+            .expect("serde deserialization should succeed");
         assert_eq!(json, "\"algebraic_simplification\"");
         // SAFETY: to_string cannot fail on derived Serialize enum
-        let json2 = serde_json::to_string(&CandidateOrigin::TemplateBased).expect("serde deserialization should succeed");
+        let json2 = serde_json::to_string(&CandidateOrigin::TemplateBased)
+            .expect("serde deserialization should succeed");
         assert_eq!(json2, "\"template_based\"");
     }
 
@@ -1051,7 +1062,8 @@ mod tests {
         // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let back: EquivalenceProof = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: EquivalenceProof =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(p, back);
         assert_eq!(back.status, ProofStatus::Refuted);
         assert_eq!(back.input_classes_tested, 20);
@@ -1064,7 +1076,8 @@ mod tests {
         // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let back: EquivalenceProof = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: EquivalenceProof =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(p, back);
     }
 
@@ -1085,7 +1098,8 @@ mod tests {
         // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let back: CostEstimate = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: CostEstimate =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c, back);
     }
 
@@ -1490,7 +1504,8 @@ mod tests {
         // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&cx).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let back: Counterexample = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: Counterexample =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cx, back);
     }
 
@@ -1563,7 +1578,9 @@ mod tests {
         assert!(r.has_result());
 
         // SAFETY: test setup guarantees report has admissible candidates
-        let best = r.best_candidate().expect("serde deserialization should succeed");
+        let best = r
+            .best_candidate()
+            .expect("serde deserialization should succeed");
         assert_eq!(best.speedup_millionths, 1_400_000);
         assert!(best.is_admissible());
     }
@@ -1605,7 +1622,8 @@ mod tests {
         // SAFETY: to_string_pretty cannot fail on derived Serialize struct
         let json = serde_json::to_string_pretty(&r).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string_pretty roundtrip
-        let back: SynthesisReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SynthesisReport =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
         assert_eq!(back.candidate_count(), 4);
     }
@@ -1664,7 +1682,8 @@ mod tests {
         // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let back: SynthesisCandidate = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SynthesisCandidate =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c, back);
         assert_eq!(back.counterexamples.len(), 1);
         assert_eq!(back.cost_estimates.len(), 2);

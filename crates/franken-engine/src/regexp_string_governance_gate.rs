@@ -1759,7 +1759,8 @@ mod tests {
         // SAFETY: StringSurface derives Serialize and has no non-serializable fields.
         let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid StringSurface serialization.
-        let back: StringSurface = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: StringSurface =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(s, back);
     }
 
@@ -1769,7 +1770,8 @@ mod tests {
         // SAFETY: RegExpSurface derives Serialize and has no non-serializable fields.
         let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid RegExpSurface serialization.
-        let back: RegExpSurface = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: RegExpSurface =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(s, back);
     }
 
@@ -1777,7 +1779,8 @@ mod tests {
     fn serde_parity_verdict_roundtrip() {
         let v = ParityVerdict::PartialParity;
         let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
-        let back: ParityVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ParityVerdict =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, back);
     }
 
@@ -1785,7 +1788,8 @@ mod tests {
     fn serde_gate_config_roundtrip() {
         let c = GateConfig::default();
         let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
-        let back: GateConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GateConfig =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c, back);
     }
 
@@ -1800,7 +1804,8 @@ mod tests {
         )];
         let result = evaluate(&string_ev, &[], &[], &[], &default_config());
         let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
-        let back: GateResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GateResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, back);
     }
 
@@ -1816,7 +1821,8 @@ mod tests {
         let result = evaluate(&string_ev, &[], &[], &[], &default_config());
         let receipt = DecisionReceipt::from_result(&result, epoch(1));
         let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
-        let back: DecisionReceipt = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DecisionReceipt =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(receipt, back);
     }
 
@@ -1824,7 +1830,8 @@ mod tests {
     fn serde_gate_summary_roundtrip() {
         let summary = GateSummary::from_results(&[]);
         let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
-        let back: GateSummary = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GateSummary =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(summary, back);
     }
 

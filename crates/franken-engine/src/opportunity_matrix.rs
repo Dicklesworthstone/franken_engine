@@ -864,17 +864,21 @@ mod tests {
             OpportunityStatus::RejectedSecurityClearance,
             OpportunityStatus::RejectedMissingHotspot,
         ] {
-            let json = serde_json::to_string(&status).expect("serde deserialization should succeed");
-            let back: OpportunityStatus = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&status).expect("serde deserialization should succeed");
+            let back: OpportunityStatus =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(back, status);
         }
     }
 
     #[test]
     fn opportunity_status_snake_case_rename() {
-        let json = serde_json::to_string(&OpportunityStatus::RejectedLowScore).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&OpportunityStatus::RejectedLowScore)
+            .expect("serde deserialization should succeed");
         assert!(json.contains("rejected_low_score"));
-        let json2 = serde_json::to_string(&OpportunityStatus::RejectedSecurityClearance).expect("serde deserialization should succeed");
+        let json2 = serde_json::to_string(&OpportunityStatus::RejectedSecurityClearance)
+            .expect("serde deserialization should succeed");
         assert!(json2.contains("rejected_security_clearance"));
     }
 
@@ -1064,7 +1068,10 @@ mod tests {
             vec![("vm;dispatch", 30), ("gc;collect", 20)],
         );
         let profile = hotspot_profile_from_flamegraphs(&[fg1, fg2]);
-        let dispatch = profile.iter().find(|e| e.function == "dispatch").expect("serde deserialization should succeed");
+        let dispatch = profile
+            .iter()
+            .find(|e| e.function == "dispatch")
+            .expect("serde deserialization should succeed");
         assert_eq!(dispatch.sample_count, 80);
         assert_eq!(profile.len(), 2);
     }
@@ -1336,7 +1343,8 @@ mod tests {
         let d = run_opportunity_matrix_scoring(&req);
         for opp in &d.ranked_opportunities {
             let json = serde_json::to_string(opp).expect("serde deserialization should succeed");
-            let back: ScoredOpportunity = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ScoredOpportunity =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, opp);
         }
     }
@@ -1347,7 +1355,8 @@ mod tests {
         let d = run_opportunity_matrix_scoring(&req);
         for h in &d.historical_tracking {
             let json = serde_json::to_string(h).expect("serde deserialization should succeed");
-            let back: OpportunityHistoryRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: OpportunityHistoryRecord =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, h);
         }
     }
@@ -1356,7 +1365,8 @@ mod tests {
     fn decision_serde_roundtrip() {
         let d = run_opportunity_matrix_scoring(&base_request());
         let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
-        let back: OpportunityMatrixDecision = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: OpportunityMatrixDecision =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.matrix_id, d.matrix_id);
         assert_eq!(back.ranked_opportunities, d.ranked_opportunities);
         assert_eq!(back.selected_opportunity_ids, d.selected_opportunity_ids);
@@ -1368,7 +1378,8 @@ mod tests {
         let d = run_opportunity_matrix_scoring(&req);
         for event in &d.events {
             let json = serde_json::to_string(event).expect("serde deserialization should succeed");
-            let back: OpportunityMatrixEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: OpportunityMatrixEvent =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, event);
         }
     }
@@ -1437,7 +1448,10 @@ mod tests {
         req.policy_id = "".into();
         let d = run_opportunity_matrix_scoring(&req);
         assert!(!d.events.is_empty());
-        let last = d.events.last().expect("serde deserialization should succeed");
+        let last = d
+            .events
+            .last()
+            .expect("serde deserialization should succeed");
         assert_eq!(last.outcome, "fail");
         assert!(last.error_code.is_some());
     }
@@ -1464,7 +1478,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: OpportunityStatus = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: OpportunityStatus =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -1647,7 +1662,8 @@ mod tests {
     #[test]
     fn scored_opportunity_json_field_names() {
         let d = run_opportunity_matrix_scoring(&base_request());
-        let json = serde_json::to_string(&d.ranked_opportunities[0]).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&d.ranked_opportunities[0])
+            .expect("serde deserialization should succeed");
         assert!(json.contains("\"opportunity_id\""));
         assert!(json.contains("\"score_millionths\""));
         assert!(json.contains("\"threshold_met\""));
@@ -1756,7 +1772,8 @@ mod tests {
             sample_count: 100,
         };
         let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
-        let back: HotspotProfileEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: HotspotProfileEntry =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(e, back);
     }
 
@@ -1764,7 +1781,8 @@ mod tests {
     fn opportunity_matrix_decision_serde_roundtrip() {
         let d = run_opportunity_matrix_scoring(&base_request());
         let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
-        let back: OpportunityMatrixDecision = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: OpportunityMatrixDecision =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(d, back);
     }
 
@@ -1872,9 +1890,11 @@ mod tests {
 
     #[test]
     fn opportunity_status_rename_all_snake_case() {
-        let j = serde_json::to_string(&OpportunityStatus::RejectedLowScore).expect("serde deserialization should succeed");
+        let j = serde_json::to_string(&OpportunityStatus::RejectedLowScore)
+            .expect("serde deserialization should succeed");
         assert_eq!(j, "\"rejected_low_score\"");
-        let j2 = serde_json::to_string(&OpportunityStatus::RejectedSecurityClearance).expect("serde deserialization should succeed");
+        let j2 = serde_json::to_string(&OpportunityStatus::RejectedSecurityClearance)
+            .expect("serde deserialization should succeed");
         assert_eq!(j2, "\"rejected_security_clearance\"");
     }
 

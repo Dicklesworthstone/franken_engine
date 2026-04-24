@@ -1676,7 +1676,8 @@ mod tests {
     fn test_react_package_serde_roundtrip() {
         for pkg in ReactPackage::ALL {
             let json = serde_json::to_string(pkg).expect("serde deserialization should succeed");
-            let back: ReactPackage = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ReactPackage =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*pkg, back);
         }
     }
@@ -1710,7 +1711,8 @@ mod tests {
     fn test_export_condition_serde_roundtrip() {
         for cond in ExportCondition::ALL {
             let json = serde_json::to_string(cond).expect("serde deserialization should succeed");
-            let back: ExportCondition = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ExportCondition =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*cond, back);
         }
     }
@@ -1735,7 +1737,8 @@ mod tests {
     fn test_module_format_serde_roundtrip() {
         for fmt in ModuleFormat::ALL {
             let json = serde_json::to_string(fmt).expect("serde deserialization should succeed");
-            let back: ModuleFormat = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ModuleFormat =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*fmt, back);
         }
     }
@@ -1890,7 +1893,8 @@ mod tests {
     #[test]
     fn test_resolve_subpath_found() {
         let manifest = sample_react_manifest();
-        let entry = resolve_subpath(&manifest, ".", &ExportCondition::Import).expect("serde deserialization should succeed");
+        let entry = resolve_subpath(&manifest, ".", &ExportCondition::Import)
+            .expect("serde deserialization should succeed");
         assert_eq!(entry.resolved_path, "./esm/react.js");
         assert_eq!(entry.format, ModuleFormat::Esm);
     }
@@ -1926,7 +1930,8 @@ mod tests {
         aliases.insert("./server".to_string(), "./server.browser".to_string());
         let manifest =
             build_manifest_with_aliases(ReactPackage::ReactDomServer, "18.3.1", subpaths, aliases);
-        let entry = resolve_subpath(&manifest, "./server", &ExportCondition::Import).expect("serde deserialization should succeed");
+        let entry = resolve_subpath(&manifest, "./server", &ExportCondition::Import)
+            .expect("serde deserialization should succeed");
         assert_eq!(entry.resolved_path, "./esm/server.browser.js");
     }
 
@@ -2173,7 +2178,8 @@ mod tests {
         ];
         for err in &errors {
             let json = serde_json::to_string(err).expect("serde deserialization should succeed");
-            let back: CohortError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: CohortError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, back);
         }
     }
@@ -2241,14 +2247,16 @@ mod tests {
         let mut aliases = BTreeMap::new();
         aliases.insert("a".to_string(), "b".to_string());
         aliases.insert("b".to_string(), "c".to_string());
-        let result = resolve_alias_chain(&aliases, "a").expect("serde deserialization should succeed");
+        let result =
+            resolve_alias_chain(&aliases, "a").expect("serde deserialization should succeed");
         assert_eq!(result, "c");
     }
 
     #[test]
     fn test_resolve_alias_chain_no_alias() {
         let aliases = BTreeMap::new();
-        let result = resolve_alias_chain(&aliases, "direct").expect("serde deserialization should succeed");
+        let result =
+            resolve_alias_chain(&aliases, "direct").expect("serde deserialization should succeed");
         assert_eq!(result, "direct");
     }
 
@@ -2429,7 +2437,8 @@ mod tests {
         let matrix = build_cohort_matrix(SecurityEpoch::from_raw(1), vec![manifest]);
         let report = validate_cohort(&matrix);
         let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
-        let back: CohortValidationReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: CohortValidationReport =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report, back);
     }
 
@@ -2506,8 +2515,11 @@ mod tests {
     #[test]
     fn test_golden_manifest_jsx_runtime_esm() {
         let matrix = franken_engine_react_cohort_manifest();
-        let jsx_manifest = matrix.find_manifest(ReactPackage::ReactJsxRuntime).expect("serde deserialization should succeed");
-        let entry = resolve_subpath(jsx_manifest, ".", &ExportCondition::Import).expect("serde deserialization should succeed");
+        let jsx_manifest = matrix
+            .find_manifest(ReactPackage::ReactJsxRuntime)
+            .expect("serde deserialization should succeed");
+        let entry = resolve_subpath(jsx_manifest, ".", &ExportCondition::Import)
+            .expect("serde deserialization should succeed");
         assert_eq!(entry.resolved_path, "./esm/jsx-runtime.js");
         assert_eq!(entry.format, ModuleFormat::Esm);
     }
@@ -2515,18 +2527,23 @@ mod tests {
     #[test]
     fn test_golden_manifest_dom_server_conditions() {
         let matrix = franken_engine_react_cohort_manifest();
-        let server_manifest = matrix.find_manifest(ReactPackage::ReactDomServer).expect("serde deserialization should succeed");
+        let server_manifest = matrix
+            .find_manifest(ReactPackage::ReactDomServer)
+            .expect("serde deserialization should succeed");
 
         // Browser condition -> browser.js
-        let browser = resolve_subpath(server_manifest, ".", &ExportCondition::Browser).expect("serde deserialization should succeed");
+        let browser = resolve_subpath(server_manifest, ".", &ExportCondition::Browser)
+            .expect("serde deserialization should succeed");
         assert_eq!(browser.resolved_path, "./esm/react-dom-server.browser.js");
 
         // ReactServer condition -> edge.js
-        let rsc = resolve_subpath(server_manifest, ".", &ExportCondition::ReactServer).expect("serde deserialization should succeed");
+        let rsc = resolve_subpath(server_manifest, ".", &ExportCondition::ReactServer)
+            .expect("serde deserialization should succeed");
         assert_eq!(rsc.resolved_path, "./esm/react-dom-server.edge.js");
 
         // Require condition -> node CJS
-        let cjs = resolve_subpath(server_manifest, ".", &ExportCondition::Require).expect("serde deserialization should succeed");
+        let cjs = resolve_subpath(server_manifest, ".", &ExportCondition::Require)
+            .expect("serde deserialization should succeed");
         assert_eq!(cjs.resolved_path, "./cjs/react-dom-server.node.js");
         assert_eq!(cjs.format, ModuleFormat::Cjs);
     }
@@ -2539,7 +2556,8 @@ mod tests {
     fn test_full_matrix_serde_roundtrip() {
         let matrix = franken_engine_react_cohort_manifest();
         let json = serde_json::to_string(&matrix).expect("serde deserialization should succeed");
-        let back: CohortMatrix = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: CohortMatrix =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(matrix, back);
     }
 

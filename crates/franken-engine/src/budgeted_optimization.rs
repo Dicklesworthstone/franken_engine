@@ -1271,8 +1271,10 @@ mod tests {
             RewriteFamily::DomUpdateBatching,
             RewriteFamily::Custom,
         ] {
-            let json = serde_json::to_string(&family).expect("serde deserialization should succeed");
-            let back: RewriteFamily = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&family).expect("serde deserialization should succeed");
+            let back: RewriteFamily =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(family, back);
         }
     }
@@ -1303,7 +1305,8 @@ mod tests {
     fn rewrite_rule_serde_roundtrip() {
         let rule = make_rule("r1", RewriteFamily::PartialEvaluation);
         let json = serde_json::to_string(&rule).expect("serde deserialization should succeed");
-        let back: RewriteRule = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: RewriteRule =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(rule, back);
     }
 
@@ -1353,7 +1356,8 @@ mod tests {
         let mut bl = BudgetLimit::new(BudgetKind::EgraphNodes, 1000);
         bl.consume(500);
         let json = serde_json::to_string(&bl).expect("serde deserialization should succeed");
-        let back: BudgetLimit = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: BudgetLimit =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(bl, back);
     }
 
@@ -1371,7 +1375,9 @@ mod tests {
     fn budget_envelope_consume() {
         let mut be = BudgetEnvelope::production();
         assert!(be.consume(BudgetKind::TimeMs, 1000));
-        let time = be.get(BudgetKind::TimeMs).expect("serde deserialization should succeed");
+        let time = be
+            .get(BudgetKind::TimeMs)
+            .expect("serde deserialization should succeed");
         assert_eq!(time.current_value, 1000);
     }
 
@@ -1379,7 +1385,9 @@ mod tests {
     fn budget_envelope_most_constrained() {
         let mut be = BudgetEnvelope::production();
         be.consume(BudgetKind::TimeMs, 4999);
-        let mc = be.most_constrained().expect("serde deserialization should succeed");
+        let mc = be
+            .most_constrained()
+            .expect("serde deserialization should succeed");
         assert_eq!(mc.kind, BudgetKind::TimeMs);
     }
 
@@ -1387,7 +1395,8 @@ mod tests {
     fn budget_envelope_serde_roundtrip() {
         let be = BudgetEnvelope::production();
         let json = serde_json::to_string(&be).expect("serde deserialization should succeed");
-        let back: BudgetEnvelope = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: BudgetEnvelope =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(be, back);
     }
 
@@ -1435,8 +1444,10 @@ mod tests {
                 name: "my_cost".to_string(),
             },
         ] {
-            let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
-            let back: ExtractionPolicy = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&policy).expect("serde deserialization should succeed");
+            let back: ExtractionPolicy =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(policy, back);
         }
     }
@@ -1534,7 +1545,8 @@ mod tests {
         c.add_rule(make_rule("r1", RewriteFamily::AlgebraicSimplification))
             .expect("serde deserialization should succeed");
         let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
-        let back: OptimizationCampaign = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: OptimizationCampaign =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c, back);
     }
 
@@ -1557,7 +1569,8 @@ mod tests {
     fn rollback_serde_roundtrip() {
         let rb = make_rollback("c1");
         let json = serde_json::to_string(&rb).expect("serde deserialization should succeed");
-        let back: RollbackArtifact = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: RollbackArtifact =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(rb, back);
     }
 
@@ -1583,7 +1596,8 @@ mod tests {
             rule_id: "bad_rule".to_string(),
         };
         let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
-        let back: OptimizationError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: OptimizationError =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(e, back);
     }
 
@@ -1605,7 +1619,8 @@ mod tests {
     #[test]
     fn stack_register_campaign() {
         let mut s = BudgetedOptimizationStack::new();
-        s.register_campaign(make_campaign("c1")).expect("serde deserialization should succeed");
+        s.register_campaign(make_campaign("c1"))
+            .expect("serde deserialization should succeed");
         assert_eq!(s.campaign_count(), 1);
         assert!(s.get_campaign("c1").is_some());
     }
@@ -1613,7 +1628,8 @@ mod tests {
     #[test]
     fn stack_register_duplicate_campaign_fails() {
         let mut s = BudgetedOptimizationStack::new();
-        s.register_campaign(make_campaign("c1")).expect("serde deserialization should succeed");
+        s.register_campaign(make_campaign("c1"))
+            .expect("serde deserialization should succeed");
         let err = s.register_campaign(make_campaign("c1")).unwrap_err();
         assert!(matches!(err, OptimizationError::DuplicateCampaign(_)));
     }
@@ -1621,8 +1637,10 @@ mod tests {
     #[test]
     fn stack_campaign_ids_sorted() {
         let mut s = BudgetedOptimizationStack::new();
-        s.register_campaign(make_campaign("beta")).expect("serde deserialization should succeed");
-        s.register_campaign(make_campaign("alpha")).expect("serde deserialization should succeed");
+        s.register_campaign(make_campaign("beta"))
+            .expect("serde deserialization should succeed");
+        s.register_campaign(make_campaign("alpha"))
+            .expect("serde deserialization should succeed");
         let ids = s.campaign_ids();
         assert_eq!(ids[0], "alpha");
         assert_eq!(ids[1], "beta");
@@ -1631,22 +1649,30 @@ mod tests {
     #[test]
     fn stack_record_saturation() {
         let mut s = BudgetedOptimizationStack::new();
-        s.register_campaign(make_campaign("c1")).expect("serde deserialization should succeed");
-        s.record_saturation("c1", make_egraph_snapshot()).expect("serde deserialization should succeed");
-        let c = s.get_campaign("c1").expect("serde deserialization should succeed");
+        s.register_campaign(make_campaign("c1"))
+            .expect("serde deserialization should succeed");
+        s.record_saturation("c1", make_egraph_snapshot())
+            .expect("serde deserialization should succeed");
+        let c = s
+            .get_campaign("c1")
+            .expect("serde deserialization should succeed");
         assert_eq!(c.status, CampaignStatus::Extracting);
     }
 
     #[test]
     fn stack_non_success_saturation_fails_closed() {
         let mut s = BudgetedOptimizationStack::new();
-        s.register_campaign(make_campaign("c1")).expect("serde deserialization should succeed");
+        s.register_campaign(make_campaign("c1"))
+            .expect("serde deserialization should succeed");
         let mut snapshot = make_egraph_snapshot();
         snapshot.outcome = SaturationOutcome::NodeLimitReached;
 
-        s.record_saturation("c1", snapshot).expect("serde deserialization should succeed");
+        s.record_saturation("c1", snapshot)
+            .expect("serde deserialization should succeed");
 
-        let c = s.get_campaign("c1").expect("serde deserialization should succeed");
+        let c = s
+            .get_campaign("c1")
+            .expect("serde deserialization should succeed");
         assert_eq!(c.status, CampaignStatus::Failed);
         assert!(c.extraction_result.is_none());
         assert!(
@@ -1667,16 +1693,21 @@ mod tests {
     #[test]
     fn stack_pathological_growth_saturation_fails_closed() {
         let mut s = BudgetedOptimizationStack::new();
-        s.register_campaign(make_campaign("c1")).expect("serde deserialization should succeed");
-        s.record_saturation("c1", make_egraph_snapshot()).expect("serde deserialization should succeed");
+        s.register_campaign(make_campaign("c1"))
+            .expect("serde deserialization should succeed");
+        s.record_saturation("c1", make_egraph_snapshot())
+            .expect("serde deserialization should succeed");
         let mut pathological = make_egraph_snapshot();
         pathological.node_count = 50_506;
         pathological.iteration_count = 15;
         pathological.outcome = SaturationOutcome::Saturated;
 
-        s.record_saturation("c1", pathological).expect("serde deserialization should succeed");
+        s.record_saturation("c1", pathological)
+            .expect("serde deserialization should succeed");
 
-        let c = s.get_campaign("c1").expect("serde deserialization should succeed");
+        let c = s
+            .get_campaign("c1")
+            .expect("serde deserialization should succeed");
         assert_eq!(c.status, CampaignStatus::Failed);
         assert!(
             s.events()
@@ -1690,10 +1721,15 @@ mod tests {
     #[test]
     fn stack_record_extraction() {
         let mut s = BudgetedOptimizationStack::new();
-        s.register_campaign(make_campaign("c1")).expect("serde deserialization should succeed");
-        s.record_saturation("c1", make_egraph_snapshot()).expect("serde deserialization should succeed");
-        s.record_extraction("c1", make_extraction_result()).expect("serde deserialization should succeed");
-        let c = s.get_campaign("c1").expect("serde deserialization should succeed");
+        s.register_campaign(make_campaign("c1"))
+            .expect("serde deserialization should succeed");
+        s.record_saturation("c1", make_egraph_snapshot())
+            .expect("serde deserialization should succeed");
+        s.record_extraction("c1", make_extraction_result())
+            .expect("serde deserialization should succeed");
+        let c = s
+            .get_campaign("c1")
+            .expect("serde deserialization should succeed");
         assert_eq!(c.status, CampaignStatus::Completed);
     }
 
@@ -1706,8 +1742,10 @@ mod tests {
         let mut c2 = make_campaign("c2");
         c2.add_rule(make_rule("r2", RewriteFamily::DeadCodeElimination))
             .expect("serde deserialization should succeed");
-        s.register_campaign(c1).expect("serde deserialization should succeed");
-        s.register_campaign(c2).expect("serde deserialization should succeed");
+        s.register_campaign(c1)
+            .expect("serde deserialization should succeed");
+        s.register_campaign(c2)
+            .expect("serde deserialization should succeed");
         let check = s.check_interference("c1", "c2");
         assert_eq!(check.kind, InterferenceKind::None);
         assert!(!check.blocking);
@@ -1722,8 +1760,10 @@ mod tests {
         let mut c2 = make_campaign("c2");
         c2.add_rule(make_rule("r2", RewriteFamily::AlgebraicSimplification))
             .expect("serde deserialization should succeed");
-        s.register_campaign(c1).expect("serde deserialization should succeed");
-        s.register_campaign(c2).expect("serde deserialization should succeed");
+        s.register_campaign(c1)
+            .expect("serde deserialization should succeed");
+        s.register_campaign(c2)
+            .expect("serde deserialization should succeed");
         let check = s.check_interference("c1", "c2");
         assert_eq!(check.kind, InterferenceKind::RewriteConflict);
         assert!(check.blocking);
@@ -1732,19 +1772,27 @@ mod tests {
     #[test]
     fn stack_rollback() {
         let mut s = BudgetedOptimizationStack::new();
-        s.register_campaign(make_campaign("c1")).expect("serde deserialization should succeed");
-        s.record_rollback("c1", make_rollback("c1")).expect("serde deserialization should succeed");
-        let c = s.get_campaign("c1").expect("serde deserialization should succeed");
+        s.register_campaign(make_campaign("c1"))
+            .expect("serde deserialization should succeed");
+        s.record_rollback("c1", make_rollback("c1"))
+            .expect("serde deserialization should succeed");
+        let c = s
+            .get_campaign("c1")
+            .expect("serde deserialization should succeed");
         assert_eq!(c.status, CampaignStatus::RolledBack);
     }
 
     #[test]
     fn stack_campaigns_by_status() {
         let mut s = BudgetedOptimizationStack::new();
-        s.register_campaign(make_campaign("c1")).expect("serde deserialization should succeed");
-        s.register_campaign(make_campaign("c2")).expect("serde deserialization should succeed");
-        s.record_saturation("c1", make_egraph_snapshot()).expect("serde deserialization should succeed");
-        s.record_extraction("c1", make_extraction_result()).expect("serde deserialization should succeed");
+        s.register_campaign(make_campaign("c1"))
+            .expect("serde deserialization should succeed");
+        s.register_campaign(make_campaign("c2"))
+            .expect("serde deserialization should succeed");
+        s.record_saturation("c1", make_egraph_snapshot())
+            .expect("serde deserialization should succeed");
+        s.record_extraction("c1", make_extraction_result())
+            .expect("serde deserialization should succeed");
         let completed = s.campaigns_by_status(CampaignStatus::Completed);
         assert_eq!(completed.len(), 1);
         let pending = s.campaigns_by_status(CampaignStatus::Pending);
@@ -1756,10 +1804,14 @@ mod tests {
         let mut s = BudgetedOptimizationStack::new();
         let mut c1 = make_campaign("c1");
         c1.expected_gain_millionths = 200_000;
-        s.register_campaign(c1).expect("serde deserialization should succeed");
-        s.record_saturation("c1", make_egraph_snapshot()).expect("serde deserialization should succeed");
-        s.record_extraction("c1", make_extraction_result()).expect("serde deserialization should succeed");
-        s.register_campaign(make_campaign("c2")).expect("serde deserialization should succeed");
+        s.register_campaign(c1)
+            .expect("serde deserialization should succeed");
+        s.record_saturation("c1", make_egraph_snapshot())
+            .expect("serde deserialization should succeed");
+        s.record_extraction("c1", make_extraction_result())
+            .expect("serde deserialization should succeed");
+        s.register_campaign(make_campaign("c2"))
+            .expect("serde deserialization should succeed");
         let summary = s.summary();
         assert_eq!(summary.total_campaigns, 2);
         assert_eq!(summary.completed_campaigns, 1);
@@ -1769,7 +1821,8 @@ mod tests {
     #[test]
     fn stack_events_tracked() {
         let mut s = BudgetedOptimizationStack::new();
-        s.register_campaign(make_campaign("c1")).expect("serde deserialization should succeed");
+        s.register_campaign(make_campaign("c1"))
+            .expect("serde deserialization should succeed");
         assert!(
             s.events()
                 .iter()
@@ -1780,9 +1833,14 @@ mod tests {
     #[test]
     fn stack_global_budget_consumed() {
         let mut s = BudgetedOptimizationStack::new();
-        s.register_campaign(make_campaign("c1")).expect("serde deserialization should succeed");
-        s.record_saturation("c1", make_egraph_snapshot()).expect("serde deserialization should succeed");
-        let time = s.global_budget().get(BudgetKind::TimeMs).expect("serde deserialization should succeed");
+        s.register_campaign(make_campaign("c1"))
+            .expect("serde deserialization should succeed");
+        s.record_saturation("c1", make_egraph_snapshot())
+            .expect("serde deserialization should succeed");
+        let time = s
+            .global_budget()
+            .get(BudgetKind::TimeMs)
+            .expect("serde deserialization should succeed");
         assert!(time.current_value > 0);
     }
 
@@ -1792,9 +1850,11 @@ mod tests {
         let mut c = make_campaign("c1");
         c.add_rule(make_rule("r1", RewriteFamily::AlgebraicSimplification))
             .expect("serde deserialization should succeed");
-        s.register_campaign(c).expect("serde deserialization should succeed");
+        s.register_campaign(c)
+            .expect("serde deserialization should succeed");
         let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
-        let back: BudgetedOptimizationStack = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: BudgetedOptimizationStack =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(s, back);
     }
 
@@ -1813,7 +1873,8 @@ mod tests {
             blocking_interference_count: 2,
         };
         let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
-        let back: OptimizationSummary = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: OptimizationSummary =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(summary, back);
     }
 
@@ -1823,7 +1884,8 @@ mod tests {
     fn egraph_snapshot_serde_roundtrip() {
         let snap = make_egraph_snapshot();
         let json = serde_json::to_string(&snap).expect("serde deserialization should succeed");
-        let back: EGraphSnapshot = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: EGraphSnapshot =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(snap, back);
     }
 
@@ -1833,7 +1895,8 @@ mod tests {
     fn extraction_result_serde_roundtrip() {
         let res = make_extraction_result();
         let json = serde_json::to_string(&res).expect("serde deserialization should succeed");
-        let back: ExtractionResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ExtractionResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(res, back);
     }
 
@@ -1849,7 +1912,8 @@ mod tests {
             blocking: true,
         };
         let json = serde_json::to_string(&check).expect("serde deserialization should succeed");
-        let back: InterferenceCheck = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: InterferenceCheck =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(check, back);
     }
 
@@ -1872,7 +1936,8 @@ mod tests {
             BudgetKind::SaturationIterations,
         ] {
             let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
-            let back: BudgetKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: BudgetKind =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(kind, back);
         }
     }
@@ -2003,7 +2068,8 @@ mod tests {
             let mut c = make_campaign("c1");
             c.add_rule(make_rule("r1", RewriteFamily::AlgebraicSimplification))
                 .expect("serde deserialization should succeed");
-            s.register_campaign(c).expect("serde deserialization should succeed");
+            s.register_campaign(c)
+                .expect("serde deserialization should succeed");
         }
         let json1 = serde_json::to_string(&s1).expect("serde deserialization should succeed");
         let json2 = serde_json::to_string(&s2).expect("serde deserialization should succeed");
@@ -2052,7 +2118,8 @@ mod tests {
             CampaignStatus::RolledBack,
         ] {
             let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
-            let back: CampaignStatus = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: CampaignStatus =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(s, back);
         }
     }
@@ -2072,7 +2139,8 @@ mod tests {
             SaturationOutcome::PolicyStopped,
         ] {
             let json = serde_json::to_string(&o).expect("serde deserialization should succeed");
-            let back: SaturationOutcome = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: SaturationOutcome =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(o, back);
         }
     }
@@ -2087,7 +2155,8 @@ mod tests {
             InterferenceKind::OrderDependence,
         ] {
             let json = serde_json::to_string(&k).expect("serde deserialization should succeed");
-            let back: InterferenceKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: InterferenceKind =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(k, back);
         }
     }
@@ -2126,7 +2195,8 @@ mod tests {
             OptimizationEventKind::BudgetConsumed,
         ] {
             let json = serde_json::to_string(&k).expect("serde deserialization should succeed");
-            let back: OptimizationEventKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: OptimizationEventKind =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(k, back);
         }
     }
@@ -2140,7 +2210,8 @@ mod tests {
             detail: "done".to_string(),
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let back: OptimizationEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: OptimizationEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
     }
 
@@ -2170,8 +2241,10 @@ mod tests {
         let mut c2 = make_campaign("c2");
         c2.add_rule(make_rule("r2", RewriteFamily::DeadCodeElimination))
             .expect("serde deserialization should succeed");
-        s.register_campaign(c1).expect("serde deserialization should succeed");
-        s.register_campaign(c2).expect("serde deserialization should succeed");
+        s.register_campaign(c1)
+            .expect("serde deserialization should succeed");
+        s.register_campaign(c2)
+            .expect("serde deserialization should succeed");
         assert!(s.interference_checks().is_empty());
         s.check_interference("c1", "c2");
         assert_eq!(s.interference_checks().len(), 1);
@@ -2184,19 +2257,28 @@ mod tests {
         // Completed campaign
         let mut c1 = make_campaign("c1");
         c1.expected_gain_millionths = 100_000;
-        s.register_campaign(c1).expect("serde deserialization should succeed");
-        s.record_saturation("c1", make_egraph_snapshot()).expect("serde deserialization should succeed");
-        s.record_extraction("c1", make_extraction_result()).expect("serde deserialization should succeed");
+        s.register_campaign(c1)
+            .expect("serde deserialization should succeed");
+        s.record_saturation("c1", make_egraph_snapshot())
+            .expect("serde deserialization should succeed");
+        s.record_extraction("c1", make_extraction_result())
+            .expect("serde deserialization should succeed");
 
         // Failed campaign
         let c2 = make_campaign("c2");
-        s.register_campaign(c2).expect("serde deserialization should succeed");
+        s.register_campaign(c2)
+            .expect("serde deserialization should succeed");
         // manually fail it
-        s.campaigns.get_mut("c2").expect("serde deserialization should succeed").record_failure();
+        s.campaigns
+            .get_mut("c2")
+            .expect("serde deserialization should succeed")
+            .record_failure();
 
         // Rolled back campaign
-        s.register_campaign(make_campaign("c3")).expect("serde deserialization should succeed");
-        s.record_rollback("c3", make_rollback("c3")).expect("serde deserialization should succeed");
+        s.register_campaign(make_campaign("c3"))
+            .expect("serde deserialization should succeed");
+        s.record_rollback("c3", make_rollback("c3"))
+            .expect("serde deserialization should succeed");
 
         let summary = s.summary();
         assert_eq!(summary.total_campaigns, 3);
@@ -2246,7 +2328,8 @@ mod tests {
         ];
         for e in &errors {
             let json = serde_json::to_string(e).expect("serde deserialization should succeed");
-            let back: OptimizationError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: OptimizationError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(e, &back);
         }
         assert_eq!(errors.len(), 9);
@@ -2280,10 +2363,12 @@ mod tests {
             .expect("serde deserialization should succeed");
         let mut unsound_rule = make_rule("r2", RewriteFamily::DeadCodeElimination);
         unsound_rule.sound = false;
-        c.add_rule(unsound_rule).expect("serde deserialization should succeed");
+        c.add_rule(unsound_rule)
+            .expect("serde deserialization should succeed");
         let mut disabled_rule = make_rule("r3", RewriteFamily::PartialEvaluation);
         disabled_rule.enabled = false;
-        c.add_rule(disabled_rule).expect("serde deserialization should succeed");
+        c.add_rule(disabled_rule)
+            .expect("serde deserialization should succeed");
         assert_eq!(c.ready_rule_count(), 1);
         assert_eq!(c.rules.len(), 3);
     }

@@ -961,7 +961,8 @@ mod tests {
     fn quorum_fails_with_wrong_keys() {
         let sk1 = make_sk(1);
         let sk2 = make_sk(2);
-        let wrong_vk = VerificationKey::from_bytes([0xFF; 32]).expect("serde deserialization should succeed");
+        let wrong_vk =
+            VerificationKey::from_bytes([0xFF; 32]).expect("serde deserialization should succeed");
         let cp = build_genesis(&[sk1, sk2]);
 
         let err = verify_checkpoint_quorum(&cp, 2, &[wrong_vk]).unwrap_err();
@@ -1020,7 +1021,8 @@ mod tests {
         let json = serde_json::to_string(&cp).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid PolicyCheckpoint,
         // so from_str back to PolicyCheckpoint cannot fail (valid format + matching schema).
-        let restored: PolicyCheckpoint = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: PolicyCheckpoint =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cp, restored);
     }
 
@@ -1032,7 +1034,8 @@ mod tests {
         let json = serde_json::to_string(&head).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid PolicyHead,
         // so from_str back to PolicyHead cannot fail (valid format + matching schema).
-        let restored: PolicyHead = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: PolicyHead =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(head, restored);
     }
 
@@ -1047,7 +1050,8 @@ mod tests {
         ];
         for pt in &types {
             let json = serde_json::to_string(pt).expect("serde deserialization should succeed");
-            let restored: PolicyType = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: PolicyType =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*pt, restored);
         }
     }
@@ -1066,7 +1070,8 @@ mod tests {
         ];
         for err in &errors {
             let json = serde_json::to_string(err).expect("serde deserialization should succeed");
-            let restored: CheckpointError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: CheckpointError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, restored);
         }
     }
@@ -1123,7 +1128,8 @@ mod tests {
             trace_id: "t-event".to_string(),
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let restored: CheckpointEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: CheckpointEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, restored);
     }
 
@@ -1164,7 +1170,8 @@ mod tests {
     fn deterministic_timestamp_serde_roundtrip() {
         let ts = DeterministicTimestamp(12345);
         let json = serde_json::to_string(&ts).expect("serde deserialization should succeed");
-        let restored: DeterministicTimestamp = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: DeterministicTimestamp =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ts, restored);
     }
 
@@ -1401,7 +1408,8 @@ mod tests {
         ];
         for event in &events {
             let json = serde_json::to_string(event).expect("serde deserialization should succeed");
-            let restored: CheckpointEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: CheckpointEvent =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*event, restored);
         }
     }
@@ -1624,7 +1632,8 @@ mod tests {
         ];
         for err in &errors {
             let json = serde_json::to_string(err).expect("serde deserialization should succeed");
-            let restored: CheckpointError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: CheckpointError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, restored);
         }
     }
@@ -1778,7 +1787,8 @@ mod tests {
             // SAFETY: CheckpointEventType derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(t).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by valid CheckpointEventType serialization
-            let restored: CheckpointEventType = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: CheckpointEventType =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*t, restored);
         }
     }
@@ -1830,20 +1840,24 @@ mod tests {
         )
         .expect("serde deserialization should succeed");
         let errors = [
-            serde_json::to_string(&CheckpointError::GenesisMustHaveNoPredecessor).expect("serde deserialization should succeed"),
-            serde_json::to_string(&CheckpointError::MissingPredecessor).expect("serde deserialization should succeed"),
+            serde_json::to_string(&CheckpointError::GenesisMustHaveNoPredecessor)
+                .expect("serde deserialization should succeed"),
+            serde_json::to_string(&CheckpointError::MissingPredecessor)
+                .expect("serde deserialization should succeed"),
             serde_json::to_string(&CheckpointError::NonMonotonicSequence {
                 prev_seq: 1,
                 current_seq: 0,
             })
             .expect("serde deserialization should succeed"),
-            serde_json::to_string(&CheckpointError::GenesisSequenceNotZero { actual: 5 }).expect("serde deserialization should succeed"),
+            serde_json::to_string(&CheckpointError::GenesisSequenceNotZero { actual: 5 })
+                .expect("serde deserialization should succeed"),
             serde_json::to_string(&CheckpointError::ChainLinkageBroken {
                 expected: id1,
                 actual: id2,
             })
             .expect("serde deserialization should succeed"),
-            serde_json::to_string(&CheckpointError::EmptyPolicyHeads).expect("serde deserialization should succeed"),
+            serde_json::to_string(&CheckpointError::EmptyPolicyHeads)
+                .expect("serde deserialization should succeed"),
             serde_json::to_string(&CheckpointError::QuorumNotMet {
                 required: 3,
                 provided: 1,
@@ -1870,7 +1884,8 @@ mod tests {
     #[test]
     fn checkpoint_event_type_serde_all_distinct() {
         let set: std::collections::BTreeSet<String> = [
-            serde_json::to_string(&CheckpointEventType::GenesisCreated).expect("serde deserialization should succeed"),
+            serde_json::to_string(&CheckpointEventType::GenesisCreated)
+                .expect("serde deserialization should succeed"),
             serde_json::to_string(&CheckpointEventType::ChainCheckpointCreated { prev_seq: 0 })
                 .expect("serde deserialization should succeed"),
             serde_json::to_string(&CheckpointEventType::QuorumVerified {
@@ -1878,7 +1893,8 @@ mod tests {
                 threshold: 1,
             })
             .expect("serde deserialization should succeed"),
-            serde_json::to_string(&CheckpointEventType::ChainLinkageVerified).expect("serde deserialization should succeed"),
+            serde_json::to_string(&CheckpointEventType::ChainLinkageVerified)
+                .expect("serde deserialization should succeed"),
             serde_json::to_string(&CheckpointEventType::EpochTransition {
                 from: SecurityEpoch::from_raw(0),
                 to: SecurityEpoch::from_raw(1),
@@ -1941,8 +1957,11 @@ mod tests {
     #[test]
     fn policy_head_json_field_names() {
         let head = make_policy_head(PolicyType::RuntimeExecution, 1);
-        let val: serde_json::Value = serde_json::to_value(&head).expect("serde deserialization should succeed");
-        let obj = val.as_object().expect("serde deserialization should succeed");
+        let val: serde_json::Value =
+            serde_json::to_value(&head).expect("serde deserialization should succeed");
+        let obj = val
+            .as_object()
+            .expect("serde deserialization should succeed");
         for key in ["policy_type", "policy_hash", "policy_version"] {
             assert!(obj.contains_key(key), "missing field: {key}");
         }
@@ -1956,8 +1975,11 @@ mod tests {
             checkpoint_seq: 0,
             trace_id: "t".to_string(),
         };
-        let val: serde_json::Value = serde_json::to_value(&event).expect("serde deserialization should succeed");
-        let obj = val.as_object().expect("serde deserialization should succeed");
+        let val: serde_json::Value =
+            serde_json::to_value(&event).expect("serde deserialization should succeed");
+        let obj = val
+            .as_object()
+            .expect("serde deserialization should succeed");
         for key in ["event_type", "checkpoint_seq", "trace_id"] {
             assert!(obj.contains_key(key), "missing field: {key}");
         }
@@ -1968,8 +1990,11 @@ mod tests {
     fn policy_checkpoint_json_field_names() {
         let sk = make_sk(1);
         let cp = build_genesis(&[sk]);
-        let val: serde_json::Value = serde_json::to_value(&cp).expect("serde deserialization should succeed");
-        let obj = val.as_object().expect("serde deserialization should succeed");
+        let val: serde_json::Value =
+            serde_json::to_value(&cp).expect("serde deserialization should succeed");
+        let obj = val
+            .as_object()
+            .expect("serde deserialization should succeed");
         for key in [
             "checkpoint_id",
             "prev_checkpoint",
@@ -2081,7 +2106,8 @@ mod tests {
     fn deterministic_timestamp_max_serde_roundtrip() {
         let ts = DeterministicTimestamp(u64::MAX);
         let json = serde_json::to_string(&ts).expect("serde deserialization should succeed");
-        let back: DeterministicTimestamp = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DeterministicTimestamp =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ts, back);
     }
 
@@ -2089,7 +2115,8 @@ mod tests {
     fn policy_head_version_zero() {
         let h = make_policy_head(PolicyType::RuntimeExecution, 0);
         let json = serde_json::to_string(&h).expect("serde deserialization should succeed");
-        let back: PolicyHead = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: PolicyHead =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(h, back);
     }
 
@@ -2101,7 +2128,8 @@ mod tests {
             policy_version: u64::MAX,
         };
         let json = serde_json::to_string(&h).expect("serde deserialization should succeed");
-        let back: PolicyHead = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: PolicyHead =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(h, back);
     }
 
@@ -2158,7 +2186,8 @@ mod tests {
             trace_id: "max-seq".to_string(),
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let back: CheckpointEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: CheckpointEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
     }
 
@@ -2170,7 +2199,8 @@ mod tests {
             trace_id: String::new(),
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let back: CheckpointEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: CheckpointEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
     }
 
@@ -2292,7 +2322,8 @@ mod tests {
     fn genesis_prev_checkpoint_is_null_in_json() {
         let sk = make_sk(1);
         let cp = build_genesis(&[sk]);
-        let val: serde_json::Value = serde_json::to_value(&cp).expect("serde deserialization should succeed");
+        let val: serde_json::Value =
+            serde_json::to_value(&cp).expect("serde deserialization should succeed");
         assert!(val["prev_checkpoint"].is_null());
     }
 
@@ -2310,7 +2341,8 @@ mod tests {
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 2))
         .build(&[sk])
         .expect("serde deserialization should succeed");
-        let val: serde_json::Value = serde_json::to_value(&cp1).expect("serde deserialization should succeed");
+        let val: serde_json::Value =
+            serde_json::to_value(&cp1).expect("serde deserialization should succeed");
         assert!(!val["prev_checkpoint"].is_null());
     }
 

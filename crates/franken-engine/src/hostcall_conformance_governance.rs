@@ -1113,7 +1113,8 @@ mod tests {
     fn axis_serde_roundtrip() {
         for a in ConformanceAxis::ALL {
             let json = serde_json::to_string(a).expect("serde deserialization should succeed");
-            let back: ConformanceAxis = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ConformanceAxis =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*a, back);
         }
     }
@@ -1161,7 +1162,8 @@ mod tests {
     fn result_serde() {
         let r = ConformanceResult::new(ConformanceAxis::Ordering, 50, 50, 500_000);
         let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
-        let back: ConformanceResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ConformanceResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 
@@ -1191,7 +1193,8 @@ mod tests {
     fn drop_category_serde() {
         for c in ReplayDropCategory::ALL {
             let json = serde_json::to_string(c).expect("serde deserialization should succeed");
-            let back: ReplayDropCategory = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ReplayDropCategory =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*c, back);
         }
     }
@@ -1237,7 +1240,8 @@ mod tests {
     fn drop_entry_serde() {
         let e = ReplayDropEntry::new(ReplayDropCategory::AuthenticationFailure, 3, 200, 50_000);
         let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
-        let back: ReplayDropEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ReplayDropEntry =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(e, back);
     }
 
@@ -1277,7 +1281,8 @@ mod tests {
     fn degraded_kind_serde() {
         for k in DegradedModeKind::ALL {
             let json = serde_json::to_string(k).expect("serde deserialization should succeed");
-            let back: DegradedModeKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: DegradedModeKind =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*k, back);
         }
     }
@@ -1325,7 +1330,8 @@ mod tests {
     fn policy_serde() {
         let p = DegradedModePolicy::for_kind(DegradedModeKind::PartialFunctionality);
         let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
-        let back: DegradedModePolicy = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DegradedModePolicy =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(p, back);
     }
 
@@ -1381,7 +1387,8 @@ mod tests {
     fn claim_delta_serde() {
         let d = ObservabilityClaimDelta::new("claim-7", 800_000, 810_000, 50_000);
         let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
-        let back: ObservabilityClaimDelta = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ObservabilityClaimDelta =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(d, back);
     }
 
@@ -1430,7 +1437,8 @@ mod tests {
     fn config_serde() {
         let c = GovernanceConfig::default();
         let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
-        let back: GovernanceConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GovernanceConfig =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c, back);
     }
 
@@ -1476,7 +1484,8 @@ mod tests {
     fn verdict_serde() {
         for v in GovernanceVerdict::ALL {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: GovernanceVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: GovernanceVerdict =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -1721,7 +1730,8 @@ mod tests {
         all_axes_passing(&mut eval);
         let receipt = eval.evaluate(epoch());
         let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
-        let back: GovernanceReceipt = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GovernanceReceipt =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(receipt, back);
     }
 

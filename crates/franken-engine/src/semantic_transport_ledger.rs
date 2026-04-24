@@ -1324,7 +1324,9 @@ mod tests {
         let a = SemanticTransportAnalyzer::new();
         let input = simple_input(vec![]);
         // SAFETY: Test helper creates valid input; analyze succeeds in controlled test environment.
-        let result = a.analyze(&input).expect("serde deserialization should succeed");
+        let result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
         assert_eq!(result.outcome, TransportAnalysisOutcome::FullyCompatible);
         assert_eq!(result.total_entries, 0);
         assert!(result.can_release());
@@ -1341,7 +1343,9 @@ mod tests {
         let spec = simple_spec("useEffect.cleanup", vec![]);
         let input = simple_input(vec![spec]);
         // SAFETY: Test helpers create valid spec and input; analyze succeeds in controlled test environment.
-        let result = a.analyze(&input).expect("serde deserialization should succeed");
+        let result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
 
         assert_eq!(result.outcome, TransportAnalysisOutcome::FullyCompatible);
         assert_eq!(result.unchanged_entries, 1);
@@ -1358,7 +1362,9 @@ mod tests {
         let spec = simple_spec("useEffect.timing", vec![delta(300_000, true)]);
         let input = simple_input(vec![spec]);
         // SAFETY: Test helpers create valid spec with deltas and input; analyze succeeds in controlled test environment.
-        let result = a.analyze(&input).expect("serde deserialization should succeed");
+        let result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
 
         assert_eq!(
             result.outcome,
@@ -1378,7 +1384,9 @@ mod tests {
         let spec = simple_spec("useLayoutEffect.order", vec![delta(300_000, false)]);
         let input = simple_input(vec![spec]);
         // SAFETY: Test helpers create valid spec with unbridgeable deltas; analyze succeeds in controlled test environment.
-        let result = a.analyze(&input).expect("serde deserialization should succeed");
+        let result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
 
         assert_eq!(
             result.outcome,
@@ -1396,7 +1404,9 @@ mod tests {
         spec.broken_invariants = vec!["ordering-guarantee".to_string()];
         let input = simple_input(vec![spec]);
         // SAFETY: Test creates valid spec with broken invariants; analyze succeeds in controlled test environment.
-        let result = a.analyze(&input).expect("serde deserialization should succeed");
+        let result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
 
         assert_eq!(
             result.outcome,
@@ -1416,7 +1426,9 @@ mod tests {
         let s3 = simple_spec("context.resolution", vec![delta(100_000, false)]);
         let input = simple_input(vec![s1, s2, s3]);
         // SAFETY: Test helpers create valid multiple specs with mixed verdicts; analyze succeeds in controlled test environment.
-        let result = a.analyze(&input).expect("serde deserialization should succeed");
+        let result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
 
         assert_eq!(
             result.outcome,
@@ -1457,7 +1469,9 @@ mod tests {
             .collect();
         let input = simple_input(specs);
         // SAFETY: Test creates multiple valid specs; analyze succeeds despite budget exhaustion in controlled test.
-        let result = a.analyze(&input).expect("serde deserialization should succeed");
+        let result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
 
         assert_eq!(result.outcome, TransportAnalysisOutcome::BudgetExhausted);
         assert_eq!(result.total_entries, 2);
@@ -1486,7 +1500,9 @@ mod tests {
             }],
             epoch: 1,
         };
-        let result = a.analyze(&input).expect("serde deserialization should succeed");
+        let result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
         assert_eq!(result.ledger.morphisms.len(), 1);
         let m = &result.ledger.morphisms[0];
         assert!(m.is_safe());
@@ -1512,7 +1528,9 @@ mod tests {
             }],
             epoch: 1,
         };
-        let result = a.analyze(&input).expect("serde deserialization should succeed");
+        let result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
         let m = &result.ledger.morphisms[0];
         assert!(m.lossy);
         assert!(!m.is_safe());
@@ -1549,7 +1567,9 @@ mod tests {
             }],
             epoch: 1,
         };
-        let result = a.analyze(&input).expect("serde deserialization should succeed");
+        let result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
 
         assert_eq!(
             result.outcome,
@@ -1578,7 +1598,9 @@ mod tests {
             verified_invariants: vec!["inv1".to_string()], // Only 1/4 verified.
             broken_invariants: vec![],
         }]);
-        let result = a.analyze(&input).expect("serde deserialization should succeed");
+        let result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
 
         // Should detect low-coverage mask.
         assert!(result.regression_mask_count > 0);
@@ -1597,7 +1619,9 @@ mod tests {
             verified_invariants: vec!["inv1".to_string()], // Only 1/2 verified.
             broken_invariants: vec![],
         }]);
-        let result = a.analyze(&input).expect("serde deserialization should succeed");
+        let result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
 
         // Unchanged verdict but unverified invariants → mask warning.
         assert!(result.regression_mask_count > 0);
@@ -1620,7 +1644,9 @@ mod tests {
             verified_invariants: vec![],
             broken_invariants: vec![],
         }]);
-        let result = a.analyze(&input).expect("serde deserialization should succeed");
+        let result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
         assert_eq!(result.regression_mask_count, 0);
     }
 
@@ -1636,8 +1662,12 @@ mod tests {
             simple_spec("frag2", vec![delta(200_000, true)]),
         ]);
 
-        let r1 = a.analyze(&input).expect("serde deserialization should succeed");
-        let r2 = a.analyze(&input).expect("serde deserialization should succeed");
+        let r1 = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
+        let r2 = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
 
         assert_eq!(r1.result_hash, r2.result_hash);
         assert_eq!(r1.ledger.ledger_hash, r2.ledger.ledger_hash);
@@ -1651,14 +1681,17 @@ mod tests {
     fn test_analysis_result_serde() {
         let a = SemanticTransportAnalyzer::new();
         let input = simple_input(vec![simple_spec("frag1", vec![])]);
-        let result = a.analyze(&input).expect("serde deserialization should succeed");
+        let result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
 
         // SAFETY: TransportAnalysisResult derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid TransportAnalysisResult,
         // so from_str back to TransportAnalysisResult cannot fail (valid format + matching schema).
-        let deserialized: TransportAnalysisResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let deserialized: TransportAnalysisResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result.outcome, deserialized.outcome);
         assert_eq!(result.result_hash, deserialized.result_hash);
     }
@@ -1671,7 +1704,8 @@ mod tests {
         let json = serde_json::to_string(&ledger).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid SemanticTransportLedger,
         // so from_str back to SemanticTransportLedger cannot fail (valid format + matching schema).
-        let deserialized: SemanticTransportLedger = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let deserialized: SemanticTransportLedger =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ledger.compiled_epoch, deserialized.compiled_epoch);
     }
 
@@ -1683,7 +1717,8 @@ mod tests {
         let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid TransportAnalyzerConfig,
         // so from_str back to TransportAnalyzerConfig cannot fail (valid format + matching schema).
-        let deserialized: TransportAnalyzerConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let deserialized: TransportAnalyzerConfig =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config.max_entries, deserialized.max_entries);
     }
 
@@ -1829,7 +1864,9 @@ mod tests {
         let mut spec = simple_spec("test", vec![delta(100_000, false)]);
         spec.broken_invariants = vec![];
         let input = simple_input(vec![spec]);
-        let result = a.analyze(&input).expect("serde deserialization should succeed");
+        let result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
         assert!(result.ledger.entries[0].is_blocking());
     }
 
@@ -1852,7 +1889,9 @@ mod tests {
             broken_invariants: vec![],
         };
         let input = simple_input(vec![spec]);
-        let result = a.analyze(&input).expect("serde deserialization should succeed");
+        let result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
         let entry = &result.ledger.entries[0];
         assert_eq!(entry.invariant_coverage_millionths(), 500_000);
         assert!(!entry.all_invariants_verified());
@@ -1863,7 +1902,9 @@ mod tests {
         let a = SemanticTransportAnalyzer::new();
         let spec = simple_spec("test", vec![]);
         let input = simple_input(vec![spec]);
-        let result = a.analyze(&input).expect("serde deserialization should succeed");
+        let result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
         let entry = &result.ledger.entries[0];
         assert_eq!(entry.invariant_coverage_millionths(), MILLION);
         assert!(entry.all_invariants_verified());
@@ -1883,7 +1924,9 @@ mod tests {
             broken_invariants: vec![],
         };
         let input = simple_input(vec![spec]);
-        let result = a.analyze(&input).expect("serde deserialization should succeed");
+        let result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
         let entry = &result.ledger.entries[0];
         assert_eq!(entry.invariant_coverage_millionths(), MILLION);
     }
@@ -1900,7 +1943,9 @@ mod tests {
         let mut s2 = simple_spec("effect1", vec![]);
         s2.domain = ContractDomain::Effect;
         let input = simple_input(vec![s1, s2]);
-        let result = a.analyze(&input).expect("serde deserialization should succeed");
+        let result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
 
         let hooks = result.ledger.entries_by_domain(&ContractDomain::Hook);
         assert_eq!(hooks.len(), 1);
@@ -1913,7 +1958,9 @@ mod tests {
         let a = SemanticTransportAnalyzer::new();
         let spec = simple_spec("test", vec![]);
         let input = simple_input(vec![spec]);
-        let result = a.analyze(&input).expect("serde deserialization should succeed");
+        let result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
         let pairs = result.ledger.version_pairs();
         assert_eq!(pairs.len(), 1);
     }
@@ -1924,7 +1971,9 @@ mod tests {
         let s1 = simple_spec("unchanged", vec![]);
         let s2 = simple_spec("adapted", vec![delta(200_000, true)]);
         let input = simple_input(vec![s1, s2]);
-        let result = a.analyze(&input).expect("serde deserialization should succeed");
+        let result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
         let codes = result.ledger.all_debt_codes();
         assert!(codes.contains(DEBT_ADAPTER_REQUIRED));
     }
@@ -1937,7 +1986,9 @@ mod tests {
     fn test_render_report_empty() {
         let a = SemanticTransportAnalyzer::new();
         let input = simple_input(vec![]);
-        let result = a.analyze(&input).expect("serde deserialization should succeed");
+        let result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
         let report = render_transport_report(&result);
         assert!(report.contains("Nothing to analyze"));
     }
@@ -1949,7 +2000,9 @@ mod tests {
             simple_spec("frag1", vec![]),
             simple_spec("frag2", vec![delta(200_000, true)]),
         ]);
-        let result = a.analyze(&input).expect("serde deserialization should succeed");
+        let result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
         let report = render_transport_report(&result);
         assert!(report.contains("unchanged"));
         assert!(report.contains("adapter-required"));
@@ -2031,7 +2084,9 @@ mod tests {
             }],
             epoch: 1,
         };
-        let result = a.analyze(&input).expect("serde deserialization should succeed");
+        let result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
         let summary = result.ledger.morphisms[0].summary_line();
         assert!(summary.contains("safe"));
         assert!(summary.contains("test-morph"));
@@ -2046,7 +2101,9 @@ mod tests {
         let a = SemanticTransportAnalyzer::new();
         let spec = simple_spec("test-entry", vec![delta(200_000, true)]);
         let input = simple_input(vec![spec]);
-        let result = a.analyze(&input).expect("serde deserialization should succeed");
+        let result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
         let summary = result.ledger.entries[0].summary_line();
         assert!(summary.contains("test-entry"));
         assert!(summary.contains("adapter-required"));
@@ -2072,7 +2129,9 @@ mod tests {
         let a = SemanticTransportAnalyzer::new();
         let spec = simple_spec("test", vec![delta(800_000, true)]);
         let input = simple_input(vec![spec]);
-        let result = a.analyze(&input).expect("serde deserialization should succeed");
+        let result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
         assert_eq!(
             result.ledger.entries[0].verdict,
             TransportVerdict::AdapterRequired
@@ -2084,7 +2143,9 @@ mod tests {
         let a = SemanticTransportAnalyzer::new();
         let spec = simple_spec("test", vec![delta(400_000, true), delta(400_000, false)]);
         let input = simple_input(vec![spec]);
-        let result = a.analyze(&input).expect("serde deserialization should succeed");
+        let result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
         assert_eq!(
             result.ledger.entries[0].verdict,
             TransportVerdict::Incompatible
@@ -2108,7 +2169,9 @@ mod tests {
             simple_spec("frag1", vec![]),
             simple_spec("frag2", vec![delta(200_000, true)]),
         ]);
-        let result = a.analyze(&input).expect("serde deserialization should succeed");
+        let result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
         assert_eq!(result.ledger.coverage_millionths(), MILLION);
     }
 
@@ -2143,7 +2206,9 @@ mod tests {
             }],
             epoch: 1,
         };
-        let result = a.analyze(&input).expect("serde deserialization should succeed");
+        let result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
         let high = result.ledger.high_risk_masks();
         assert!(!high.is_empty());
         assert!(high[0].is_high_risk());
@@ -2159,7 +2224,9 @@ mod tests {
         let mut spec = simple_spec("test", vec![]);
         spec.broken_invariants = vec!["broken".to_string()];
         let input = simple_input(vec![spec]);
-        let result = a.analyze(&input).expect("serde deserialization should succeed");
+        let result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
         assert_eq!(
             result.ledger.entries[0].debt_code.as_deref(),
             Some(DEBT_TRANSPORT_INCOMPATIBLE),
@@ -2171,7 +2238,9 @@ mod tests {
         let a = SemanticTransportAnalyzer::new();
         let spec = simple_spec("test", vec![delta(300_000, true)]);
         let input = simple_input(vec![spec]);
-        let result = a.analyze(&input).expect("serde deserialization should succeed");
+        let result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
         assert_eq!(
             result.ledger.entries[0].debt_code.as_deref(),
             Some(DEBT_ADAPTER_REQUIRED),
@@ -2183,7 +2252,9 @@ mod tests {
         let a = SemanticTransportAnalyzer::new();
         let spec = simple_spec("test", vec![]);
         let input = simple_input(vec![spec]);
-        let result = a.analyze(&input).expect("serde deserialization should succeed");
+        let result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
         assert!(result.ledger.entries[0].debt_code.is_none());
     }
 
@@ -2209,7 +2280,9 @@ mod tests {
             }],
             epoch: 1,
         };
-        let result = a.analyze(&input).expect("serde deserialization should succeed");
+        let result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
         let m = &result.ledger.morphisms[0];
         assert!(!m.is_safe());
         assert!(!m.lossy);
@@ -2234,7 +2307,9 @@ mod tests {
             }],
             epoch: 1,
         };
-        let result = a.analyze(&input).expect("serde deserialization should succeed");
+        let result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
         let summary = result.ledger.morphisms[0].summary_line();
         assert!(summary.contains("UNVERIFIED"));
     }
@@ -2257,7 +2332,9 @@ mod tests {
             }],
             epoch: 1,
         };
-        let result = a.analyze(&input).expect("serde deserialization should succeed");
+        let result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
         let summary = result.ledger.morphisms[0].summary_line();
         assert!(summary.contains("verified-lossy"));
     }
@@ -2314,7 +2391,9 @@ mod tests {
             broken_invariants: vec![],
         };
         let input = simple_input(vec![spec]);
-        let result = a.analyze(&input).expect("serde deserialization should succeed");
+        let result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
         assert_eq!(result.ledger.entries[0].confidence_millionths, 500_000);
     }
 
@@ -2337,7 +2416,9 @@ mod tests {
             broken_invariants: vec![],
         };
         let input = simple_input(vec![spec]);
-        let result = a.analyze(&input).expect("serde deserialization should succeed");
+        let result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
         assert_eq!(result.ledger.entries[0].confidence_millionths, 250_000);
     }
 
@@ -2350,7 +2431,9 @@ mod tests {
         let a = SemanticTransportAnalyzer::new();
         let spec = simple_spec("test", vec![delta(200_000, true)]);
         let input = simple_input(vec![spec]);
-        let result = a.analyze(&input).expect("serde deserialization should succeed");
+        let result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
         assert_eq!(
             result.outcome,
             TransportAnalysisOutcome::CompatibleWithAdapters,
@@ -2380,7 +2463,9 @@ mod tests {
             }],
             epoch: 42,
         };
-        let result = a.analyze(&input).expect("serde deserialization should succeed");
+        let result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
         let report = render_transport_report(&result);
         assert!(report.contains("Morphisms"));
         assert!(report.contains("report-morph"));
@@ -2403,7 +2488,9 @@ mod tests {
             morphisms: vec![],
             epoch: 1,
         };
-        let result = a.analyze(&input).expect("serde deserialization should succeed");
+        let result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
         let report = render_transport_report(&result);
         assert!(report.contains("Regression Masks"));
     }
@@ -2431,7 +2518,8 @@ mod tests {
             let json = serde_json::to_string(d).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by to_string of a valid ContractDomain,
             // so from_str back to ContractDomain cannot fail (valid format + matching schema).
-            let back: ContractDomain = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ContractDomain =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*d, back);
         }
     }
@@ -2446,7 +2534,8 @@ mod tests {
         ];
         for v in &verdicts {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: TransportVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: TransportVerdict =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -2462,7 +2551,8 @@ mod tests {
         ];
         for o in &outcomes {
             let json = serde_json::to_string(o).expect("serde deserialization should succeed");
-            let back: TransportAnalysisOutcome = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: TransportAnalysisOutcome =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*o, back);
         }
     }
@@ -2480,7 +2570,8 @@ mod tests {
         ];
         for e in &errors {
             let json = serde_json::to_string(e).expect("serde deserialization should succeed");
-            let back: TransportError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: TransportError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*e, back);
         }
     }
@@ -2511,7 +2602,9 @@ mod tests {
         let mut s4 = simple_spec("hook4", vec![]);
         s4.broken_invariants = vec!["also-broken".to_string()];
         let input = simple_input(vec![s1, s2, s3, s4]);
-        let result = a.analyze(&input).expect("serde deserialization should succeed");
+        let result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
 
         assert_eq!(result.ledger.unchanged_count(), 1);
         assert_eq!(result.ledger.adapter_required_count(), 1);
@@ -2530,7 +2623,9 @@ mod tests {
             simple_spec("f1", vec![]),
             simple_spec("f2", vec![delta(200_000, true)]),
         ]);
-        let result = a.analyze(&input).expect("serde deserialization should succeed");
+        let result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
         let s = result.summary_line();
         assert!(s.contains("compatible-with-adapters"));
         assert!(s.contains("2 entries"));
@@ -2548,7 +2643,8 @@ mod tests {
         let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid BehavioralDelta,
         // so from_str back to BehavioralDelta cannot fail (valid format + matching schema).
-        let back: BehavioralDelta = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: BehavioralDelta =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(d, back);
     }
 
@@ -2560,7 +2656,8 @@ mod tests {
     fn test_version_pair_serde() {
         let pair = VersionPair::new(v(1, 2, 3), v(4, 5, 6));
         let json = serde_json::to_string(&pair).expect("serde deserialization should succeed");
-        let back: VersionPair = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: VersionPair =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(pair, back);
     }
 
@@ -2586,7 +2683,9 @@ mod tests {
             }],
             epoch: 1,
         };
-        let result = a.analyze(&input).expect("serde deserialization should succeed");
+        let result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
         let m = &result.ledger.morphisms[0];
         assert_eq!(m.adapter_ref.as_deref(), Some("adapters::hydration_v2"));
     }
@@ -2601,7 +2700,9 @@ mod tests {
         let mut spec = simple_spec("test", vec![]);
         spec.broken_invariants = vec!["broken".to_string()];
         let input = simple_input(vec![spec]);
-        let result = a.analyze(&input).expect("serde deserialization should succeed");
+        let result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
         assert!(!result.can_release());
     }
 
@@ -2669,7 +2770,9 @@ mod tests {
             })
             .collect();
         let input = simple_input(specs);
-        let result = a.analyze(&input).expect("serde deserialization should succeed");
+        let result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
         assert_eq!(result.total_entries, 9);
         assert_eq!(result.outcome, TransportAnalysisOutcome::FullyCompatible);
         for d in &domains {
@@ -2716,7 +2819,8 @@ mod tests {
             epoch: 99,
         };
         let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
-        let back: TransportAnalysisInput = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: TransportAnalysisInput =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(input, back);
     }
 
@@ -2731,7 +2835,9 @@ mod tests {
         let a = SemanticTransportAnalyzer::with_config(config);
         let specs = vec![simple_spec("a", vec![]), simple_spec("b", vec![])];
         let input = simple_input(specs);
-        let result = a.analyze(&input).expect("serde deserialization should succeed");
+        let result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
         assert_eq!(result.outcome, TransportAnalysisOutcome::BudgetExhausted);
         assert!(!result.can_release());
     }
@@ -2766,7 +2872,9 @@ mod tests {
             morphisms: vec![morph],
             epoch: 10,
         };
-        let result = a.analyze(&input).expect("serde deserialization should succeed");
+        let result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
         assert_eq!(
             result.outcome,
             TransportAnalysisOutcome::RegressionMaskDetected
@@ -2784,7 +2892,9 @@ mod tests {
         // method directly by constructing a ledger.
         let spec_known = simple_spec("known", vec![]);
         let input = simple_input(vec![spec_known]);
-        let mut result = a.analyze(&input).expect("serde deserialization should succeed");
+        let mut result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
         // Manually add an Unknown entry to test coverage calculation.
         let unknown_entry = TransportEntry {
             id: result.ledger.entries[0].id.clone(),
@@ -2846,7 +2956,9 @@ mod tests {
             morphisms: vec![morph],
             epoch: 20,
         };
-        let result = a.analyze(&input).expect("serde deserialization should succeed");
+        let result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
         let codes = result.ledger.all_debt_codes();
         assert!(
             codes.contains(DEBT_REGRESSION_MASKED),
@@ -2874,7 +2986,9 @@ mod tests {
             broken_invariants: vec!["i2".to_string()],
         };
         let input = simple_input(vec![spec]);
-        let result = a.analyze(&input).expect("serde deserialization should succeed");
+        let result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
         let entry = &result.ledger.entries[0];
         assert!(
             !entry.all_invariants_verified(),
@@ -2895,7 +3009,9 @@ mod tests {
             },
         ];
         let input = simple_input(specs);
-        let result = a.analyze(&input).expect("serde deserialization should succeed");
+        let result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
         let report = render_transport_report(&result);
         assert!(
             report.contains("incompatible"),
@@ -2931,7 +3047,9 @@ mod tests {
             morphisms: vec![morph_spec],
             epoch: 30,
         };
-        let result = a.analyze(&input).expect("serde deserialization should succeed");
+        let result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
         let m = &result.ledger.morphisms[0];
         assert!(m.is_safe());
         assert!(m.summary_line().contains("safe"));
@@ -2950,7 +3068,9 @@ mod tests {
         let a = SemanticTransportAnalyzer::new();
         let spec = simple_spec("at-thresh", vec![delta(750_000, true)]);
         let input = simple_input(vec![spec]);
-        let result = a.analyze(&input).expect("serde deserialization should succeed");
+        let result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
         assert_eq!(
             result.ledger.entries[0].verdict,
             TransportVerdict::AdapterRequired,
@@ -2963,7 +3083,9 @@ mod tests {
         let a = SemanticTransportAnalyzer::new();
         let spec = simple_spec("at-thresh-unbr", vec![delta(750_000, false)]);
         let input = simple_input(vec![spec]);
-        let result = a.analyze(&input).expect("serde deserialization should succeed");
+        let result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
         assert_eq!(
             result.ledger.entries[0].verdict,
             TransportVerdict::Incompatible,
@@ -2979,7 +3101,9 @@ mod tests {
             vec![delta(200_000, true), delta(300_000, true)],
         );
         let input = simple_input(vec![spec]);
-        let result = a.analyze(&input).expect("serde deserialization should succeed");
+        let result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
         assert_eq!(
             result.ledger.entries[0].verdict,
             TransportVerdict::AdapterRequired,
@@ -2995,7 +3119,9 @@ mod tests {
             vec![delta(100_000, true), delta(100_000, false)],
         );
         let input = simple_input(vec![spec]);
-        let result = a.analyze(&input).expect("serde deserialization should succeed");
+        let result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
         assert_eq!(
             result.ledger.entries[0].verdict,
             TransportVerdict::Incompatible,
@@ -3011,7 +3137,9 @@ mod tests {
             vec![delta(400_000, true), delta(400_000, true)],
         );
         let input = simple_input(vec![spec]);
-        let result = a.analyze(&input).expect("serde deserialization should succeed");
+        let result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
         assert_eq!(
             result.ledger.entries[0].verdict,
             TransportVerdict::AdapterRequired,
@@ -3028,7 +3156,9 @@ mod tests {
         let a = SemanticTransportAnalyzer::with_config(config);
         let spec = simple_spec("custom-thresh", vec![delta(200_000, true)]);
         let input = simple_input(vec![spec]);
-        let result = a.analyze(&input).expect("serde deserialization should succeed");
+        let result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
         assert_eq!(
             result.ledger.entries[0].verdict,
             TransportVerdict::AdapterRequired,
@@ -3079,7 +3209,9 @@ mod tests {
             morphisms: vec![morph1, morph2],
             epoch: 1,
         };
-        let result = a.analyze(&input).expect("serde deserialization should succeed");
+        let result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
         // Lossy morphism should trigger regression mask.
         assert_eq!(
             result.outcome,
@@ -3115,7 +3247,9 @@ mod tests {
             })
             .collect();
         let input = simple_input(specs);
-        let result = a.analyze(&input).expect("serde deserialization should succeed");
+        let result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
         // Budget limits masks to 1.
         assert_eq!(result.ledger.regression_masks.len(), 1);
     }
@@ -3128,7 +3262,8 @@ mod tests {
     fn test_analyzer_serde_roundtrip() {
         let a = SemanticTransportAnalyzer::new();
         let json = serde_json::to_string(&a).expect("serde deserialization should succeed");
-        let back: SemanticTransportAnalyzer = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SemanticTransportAnalyzer =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(a.config.max_entries, back.config.max_entries);
         assert_eq!(
             a.config.incompatibility_threshold_millionths,
@@ -3147,7 +3282,8 @@ mod tests {
         };
         let a = SemanticTransportAnalyzer::with_config(config);
         let json = serde_json::to_string(&a).expect("serde deserialization should succeed");
-        let back: SemanticTransportAnalyzer = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SemanticTransportAnalyzer =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.config.max_entries, 42);
         assert_eq!(back.config.max_morphisms_per_entry, 7);
         assert_eq!(back.config.max_regression_masks, 3);
@@ -3186,7 +3322,9 @@ mod tests {
             }],
             epoch: 1,
         };
-        let result = a.analyze(&input).expect("serde deserialization should succeed");
+        let result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
         let mask = &result.ledger.regression_masks[0];
         assert!(
             mask.morphism_id.is_some(),
@@ -3212,7 +3350,9 @@ mod tests {
             verified_invariants: vec!["a".to_string()], // 1/4 < 50% → mask type 2
             broken_invariants: vec![],
         }]);
-        let result = a.analyze(&input).expect("serde deserialization should succeed");
+        let result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
         // Find the low-coverage mask (mask type 2 has no morphism_id).
         let low_cov_masks: Vec<_> = result
             .ledger
@@ -3260,7 +3400,9 @@ mod tests {
             }],
             epoch: 1,
         };
-        let result = a.analyze(&input).expect("serde deserialization should succeed");
+        let result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
         // Should have at least 2 masks: lossy morphism mask + low coverage mask.
         assert!(
             result.ledger.regression_masks.len() >= 2,
@@ -3287,7 +3429,9 @@ mod tests {
             broken_invariants: vec![],
         };
         let input = simple_input(vec![spec]);
-        let result = a.analyze(&input).expect("serde deserialization should succeed");
+        let result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
         assert_eq!(result.ledger.entries[0].confidence_millionths, 0);
     }
 
@@ -3305,7 +3449,9 @@ mod tests {
             broken_invariants: vec![],
         };
         let input = simple_input(vec![spec]);
-        let result = a.analyze(&input).expect("serde deserialization should succeed");
+        let result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
         assert_eq!(result.ledger.entries[0].confidence_millionths, MILLION);
     }
 
@@ -3366,7 +3512,9 @@ mod tests {
             },
         ];
         let input = simple_input(specs);
-        let result = a.analyze(&input).expect("serde deserialization should succeed");
+        let result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
         let pairs = result.ledger.version_pairs();
         assert_eq!(pairs.len(), 2);
     }
@@ -3380,7 +3528,9 @@ mod tests {
         let a = SemanticTransportAnalyzer::new();
         let spec = simple_spec("not-blocking", vec![]);
         let input = simple_input(vec![spec]);
-        let result = a.analyze(&input).expect("serde deserialization should succeed");
+        let result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
         assert!(!result.ledger.entries[0].is_blocking());
     }
 
@@ -3389,7 +3539,9 @@ mod tests {
         let a = SemanticTransportAnalyzer::new();
         let spec = simple_spec("adapter-not-block", vec![delta(200_000, true)]);
         let input = simple_input(vec![spec]);
-        let result = a.analyze(&input).expect("serde deserialization should succeed");
+        let result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
         assert!(!result.ledger.entries[0].is_blocking());
     }
 
@@ -3411,7 +3563,9 @@ mod tests {
             }],
         );
         let input = simple_input(vec![spec]);
-        let result = a.analyze(&input).expect("serde deserialization should succeed");
+        let result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
         let report = render_transport_report(&result);
         assert!(report.contains("Delta:"), "report should show delta lines");
         assert!(
@@ -3448,8 +3602,12 @@ mod tests {
             morphisms: vec![morph_spec],
             epoch: 2,
         };
-        let r1 = a.analyze(&input1).expect("serde deserialization should succeed");
-        let r2 = a.analyze(&input2).expect("serde deserialization should succeed");
+        let r1 = a
+            .analyze(&input1)
+            .expect("serde deserialization should succeed");
+        let r2 = a
+            .analyze(&input2)
+            .expect("serde deserialization should succeed");
         assert_eq!(
             r1.ledger.morphisms[0].evidence_hash, r2.ledger.morphisms[0].evidence_hash,
             "morphism hash should be deterministic regardless of epoch"
@@ -3474,8 +3632,12 @@ mod tests {
             }],
             epoch: 1,
         };
-        let r1 = a.analyze(&make_input("morph-alpha")).expect("serde deserialization should succeed");
-        let r2 = a.analyze(&make_input("morph-beta")).expect("serde deserialization should succeed");
+        let r1 = a
+            .analyze(&make_input("morph-alpha"))
+            .expect("serde deserialization should succeed");
+        let r2 = a
+            .analyze(&make_input("morph-beta"))
+            .expect("serde deserialization should succeed");
         assert_ne!(
             r1.ledger.morphisms[0].evidence_hash,
             r2.ledger.morphisms[0].evidence_hash,
@@ -3510,10 +3672,13 @@ mod tests {
         let a = SemanticTransportAnalyzer::new();
         let spec = simple_spec("serde-entry", vec![delta(100_000, true)]);
         let input = simple_input(vec![spec]);
-        let result = a.analyze(&input).expect("serde deserialization should succeed");
+        let result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
         let entry = &result.ledger.entries[0];
         let json = serde_json::to_string(entry).expect("serde deserialization should succeed");
-        let back: TransportEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: TransportEntry =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(*entry, back);
     }
 
@@ -3539,10 +3704,13 @@ mod tests {
             }],
             epoch: 5,
         };
-        let result = a.analyze(&input).expect("serde deserialization should succeed");
+        let result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
         let morph = &result.ledger.morphisms[0];
         let json = serde_json::to_string(morph).expect("serde deserialization should succeed");
-        let back: CompatibilityMorphism = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: CompatibilityMorphism =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(*morph, back);
     }
 
@@ -3583,7 +3751,8 @@ mod tests {
             evidence_hash: ContentHash::compute(b"mask-serde-test"),
         };
         let json = serde_json::to_string(&mask).expect("serde deserialization should succeed");
-        let back: RegressionMask = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: RegressionMask =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(mask, back);
     }
 
@@ -3660,7 +3829,9 @@ mod tests {
             s
         };
         let input = simple_input(vec![s_unchanged, s_adapter, s_incompat]);
-        let result = a.analyze(&input).expect("serde deserialization should succeed");
+        let result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
         let ledger = &result.ledger;
 
         assert_eq!(
@@ -3699,7 +3870,9 @@ mod tests {
             morphisms: vec![],
             epoch: 42_000,
         };
-        let result = a.analyze(&input).expect("serde deserialization should succeed");
+        let result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
         assert_eq!(result.analysis_epoch, 42_000);
         assert_eq!(result.ledger.compiled_epoch, 42_000);
     }
@@ -3716,7 +3889,9 @@ mod tests {
             morphisms: vec![],
             epoch: 999,
         };
-        let result = a.analyze(&input).expect("serde deserialization should succeed");
+        let result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
         let report = render_transport_report(&result);
         assert!(
             report.contains("epoch 999"),
@@ -3808,7 +3983,9 @@ mod tests {
             morphisms,
             epoch: 50,
         };
-        let result = a.analyze(&input).expect("serde deserialization should succeed");
+        let result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
 
         // Verify structure.
         assert_eq!(result.total_entries, 3);
@@ -3829,7 +4006,8 @@ mod tests {
 
         // Serde roundtrip of full result.
         let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
-        let back: TransportAnalysisResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: TransportAnalysisResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result.result_hash, back.result_hash);
         assert_eq!(result.outcome, back.outcome);
         assert_eq!(result.ledger.entries.len(), back.ledger.entries.len());
@@ -3848,7 +4026,9 @@ mod tests {
             simple_spec("s3", vec![delta(200_000, true)]),
         ];
         let input = simple_input(specs);
-        let result = a.analyze(&input).expect("serde deserialization should succeed");
+        let result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
         let s = result.ledger.summary_line();
         assert!(s.contains("3 entries"));
         assert!(s.contains("1 unchanged"));
@@ -3864,7 +4044,9 @@ mod tests {
     fn test_result_schema_version_and_bead_id() {
         let a = SemanticTransportAnalyzer::new();
         let input = simple_input(vec![simple_spec("meta-test", vec![])]);
-        let result = a.analyze(&input).expect("serde deserialization should succeed");
+        let result = a
+            .analyze(&input)
+            .expect("serde deserialization should succeed");
         assert_eq!(result.schema_version, TRANSPORT_LEDGER_SCHEMA_VERSION);
         assert_eq!(result.bead_id, TRANSPORT_LEDGER_BEAD_ID);
     }

@@ -1080,7 +1080,8 @@ mod tests {
             // SAFETY: ConformanceLevel derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(c).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by valid ConformanceLevel serialization
-            let back: ConformanceLevel = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ConformanceLevel =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*c, back);
         }
     }
@@ -1105,7 +1106,8 @@ mod tests {
             // SAFETY: DegradedModeReason derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(r).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by valid DegradedModeReason serialization
-            let back: DegradedModeReason = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: DegradedModeReason =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*r, back);
         }
     }
@@ -1136,7 +1138,8 @@ mod tests {
     fn gate_verdict_serde() {
         for v in GateVerdict::ALL {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: GateVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: GateVerdict =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -1154,7 +1157,8 @@ mod tests {
             // SAFETY: ReplayDropKind derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(k).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by valid ReplayDropKind serialization
-            let back: ReplayDropKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ReplayDropKind =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*k, back);
         }
     }
@@ -1202,7 +1206,8 @@ mod tests {
         // SAFETY: ConformanceVector derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid ConformanceVector serialization
-        let back: ConformanceVector = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ConformanceVector =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, back);
     }
 
@@ -1240,7 +1245,8 @@ mod tests {
         // SAFETY: ReplayDropRecord derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid ReplayDropRecord serialization
-        let back: ReplayDropRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ReplayDropRecord =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 
@@ -1272,7 +1278,8 @@ mod tests {
         // SAFETY: DegradedModeRecord derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid DegradedModeRecord serialization
-        let back: DegradedModeRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DegradedModeRecord =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 
@@ -1326,7 +1333,8 @@ mod tests {
         // SAFETY: ObservabilityDelta derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid ObservabilityDelta serialization
-        let back: ObservabilityDelta = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ObservabilityDelta =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(d, back);
     }
 
@@ -1361,7 +1369,8 @@ mod tests {
         // SAFETY: GateConfig derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid GateConfig serialization
-        let back: GateConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GateConfig =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c, back);
     }
 
@@ -1578,7 +1587,8 @@ mod tests {
     fn gate_result_serde() {
         let r = evaluate(&good_conformance(), &[], &[], None, &default_config());
         let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
-        let back: GateResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GateResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 
@@ -1614,7 +1624,8 @@ mod tests {
         let eh = ContentHash::compute(b"test");
         let r = DecisionReceipt::new(epoch(), GateVerdict::ConditionalPass, eh);
         let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
-        let back: DecisionReceipt = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DecisionReceipt =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 
@@ -1673,7 +1684,8 @@ mod tests {
         )];
         let s = GateSummary::from_results(&results);
         let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
-        let back: GateSummary = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GateSummary =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(s, back);
     }
 }

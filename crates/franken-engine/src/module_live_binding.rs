@@ -1121,7 +1121,8 @@ mod tests {
         let mut cell = make_cell("mod_a", "foo");
         cell.initialize_millionths(1_000_000);
         assert_eq!(cell.version, 1);
-        cell.mutate_millionths(2_000_000).expect("serde deserialization should succeed");
+        cell.mutate_millionths(2_000_000)
+            .expect("serde deserialization should succeed");
         assert_eq!(cell.version, 2);
         assert_eq!(cell.value_millionths, Some(2_000_000));
     }
@@ -1206,7 +1207,9 @@ mod tests {
         let cell = make_cell("mod_a", "foo");
         let id = map.register_cell(cell);
         assert_eq!(id, BindingId::new("mod_a", "foo"));
-        let retrieved = map.get_cell(&id).expect("serde deserialization should succeed");
+        let retrieved = map
+            .get_cell(&id)
+            .expect("serde deserialization should succeed");
         assert_eq!(retrieved.source_module, "mod_a");
         assert_eq!(retrieved.export_name, "foo");
     }
@@ -1216,11 +1219,28 @@ mod tests {
         let mut map = LiveBindingMap::new();
         let cell = make_cell("mod_a", "counter");
         let id = map.register_cell(cell);
-        map.initialize_millionths(&id, 0).expect("serde deserialization should succeed");
-        assert_eq!(map.get_cell(&id).expect("serde deserialization should succeed").value_millionths, Some(0));
-        map.mutate_millionths(&id, 1_000_000).expect("serde deserialization should succeed");
-        assert_eq!(map.get_cell(&id).expect("serde deserialization should succeed").value_millionths, Some(1_000_000));
-        assert_eq!(map.get_cell(&id).expect("serde deserialization should succeed").version, 2);
+        map.initialize_millionths(&id, 0)
+            .expect("serde deserialization should succeed");
+        assert_eq!(
+            map.get_cell(&id)
+                .expect("serde deserialization should succeed")
+                .value_millionths,
+            Some(0)
+        );
+        map.mutate_millionths(&id, 1_000_000)
+            .expect("serde deserialization should succeed");
+        assert_eq!(
+            map.get_cell(&id)
+                .expect("serde deserialization should succeed")
+                .value_millionths,
+            Some(1_000_000)
+        );
+        assert_eq!(
+            map.get_cell(&id)
+                .expect("serde deserialization should succeed")
+                .version,
+            2
+        );
     }
 
     #[test]
@@ -1228,7 +1248,8 @@ mod tests {
         let mut map = LiveBindingMap::new();
         let cell = make_cell("mod_a", "val");
         let id = map.register_cell(cell);
-        map.mark_dead(&id).expect("serde deserialization should succeed");
+        map.mark_dead(&id)
+            .expect("serde deserialization should succeed");
         assert!(map.mutate_millionths(&id, 1).is_err());
     }
 
@@ -1245,7 +1266,8 @@ mod tests {
         let mut map = LiveBindingMap::new();
         let cell = make_cell("mod_a", "foo");
         let id = map.register_cell(cell);
-        map.initialize_millionths(&id, 42).expect("serde deserialization should succeed");
+        map.initialize_millionths(&id, 42)
+            .expect("serde deserialization should succeed");
 
         let import = ImportBinding {
             importer: "mod_b".to_string(),
@@ -1255,7 +1277,9 @@ mod tests {
         };
         map.wire_import(import);
 
-        let cell = map.read_through_import("mod_b", "myFoo").expect("serde deserialization should succeed");
+        let cell = map
+            .read_through_import("mod_b", "myFoo")
+            .expect("serde deserialization should succeed");
         assert_eq!(cell.value_millionths, Some(42));
     }
 
@@ -1264,7 +1288,8 @@ mod tests {
         let mut map = LiveBindingMap::new();
         let cell = make_cell("mod_a", "counter");
         let id = map.register_cell(cell);
-        map.initialize_millionths(&id, 0).expect("serde deserialization should succeed");
+        map.initialize_millionths(&id, 0)
+            .expect("serde deserialization should succeed");
 
         let import = ImportBinding {
             importer: "mod_b".to_string(),
@@ -1283,7 +1308,8 @@ mod tests {
         );
 
         // Mutate in source module
-        map.mutate_millionths(&id, 1_000_000).expect("serde deserialization should succeed");
+        map.mutate_millionths(&id, 1_000_000)
+            .expect("serde deserialization should succeed");
 
         // After mutation — importer sees updated value
         assert_eq!(
@@ -1306,7 +1332,8 @@ mod tests {
             BindingType::ReExport,
         ));
         map.register_alias(alias_id.clone(), source_id.clone());
-        map.initialize_millionths(&source_id, 100).expect("serde deserialization should succeed");
+        map.initialize_millionths(&source_id, 100)
+            .expect("serde deserialization should succeed");
 
         map.wire_import(ImportBinding {
             importer: "mod_c".to_string(),
@@ -1315,7 +1342,12 @@ mod tests {
             is_namespace: false,
         });
 
-        assert_eq!(map.get_cell(&alias_id).expect("serde deserialization should succeed").source_module, "mod_a");
+        assert_eq!(
+            map.get_cell(&alias_id)
+                .expect("serde deserialization should succeed")
+                .source_module,
+            "mod_a"
+        );
         assert_eq!(
             map.read_through_import("mod_c", "foo")
                 .expect("serde deserialization should succeed")
@@ -1323,9 +1355,12 @@ mod tests {
             Some(100)
         );
 
-        map.mutate_millionths(&alias_id, 200).expect("serde deserialization should succeed");
+        map.mutate_millionths(&alias_id, 200)
+            .expect("serde deserialization should succeed");
         assert_eq!(
-            map.get_cell(&source_id).expect("serde deserialization should succeed").value_millionths,
+            map.get_cell(&source_id)
+                .expect("serde deserialization should succeed")
+                .value_millionths,
             Some(200)
         );
     }
@@ -1344,15 +1379,21 @@ mod tests {
         map.register_alias(alias_id.clone(), source_id);
 
         assert_eq!(
-            map.get_cell(&alias_id).expect("serde deserialization should succeed").binding_type,
+            map.get_cell(&alias_id)
+                .expect("serde deserialization should succeed")
+                .binding_type,
             BindingType::Direct
         );
         assert_eq!(
-            map.get_surface_cell(&alias_id).expect("serde deserialization should succeed").binding_type,
+            map.get_surface_cell(&alias_id)
+                .expect("serde deserialization should succeed")
+                .binding_type,
             BindingType::StarReExport
         );
         assert_eq!(
-            map.get_surface_cell(&alias_id).expect("serde deserialization should succeed").source_module,
+            map.get_surface_cell(&alias_id)
+                .expect("serde deserialization should succeed")
+                .source_module,
             "mod_b"
         );
     }
@@ -1362,9 +1403,12 @@ mod tests {
         let mut map = LiveBindingMap::new();
         let cell = make_cell("mod_a", "x");
         let id = map.register_cell(cell);
-        map.initialize_millionths(&id, 1).expect("serde deserialization should succeed");
-        map.mutate_millionths(&id, 2).expect("serde deserialization should succeed");
-        map.mark_dead(&id).expect("serde deserialization should succeed");
+        map.initialize_millionths(&id, 1)
+            .expect("serde deserialization should succeed");
+        map.mutate_millionths(&id, 2)
+            .expect("serde deserialization should succeed");
+        map.mark_dead(&id)
+            .expect("serde deserialization should succeed");
         // 1 created + 1 initialized + 1 mutated + 1 died = 4 events
         assert_eq!(map.events.len(), 4);
     }
@@ -1384,7 +1428,8 @@ mod tests {
         let mut cell = make_cell("mod_a", "foo");
         cell.initialize_millionths(42);
         let json = serde_json::to_string(&cell).expect("serde deserialization should succeed");
-        let back: BindingCell = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: BindingCell =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cell, back);
     }
 
@@ -1392,7 +1437,8 @@ mod tests {
     fn binding_id_serde_roundtrip() {
         let id = BindingId::new("mod_a", "foo");
         let json = serde_json::to_string(&id).expect("serde deserialization should succeed");
-        let back: BindingId = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: BindingId =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(id, back);
     }
 
@@ -1410,7 +1456,8 @@ mod tests {
             source_hash: ContentHash::compute(b"source"),
         };
         let json = serde_json::to_string(&ns).expect("serde deserialization should succeed");
-        let back: NamespaceObject = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: NamespaceObject =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ns, back);
     }
 
@@ -1423,7 +1470,8 @@ mod tests {
             is_namespace: false,
         };
         let json = serde_json::to_string(&ib).expect("serde deserialization should succeed");
-        let back: ImportBinding = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ImportBinding =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ib, back);
     }
 
@@ -1434,7 +1482,8 @@ mod tests {
             binding_type: BindingType::Direct,
         };
         let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
-        let back: BindingEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: BindingEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ev, back);
     }
 
@@ -1444,7 +1493,8 @@ mod tests {
         let cell = make_cell("mod_a", "x");
         map.register_cell(cell);
         let json = serde_json::to_string(&map).expect("serde deserialization should succeed");
-        let back: LiveBindingMap = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: LiveBindingMap =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(map, back);
     }
 
@@ -1463,7 +1513,8 @@ mod tests {
             BindingCellState::Dead,
         ] {
             let json = serde_json::to_string(&state).expect("serde deserialization should succeed");
-            let back: BindingCellState = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: BindingCellState =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(state, back);
         }
     }
@@ -1525,17 +1576,30 @@ mod tests {
         let mut map = LiveBindingMap::new();
         let cell = make_cell("mod_a", "name");
         let id = map.register_cell(cell);
-        map.initialize_string(&id, "alice".to_string()).expect("serde deserialization should succeed");
+        map.initialize_string(&id, "alice".to_string())
+            .expect("serde deserialization should succeed");
         assert_eq!(
-            map.get_cell(&id).expect("serde deserialization should succeed").value_string.as_deref(),
+            map.get_cell(&id)
+                .expect("serde deserialization should succeed")
+                .value_string
+                .as_deref(),
             Some("alice")
         );
-        map.mutate_string(&id, "bob".to_string()).expect("serde deserialization should succeed");
+        map.mutate_string(&id, "bob".to_string())
+            .expect("serde deserialization should succeed");
         assert_eq!(
-            map.get_cell(&id).expect("serde deserialization should succeed").value_string.as_deref(),
+            map.get_cell(&id)
+                .expect("serde deserialization should succeed")
+                .value_string
+                .as_deref(),
             Some("bob")
         );
-        assert_eq!(map.get_cell(&id).expect("serde deserialization should succeed").version, 2);
+        assert_eq!(
+            map.get_cell(&id)
+                .expect("serde deserialization should succeed")
+                .version,
+            2
+        );
     }
 
     #[test]
@@ -1543,7 +1607,8 @@ mod tests {
         let mut map = LiveBindingMap::new();
         let cell = make_cell("mod_a", "shared");
         let id = map.register_cell(cell);
-        map.initialize_millionths(&id, 0).expect("serde deserialization should succeed");
+        map.initialize_millionths(&id, 0)
+            .expect("serde deserialization should succeed");
 
         // Two importers both import the same binding
         map.wire_import(ImportBinding {
@@ -1560,7 +1625,8 @@ mod tests {
         });
 
         // Mutate from source
-        map.mutate_millionths(&id, 999).expect("serde deserialization should succeed");
+        map.mutate_millionths(&id, 999)
+            .expect("serde deserialization should succeed");
 
         // Both importers see the mutation
         assert_eq!(
@@ -1660,7 +1726,8 @@ mod tests {
         let mut cell = BindingCell::new("mod_a", "greeting", "greeting", BindingType::Direct);
         cell.initialize_string("hello".into());
         assert_eq!(cell.version, 1);
-        cell.mutate_string("world".into()).expect("serde deserialization should succeed");
+        cell.mutate_string("world".into())
+            .expect("serde deserialization should succeed");
         assert_eq!(cell.version, 2);
         assert_eq!(cell.value_string.as_deref(), Some("world"));
     }
@@ -1673,8 +1740,10 @@ mod tests {
         let id = BindingId::new("mod_a", "name");
         let cell = BindingCell::new("mod_a", "name", "name", BindingType::Direct);
         map.register_cell(cell);
-        map.initialize_string(&id, "alice".into()).expect("serde deserialization should succeed");
-        map.mutate_string(&id, "bob".into()).expect("serde deserialization should succeed");
+        map.initialize_string(&id, "alice".into())
+            .expect("serde deserialization should succeed");
+        map.mutate_string(&id, "bob".into())
+            .expect("serde deserialization should succeed");
         // At least 3 events: CellCreated, CellInitialized, CellMutated
         assert!(map.events.len() >= 3);
     }
@@ -1685,7 +1754,8 @@ mod tests {
         let id = BindingId::new("mod_a", "x");
         let cell = BindingCell::new("mod_a", "x", "x", BindingType::Direct);
         map.register_cell(cell);
-        map.mark_dead(&id).expect("serde deserialization should succeed");
+        map.mark_dead(&id)
+            .expect("serde deserialization should succeed");
         let has_died = map
             .events
             .iter()
@@ -1701,7 +1771,8 @@ mod tests {
         let id = BindingId::new("mod_a", "x");
         let cell = BindingCell::new("mod_a", "x", "x", BindingType::Direct);
         map.register_cell(cell);
-        map.mark_dead(&id).expect("serde deserialization should succeed");
+        map.mark_dead(&id)
+            .expect("serde deserialization should succeed");
         map.wire_import(ImportBinding {
             importer: "mod_b".into(),
             local_name: "y".into(),
@@ -1775,7 +1846,8 @@ mod tests {
         ];
         for event in &events {
             let json = serde_json::to_string(event).expect("serde deserialization should succeed");
-            let back: BindingEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: BindingEvent =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*event, back);
         }
     }

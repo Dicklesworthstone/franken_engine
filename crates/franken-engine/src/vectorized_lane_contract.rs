@@ -963,8 +963,10 @@ mod tests {
     #[test]
     fn builtin_family_serde_round_trip() {
         for &family in BuiltinFamily::ALL {
-            let json = serde_json::to_string(&family).expect("serde deserialization should succeed");
-            let back: BuiltinFamily = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&family).expect("serde deserialization should succeed");
+            let back: BuiltinFamily =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(back, family);
         }
     }
@@ -1105,7 +1107,8 @@ mod tests {
         let mut sv = SelectionVector::new(4);
         sv.mask(2);
         let json = serde_json::to_string(&sv).expect("serde deserialization should succeed");
-        let back: SelectionVector = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SelectionVector =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, sv);
     }
 
@@ -1134,7 +1137,8 @@ mod tests {
     fn scalar_oracle_kind_serde_round_trip() {
         for &kind in ScalarOracleKind::ALL {
             let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
-            let back: ScalarOracleKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ScalarOracleKind =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(back, kind);
         }
     }
@@ -1204,7 +1208,9 @@ mod tests {
     #[test]
     fn array_map_eligibility_properties() {
         let contract = LaneContract::new();
-        let e = contract.lookup(BuiltinFamily::ArrayMap).expect("serde deserialization should succeed");
+        let e = contract
+            .lookup(BuiltinFamily::ArrayMap)
+            .expect("serde deserialization should succeed");
         assert_eq!(e.max_lane_width, LaneWidth::Lane16);
         assert!(!e.supports_early_exit);
         assert!(e.supports_masking);
@@ -1214,14 +1220,18 @@ mod tests {
     #[test]
     fn array_every_supports_early_exit() {
         let contract = LaneContract::new();
-        let e = contract.lookup(BuiltinFamily::ArrayEvery).expect("serde deserialization should succeed");
+        let e = contract
+            .lookup(BuiltinFamily::ArrayEvery)
+            .expect("serde deserialization should succeed");
         assert!(e.supports_early_exit);
     }
 
     #[test]
     fn typed_array_fill_no_required_oracles() {
         let contract = LaneContract::new();
-        let e = contract.lookup(BuiltinFamily::TypedArrayFill).expect("serde deserialization should succeed");
+        let e = contract
+            .lookup(BuiltinFamily::TypedArrayFill)
+            .expect("serde deserialization should succeed");
         assert!(e.required_oracles.is_empty());
     }
 
@@ -1376,8 +1386,10 @@ mod tests {
     #[test]
     fn lane_specimen_family_serde_round_trip() {
         for &family in LaneSpecimenFamily::ALL {
-            let json = serde_json::to_string(&family).expect("serde deserialization should succeed");
-            let back: LaneSpecimenFamily = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&family).expect("serde deserialization should succeed");
+            let back: LaneSpecimenFamily =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(back, family);
         }
     }
@@ -1410,7 +1422,8 @@ mod tests {
     fn lane_contract_serde_round_trip() {
         let c = LaneContract::new();
         let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
-        let back: LaneContract = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: LaneContract =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, c);
     }
 

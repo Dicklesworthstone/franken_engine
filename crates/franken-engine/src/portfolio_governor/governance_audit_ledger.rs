@@ -1488,7 +1488,9 @@ mod tests {
     #[test]
     fn override_entry_has_is_override_true() {
         let mut ledger = ledger();
-        let entry = ledger.append(override_input("ovr-1", 10)).expect("serde deserialization should succeed");
+        let entry = ledger
+            .append(override_input("ovr-1", 10))
+            .expect("serde deserialization should succeed");
         assert!(entry.is_override);
     }
 
@@ -1662,7 +1664,8 @@ mod tests {
             GovernanceDecisionType::Override,
         ] {
             let json = serde_json::to_value(dt).expect("serde deserialization should succeed");
-            let back: GovernanceDecisionType = serde_json::from_value(json).expect("serde deserialization should succeed");
+            let back: GovernanceDecisionType =
+                serde_json::from_value(json).expect("serde deserialization should succeed");
             assert_eq!(dt, back);
         }
     }
@@ -1674,7 +1677,8 @@ mod tests {
             GovernanceActor::Human("operator".to_string()),
         ] {
             let json = serde_json::to_string(&actor).expect("serde deserialization should succeed");
-            let back: GovernanceActor = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: GovernanceActor =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(actor, back);
         }
     }
@@ -1692,7 +1696,8 @@ mod tests {
         ];
         for err in errors {
             let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
-            let back: GovernanceLedgerError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: GovernanceLedgerError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(err, back);
         }
     }
@@ -1707,7 +1712,8 @@ mod tests {
             vec!["criterion-b".to_string()],
         );
         let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
-        let back: GovernanceRationale = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GovernanceRationale =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 
@@ -1723,7 +1729,8 @@ mod tests {
             ))
             .expect("serde deserialization should succeed");
         let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
-        let back: GovernanceLedgerEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GovernanceLedgerEntry =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, back);
     }
 
@@ -1747,7 +1754,9 @@ mod tests {
             "a-ref".to_string(),
             "a-ref".to_string(),
         ];
-        let entry = ledger.append(input).expect("serde deserialization should succeed");
+        let entry = ledger
+            .append(input)
+            .expect("serde deserialization should succeed");
         assert_eq!(entry.artifact_references, vec!["a-ref", "z-ref"]);
     }
 
@@ -1799,7 +1808,8 @@ mod tests {
             operational_burden_millionths: 75_000,
         };
         let json = serde_json::to_string(&snap).expect("serde deserialization should succeed");
-        let back: ScorecardSnapshot = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ScorecardSnapshot =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(snap, back);
     }
 
@@ -1807,7 +1817,8 @@ mod tests {
     fn governance_ledger_config_default_serde_stable() {
         let config = GovernanceLedgerConfig::default();
         let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
-        let back: GovernanceLedgerConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GovernanceLedgerConfig =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, back);
     }
 
@@ -1825,7 +1836,8 @@ mod tests {
             override_only: Some(true),
         };
         let json = serde_json::to_string(&query).expect("serde deserialization should succeed");
-        let back: GovernanceLedgerQuery = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GovernanceLedgerQuery =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(query, back);
     }
 
@@ -1851,7 +1863,8 @@ mod tests {
             }],
         };
         let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
-        let back: GovernanceReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GovernanceReport =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report, back);
     }
 
@@ -1869,7 +1882,8 @@ mod tests {
             avg_risk_millionths: 50_000,
         };
         let json = serde_json::to_string(&point).expect("serde deserialization should succeed");
-        let back: PortfolioHealthPoint = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: PortfolioHealthPoint =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(point, back);
     }
 
@@ -1884,7 +1898,8 @@ mod tests {
             signature: "sig".into(),
         };
         let json = serde_json::to_string(&cp).expect("serde deserialization should succeed");
-        let back: GovernanceLedgerCheckpoint = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GovernanceLedgerCheckpoint =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cp, back);
     }
 
@@ -1901,7 +1916,8 @@ mod tests {
             timestamp_ns: 42,
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let back: GovernanceLogEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GovernanceLogEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
     }
 
@@ -2081,9 +2097,12 @@ mod tests {
                 20,
             ))
             .expect("serde deserialization should succeed");
-        ledger.append(override_input("rt-3", 30)).expect("serde deserialization should succeed");
+        ledger
+            .append(override_input("rt-3", 30))
+            .expect("serde deserialization should succeed");
         let json = serde_json::to_string(&ledger).expect("serde deserialization should succeed");
-        let back: GovernanceAuditLedger = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GovernanceAuditLedger =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ledger, back);
         assert_eq!(back.entries().len(), 3);
         assert_eq!(back.checkpoints().len(), 1);
@@ -2126,7 +2145,9 @@ mod tests {
             automatic_input("boundary-1", "moon-1", GovernanceDecisionType::Promote, 10);
         input.rationale.confidence_millionths = 1_000_000;
         input.rationale.risk_of_harm_millionths = 1_000_000;
-        let entry = ledger.append(input).expect("serde deserialization should succeed");
+        let entry = ledger
+            .append(input)
+            .expect("serde deserialization should succeed");
         assert_eq!(entry.rationale.confidence_millionths, 1_000_000);
         assert_eq!(entry.rationale.risk_of_harm_millionths, 1_000_000);
 
@@ -2134,7 +2155,9 @@ mod tests {
         let mut input2 = automatic_input("boundary-2", "moon-1", GovernanceDecisionType::Hold, 20);
         input2.rationale.confidence_millionths = 0;
         input2.rationale.risk_of_harm_millionths = 0;
-        let entry2 = ledger.append(input2).expect("serde deserialization should succeed");
+        let entry2 = ledger
+            .append(input2)
+            .expect("serde deserialization should succeed");
         assert_eq!(entry2.rationale.confidence_millionths, 0);
         assert_eq!(entry2.rationale.risk_of_harm_millionths, 0);
     }

@@ -2049,7 +2049,8 @@ pub fn write_evidence_artifacts(
             "peak_extensions_alive": m.peak_extensions_alive,
             "correctness_digest": m.correctness_digest,
         });
-        evidence_lines.push(serde_json::to_string(&entry).expect("serde deserialization should succeed"));
+        evidence_lines
+            .push(serde_json::to_string(&entry).expect("serde deserialization should succeed"));
     }
     for r in &result.regressions {
         let entry = serde_json::json!({
@@ -2062,7 +2063,8 @@ pub fn write_evidence_artifacts(
             "blocked": r.blocked,
             "blockers": r.blockers,
         });
-        evidence_lines.push(serde_json::to_string(&entry).expect("serde deserialization should succeed"));
+        evidence_lines
+            .push(serde_json::to_string(&entry).expect("serde deserialization should succeed"));
     }
     for evt in &result.events {
         let entry = serde_json::json!({
@@ -2076,7 +2078,8 @@ pub fn write_evidence_artifacts(
             "family": evt.family,
             "profile": evt.profile,
         });
-        evidence_lines.push(serde_json::to_string(&entry).expect("serde deserialization should succeed"));
+        evidence_lines
+            .push(serde_json::to_string(&entry).expect("serde deserialization should succeed"));
     }
     fs::write(&evidence_path, evidence_lines.join("\n") + "\n")?;
 
@@ -2230,7 +2233,8 @@ pub fn write_benchmark_comparison_artifacts(
     )?;
     fs::write(
         &comparison_bundle_path,
-        serde_json::to_string_pretty(&result.evidence_bundle).expect("serde deserialization should succeed"),
+        serde_json::to_string_pretty(&result.evidence_bundle)
+            .expect("serde deserialization should succeed"),
     )?;
 
     let evidence_lines = result
@@ -3229,7 +3233,8 @@ mod tests {
         let result = run_benchmark_suite(&config);
         let dir = std::env::temp_dir().join("franken_bench_test_evidence");
         let _ = fs::remove_dir_all(&dir);
-        let artifacts = write_evidence_artifacts(&result, &dir).expect("serde deserialization should succeed");
+        let artifacts =
+            write_evidence_artifacts(&result, &dir).expect("serde deserialization should succeed");
         assert!(artifacts.run_manifest_path.exists());
         assert!(artifacts.evidence_path.exists());
         assert!(artifacts.events_path.exists());
@@ -3239,26 +3244,31 @@ mod tests {
         assert!(artifacts.summary_path.exists());
 
         // Verify manifest is valid JSON
-        let manifest: serde_json::Value =
-            serde_json::from_str(&fs::read_to_string(&artifacts.run_manifest_path).expect("serde deserialization should succeed"))
-                .expect("serde deserialization should succeed");
+        let manifest: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(&artifacts.run_manifest_path)
+                .expect("serde deserialization should succeed"),
+        )
+        .expect("serde deserialization should succeed");
         assert_eq!(manifest["schema_version"], BENCHMARK_E2E_SCHEMA_VERSION);
         assert_eq!(manifest["run_id"], "test-evidence");
         assert_eq!(manifest["seed"], 42);
 
         // Verify evidence JSONL has entries
-        let evidence = fs::read_to_string(&artifacts.evidence_path).expect("serde deserialization should succeed");
+        let evidence = fs::read_to_string(&artifacts.evidence_path)
+            .expect("serde deserialization should succeed");
         assert!(!evidence.is_empty());
         let lines: Vec<&str> = evidence.lines().collect();
         assert!(!lines.is_empty());
         // Each line should be valid JSON
         for line in &lines {
-            let _: serde_json::Value = serde_json::from_str(line).expect("serde deserialization should succeed");
+            let _: serde_json::Value =
+                serde_json::from_str(line).expect("serde deserialization should succeed");
         }
 
         // Verify benchmark env manifest
         let env_manifest: serde_json::Value = serde_json::from_str(
-            &fs::read_to_string(&artifacts.benchmark_env_manifest_path).expect("serde deserialization should succeed"),
+            &fs::read_to_string(&artifacts.benchmark_env_manifest_path)
+                .expect("serde deserialization should succeed"),
         )
         .expect("serde deserialization should succeed");
         assert_eq!(env_manifest["schema_version"], BENCHMARK_ENV_SCHEMA_VERSION);
@@ -3289,9 +3299,11 @@ mod tests {
         assert_eq!(env_manifest["fairness_policy"]["case_timeout_ms"], 30_000);
 
         // Verify raw archive has full measurement payload
-        let raw_archive: serde_json::Value =
-            serde_json::from_str(&fs::read_to_string(&artifacts.raw_results_archive_path).expect("serde deserialization should succeed"))
-                .expect("serde deserialization should succeed");
+        let raw_archive: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(&artifacts.raw_results_archive_path)
+                .expect("serde deserialization should succeed"),
+        )
+        .expect("serde deserialization should succeed");
         assert_eq!(
             raw_archive["schema_version"],
             "franken-engine.benchmark-e2e.raw-results.v1"
@@ -3303,13 +3315,17 @@ mod tests {
         );
 
         // Verify summary is valid JSON
-        let summary: serde_json::Value =
-            serde_json::from_str(&fs::read_to_string(&artifacts.summary_path).expect("serde deserialization should succeed")).expect("serde deserialization should succeed");
+        let summary: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(&artifacts.summary_path)
+                .expect("serde deserialization should succeed"),
+        )
+        .expect("serde deserialization should succeed");
         assert_eq!(summary["schema_version"], BENCHMARK_E2E_SCHEMA_VERSION);
         assert_eq!(summary["run_id"], "test-evidence");
 
         // Verify structured events and command transcript were emitted
-        let events = fs::read_to_string(&artifacts.events_path).expect("serde deserialization should succeed");
+        let events = fs::read_to_string(&artifacts.events_path)
+            .expect("serde deserialization should succeed");
         assert!(
             events.lines().all(|line| {
                 serde_json::from_str::<serde_json::Value>(line)
@@ -3319,7 +3335,8 @@ mod tests {
             }),
             "all events must be valid structured JSON with trace_id"
         );
-        let commands = fs::read_to_string(&artifacts.commands_path).expect("serde deserialization should succeed");
+        let commands = fs::read_to_string(&artifacts.commands_path)
+            .expect("serde deserialization should succeed");
         assert!(commands.contains("rch exec -- scripts/run_benchmark_e2e_suite.sh report"));
 
         let _ = fs::remove_dir_all(&dir);
@@ -3340,9 +3357,11 @@ mod tests {
 
         let dir = std::env::temp_dir().join("franken_bench_test_reg_evidence");
         let _ = fs::remove_dir_all(&dir);
-        let artifacts = write_evidence_artifacts(&result, &dir).expect("serde deserialization should succeed");
+        let artifacts =
+            write_evidence_artifacts(&result, &dir).expect("serde deserialization should succeed");
 
-        let evidence = fs::read_to_string(&artifacts.evidence_path).expect("serde deserialization should succeed");
+        let evidence = fs::read_to_string(&artifacts.evidence_path)
+            .expect("serde deserialization should succeed");
         let lines: Vec<&str> = evidence.lines().collect();
         // Should have measurement + regression + event lines
         assert!(lines.len() >= 3);
@@ -3363,11 +3382,17 @@ mod tests {
         let result = run_benchmark_suite(&config);
         let dir = std::env::temp_dir().join("franken_bench_test_fam_summary");
         let _ = fs::remove_dir_all(&dir);
-        let artifacts = write_evidence_artifacts(&result, &dir).expect("serde deserialization should succeed");
+        let artifacts =
+            write_evidence_artifacts(&result, &dir).expect("serde deserialization should succeed");
 
-        let summary: serde_json::Value =
-            serde_json::from_str(&fs::read_to_string(&artifacts.summary_path).expect("serde deserialization should succeed")).expect("serde deserialization should succeed");
-        let families = summary["families"].as_array().expect("serde deserialization should succeed");
+        let summary: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(&artifacts.summary_path)
+                .expect("serde deserialization should succeed"),
+        )
+        .expect("serde deserialization should succeed");
+        let families = summary["families"]
+            .as_array()
+            .expect("serde deserialization should succeed");
         assert_eq!(families.len(), 2);
         assert!(
             summary["environment"]["cpu_model"]

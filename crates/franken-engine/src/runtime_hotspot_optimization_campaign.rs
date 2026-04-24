@@ -377,7 +377,8 @@ mod tests {
     fn hotspot_evidence_serde_roundtrip() {
         let orig = sample_hotspot_evidence();
         let json = serde_json::to_string(&orig).expect("serde deserialization should succeed");
-        let back: HotspotEvidence = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: HotspotEvidence =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(orig, back);
     }
 
@@ -385,7 +386,8 @@ mod tests {
     fn metric_vector_serde_roundtrip() {
         let orig = sample_metric_vector(1000);
         let json = serde_json::to_string(&orig).expect("serde deserialization should succeed");
-        let back: MetricVector = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: MetricVector =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(orig, back);
     }
 
@@ -399,7 +401,8 @@ mod tests {
             interaction_p95_latency_ns: 0,
         };
         let json = serde_json::to_string(&orig).expect("serde deserialization should succeed");
-        let back: MetricVector = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: MetricVector =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(orig, back);
     }
 
@@ -407,7 +410,8 @@ mod tests {
     fn ev_inputs_serde_roundtrip() {
         let orig = sample_ev_inputs();
         let json = serde_json::to_string(&orig).expect("serde deserialization should succeed");
-        let back: EvInputs = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: EvInputs =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(orig, back);
     }
 
@@ -415,7 +419,8 @@ mod tests {
     fn semantic_proof_note_serde_roundtrip() {
         let orig = sample_semantic_proof();
         let json = serde_json::to_string(&orig).expect("serde deserialization should succeed");
-        let back: SemanticProofNote = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SemanticProofNote =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(orig, back);
     }
 
@@ -423,7 +428,8 @@ mod tests {
     fn campaign_run_serde_roundtrip() {
         let orig = sample_campaign_run("c1", 1000, 800);
         let json = serde_json::to_string(&orig).expect("serde deserialization should succeed");
-        let back: CampaignRun = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: CampaignRun =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(orig, back);
     }
 
@@ -437,7 +443,8 @@ mod tests {
             expected_outcome: "pass".into(),
         };
         let json = serde_json::to_string(&orig).expect("serde deserialization should succeed");
-        let back: ReplayScenario = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ReplayScenario =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(orig, back);
     }
 
@@ -451,7 +458,8 @@ mod tests {
             expected_outcome: "containment-triggered".into(),
         };
         let json = serde_json::to_string(&orig).expect("serde deserialization should succeed");
-        let back: ReplayScenario = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ReplayScenario =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(orig, back);
         assert!(!back.expected_pass);
     }
@@ -461,7 +469,8 @@ mod tests {
         let runs = vec![sample_campaign_run("c1", 1000, 800)];
         let orig = sample_fixture(runs);
         let json = serde_json::to_string(&orig).expect("serde deserialization should succeed");
-        let back: RuntimeHotspotCampaignFixture = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: RuntimeHotspotCampaignFixture =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(orig, back);
     }
 
@@ -476,7 +485,8 @@ mod tests {
             expected_outcome: "identical".into(),
         });
         let json = serde_json::to_string(&fix).expect("serde deserialization should succeed");
-        let back: RuntimeHotspotCampaignFixture = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: RuntimeHotspotCampaignFixture =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(fix, back);
     }
 
@@ -488,7 +498,8 @@ mod tests {
             gain_millionths: 100_000,
         };
         let json = serde_json::to_string(&orig).expect("serde deserialization should succeed");
-        let back: RuntimeHotspotCampaignResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: RuntimeHotspotCampaignResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(orig, back);
     }
 
@@ -505,7 +516,8 @@ mod tests {
             error_code: None,
         };
         let json = serde_json::to_string(&orig).expect("serde deserialization should succeed");
-        let back: RuntimeHotspotEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: RuntimeHotspotEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(orig, back);
     }
 
@@ -522,7 +534,8 @@ mod tests {
             error_code: Some("ERR_REGRESSION".into()),
         };
         let json = serde_json::to_string(&orig).expect("serde deserialization should succeed");
-        let back: RuntimeHotspotEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: RuntimeHotspotEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(orig, back);
         assert_eq!(back.error_code.as_deref(), Some("ERR_REGRESSION"));
     }
@@ -1167,7 +1180,13 @@ mod tests {
 
         assert_eq!(gain_ranking[0], "alpha", "alpha had most improvement");
         // SAFETY: test verified gain_ranking.len() == 3; last() returns Some for non-empty vec
-        assert_eq!(*gain_ranking.last().expect("serde deserialization should succeed"), "gamma", "gamma regressed");
+        assert_eq!(
+            *gain_ranking
+                .last()
+                .expect("serde deserialization should succeed"),
+            "gamma",
+            "gamma regressed"
+        );
         assert!(!selected.is_empty());
 
         let events = emit_structured_events(&results);

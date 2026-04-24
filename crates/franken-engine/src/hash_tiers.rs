@@ -792,7 +792,8 @@ mod tests {
     fn integrity_hash_serialization_round_trip() {
         let h = IntegrityHash::compute(b"test");
         let json = serde_json::to_string(&h).expect("serde deserialization should succeed");
-        let restored: IntegrityHash = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: IntegrityHash =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(h, restored);
     }
 
@@ -800,7 +801,8 @@ mod tests {
     fn content_hash_serialization_round_trip() {
         let h = ContentHash::compute(b"test");
         let json = serde_json::to_string(&h).expect("serde deserialization should succeed");
-        let restored: ContentHash = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: ContentHash =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(h, restored);
     }
 
@@ -808,7 +810,8 @@ mod tests {
     fn authenticity_hash_serialization_round_trip() {
         let h = AuthenticityHash::compute_keyed(b"key", b"data");
         let json = serde_json::to_string(&h).expect("serde deserialization should succeed");
-        let restored: AuthenticityHash = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: AuthenticityHash =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(h, restored);
     }
 
@@ -822,7 +825,8 @@ mod tests {
             trace_id: "trace-123".to_string(),
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let restored: HashEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: HashEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, restored);
     }
 
@@ -834,7 +838,8 @@ mod tests {
             HashTier::Authenticity,
         ] {
             let json = serde_json::to_string(&tier).expect("serde deserialization should succeed");
-            let restored: HashTier = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: HashTier =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(tier, restored);
         }
     }
@@ -847,7 +852,8 @@ mod tests {
             HashAlgorithm::SipInspiredKeyed,
         ] {
             let json = serde_json::to_string(&alg).expect("serde deserialization should succeed");
-            let restored: HashAlgorithm = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: HashAlgorithm =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(alg, restored);
         }
     }
@@ -1104,7 +1110,8 @@ mod tests {
                 trace_id: "rt-000".to_string(),
             };
             let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-            let restored: HashEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: HashEvent =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(event, restored);
         }
     }

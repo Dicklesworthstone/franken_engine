@@ -1647,8 +1647,16 @@ mod tests {
         .expect("serde deserialization should succeed");
 
         assert!(!gate.passes());
-        assert!(gate.verdict_for(&s1).expect("serde deserialization should succeed").is_ready());
-        assert!(gate.verdict_for(&s2).expect("serde deserialization should succeed").is_blocked());
+        assert!(
+            gate.verdict_for(&s1)
+                .expect("serde deserialization should succeed")
+                .is_ready()
+        );
+        assert!(
+            gate.verdict_for(&s2)
+                .expect("serde deserialization should succeed")
+                .is_blocked()
+        );
     }
 
     #[test]
@@ -2033,7 +2041,8 @@ mod tests {
             DivergenceClass::BenignImprovement,
         ] {
             let json = serde_json::to_string(class).expect("serde deserialization should succeed");
-            let back: DivergenceClass = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: DivergenceClass =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, class);
         }
     }
@@ -2045,7 +2054,8 @@ mod tests {
             improvement_count: 3,
         };
         let json = serde_json::to_string(&ready).expect("serde deserialization should succeed");
-        let back: PromotionReadiness = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: PromotionReadiness =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, ready);
     }
 
@@ -2053,7 +2063,8 @@ mod tests {
     fn serde_cell_output_roundtrip() {
         let out = make_output("hello", 42, 256, &[SlotCapability::ReadSource]);
         let json = serde_json::to_string(&out).expect("serde deserialization should succeed");
-        let back: CellOutput = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: CellOutput =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, out);
     }
 
@@ -2068,7 +2079,8 @@ mod tests {
             divergence_class: None,
         };
         let json = serde_json::to_string(&wr).expect("serde deserialization should succeed");
-        let back: WorkloadResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: WorkloadResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, wr);
     }
 
@@ -2088,7 +2100,8 @@ mod tests {
             },
         );
         let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
-        let back: SlotDifferentialEvidence = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SlotDifferentialEvidence =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.verdicts.len(), 1);
     }
 
@@ -2101,7 +2114,8 @@ mod tests {
             epoch: SecurityEpoch::from_raw(7),
         };
         let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
-        let back: DifferentialConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DifferentialConfig =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, cfg);
     }
 
@@ -2120,7 +2134,8 @@ mod tests {
             artifact_hash: ContentHash::compute(b"hash"),
         };
         let json = serde_json::to_string(&repro).expect("serde deserialization should succeed");
-        let back: DivergenceRepro = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DivergenceRepro =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.slot_id, repro.slot_id);
     }
 
@@ -2139,7 +2154,8 @@ mod tests {
             resource_diff: "none".to_string(),
         };
         let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
-        let back: WorkloadLogEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: WorkloadLogEntry =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.trace_id, "trace-1");
     }
 
@@ -2154,7 +2170,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: WorkloadCategory = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: WorkloadCategory =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -2164,7 +2181,8 @@ mod tests {
         let variants = [DifferentialOutcome::Match, DifferentialOutcome::Diverge];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: DifferentialOutcome = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: DifferentialOutcome =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -2192,7 +2210,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: SlotDifferentialError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: SlotDifferentialError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }

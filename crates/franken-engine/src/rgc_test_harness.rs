@@ -1580,7 +1580,9 @@ mod tests {
             let mut event: HarnessLogEvent =
                 serde_json::from_str(line).expect("parse security event");
             event.trace_id = bad_trace.to_string();
-            rewritten.push_str(&serde_json::to_string(&event).expect("serde deserialization should succeed"));
+            rewritten.push_str(
+                &serde_json::to_string(&event).expect("serde deserialization should succeed"),
+            );
             rewritten.push('\n');
         }
         fs::write(&events_path, rewritten).expect("write corrupted events");
@@ -1660,7 +1662,8 @@ mod tests {
             HarnessLane::E2e,
         ] {
             let json = serde_json::to_string(&lane).expect("serde deserialization should succeed");
-            let restored: HarnessLane = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: HarnessLane =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(lane, restored);
         }
     }
@@ -1692,8 +1695,10 @@ mod tests {
             BaselineScenarioDomain::Module,
             BaselineScenarioDomain::Security,
         ] {
-            let json = serde_json::to_string(&domain).expect("serde deserialization should succeed");
-            let restored: BaselineScenarioDomain = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&domain).expect("serde deserialization should succeed");
+            let restored: BaselineScenarioDomain =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(domain, restored);
         }
     }
@@ -1706,8 +1711,10 @@ mod tests {
             BaselineScenarioOutcome::HappyPath,
             BaselineScenarioOutcome::CanonicalFailure,
         ] {
-            let json = serde_json::to_string(&outcome).expect("serde deserialization should succeed");
-            let restored: BaselineScenarioOutcome = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&outcome).expect("serde deserialization should succeed");
+            let restored: BaselineScenarioOutcome =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(outcome, restored);
         }
     }
@@ -1751,7 +1758,8 @@ mod tests {
     fn context_serde_round_trip() {
         let ctx = DeterministicTestContext::new("rgc-052", "fixture-a", HarnessLane::Security, 7);
         let json = serde_json::to_string(&ctx).expect("serde deserialization should succeed");
-        let restored: DeterministicTestContext = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: DeterministicTestContext =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ctx, restored);
     }
 
@@ -1770,7 +1778,8 @@ mod tests {
             timestamp_unix_ms: 1_700_000_000_000,
         });
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let restored: HarnessLogEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: HarnessLogEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, restored);
     }
 
@@ -1788,7 +1797,8 @@ mod tests {
         });
         assert_eq!(event.error_code.as_deref(), Some("FE-SEC-0001"));
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let restored: HarnessLogEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: HarnessLogEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, restored);
     }
 
@@ -1800,7 +1810,8 @@ mod tests {
         let manifest =
             HarnessRunManifest::from_context(&ctx, "run-001", 3, 2, "replay.sh", 1_700_000_000_000);
         let json = serde_json::to_string(&manifest).expect("serde deserialization should succeed");
-        let restored: HarnessRunManifest = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: HarnessRunManifest =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(manifest, restored);
     }
 
@@ -1853,7 +1864,8 @@ mod tests {
             ArtifactValidationErrorCode::EmptyCommands,
         ] {
             let json = serde_json::to_string(&code).expect("serde deserialization should succeed");
-            let restored: ArtifactValidationErrorCode = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: ArtifactValidationErrorCode =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(code, restored);
         }
     }
@@ -1873,7 +1885,8 @@ mod tests {
             ArtifactBundleValidationErrorCode::CorrelationMismatch,
         ] {
             let json = serde_json::to_string(&code).expect("serde deserialization should succeed");
-            let restored: ArtifactBundleValidationErrorCode = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: ArtifactBundleValidationErrorCode =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(code, restored);
         }
     }
@@ -2227,7 +2240,8 @@ mod tests {
             None,
         );
         let json = serde_json::to_string(&scenario).expect("serde deserialization should succeed");
-        let restored: BaselineE2eScenario = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: BaselineE2eScenario =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(scenario, restored);
     }
 
@@ -2243,7 +2257,8 @@ mod tests {
             Some("FE-SEC-0001"),
         );
         let json = serde_json::to_string(&scenario).expect("serde deserialization should succeed");
-        let restored: BaselineE2eScenario = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: BaselineE2eScenario =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(scenario, restored);
         assert_eq!(restored.error_code.as_deref(), Some("FE-SEC-0001"));
     }
@@ -2265,7 +2280,8 @@ mod tests {
             findings: Vec::new(),
         };
         let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
-        let restored: ArtifactValidationReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: ArtifactValidationReport =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report, restored);
     }
 
@@ -2288,7 +2304,8 @@ mod tests {
             findings: Vec::new(),
         };
         let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
-        let restored: ArtifactBundleValidationReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: ArtifactBundleValidationReport =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report, restored);
     }
 
@@ -2498,7 +2515,8 @@ mod tests {
             message: "mismatch".to_string(),
         };
         let json = serde_json::to_string(&finding).expect("serde deserialization should succeed");
-        let restored: ArtifactValidationFinding = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: ArtifactValidationFinding =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(finding, restored);
     }
 
@@ -2515,7 +2533,8 @@ mod tests {
             repro_command: "cargo test".to_string(),
         };
         let json = serde_json::to_string(&finding).expect("serde deserialization should succeed");
-        let restored: ArtifactBundleValidationFinding = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: ArtifactBundleValidationFinding =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(finding, restored);
     }
 
@@ -2527,7 +2546,8 @@ mod tests {
             lanes: vec![HarnessLane::Parser, HarnessLane::Runtime],
         };
         let json = serde_json::to_string(&sig).expect("serde deserialization should succeed");
-        let restored: ArtifactBundleCorrelationSignature = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: ArtifactBundleCorrelationSignature =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(sig, restored);
     }
 

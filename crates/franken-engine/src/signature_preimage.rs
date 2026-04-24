@@ -704,8 +704,10 @@ mod tests {
 
     #[test]
     fn different_signing_keys_produce_different_verification_keys() {
-        let sk1 = SigningKey::from_bytes([1u8; SIGNING_KEY_LEN]).expect("serde deserialization should succeed");
-        let sk2 = SigningKey::from_bytes([2u8; SIGNING_KEY_LEN]).expect("serde deserialization should succeed");
+        let sk1 = SigningKey::from_bytes([1u8; SIGNING_KEY_LEN])
+            .expect("serde deserialization should succeed");
+        let sk2 = SigningKey::from_bytes([2u8; SIGNING_KEY_LEN])
+            .expect("serde deserialization should succeed");
         assert_ne!(sk1.verification_key(), sk2.verification_key());
     }
 
@@ -810,7 +812,9 @@ mod tests {
         let vk = sk.verification_key();
         let obj = test_object();
 
-        let sig = ctx.sign(&obj, &sk, "t-001").expect("serde deserialization should succeed");
+        let sig = ctx
+            .sign(&obj, &sk, "t-001")
+            .expect("serde deserialization should succeed");
         assert!(ctx.verify(&obj, &vk, &sig, "t-001").is_ok());
     }
 
@@ -820,20 +824,30 @@ mod tests {
         let sk = test_signing_key();
         let obj = test_object();
 
-        let sig1 = ctx.sign(&obj, &sk, "t-det-1").expect("serde deserialization should succeed");
-        let sig2 = ctx.sign(&obj, &sk, "t-det-2").expect("serde deserialization should succeed");
+        let sig1 = ctx
+            .sign(&obj, &sk, "t-det-1")
+            .expect("serde deserialization should succeed");
+        let sig2 = ctx
+            .sign(&obj, &sk, "t-det-2")
+            .expect("serde deserialization should succeed");
         assert_eq!(sig1, sig2);
     }
 
     #[test]
     fn different_keys_produce_different_signatures() {
         let mut ctx = SignatureContext::new();
-        let sk1 = SigningKey::from_bytes([1u8; SIGNING_KEY_LEN]).expect("serde deserialization should succeed");
-        let sk2 = SigningKey::from_bytes([2u8; SIGNING_KEY_LEN]).expect("serde deserialization should succeed");
+        let sk1 = SigningKey::from_bytes([1u8; SIGNING_KEY_LEN])
+            .expect("serde deserialization should succeed");
+        let sk2 = SigningKey::from_bytes([2u8; SIGNING_KEY_LEN])
+            .expect("serde deserialization should succeed");
         let obj = test_object();
 
-        let sig1 = ctx.sign(&obj, &sk1, "t-diff-1").expect("serde deserialization should succeed");
-        let sig2 = ctx.sign(&obj, &sk2, "t-diff-2").expect("serde deserialization should succeed");
+        let sig1 = ctx
+            .sign(&obj, &sk1, "t-diff-1")
+            .expect("serde deserialization should succeed");
+        let sig2 = ctx
+            .sign(&obj, &sk2, "t-diff-2")
+            .expect("serde deserialization should succeed");
         assert_ne!(sig1, sig2);
     }
 
@@ -852,8 +866,12 @@ mod tests {
             data: CanonicalValue::U64(2),
         };
 
-        let sig1 = ctx.sign(&obj1, &sk, "t-data-1").expect("serde deserialization should succeed");
-        let sig2 = ctx.sign(&obj2, &sk, "t-data-2").expect("serde deserialization should succeed");
+        let sig1 = ctx
+            .sign(&obj1, &sk, "t-data-1")
+            .expect("serde deserialization should succeed");
+        let sig2 = ctx
+            .sign(&obj2, &sk, "t-data-2")
+            .expect("serde deserialization should succeed");
         assert_ne!(sig1, sig2);
     }
 
@@ -866,7 +884,9 @@ mod tests {
         let wrong_vk = test_verification_key_from_seed(0xFF);
         let obj = test_object();
 
-        let sig = ctx.sign(&obj, &sk, "t-wrong-key").expect("serde deserialization should succeed");
+        let sig = ctx
+            .sign(&obj, &sk, "t-wrong-key")
+            .expect("serde deserialization should succeed");
         let err = ctx
             .verify(&obj, &wrong_vk, &sig, "t-wrong-key")
             .unwrap_err();
@@ -880,7 +900,9 @@ mod tests {
         let vk = sk.verification_key();
         let obj = test_object();
 
-        let mut sig = ctx.sign(&obj, &sk, "t-tamper").expect("serde deserialization should succeed");
+        let mut sig = ctx
+            .sign(&obj, &sk, "t-tamper")
+            .expect("serde deserialization should succeed");
         sig.lower[0] ^= 0xFF; // tamper
         let err = ctx.verify(&obj, &vk, &sig, "t-tamper").unwrap_err();
         assert!(matches!(err, SignatureError::VerificationFailed { .. }));
@@ -898,7 +920,9 @@ mod tests {
             data: CanonicalValue::U64(999),
         };
 
-        let sig = ctx.sign(&obj1, &sk, "t-diff-obj").expect("serde deserialization should succeed");
+        let sig = ctx
+            .sign(&obj1, &sk, "t-diff-obj")
+            .expect("serde deserialization should succeed");
         let err = ctx.verify(&obj2, &vk, &sig, "t-diff-obj").unwrap_err();
         assert!(matches!(err, SignatureError::VerificationFailed { .. }));
     }
@@ -907,9 +931,12 @@ mod tests {
 
     #[test]
     fn multi_sig_same_preimage() {
-        let sk1 = SigningKey::from_bytes([1u8; SIGNING_KEY_LEN]).expect("serde deserialization should succeed");
-        let sk2 = SigningKey::from_bytes([2u8; SIGNING_KEY_LEN]).expect("serde deserialization should succeed");
-        let sk3 = SigningKey::from_bytes([3u8; SIGNING_KEY_LEN]).expect("serde deserialization should succeed");
+        let sk1 = SigningKey::from_bytes([1u8; SIGNING_KEY_LEN])
+            .expect("serde deserialization should succeed");
+        let sk2 = SigningKey::from_bytes([2u8; SIGNING_KEY_LEN])
+            .expect("serde deserialization should succeed");
+        let sk3 = SigningKey::from_bytes([3u8; SIGNING_KEY_LEN])
+            .expect("serde deserialization should succeed");
         let obj = test_object();
 
         let preimage = obj.preimage_bytes();
@@ -922,9 +949,15 @@ mod tests {
 
         // Each produces a different signature on the same preimage.
         let mut ctx = SignatureContext::new();
-        let sig1 = ctx.sign(&obj, &sk1, "t-ms-1").expect("serde deserialization should succeed");
-        let sig2 = ctx.sign(&obj, &sk2, "t-ms-2").expect("serde deserialization should succeed");
-        let sig3 = ctx.sign(&obj, &sk3, "t-ms-3").expect("serde deserialization should succeed");
+        let sig1 = ctx
+            .sign(&obj, &sk1, "t-ms-1")
+            .expect("serde deserialization should succeed");
+        let sig2 = ctx
+            .sign(&obj, &sk2, "t-ms-2")
+            .expect("serde deserialization should succeed");
+        let sig3 = ctx
+            .sign(&obj, &sk3, "t-ms-3")
+            .expect("serde deserialization should succeed");
         assert_ne!(sig1, sig2);
         assert_ne!(sig2, sig3);
         assert_ne!(sig1, sig3);
@@ -970,7 +1003,9 @@ mod tests {
         // Basic sign/verify works with generated keys
         let mut ctx = SignatureContext::new();
         let obj = test_object();
-        let sig = ctx.sign(&obj, &sk, "t-gen").expect("serde deserialization should succeed");
+        let sig = ctx
+            .sign(&obj, &sk, "t-gen")
+            .expect("serde deserialization should succeed");
         assert!(ctx.verify(&obj, &vk, &sig, "t-gen").is_ok());
     }
 
@@ -999,7 +1034,9 @@ mod tests {
 
         // Create a valid signature with the private key
         let mut ctx = SignatureContext::new();
-        let valid_sig = ctx.sign(&obj, &sk, "t-nonrep").expect("serde deserialization should succeed");
+        let valid_sig = ctx
+            .sign(&obj, &sk, "t-nonrep")
+            .expect("serde deserialization should succeed");
 
         // Verification with public key succeeds
         assert!(ctx.verify(&obj, &vk, &valid_sig, "t-nonrep").is_ok());
@@ -1020,7 +1057,9 @@ mod tests {
         let obj = test_object();
         let mut ctx = SignatureContext::new();
 
-        let sig = ctx.sign(&obj, &sk, "t-tamper").expect("serde deserialization should succeed");
+        let sig = ctx
+            .sign(&obj, &sk, "t-tamper")
+            .expect("serde deserialization should succeed");
 
         // Original signature verifies
         assert!(ctx.verify(&obj, &vk, &sig, "t-tamper").is_ok());
@@ -1050,7 +1089,9 @@ mod tests {
         let mut ctx = SignatureContext::new();
 
         // Sign with key 1
-        let sig = ctx.sign(&obj, &sk1, "t-wrong-key").expect("serde deserialization should succeed");
+        let sig = ctx
+            .sign(&obj, &sk1, "t-wrong-key")
+            .expect("serde deserialization should succeed");
 
         // Verify with key 2 should fail
         let result = ctx.verify(&obj, &vk2, &sig, "t-wrong-key");
@@ -1135,7 +1176,8 @@ mod tests {
         let sk = test_signing_key();
         let obj = test_object();
 
-        ctx.sign(&obj, &sk, "t-track").expect("serde deserialization should succeed");
+        ctx.sign(&obj, &sk, "t-track")
+            .expect("serde deserialization should succeed");
         assert_eq!(ctx.sign_count(), 1);
         assert_eq!(ctx.verify_count(), 0);
         assert_eq!(ctx.failure_count(), 0);
@@ -1156,8 +1198,11 @@ mod tests {
         let vk = sk.verification_key();
         let obj = test_object();
 
-        let sig = ctx.sign(&obj, &sk, "t-v1").expect("serde deserialization should succeed");
-        ctx.verify(&obj, &vk, &sig, "t-v2").expect("serde deserialization should succeed");
+        let sig = ctx
+            .sign(&obj, &sk, "t-v1")
+            .expect("serde deserialization should succeed");
+        ctx.verify(&obj, &vk, &sig, "t-v2")
+            .expect("serde deserialization should succeed");
         assert_eq!(ctx.verify_count(), 1);
     }
 
@@ -1168,7 +1213,9 @@ mod tests {
         let wrong_vk = test_verification_key_from_seed(0xAA);
         let obj = test_object();
 
-        let sig = ctx.sign(&obj, &sk, "t-fail").expect("serde deserialization should succeed");
+        let sig = ctx
+            .sign(&obj, &sk, "t-fail")
+            .expect("serde deserialization should succeed");
         ctx.verify(&obj, &wrong_vk, &sig, "t-fail").unwrap_err();
         assert_eq!(ctx.failure_count(), 1);
 
@@ -1182,7 +1229,8 @@ mod tests {
         let mut ctx = SignatureContext::new();
         let sk = test_signing_key();
         let obj = test_object();
-        ctx.sign(&obj, &sk, "t-drain").expect("serde deserialization should succeed");
+        ctx.sign(&obj, &sk, "t-drain")
+            .expect("serde deserialization should succeed");
         assert_eq!(ctx.drain_events().len(), 1);
         assert_eq!(ctx.drain_events().len(), 0);
     }
@@ -1225,7 +1273,8 @@ mod tests {
     fn signing_key_serialization_round_trip() {
         let sk = test_signing_key();
         let json = serde_json::to_string(&sk).expect("serde deserialization should succeed");
-        let restored: SigningKey = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: SigningKey =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(sk, restored);
     }
 
@@ -1233,7 +1282,8 @@ mod tests {
     fn verification_key_serialization_round_trip() {
         let vk = test_signing_key().verification_key();
         let json = serde_json::to_string(&vk).expect("serde deserialization should succeed");
-        let restored: VerificationKey = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: VerificationKey =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(vk, restored);
     }
 
@@ -1244,7 +1294,8 @@ mod tests {
             .sign(&test_object(), &test_signing_key(), "t-ser")
             .expect("serde deserialization should succeed");
         let json = serde_json::to_string(&sig).expect("serde deserialization should succeed");
-        let restored: Signature = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: Signature =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(sig, restored);
     }
 
@@ -1262,7 +1313,8 @@ mod tests {
         ];
         for err in &errors {
             let json = serde_json::to_string(err).expect("serde deserialization should succeed");
-            let restored: SignatureError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: SignatureError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, restored);
         }
     }
@@ -1277,7 +1329,8 @@ mod tests {
             trace_id: "t-serde".to_string(),
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let restored: SignatureEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: SignatureEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, restored);
     }
 
@@ -1364,7 +1417,8 @@ mod tests {
     fn verification_key_bytes_roundtrip() {
         let vk = test_verification_key_from_seed(99);
         let bytes = *vk.as_bytes();
-        let restored = VerificationKey::from_bytes(bytes).expect("serde deserialization should succeed");
+        let restored =
+            VerificationKey::from_bytes(bytes).expect("serde deserialization should succeed");
         assert_eq!(restored.as_bytes(), &bytes);
     }
 
@@ -1381,8 +1435,10 @@ mod tests {
         let mut ctx = SignatureContext::new();
         let sk = test_signing_key();
         let obj = test_object();
-        ctx.sign(&obj, &sk, "t-1").expect("serde deserialization should succeed");
-        ctx.sign(&obj, &sk, "t-2").expect("serde deserialization should succeed");
+        ctx.sign(&obj, &sk, "t-1")
+            .expect("serde deserialization should succeed");
+        ctx.sign(&obj, &sk, "t-2")
+            .expect("serde deserialization should succeed");
         assert_eq!(ctx.sign_count(), 2);
         let counts = ctx.event_counts();
         assert_eq!(counts.get("signed"), Some(&2));
@@ -1533,8 +1589,10 @@ mod tests {
 
         let json_a = serde_json::to_string(&vk_a).expect("serde deserialization should succeed");
         let json_b = serde_json::to_string(&vk_b).expect("serde deserialization should succeed");
-        let restored_a: VerificationKey = serde_json::from_str(&json_a).expect("serde deserialization should succeed");
-        let restored_b: VerificationKey = serde_json::from_str(&json_b).expect("serde deserialization should succeed");
+        let restored_a: VerificationKey =
+            serde_json::from_str(&json_a).expect("serde deserialization should succeed");
+        let restored_b: VerificationKey =
+            serde_json::from_str(&json_b).expect("serde deserialization should succeed");
         assert!(
             restored_a < restored_b,
             "Ord must be preserved after serde roundtrip"
@@ -1671,7 +1729,8 @@ mod tests {
     fn enrichment_signing_key_serde_roundtrip() {
         let sk = test_signing_key();
         let json = serde_json::to_string(&sk).expect("serde deserialization should succeed");
-        let restored: SigningKey = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: SigningKey =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(sk, restored);
     }
 
@@ -1681,8 +1740,11 @@ mod tests {
         let sk = test_signing_key();
         let vk = sk.verification_key();
         let obj = test_object();
-        let sig = ctx.sign(&obj, &sk, "t-rv").expect("serde deserialization should succeed");
-        ctx.verify(&obj, &vk, &sig, "t-rv2").expect("serde deserialization should succeed");
+        let sig = ctx
+            .sign(&obj, &sk, "t-rv")
+            .expect("serde deserialization should succeed");
+        ctx.verify(&obj, &vk, &sig, "t-rv2")
+            .expect("serde deserialization should succeed");
         assert_eq!(ctx.sign_count(), 1);
         assert_eq!(ctx.verify_count(), 1);
         assert_eq!(ctx.failure_count(), 0);
@@ -1704,7 +1766,9 @@ mod tests {
         let mut ctx = SignatureContext::new();
         let sk = test_signing_key();
         let obj = test_object();
-        let sig = ctx.sign(&obj, &sk, "t-wrong").expect("serde deserialization should succeed");
+        let sig = ctx
+            .sign(&obj, &sk, "t-wrong")
+            .expect("serde deserialization should succeed");
         let wrong_vk = test_verification_key_from_seed(0xBB);
         let err = ctx.verify(&obj, &wrong_vk, &sig, "t-wrong2").unwrap_err();
         assert!(matches!(err, SignatureError::VerificationFailed { .. }));

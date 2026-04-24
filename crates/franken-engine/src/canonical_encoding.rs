@@ -432,7 +432,9 @@ impl CanonicalGuard {
             });
         }
 
-        let schema_bytes: [u8; 32] = bytes[..32].try_into().expect("serde deserialization should succeed");
+        let schema_bytes: [u8; 32] = bytes[..32]
+            .try_into()
+            .expect("serde deserialization should succeed");
         let schema_hash = SchemaHash(schema_bytes);
 
         // Find the domain for this schema.
@@ -1116,7 +1118,9 @@ mod tests {
             b"revocation-schema",
         );
         let bytes = make_canonical_payload(&schema, &CanonicalValue::Bool(false));
-        let (domain, value) = guard.validate_from_registry(&bytes, "t-reg-1").expect("serde deserialization should succeed");
+        let (domain, value) = guard
+            .validate_from_registry(&bytes, "t-reg-1")
+            .expect("serde deserialization should succeed");
         assert_eq!(domain, ObjectDomain::Revocation);
         assert_eq!(value, CanonicalValue::Bool(false));
     }
@@ -1205,7 +1209,8 @@ mod tests {
         ];
         for v in &violations {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let restored: CanonicalViolation = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: CanonicalViolation =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, restored);
         }
     }
@@ -1219,7 +1224,8 @@ mod tests {
             trace_id: "t-serde".to_string(),
         };
         let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
-        let restored: NonCanonicalError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: NonCanonicalError =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, restored);
     }
 
@@ -1237,7 +1243,8 @@ mod tests {
             input_hash: [0x01; 32],
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let restored: GuardEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: GuardEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, restored);
     }
 
@@ -1773,7 +1780,8 @@ mod tests {
         ];
         let mut serialized = std::collections::BTreeSet::new();
         for t in &types {
-            serialized.insert(serde_json::to_string(t).expect("serde deserialization should succeed"));
+            serialized
+                .insert(serde_json::to_string(t).expect("serde deserialization should succeed"));
         }
         assert_eq!(serialized.len(), 3);
     }
@@ -1965,7 +1973,8 @@ mod tests {
     fn violation_trailing_bytes_zero_count_serde_roundtrip() {
         let v = CanonicalViolation::TrailingBytes { count: 0 };
         let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
-        let restored: CanonicalViolation = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: CanonicalViolation =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, restored);
     }
 
@@ -1973,7 +1982,8 @@ mod tests {
     fn violation_leading_padding_zero_bytes_serde_roundtrip() {
         let v = CanonicalViolation::LeadingPadding { byte_count: 0 };
         let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
-        let restored: CanonicalViolation = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: CanonicalViolation =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, restored);
     }
 
@@ -1985,7 +1995,8 @@ mod tests {
             actual: 255,
         };
         let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
-        let restored: CanonicalViolation = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: CanonicalViolation =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, restored);
     }
 
@@ -1998,7 +2009,8 @@ mod tests {
             canonical_len: 100,
         };
         let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
-        let restored: CanonicalViolation = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: CanonicalViolation =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, restored);
     }
 
@@ -2009,7 +2021,8 @@ mod tests {
             offset: 0,
         };
         let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
-        let restored: CanonicalViolation = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: CanonicalViolation =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, restored);
     }
 
@@ -2017,7 +2030,8 @@ mod tests {
     fn violation_empty_key_strings_serde_roundtrip() {
         let v = CanonicalViolation::DuplicateKey { key: String::new() };
         let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
-        let restored: CanonicalViolation = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: CanonicalViolation =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, restored);
     }
 
@@ -2030,7 +2044,8 @@ mod tests {
             trace_id: String::new(),
         };
         let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
-        let restored: NonCanonicalError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: NonCanonicalError =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, restored);
     }
 
@@ -2043,7 +2058,8 @@ mod tests {
             trace_id: "max".to_string(),
         };
         let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
-        let restored: NonCanonicalError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: NonCanonicalError =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, restored);
     }
 

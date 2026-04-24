@@ -1236,14 +1236,16 @@ mod tests {
     fn capability_serde_roundtrip() {
         for cap in CategoryShiftCapability::ALL {
             let json = serde_json::to_string(&cap).expect("serde deserialization should succeed");
-            let back: CategoryShiftCapability = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: CategoryShiftCapability =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(back, cap);
         }
     }
 
     #[test]
     fn capability_serde_is_snake_case() {
-        let json = serde_json::to_string(&CategoryShiftCapability::DeterministicIfc).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&CategoryShiftCapability::DeterministicIfc)
+            .expect("serde deserialization should succeed");
         assert_eq!(json, "\"deterministic_ifc\"");
     }
 
@@ -1452,7 +1454,8 @@ mod tests {
 
     #[test]
     fn build_report_succeeds_for_valid_input() {
-        let report = build_category_shift_report(valid_input()).expect("serde deserialization should succeed");
+        let report = build_category_shift_report(valid_input())
+            .expect("serde deserialization should succeed");
         assert_eq!(report.schema_version, SCHEMA_VERSION);
         assert_eq!(report.component, COMPONENT);
         assert_eq!(report.bead_id, BEAD_ID);
@@ -1462,7 +1465,8 @@ mod tests {
 
     #[test]
     fn build_report_publication_hash_is_nonzero() {
-        let report = build_category_shift_report(valid_input()).expect("serde deserialization should succeed");
+        let report = build_category_shift_report(valid_input())
+            .expect("serde deserialization should succeed");
         assert_ne!(
             report.publication_hash,
             ContentHash::compute(b"placeholder")
@@ -1471,8 +1475,10 @@ mod tests {
 
     #[test]
     fn build_report_publication_hash_is_deterministic() {
-        let r1 = build_category_shift_report(valid_input()).expect("serde deserialization should succeed");
-        let r2 = build_category_shift_report(valid_input()).expect("serde deserialization should succeed");
+        let r1 = build_category_shift_report(valid_input())
+            .expect("serde deserialization should succeed");
+        let r2 = build_category_shift_report(valid_input())
+            .expect("serde deserialization should succeed");
         assert_eq!(r1.publication_hash, r2.publication_hash);
     }
 
@@ -1520,14 +1526,19 @@ mod tests {
 
     #[test]
     fn report_to_json_pretty_is_valid_json() {
-        let report = build_category_shift_report(valid_input()).expect("serde deserialization should succeed");
-        let json_str = report.to_json_pretty().expect("serde deserialization should succeed");
-        let _parsed: serde_json::Value = serde_json::from_str(&json_str).expect("serde deserialization should succeed");
+        let report = build_category_shift_report(valid_input())
+            .expect("serde deserialization should succeed");
+        let json_str = report
+            .to_json_pretty()
+            .expect("serde deserialization should succeed");
+        let _parsed: serde_json::Value =
+            serde_json::from_str(&json_str).expect("serde deserialization should succeed");
     }
 
     #[test]
     fn report_to_markdown_contains_headings() {
-        let report = build_category_shift_report(valid_input()).expect("serde deserialization should succeed");
+        let report = build_category_shift_report(valid_input())
+            .expect("serde deserialization should succeed");
         let md = report.to_markdown();
         assert!(md.contains("# First Category-Shift Report"));
         assert!(md.contains("## Disruption Scorecard"));
@@ -1540,7 +1551,8 @@ mod tests {
 
     #[test]
     fn report_to_markdown_contains_all_capabilities() {
-        let report = build_category_shift_report(valid_input()).expect("serde deserialization should succeed");
+        let report = build_category_shift_report(valid_input())
+            .expect("serde deserialization should succeed");
         let md = report.to_markdown();
         for cap in CategoryShiftCapability::ALL {
             assert!(
@@ -1553,14 +1565,16 @@ mod tests {
 
     #[test]
     fn report_to_markdown_contains_publication_hash() {
-        let report = build_category_shift_report(valid_input()).expect("serde deserialization should succeed");
+        let report = build_category_shift_report(valid_input())
+            .expect("serde deserialization should succeed");
         let md = report.to_markdown();
         assert!(md.contains(&report.publication_hash.to_string()));
     }
 
     #[test]
     fn report_compute_hash_is_idempotent() {
-        let report = build_category_shift_report(valid_input()).expect("serde deserialization should succeed");
+        let report = build_category_shift_report(valid_input())
+            .expect("serde deserialization should succeed");
         let h1 = report.compute_hash();
         let h2 = report.compute_hash();
         assert_eq!(h1, h2);
@@ -1572,7 +1586,8 @@ mod tests {
 
     #[test]
     fn log_entries_claim_published_events_have_claim_id() {
-        let report = build_category_shift_report(valid_input()).expect("serde deserialization should succeed");
+        let report = build_category_shift_report(valid_input())
+            .expect("serde deserialization should succeed");
         let entries = generate_log_entries("trace-1", &report);
         let claim_entries: Vec<_> = entries
             .iter()
@@ -1588,7 +1603,8 @@ mod tests {
 
     #[test]
     fn log_entries_peer_review_events_have_reviewer_id() {
-        let report = build_category_shift_report(valid_input()).expect("serde deserialization should succeed");
+        let report = build_category_shift_report(valid_input())
+            .expect("serde deserialization should succeed");
         let entries = generate_log_entries("trace-1", &report);
         let review_entries: Vec<_> = entries
             .iter()
@@ -1603,7 +1619,8 @@ mod tests {
 
     #[test]
     fn log_entries_all_have_trace_id() {
-        let report = build_category_shift_report(valid_input()).expect("serde deserialization should succeed");
+        let report = build_category_shift_report(valid_input())
+            .expect("serde deserialization should succeed");
         let entries = generate_log_entries("my-trace", &report);
         for entry in &entries {
             assert_eq!(entry.trace_id, "my-trace");
@@ -1669,7 +1686,8 @@ mod tests {
     fn category_shift_claim_serde_roundtrip() {
         let c = claim(CategoryShiftCapability::PlasSignedWitnesses);
         let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
-        let back: CategoryShiftClaim = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: CategoryShiftClaim =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.claim_id, c.claim_id);
         assert_eq!(back.capability, c.capability);
     }
@@ -1678,7 +1696,8 @@ mod tests {
     fn methodology_section_serde_roundtrip() {
         let m = methodology();
         let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
-        let back: MethodologySection = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: MethodologySection =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.summary, m.summary);
     }
 
@@ -1691,7 +1710,8 @@ mod tests {
             notes: "all good".to_string(),
         };
         let json = serde_json::to_string(&review).expect("serde deserialization should succeed");
-        let back: PeerReviewSignoff = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: PeerReviewSignoff =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert!(back.approved);
     }
 
@@ -1705,18 +1725,21 @@ mod tests {
             meets_target: true,
         };
         let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
-        let back: DimensionPublicationSummary = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DimensionPublicationSummary =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.raw_score_millionths, 500_000);
         assert!(back.meets_target);
     }
 
     #[test]
     fn log_entry_serde_roundtrip() {
-        let report = build_category_shift_report(valid_input()).expect("serde deserialization should succeed");
+        let report = build_category_shift_report(valid_input())
+            .expect("serde deserialization should succeed");
         let entries = generate_log_entries("trace-1", &report);
         for entry in &entries {
             let json = serde_json::to_string(entry).expect("serde deserialization should succeed");
-            let back: CategoryShiftReportLogEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: CategoryShiftReportLogEntry =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(back.trace_id, "trace-1");
         }
     }

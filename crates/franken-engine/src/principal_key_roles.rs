@@ -821,7 +821,9 @@ mod tests {
 
         // Revoke only the signing key.
         // SAFETY: Test-only unwrap with valid revocation parameters (registered key)
-        store.revoke_key(KeyRole::Signing, 0, epoch2).expect("serde deserialization should succeed");
+        store
+            .revoke_key(KeyRole::Signing, 0, epoch2)
+            .expect("serde deserialization should succeed");
 
         // Signing is revoked.
         let signing = store.get_active_key(KeyRole::Signing);
@@ -925,14 +927,18 @@ mod tests {
             .expect("serde deserialization should succeed");
 
         // Rotate: old becomes Rotated, new becomes Active.
-        store.rotate_key(KeyRole::Signing, 0, 1, epoch2).expect("serde deserialization should succeed");
+        store
+            .rotate_key(KeyRole::Signing, 0, 1, epoch2)
+            .expect("serde deserialization should succeed");
 
         // Both should be valid for verification.
         let verifiable = store.verification_keys_for_role(KeyRole::Signing);
         assert_eq!(verifiable.len(), 2);
 
         // Only the new key is active for creation.
-        let active = store.get_active_key(KeyRole::Signing).expect("serde deserialization should succeed");
+        let active = store
+            .get_active_key(KeyRole::Signing)
+            .expect("serde deserialization should succeed");
         assert_eq!(active.sequence, 1);
     }
 
@@ -1054,13 +1060,19 @@ mod tests {
             ))
             .expect("serde deserialization should succeed");
 
-        let s = store.get_active_key(KeyRole::Signing).expect("serde deserialization should succeed");
+        let s = store
+            .get_active_key(KeyRole::Signing)
+            .expect("serde deserialization should succeed");
         assert_eq!(s.role, KeyRole::Signing);
 
-        let e = store.get_active_key(KeyRole::Encryption).expect("serde deserialization should succeed");
+        let e = store
+            .get_active_key(KeyRole::Encryption)
+            .expect("serde deserialization should succeed");
         assert_eq!(e.role, KeyRole::Encryption);
 
-        let i = store.get_active_key(KeyRole::Issuance).expect("serde deserialization should succeed");
+        let i = store
+            .get_active_key(KeyRole::Issuance)
+            .expect("serde deserialization should succeed");
         assert_eq!(i.role, KeyRole::Issuance);
     }
 
@@ -1101,11 +1113,15 @@ mod tests {
         assert!(store.get_active_key(KeyRole::Signing).is_err());
 
         // Activate.
-        store.activate_key(KeyRole::Signing, 0, epoch2).expect("serde deserialization should succeed");
+        store
+            .activate_key(KeyRole::Signing, 0, epoch2)
+            .expect("serde deserialization should succeed");
         assert!(store.get_active_key(KeyRole::Signing).is_ok());
 
         // Revoke.
-        store.revoke_key(KeyRole::Signing, 0, epoch3).expect("serde deserialization should succeed");
+        store
+            .revoke_key(KeyRole::Signing, 0, epoch3)
+            .expect("serde deserialization should succeed");
         assert!(store.get_active_key(KeyRole::Signing).is_err());
     }
 
@@ -1240,7 +1256,9 @@ mod tests {
             ))
             .expect("serde deserialization should succeed");
 
-        store.revoke_key(KeyRole::Signing, 0, epoch2).expect("serde deserialization should succeed");
+        store
+            .revoke_key(KeyRole::Signing, 0, epoch2)
+            .expect("serde deserialization should succeed");
 
         let all = store.keys_for_role(KeyRole::Signing);
         assert_eq!(all.len(), 2);
@@ -1353,7 +1371,13 @@ mod tests {
         assert!(store.bundle().is_none());
         store.set_bundle(bundle.clone());
         assert!(store.bundle().is_some());
-        assert_eq!(store.bundle().expect("serde deserialization should succeed").sequence, 1);
+        assert_eq!(
+            store
+                .bundle()
+                .expect("serde deserialization should succeed")
+                .sequence,
+            1
+        );
     }
 
     #[test]
@@ -1388,13 +1412,17 @@ mod tests {
             .expect("serde deserialization should succeed");
 
         // Get signing key.
-        let signing_entry = store.get_active_key(KeyRole::Signing).expect("serde deserialization should succeed");
+        let signing_entry = store
+            .get_active_key(KeyRole::Signing)
+            .expect("serde deserialization should succeed");
 
         // Attempt to use it for issuance should fail.
         assert!(enforce_role(signing_entry, KeyRole::Issuance).is_err());
 
         // Correct issuance key should work.
-        let issuance_entry = store.get_active_key(KeyRole::Issuance).expect("serde deserialization should succeed");
+        let issuance_entry = store
+            .get_active_key(KeyRole::Issuance)
+            .expect("serde deserialization should succeed");
         assert!(enforce_role(issuance_entry, KeyRole::Issuance).is_ok());
     }
 
@@ -1431,7 +1459,9 @@ mod tests {
             .expect("serde deserialization should succeed");
 
         // Attacker retrieves signing entry.
-        let signing_entry = store.get_active_key(KeyRole::Signing).expect("serde deserialization should succeed");
+        let signing_entry = store
+            .get_active_key(KeyRole::Signing)
+            .expect("serde deserialization should succeed");
 
         // Role enforcement blocks issuance use.
         assert_eq!(
@@ -1522,7 +1552,8 @@ mod tests {
     fn key_role_serde_roundtrip() {
         for role in KeyRole::ALL {
             let json = serde_json::to_string(role).expect("serde deserialization should succeed");
-            let back: KeyRole = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: KeyRole =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*role, back);
         }
     }
@@ -1537,7 +1568,8 @@ mod tests {
             KeyStatus::Expired,
         ] {
             let json = serde_json::to_string(status).expect("serde deserialization should succeed");
-            let back: KeyStatus = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: KeyStatus =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*status, back);
         }
     }
@@ -1571,7 +1603,8 @@ mod tests {
         ];
         for err in &errors {
             let json = serde_json::to_string(err).expect("serde deserialization should succeed");
-            let back: KeyRoleError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: KeyRoleError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, back);
         }
     }
@@ -1646,7 +1679,8 @@ mod tests {
     fn encryption_public_key_serde_roundtrip() {
         let pk = EncryptionPublicKey::from_bytes([0x42; 32]);
         let json = serde_json::to_string(&pk).expect("serde deserialization should succeed");
-        let back: EncryptionPublicKey = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: EncryptionPublicKey =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(pk, back);
     }
 
@@ -1654,7 +1688,8 @@ mod tests {
     fn encryption_private_key_serde_roundtrip() {
         let sk = EncryptionPrivateKey::from_bytes([0x99; 32]);
         let json = serde_json::to_string(&sk).expect("serde deserialization should succeed");
-        let back: EncryptionPrivateKey = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: EncryptionPrivateKey =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(sk.as_bytes(), back.as_bytes());
     }
 
@@ -1672,7 +1707,8 @@ mod tests {
             0,
         );
         let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
-        let back: RoleKeyEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: RoleKeyEntry =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, back);
     }
 
@@ -1913,7 +1949,8 @@ mod tests {
         // SAFETY: OwnerKeyBundle derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&bundle).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid OwnerKeyBundle serialization
-        let back: OwnerKeyBundle = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: OwnerKeyBundle =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(bundle.sequence, back.sequence);
         assert_eq!(bundle.epoch, back.epoch);
     }
@@ -1952,7 +1989,8 @@ mod tests {
             // SAFETY: KeyRole derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(role).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by valid KeyRole serialization
-            let back: KeyRole = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: KeyRole =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*role, back);
         }
     }
@@ -1998,9 +2036,11 @@ mod tests {
             KeyStatus::Expired,
         ] {
             // SAFETY: KeyStatus derives Serialize and has no non-serializable fields
-            let json = serde_json::to_string(&status).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&status).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by valid KeyStatus serialization
-            let back: KeyStatus = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: KeyStatus =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(status, back);
         }
     }
@@ -2035,7 +2075,8 @@ mod tests {
     fn encryption_public_key_bytes_serde_roundtrip() {
         let pk = EncryptionPublicKey::from_bytes([0x01; 32]);
         let json = serde_json::to_string(&pk).expect("serde deserialization should succeed");
-        let back: EncryptionPublicKey = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: EncryptionPublicKey =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(pk, back);
     }
 
@@ -2043,7 +2084,8 @@ mod tests {
     fn encryption_private_key_bytes_serde_roundtrip() {
         let sk = EncryptionPrivateKey::from_bytes([0x99; 32]);
         let json = serde_json::to_string(&sk).expect("serde deserialization should succeed");
-        let back: EncryptionPrivateKey = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: EncryptionPrivateKey =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(sk, back);
     }
 

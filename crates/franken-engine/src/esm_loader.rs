@@ -1100,7 +1100,9 @@ mod tests {
     fn test_add_single_module() {
         let mut graph = ModuleGraph::new();
         let module = make_module("./main.js", "console.log('hello')");
-        graph.add_module(module).expect("serde deserialization should succeed");
+        graph
+            .add_module(module)
+            .expect("serde deserialization should succeed");
         assert_eq!(graph.len(), 1);
         assert_eq!(graph.entry_point(), Some("./main.js"));
     }
@@ -1166,12 +1168,17 @@ mod tests {
     #[test]
     fn test_link_single_module() {
         let mut graph = ModuleGraph::new();
-        graph.add_module(make_module("main.js", "")).expect("serde deserialization should succeed");
+        graph
+            .add_module(make_module("main.js", ""))
+            .expect("serde deserialization should succeed");
         let result = graph.link().expect("serde deserialization should succeed");
         assert_eq!(result.linked_count, 1);
         assert_eq!(result.cycle_count, 0);
         assert_eq!(
-            graph.get_module("main.js").expect("serde deserialization should succeed").status,
+            graph
+                .get_module("main.js")
+                .expect("serde deserialization should succeed")
+                .status,
             ModuleStatus::Linked
         );
     }
@@ -1185,9 +1192,15 @@ mod tests {
         a.add_import(ImportEntry::new("b.js", "y", "y"));
         let b = make_module("b.js", "");
 
-        graph.add_module(main).expect("serde deserialization should succeed");
-        graph.add_module(a).expect("serde deserialization should succeed");
-        graph.add_module(b).expect("serde deserialization should succeed");
+        graph
+            .add_module(main)
+            .expect("serde deserialization should succeed");
+        graph
+            .add_module(a)
+            .expect("serde deserialization should succeed");
+        graph
+            .add_module(b)
+            .expect("serde deserialization should succeed");
 
         let result = graph.link().expect("serde deserialization should succeed");
         assert_eq!(result.linked_count, 3);
@@ -1202,8 +1215,12 @@ mod tests {
         let mut b = make_module("b.js", "");
         b.add_import(ImportEntry::new("a.js", "y", "y"));
 
-        graph.add_module(a).expect("serde deserialization should succeed");
-        graph.add_module(b).expect("serde deserialization should succeed");
+        graph
+            .add_module(a)
+            .expect("serde deserialization should succeed");
+        graph
+            .add_module(b)
+            .expect("serde deserialization should succeed");
 
         let result = graph.link().expect("serde deserialization should succeed");
         assert_eq!(result.linked_count, 2);
@@ -1215,7 +1232,9 @@ mod tests {
         let mut graph = ModuleGraph::new();
         let mut main = make_module("main.js", "");
         main.add_import(ImportEntry::new("missing.js", "x", "x"));
-        graph.add_module(main).expect("serde deserialization should succeed");
+        graph
+            .add_module(main)
+            .expect("serde deserialization should succeed");
 
         let err = graph.link().unwrap_err();
         assert!(matches!(err, EsmLoaderError::UnresolvedDependency { .. }));
@@ -1226,9 +1245,13 @@ mod tests {
     #[test]
     fn test_evaluate_single() {
         let mut graph = ModuleGraph::new();
-        graph.add_module(make_module("main.js", "")).expect("serde deserialization should succeed");
+        graph
+            .add_module(make_module("main.js", ""))
+            .expect("serde deserialization should succeed");
         graph.link().expect("serde deserialization should succeed");
-        let result = graph.evaluate().expect("serde deserialization should succeed");
+        let result = graph
+            .evaluate()
+            .expect("serde deserialization should succeed");
         assert_eq!(result.eval_order, vec!["main.js"]);
         assert_eq!(result.evaluated_count, 1);
     }
@@ -1242,12 +1265,20 @@ mod tests {
         a.add_import(ImportEntry::new("b.js", "y", "y"));
         let b = make_module("b.js", "");
 
-        graph.add_module(main).expect("serde deserialization should succeed");
-        graph.add_module(a).expect("serde deserialization should succeed");
-        graph.add_module(b).expect("serde deserialization should succeed");
+        graph
+            .add_module(main)
+            .expect("serde deserialization should succeed");
+        graph
+            .add_module(a)
+            .expect("serde deserialization should succeed");
+        graph
+            .add_module(b)
+            .expect("serde deserialization should succeed");
 
         graph.link().expect("serde deserialization should succeed");
-        let result = graph.evaluate().expect("serde deserialization should succeed");
+        let result = graph
+            .evaluate()
+            .expect("serde deserialization should succeed");
         // Dependencies first: b -> a -> main.
         assert_eq!(result.eval_order, vec!["b.js", "a.js", "main.js"]);
     }
@@ -1264,16 +1295,32 @@ mod tests {
         b.add_import(ImportEntry::new("shared.js", "s", "s"));
         let shared = make_module("shared.js", "");
 
-        graph.add_module(main).expect("serde deserialization should succeed");
-        graph.add_module(a).expect("serde deserialization should succeed");
-        graph.add_module(b).expect("serde deserialization should succeed");
-        graph.add_module(shared).expect("serde deserialization should succeed");
+        graph
+            .add_module(main)
+            .expect("serde deserialization should succeed");
+        graph
+            .add_module(a)
+            .expect("serde deserialization should succeed");
+        graph
+            .add_module(b)
+            .expect("serde deserialization should succeed");
+        graph
+            .add_module(shared)
+            .expect("serde deserialization should succeed");
 
         graph.link().expect("serde deserialization should succeed");
-        let result = graph.evaluate().expect("serde deserialization should succeed");
+        let result = graph
+            .evaluate()
+            .expect("serde deserialization should succeed");
         // Shared is evaluated once, before a and b.
         assert_eq!(result.eval_order[0], "shared.js");
-        assert_eq!(*result.eval_order.last().expect("serde deserialization should succeed"), "main.js");
+        assert_eq!(
+            *result
+                .eval_order
+                .last()
+                .expect("serde deserialization should succeed"),
+            "main.js"
+        );
         assert_eq!(result.evaluated_count, 4);
     }
 
@@ -1285,11 +1332,17 @@ mod tests {
         let mut b = make_module("b.js", "");
         b.add_import(ImportEntry::new("a.js", "y", "y"));
 
-        graph.add_module(a).expect("serde deserialization should succeed");
-        graph.add_module(b).expect("serde deserialization should succeed");
+        graph
+            .add_module(a)
+            .expect("serde deserialization should succeed");
+        graph
+            .add_module(b)
+            .expect("serde deserialization should succeed");
 
         graph.link().expect("serde deserialization should succeed");
-        let result = graph.evaluate().expect("serde deserialization should succeed");
+        let result = graph
+            .evaluate()
+            .expect("serde deserialization should succeed");
         // Both should be evaluated despite cycle.
         assert_eq!(result.evaluated_count, 2);
     }
@@ -1301,9 +1354,13 @@ mod tests {
         let mut graph = ModuleGraph::new();
         let mut lib = make_module("lib.js", "");
         lib.add_export(ExportEntry::direct("foo", "foo"));
-        graph.add_module(lib).expect("serde deserialization should succeed");
+        graph
+            .add_module(lib)
+            .expect("serde deserialization should succeed");
 
-        let binding = graph.resolve_export("lib.js", "foo").expect("serde deserialization should succeed");
+        let binding = graph
+            .resolve_export("lib.js", "foo")
+            .expect("serde deserialization should succeed");
         assert_eq!(binding.module_specifier, "lib.js");
         assert_eq!(binding.local_name, "foo");
         assert_eq!(binding.binding_type, BindingType::Direct);
@@ -1317,10 +1374,16 @@ mod tests {
         let mut index = make_module("index.js", "");
         index.add_export(ExportEntry::re_export("bar", "lib.js", "bar"));
 
-        graph.add_module(index).expect("serde deserialization should succeed");
-        graph.add_module(lib).expect("serde deserialization should succeed");
+        graph
+            .add_module(index)
+            .expect("serde deserialization should succeed");
+        graph
+            .add_module(lib)
+            .expect("serde deserialization should succeed");
 
-        let binding = graph.resolve_export("index.js", "bar").expect("serde deserialization should succeed");
+        let binding = graph
+            .resolve_export("index.js", "bar")
+            .expect("serde deserialization should succeed");
         assert_eq!(binding.module_specifier, "lib.js");
         assert_eq!(binding.local_name, "bar");
         assert_eq!(binding.binding_type, BindingType::ReExport);
@@ -1334,10 +1397,16 @@ mod tests {
         let mut index = make_module("index.js", "");
         index.add_export(ExportEntry::star_re_export("lib.js"));
 
-        graph.add_module(index).expect("serde deserialization should succeed");
-        graph.add_module(lib).expect("serde deserialization should succeed");
+        graph
+            .add_module(index)
+            .expect("serde deserialization should succeed");
+        graph
+            .add_module(lib)
+            .expect("serde deserialization should succeed");
 
-        let binding = graph.resolve_export("index.js", "baz").expect("serde deserialization should succeed");
+        let binding = graph
+            .resolve_export("index.js", "baz")
+            .expect("serde deserialization should succeed");
         assert_eq!(binding.module_specifier, "lib.js");
         assert_eq!(binding.binding_type, BindingType::StarReExport);
     }
@@ -1350,8 +1419,12 @@ mod tests {
         let mut index = make_module("index.js", "");
         index.add_export(ExportEntry::star_re_export("lib.js"));
 
-        graph.add_module(index).expect("serde deserialization should succeed");
-        graph.add_module(lib).expect("serde deserialization should succeed");
+        graph
+            .add_module(index)
+            .expect("serde deserialization should succeed");
+        graph
+            .add_module(lib)
+            .expect("serde deserialization should succeed");
 
         let err = graph.resolve_export("index.js", "default").unwrap_err();
         assert_eq!(
@@ -1376,12 +1449,22 @@ mod tests {
         index.add_export(ExportEntry::star_re_export("left.js"));
         index.add_export(ExportEntry::star_re_export("right.js"));
 
-        graph.add_module(index).expect("serde deserialization should succeed");
-        graph.add_module(left).expect("serde deserialization should succeed");
-        graph.add_module(right).expect("serde deserialization should succeed");
-        graph.add_module(leaf).expect("serde deserialization should succeed");
+        graph
+            .add_module(index)
+            .expect("serde deserialization should succeed");
+        graph
+            .add_module(left)
+            .expect("serde deserialization should succeed");
+        graph
+            .add_module(right)
+            .expect("serde deserialization should succeed");
+        graph
+            .add_module(leaf)
+            .expect("serde deserialization should succeed");
 
-        let binding = graph.resolve_export("index.js", "shared").expect("serde deserialization should succeed");
+        let binding = graph
+            .resolve_export("index.js", "shared")
+            .expect("serde deserialization should succeed");
         assert_eq!(binding.module_specifier, "leaf.js");
         assert_eq!(binding.local_name, "shared");
         assert_eq!(binding.binding_type, BindingType::StarReExport);
@@ -1404,12 +1487,22 @@ mod tests {
         index.add_export(ExportEntry::star_re_export("left.js"));
         index.add_export(ExportEntry::star_re_export("right.js"));
 
-        graph.add_module(index).expect("serde deserialization should succeed");
-        graph.add_module(left).expect("serde deserialization should succeed");
-        graph.add_module(mid).expect("serde deserialization should succeed");
-        graph.add_module(right).expect("serde deserialization should succeed");
+        graph
+            .add_module(index)
+            .expect("serde deserialization should succeed");
+        graph
+            .add_module(left)
+            .expect("serde deserialization should succeed");
+        graph
+            .add_module(mid)
+            .expect("serde deserialization should succeed");
+        graph
+            .add_module(right)
+            .expect("serde deserialization should succeed");
 
-        let binding = graph.resolve_export("index.js", "shared").expect("serde deserialization should succeed");
+        let binding = graph
+            .resolve_export("index.js", "shared")
+            .expect("serde deserialization should succeed");
         assert_eq!(binding.module_specifier, "right.js");
         assert_eq!(binding.local_name, "shared");
         assert_eq!(binding.binding_type, BindingType::StarReExport);
@@ -1425,8 +1518,12 @@ mod tests {
         let mut b = make_module("b.js", "");
         b.add_export(ExportEntry::star_re_export("a.js"));
 
-        graph.add_module(a).expect("serde deserialization should succeed");
-        graph.add_module(b).expect("serde deserialization should succeed");
+        graph
+            .add_module(a)
+            .expect("serde deserialization should succeed");
+        graph
+            .add_module(b)
+            .expect("serde deserialization should succeed");
 
         let err = graph.resolve_export("a.js", "missing").unwrap_err();
         assert_eq!(
@@ -1447,8 +1544,12 @@ mod tests {
 
         let lib = make_module("lib.js", "");
 
-        graph.add_module(index).expect("serde deserialization should succeed");
-        graph.add_module(lib).expect("serde deserialization should succeed");
+        graph
+            .add_module(index)
+            .expect("serde deserialization should succeed");
+        graph
+            .add_module(lib)
+            .expect("serde deserialization should succeed");
 
         let err = graph.resolve_export("index.js", "shared").unwrap_err();
         assert_eq!(
@@ -1480,11 +1581,21 @@ mod tests {
         let mut index = make_module("index.js", "");
         index.add_export(ExportEntry::re_export("shared", "lib.js", "shared"));
 
-        graph.add_module(index).expect("serde deserialization should succeed");
-        graph.add_module(lib).expect("serde deserialization should succeed");
-        graph.add_module(left).expect("serde deserialization should succeed");
-        graph.add_module(right).expect("serde deserialization should succeed");
-        graph.add_module(leaf).expect("serde deserialization should succeed");
+        graph
+            .add_module(index)
+            .expect("serde deserialization should succeed");
+        graph
+            .add_module(lib)
+            .expect("serde deserialization should succeed");
+        graph
+            .add_module(left)
+            .expect("serde deserialization should succeed");
+        graph
+            .add_module(right)
+            .expect("serde deserialization should succeed");
+        graph
+            .add_module(leaf)
+            .expect("serde deserialization should succeed");
 
         let err = graph.resolve_export("index.js", "shared").unwrap_err();
         assert_eq!(
@@ -1502,8 +1613,12 @@ mod tests {
         let mut index = make_module("index.js", "");
         index.add_export(ExportEntry::direct("foo_local", "foo"));
         index.add_export(ExportEntry::re_export("foo", "lib.js", "foo"));
-        graph.add_module(index).expect("serde deserialization should succeed");
-        graph.add_module(make_module("lib.js", "")).expect("serde deserialization should succeed");
+        graph
+            .add_module(index)
+            .expect("serde deserialization should succeed");
+        graph
+            .add_module(make_module("lib.js", ""))
+            .expect("serde deserialization should succeed");
 
         let err = graph.resolve_export("index.js", "foo").unwrap_err();
         assert_eq!(
@@ -1532,10 +1647,18 @@ mod tests {
         let mut index = make_module("index.js", "");
         index.add_export(ExportEntry::star_re_export("lib.js"));
 
-        graph.add_module(index).expect("serde deserialization should succeed");
-        graph.add_module(lib).expect("serde deserialization should succeed");
-        graph.add_module(left).expect("serde deserialization should succeed");
-        graph.add_module(right).expect("serde deserialization should succeed");
+        graph
+            .add_module(index)
+            .expect("serde deserialization should succeed");
+        graph
+            .add_module(lib)
+            .expect("serde deserialization should succeed");
+        graph
+            .add_module(left)
+            .expect("serde deserialization should succeed");
+        graph
+            .add_module(right)
+            .expect("serde deserialization should succeed");
 
         let err = graph.resolve_export("index.js", "shared").unwrap_err();
         assert_eq!(
@@ -1551,7 +1674,9 @@ mod tests {
     fn test_resolve_export_not_found() {
         let mut graph = ModuleGraph::new();
         let lib = make_module("lib.js", "");
-        graph.add_module(lib).expect("serde deserialization should succeed");
+        graph
+            .add_module(lib)
+            .expect("serde deserialization should succeed");
 
         let err = graph.resolve_export("lib.js", "missing").unwrap_err();
         assert!(matches!(err, EsmLoaderError::ExportNotFound { .. }));
@@ -1568,9 +1693,15 @@ mod tests {
         index.add_export(ExportEntry::star_re_export("a.js"));
         index.add_export(ExportEntry::star_re_export("b.js"));
 
-        graph.add_module(index).expect("serde deserialization should succeed");
-        graph.add_module(a).expect("serde deserialization should succeed");
-        graph.add_module(b).expect("serde deserialization should succeed");
+        graph
+            .add_module(index)
+            .expect("serde deserialization should succeed");
+        graph
+            .add_module(a)
+            .expect("serde deserialization should succeed");
+        graph
+            .add_module(b)
+            .expect("serde deserialization should succeed");
 
         let err = graph.resolve_export("index.js", "dup").unwrap_err();
         assert!(matches!(err, EsmLoaderError::AmbiguousExport { .. }));
@@ -1583,8 +1714,12 @@ mod tests {
         let mut graph = ModuleGraph::new();
         let mut main = make_module("main.js", "");
         main.add_import(ImportEntry::new("dep.js", "x", "x"));
-        graph.add_module(main).expect("serde deserialization should succeed");
-        graph.add_module(make_module("dep.js", "")).expect("serde deserialization should succeed");
+        graph
+            .add_module(main)
+            .expect("serde deserialization should succeed");
+        graph
+            .add_module(make_module("dep.js", ""))
+            .expect("serde deserialization should succeed");
 
         let cycles = graph.find_cycles();
         assert!(cycles.is_empty());
@@ -1598,8 +1733,12 @@ mod tests {
         let mut b = make_module("b.js", "");
         b.add_import(ImportEntry::new("a.js", "y", "y"));
 
-        graph.add_module(a).expect("serde deserialization should succeed");
-        graph.add_module(b).expect("serde deserialization should succeed");
+        graph
+            .add_module(a)
+            .expect("serde deserialization should succeed");
+        graph
+            .add_module(b)
+            .expect("serde deserialization should succeed");
 
         let cycles = graph.find_cycles();
         assert_eq!(cycles.len(), 1);
@@ -1616,9 +1755,15 @@ mod tests {
         let mut c = make_module("c.js", "");
         c.add_import(ImportEntry::new("a.js", "x", "x"));
 
-        graph.add_module(a).expect("serde deserialization should succeed");
-        graph.add_module(b).expect("serde deserialization should succeed");
-        graph.add_module(c).expect("serde deserialization should succeed");
+        graph
+            .add_module(a)
+            .expect("serde deserialization should succeed");
+        graph
+            .add_module(b)
+            .expect("serde deserialization should succeed");
+        graph
+            .add_module(c)
+            .expect("serde deserialization should succeed");
 
         let cycles = graph.find_cycles();
         assert_eq!(cycles.len(), 1);
@@ -1630,7 +1775,9 @@ mod tests {
         let mut graph = ModuleGraph::new();
         let mut a = make_module("a.js", "");
         a.add_import(ImportEntry::new("a.js", "x", "x"));
-        graph.add_module(a).expect("serde deserialization should succeed");
+        graph
+            .add_module(a)
+            .expect("serde deserialization should succeed");
 
         let cycles = graph.find_cycles();
         assert_eq!(cycles, vec![vec!["a.js".to_string()]]);
@@ -1645,14 +1792,29 @@ mod tests {
         main.add_import(ImportEntry::new("a.js", "x", "x"));
         let mut a = make_module("a.js", "");
         a.add_import(ImportEntry::new("b.js", "y", "y"));
-        graph.add_module(main).expect("serde deserialization should succeed");
-        graph.add_module(a).expect("serde deserialization should succeed");
-        graph.add_module(make_module("b.js", "")).expect("serde deserialization should succeed");
+        graph
+            .add_module(main)
+            .expect("serde deserialization should succeed");
+        graph
+            .add_module(a)
+            .expect("serde deserialization should succeed");
+        graph
+            .add_module(make_module("b.js", ""))
+            .expect("serde deserialization should succeed");
 
         let order = graph.topological_order();
-        let b_pos = order.iter().position(|s| s == "b.js").expect("serde deserialization should succeed");
-        let a_pos = order.iter().position(|s| s == "a.js").expect("serde deserialization should succeed");
-        let main_pos = order.iter().position(|s| s == "main.js").expect("serde deserialization should succeed");
+        let b_pos = order
+            .iter()
+            .position(|s| s == "b.js")
+            .expect("serde deserialization should succeed");
+        let a_pos = order
+            .iter()
+            .position(|s| s == "a.js")
+            .expect("serde deserialization should succeed");
+        let main_pos = order
+            .iter()
+            .position(|s| s == "main.js")
+            .expect("serde deserialization should succeed");
         assert!(b_pos < a_pos);
         assert!(a_pos < main_pos);
     }
@@ -1666,9 +1828,15 @@ mod tests {
         main.add_import(ImportEntry::new("a.js", "x", "x"));
         let mut a = make_module("a.js", "");
         a.add_import(ImportEntry::new("b.js", "y", "y"));
-        graph.add_module(main).expect("serde deserialization should succeed");
-        graph.add_module(a).expect("serde deserialization should succeed");
-        graph.add_module(make_module("b.js", "")).expect("serde deserialization should succeed");
+        graph
+            .add_module(main)
+            .expect("serde deserialization should succeed");
+        graph
+            .add_module(a)
+            .expect("serde deserialization should succeed");
+        graph
+            .add_module(make_module("b.js", ""))
+            .expect("serde deserialization should succeed");
 
         let deps = graph.transitive_dependencies("main.js");
         assert!(deps.contains("a.js"));
@@ -1688,9 +1856,15 @@ mod tests {
         let mut c = make_module("c.js", "");
         c.add_export(ExportEntry::direct("foo", "foo"));
 
-        graph.add_module(a).expect("serde deserialization should succeed");
-        graph.add_module(b).expect("serde deserialization should succeed");
-        graph.add_module(c).expect("serde deserialization should succeed");
+        graph
+            .add_module(a)
+            .expect("serde deserialization should succeed");
+        graph
+            .add_module(b)
+            .expect("serde deserialization should succeed");
+        graph
+            .add_module(c)
+            .expect("serde deserialization should succeed");
 
         let exporters = graph.find_exporters("foo");
         assert_eq!(exporters.len(), 2);
@@ -1703,9 +1877,13 @@ mod tests {
     #[test]
     fn test_trace_events_emitted() {
         let mut graph = ModuleGraph::new();
-        graph.add_module(make_module("main.js", "")).expect("serde deserialization should succeed");
+        graph
+            .add_module(make_module("main.js", ""))
+            .expect("serde deserialization should succeed");
         graph.link().expect("serde deserialization should succeed");
-        graph.evaluate().expect("serde deserialization should succeed");
+        graph
+            .evaluate()
+            .expect("serde deserialization should succeed");
 
         let events = graph.trace_events();
         assert!(events.len() >= 2); // At least link + evaluate
@@ -1868,8 +2046,12 @@ mod tests {
     #[test]
     fn entry_point_set_to_first_module() {
         let mut graph = ModuleGraph::new();
-        graph.add_module(make_module("first.js", "")).expect("serde deserialization should succeed");
-        graph.add_module(make_module("second.js", "")).expect("serde deserialization should succeed");
+        graph
+            .add_module(make_module("first.js", ""))
+            .expect("serde deserialization should succeed");
+        graph
+            .add_module(make_module("second.js", ""))
+            .expect("serde deserialization should succeed");
         assert_eq!(graph.entry_point(), Some("first.js"));
     }
 
@@ -1897,9 +2079,15 @@ mod tests {
     #[test]
     fn specifiers_iterator_deterministic_order() {
         let mut graph = ModuleGraph::new();
-        graph.add_module(make_module("c.js", "")).expect("serde deserialization should succeed");
-        graph.add_module(make_module("a.js", "")).expect("serde deserialization should succeed");
-        graph.add_module(make_module("b.js", "")).expect("serde deserialization should succeed");
+        graph
+            .add_module(make_module("c.js", ""))
+            .expect("serde deserialization should succeed");
+        graph
+            .add_module(make_module("a.js", ""))
+            .expect("serde deserialization should succeed");
+        graph
+            .add_module(make_module("b.js", ""))
+            .expect("serde deserialization should succeed");
         let specs: Vec<&str> = graph.specifiers().collect();
         // BTreeMap guarantees sorted order.
         assert_eq!(specs, vec!["a.js", "b.js", "c.js"]);
@@ -1908,8 +2096,12 @@ mod tests {
     #[test]
     fn modules_iterator_count() {
         let mut graph = ModuleGraph::new();
-        graph.add_module(make_module("a.js", "")).expect("serde deserialization should succeed");
-        graph.add_module(make_module("b.js", "")).expect("serde deserialization should succeed");
+        graph
+            .add_module(make_module("a.js", ""))
+            .expect("serde deserialization should succeed");
+        graph
+            .add_module(make_module("b.js", ""))
+            .expect("serde deserialization should succeed");
         assert_eq!(graph.modules().count(), 2);
     }
 
@@ -1920,14 +2112,22 @@ mod tests {
         let mut graph = ModuleGraph::new();
         let mut main = make_module("main.js", "");
         main.add_import(ImportEntry::new("dep.js", "x", "x"));
-        graph.add_module(main).expect("serde deserialization should succeed");
-        graph.add_module(make_module("dep.js", "")).expect("serde deserialization should succeed");
+        graph
+            .add_module(main)
+            .expect("serde deserialization should succeed");
+        graph
+            .add_module(make_module("dep.js", ""))
+            .expect("serde deserialization should succeed");
         graph.link().expect("serde deserialization should succeed");
 
-        let m = graph.get_module("main.js").expect("serde deserialization should succeed");
+        let m = graph
+            .get_module("main.js")
+            .expect("serde deserialization should succeed");
         assert!(m.dfs_index.is_some());
         assert!(m.dfs_ancestor_index.is_some());
-        let d = graph.get_module("dep.js").expect("serde deserialization should succeed");
+        let d = graph
+            .get_module("dep.js")
+            .expect("serde deserialization should succeed");
         assert!(d.dfs_index.is_some());
     }
 
@@ -1938,8 +2138,12 @@ mod tests {
         a.add_import(ImportEntry::new("b.js", "x", "x"));
         let mut b = make_module("b.js", "");
         b.add_import(ImportEntry::new("a.js", "y", "y"));
-        graph.add_module(a).expect("serde deserialization should succeed");
-        graph.add_module(b).expect("serde deserialization should succeed");
+        graph
+            .add_module(a)
+            .expect("serde deserialization should succeed");
+        graph
+            .add_module(b)
+            .expect("serde deserialization should succeed");
 
         let result = graph.link().expect("serde deserialization should succeed");
         assert_eq!(result.cycle_count, 1);
@@ -1956,14 +2160,24 @@ mod tests {
         let mut graph = ModuleGraph::new();
         let mut main = make_module("main.js", "");
         main.add_import(ImportEntry::new("dep.js", "x", "x"));
-        graph.add_module(main).expect("serde deserialization should succeed");
-        graph.add_module(make_module("dep.js", "")).expect("serde deserialization should succeed");
+        graph
+            .add_module(main)
+            .expect("serde deserialization should succeed");
+        graph
+            .add_module(make_module("dep.js", ""))
+            .expect("serde deserialization should succeed");
         graph.link().expect("serde deserialization should succeed");
-        graph.evaluate().expect("serde deserialization should succeed");
+        graph
+            .evaluate()
+            .expect("serde deserialization should succeed");
 
         // dep.js evaluated first (order 0), main.js second (order 1).
-        let dep = graph.get_module("dep.js").expect("serde deserialization should succeed");
-        let main = graph.get_module("main.js").expect("serde deserialization should succeed");
+        let dep = graph
+            .get_module("dep.js")
+            .expect("serde deserialization should succeed");
+        let main = graph
+            .get_module("main.js")
+            .expect("serde deserialization should succeed");
         assert_eq!(dep.eval_order, Some(0));
         assert_eq!(main.eval_order, Some(1));
         assert_eq!(dep.status, ModuleStatus::Evaluated);
@@ -1973,7 +2187,9 @@ mod tests {
     #[test]
     fn evaluate_without_link_fails() {
         let mut graph = ModuleGraph::new();
-        graph.add_module(make_module("main.js", "")).expect("serde deserialization should succeed");
+        graph
+            .add_module(make_module("main.js", ""))
+            .expect("serde deserialization should succeed");
         // Skip link phase — module is still Unlinked.
         let err = graph.evaluate().unwrap_err();
         assert!(matches!(err, EsmLoaderError::InvalidStatus { .. }));
@@ -1991,11 +2207,19 @@ mod tests {
         let mut top = make_module("top.js", "");
         top.add_export(ExportEntry::re_export("val", "mid.js", "val"));
 
-        graph.add_module(top).expect("serde deserialization should succeed");
-        graph.add_module(mid).expect("serde deserialization should succeed");
-        graph.add_module(origin).expect("serde deserialization should succeed");
+        graph
+            .add_module(top)
+            .expect("serde deserialization should succeed");
+        graph
+            .add_module(mid)
+            .expect("serde deserialization should succeed");
+        graph
+            .add_module(origin)
+            .expect("serde deserialization should succeed");
 
-        let binding = graph.resolve_export("top.js", "val").expect("serde deserialization should succeed");
+        let binding = graph
+            .resolve_export("top.js", "val")
+            .expect("serde deserialization should succeed");
         assert_eq!(binding.module_specifier, "origin.js");
         assert_eq!(binding.local_name, "val");
     }
@@ -2014,7 +2238,9 @@ mod tests {
         let mut graph = ModuleGraph::new();
         let mut a = make_module("a.js", "");
         a.add_export(ExportEntry::direct("foo", "foo"));
-        graph.add_module(a).expect("serde deserialization should succeed");
+        graph
+            .add_module(a)
+            .expect("serde deserialization should succeed");
         assert!(graph.find_exporters("bar").is_empty());
     }
 
@@ -2023,7 +2249,9 @@ mod tests {
     #[test]
     fn topological_order_single_module() {
         let mut graph = ModuleGraph::new();
-        graph.add_module(make_module("only.js", "")).expect("serde deserialization should succeed");
+        graph
+            .add_module(make_module("only.js", ""))
+            .expect("serde deserialization should succeed");
         let order = graph.topological_order();
         assert_eq!(order, vec!["only.js"]);
     }
@@ -2031,9 +2259,15 @@ mod tests {
     #[test]
     fn topological_order_disconnected() {
         let mut graph = ModuleGraph::new();
-        graph.add_module(make_module("a.js", "")).expect("serde deserialization should succeed");
-        graph.add_module(make_module("b.js", "")).expect("serde deserialization should succeed");
-        graph.add_module(make_module("c.js", "")).expect("serde deserialization should succeed");
+        graph
+            .add_module(make_module("a.js", ""))
+            .expect("serde deserialization should succeed");
+        graph
+            .add_module(make_module("b.js", ""))
+            .expect("serde deserialization should succeed");
+        graph
+            .add_module(make_module("c.js", ""))
+            .expect("serde deserialization should succeed");
         let order = graph.topological_order();
         // All three present, BTreeMap order.
         assert_eq!(order.len(), 3);
@@ -2044,7 +2278,9 @@ mod tests {
     #[test]
     fn transitive_deps_leaf_node_empty() {
         let mut graph = ModuleGraph::new();
-        graph.add_module(make_module("leaf.js", "")).expect("serde deserialization should succeed");
+        graph
+            .add_module(make_module("leaf.js", ""))
+            .expect("serde deserialization should succeed");
         let deps = graph.transitive_dependencies("leaf.js");
         assert!(deps.is_empty());
     }
@@ -2054,8 +2290,12 @@ mod tests {
         let mut graph = ModuleGraph::new();
         let mut main = make_module("main.js", "");
         main.add_import(ImportEntry::new("dep.js", "x", "x"));
-        graph.add_module(main).expect("serde deserialization should succeed");
-        graph.add_module(make_module("dep.js", "")).expect("serde deserialization should succeed");
+        graph
+            .add_module(main)
+            .expect("serde deserialization should succeed");
+        graph
+            .add_module(make_module("dep.js", ""))
+            .expect("serde deserialization should succeed");
         let deps = graph.transitive_dependencies("main.js");
         assert!(deps.contains("dep.js"));
         assert!(!deps.contains("main.js"));
@@ -2066,9 +2306,13 @@ mod tests {
     #[test]
     fn trace_events_sequential_seq() {
         let mut graph = ModuleGraph::new();
-        graph.add_module(make_module("main.js", "")).expect("serde deserialization should succeed");
+        graph
+            .add_module(make_module("main.js", ""))
+            .expect("serde deserialization should succeed");
         graph.link().expect("serde deserialization should succeed");
-        graph.evaluate().expect("serde deserialization should succeed");
+        graph
+            .evaluate()
+            .expect("serde deserialization should succeed");
         let events = graph.trace_events();
         for pair in events.windows(2) {
             assert!(pair[0].seq < pair[1].seq);
@@ -2082,8 +2326,12 @@ mod tests {
         a.add_import(ImportEntry::new("b.js", "x", "x"));
         let mut b = make_module("b.js", "");
         b.add_import(ImportEntry::new("a.js", "y", "y"));
-        graph.add_module(a).expect("serde deserialization should succeed");
-        graph.add_module(b).expect("serde deserialization should succeed");
+        graph
+            .add_module(a)
+            .expect("serde deserialization should succeed");
+        graph
+            .add_module(b)
+            .expect("serde deserialization should succeed");
         graph.link().expect("serde deserialization should succeed");
 
         let events = graph.trace_events();
@@ -2093,7 +2341,9 @@ mod tests {
     #[test]
     fn trace_events_empty_before_link() {
         let mut graph = ModuleGraph::new();
-        graph.add_module(make_module("main.js", "")).expect("serde deserialization should succeed");
+        graph
+            .add_module(make_module("main.js", ""))
+            .expect("serde deserialization should succeed");
         assert!(graph.trace_events().is_empty());
     }
 
@@ -2200,17 +2450,23 @@ mod tests {
         m.add_import(ImportEntry::new("dep.js", "foo", "foo"));
         m.add_export(ExportEntry::direct("bar", "bar"));
         let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
-        let m2: EsmModule = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let m2: EsmModule =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(m, m2);
     }
 
     #[test]
     fn module_graph_serde_roundtrip() {
         let mut graph = ModuleGraph::new();
-        graph.add_module(make_module("a.js", "")).expect("serde deserialization should succeed");
-        graph.add_module(make_module("b.js", "")).expect("serde deserialization should succeed");
+        graph
+            .add_module(make_module("a.js", ""))
+            .expect("serde deserialization should succeed");
+        graph
+            .add_module(make_module("b.js", ""))
+            .expect("serde deserialization should succeed");
         let json = serde_json::to_string(&graph).expect("serde deserialization should succeed");
-        let g2: ModuleGraph = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let g2: ModuleGraph =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(g2.len(), 2);
         assert_eq!(g2.entry_point(), Some("a.js"));
     }
@@ -2226,7 +2482,8 @@ mod tests {
             }],
         };
         let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
-        let r2: LinkResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let r2: LinkResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r2.linked_count, 3);
         assert_eq!(r2.cycle_count, 1);
     }
@@ -2238,7 +2495,8 @@ mod tests {
             evaluated_count: 2,
         };
         let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
-        let r2: EvalResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let r2: EvalResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r2.evaluated_count, 2);
         assert_eq!(r2.eval_order.len(), 2);
     }
@@ -2251,7 +2509,8 @@ mod tests {
             BindingType::StarReExport,
         ] {
             let json = serde_json::to_string(&bt).expect("serde deserialization should succeed");
-            let bt2: BindingType = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let bt2: BindingType =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(bt, bt2);
         }
     }
@@ -2264,7 +2523,8 @@ mod tests {
             dependency: "missing.js".into(),
         };
         let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
-        let val: serde_json::Value = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let val: serde_json::Value =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert!(val.get("UnresolvedDependency").is_some());
     }
 
@@ -2286,10 +2546,16 @@ mod tests {
         lib.add_export(ExportEntry::direct("item", "item"));
         let mut index = make_module("index.js", "");
         index.add_export(ExportEntry::star_re_export("lib.js"));
-        graph.add_module(index).expect("serde deserialization should succeed");
-        graph.add_module(lib).expect("serde deserialization should succeed");
+        graph
+            .add_module(index)
+            .expect("serde deserialization should succeed");
+        graph
+            .add_module(lib)
+            .expect("serde deserialization should succeed");
 
-        let binding = graph.resolve_export("index.js", "item").expect("serde deserialization should succeed");
+        let binding = graph
+            .resolve_export("index.js", "item")
+            .expect("serde deserialization should succeed");
         assert_eq!(binding.module_specifier, "lib.js");
         assert_eq!(binding.binding_type, BindingType::StarReExport);
     }
@@ -2302,10 +2568,16 @@ mod tests {
         lib.add_export(ExportEntry::direct("x", "x"));
         let mut index = make_module("index.js", "");
         index.add_export(ExportEntry::re_export("x", "lib.js", "x"));
-        graph.add_module(index).expect("serde deserialization should succeed");
-        graph.add_module(lib).expect("serde deserialization should succeed");
+        graph
+            .add_module(index)
+            .expect("serde deserialization should succeed");
+        graph
+            .add_module(lib)
+            .expect("serde deserialization should succeed");
 
-        let binding = graph.resolve_export("index.js", "x").expect("serde deserialization should succeed");
+        let binding = graph
+            .resolve_export("index.js", "x")
+            .expect("serde deserialization should succeed");
         assert_eq!(binding.module_specifier, "lib.js");
         assert_eq!(binding.binding_type, BindingType::ReExport);
     }
@@ -2323,10 +2595,18 @@ mod tests {
         c.add_import(ImportEntry::new("d.js", "x", "x"));
         let mut d = make_module("d.js", "");
         d.add_import(ImportEntry::new("a.js", "x", "x"));
-        graph.add_module(a).expect("serde deserialization should succeed");
-        graph.add_module(b).expect("serde deserialization should succeed");
-        graph.add_module(c).expect("serde deserialization should succeed");
-        graph.add_module(d).expect("serde deserialization should succeed");
+        graph
+            .add_module(a)
+            .expect("serde deserialization should succeed");
+        graph
+            .add_module(b)
+            .expect("serde deserialization should succeed");
+        graph
+            .add_module(c)
+            .expect("serde deserialization should succeed");
+        graph
+            .add_module(d)
+            .expect("serde deserialization should succeed");
 
         let cycles = graph.find_cycles();
         assert_eq!(cycles.len(), 1);
@@ -2346,10 +2626,18 @@ mod tests {
         c.add_import(ImportEntry::new("d.js", "x", "x"));
         let mut d = make_module("d.js", "");
         d.add_import(ImportEntry::new("c.js", "x", "x"));
-        graph.add_module(a).expect("serde deserialization should succeed");
-        graph.add_module(b).expect("serde deserialization should succeed");
-        graph.add_module(c).expect("serde deserialization should succeed");
-        graph.add_module(d).expect("serde deserialization should succeed");
+        graph
+            .add_module(a)
+            .expect("serde deserialization should succeed");
+        graph
+            .add_module(b)
+            .expect("serde deserialization should succeed");
+        graph
+            .add_module(c)
+            .expect("serde deserialization should succeed");
+        graph
+            .add_module(d)
+            .expect("serde deserialization should succeed");
 
         let cycles = graph.find_cycles();
         assert_eq!(cycles.len(), 2);
@@ -2362,11 +2650,18 @@ mod tests {
         let mut graph = ModuleGraph::new();
         let m = make_module("main.js", "const x = 1");
         let hash_before = m.content_hash;
-        graph.add_module(m).expect("serde deserialization should succeed");
+        graph
+            .add_module(m)
+            .expect("serde deserialization should succeed");
         graph.link().expect("serde deserialization should succeed");
-        graph.evaluate().expect("serde deserialization should succeed");
+        graph
+            .evaluate()
+            .expect("serde deserialization should succeed");
         assert_eq!(
-            graph.get_module("main.js").expect("serde deserialization should succeed").content_hash,
+            graph
+                .get_module("main.js")
+                .expect("serde deserialization should succeed")
+                .content_hash,
             hash_before
         );
     }
@@ -2384,14 +2679,30 @@ mod tests {
             a.add_import(ImportEntry::new("shared.js", "s", "s"));
             let mut b = make_module("b.js", "");
             b.add_import(ImportEntry::new("shared.js", "s", "s"));
-            graph.add_module(main).expect("serde deserialization should succeed");
-            graph.add_module(a).expect("serde deserialization should succeed");
-            graph.add_module(b).expect("serde deserialization should succeed");
-            graph.add_module(make_module("shared.js", "")).expect("serde deserialization should succeed");
+            graph
+                .add_module(main)
+                .expect("serde deserialization should succeed");
+            graph
+                .add_module(a)
+                .expect("serde deserialization should succeed");
+            graph
+                .add_module(b)
+                .expect("serde deserialization should succeed");
+            graph
+                .add_module(make_module("shared.js", ""))
+                .expect("serde deserialization should succeed");
             graph.link().expect("serde deserialization should succeed");
-            let result = graph.evaluate().expect("serde deserialization should succeed");
+            let result = graph
+                .evaluate()
+                .expect("serde deserialization should succeed");
             assert_eq!(result.eval_order[0], "shared.js");
-            assert_eq!(*result.eval_order.last().expect("serde deserialization should succeed"), "main.js");
+            assert_eq!(
+                *result
+                    .eval_order
+                    .last()
+                    .expect("serde deserialization should succeed"),
+                "main.js"
+            );
         }
     }
 }

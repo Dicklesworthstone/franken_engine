@@ -729,7 +729,8 @@ mod tests {
     fn frontier_family_serde_round_trip() {
         for family in ParserFrontierFamily::ALL {
             let json = serde_json::to_string(family).expect("serde deserialization should succeed");
-            let back: ParserFrontierFamily = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ParserFrontierFamily =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(back, *family);
         }
     }
@@ -823,7 +824,8 @@ mod tests {
     fn evidence_serde_roundtrip() {
         let inv = run_frontier_corpus();
         let json = serde_json::to_string(&inv).expect("serde deserialization should succeed");
-        let back: ParserFrontierEvidenceInventory = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ParserFrontierEvidenceInventory =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(inv, back);
     }
 
@@ -843,8 +845,10 @@ mod tests {
         let out = unique_temp_dir("frontier-manifest");
         let cmds = vec!["test".to_string()];
         let arts = write_frontier_evidence_bundle(&out, &cmds).expect("write");
-        let manifest: FrontierEvidenceRunManifest =
-            serde_json::from_slice(&fs::read(&arts.run_manifest_path).expect("serde deserialization should succeed")).expect("serde deserialization should succeed");
+        let manifest: FrontierEvidenceRunManifest = serde_json::from_slice(
+            &fs::read(&arts.run_manifest_path).expect("serde deserialization should succeed"),
+        )
+        .expect("serde deserialization should succeed");
         assert!(manifest.contract_satisfied);
         assert_eq!(manifest.fail_count, 0);
     }
@@ -864,7 +868,8 @@ mod tests {
         let out = unique_temp_dir("frontier-events");
         let cmds = vec!["test".to_string()];
         let arts = write_frontier_evidence_bundle(&out, &cmds).expect("write");
-        let events = fs::read_to_string(&arts.events_path).expect("serde deserialization should succeed");
+        let events =
+            fs::read_to_string(&arts.events_path).expect("serde deserialization should succeed");
         let corpus = frontier_corpus();
         assert_eq!(events.lines().count(), corpus.len() + 2);
     }
@@ -919,8 +924,10 @@ mod tests {
     #[test]
     fn frontier_family_as_str_matches_serde_name() {
         for family in ParserFrontierFamily::ALL {
-            let json: String =
-                serde_json::from_str(&serde_json::to_string(family).expect("serde deserialization should succeed")).expect("serde deserialization should succeed");
+            let json: String = serde_json::from_str(
+                &serde_json::to_string(family).expect("serde deserialization should succeed"),
+            )
+            .expect("serde deserialization should succeed");
             assert_eq!(json, family.as_str());
         }
     }
@@ -931,8 +938,10 @@ mod tests {
             ExpectedParseOutcome::Accepted,
             ExpectedParseOutcome::Rejected,
         ] {
-            let json = serde_json::to_string(&outcome).expect("serde deserialization should succeed");
-            let back: ExpectedParseOutcome = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&outcome).expect("serde deserialization should succeed");
+            let back: ExpectedParseOutcome =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(back, outcome);
         }
     }
@@ -948,8 +957,10 @@ mod tests {
     #[test]
     fn actual_parse_outcome_serde_roundtrip() {
         for outcome in [ActualParseOutcome::Accepted, ActualParseOutcome::Rejected] {
-            let json = serde_json::to_string(&outcome).expect("serde deserialization should succeed");
-            let back: ActualParseOutcome = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&outcome).expect("serde deserialization should succeed");
+            let back: ActualParseOutcome =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(back, outcome);
         }
     }
@@ -957,8 +968,10 @@ mod tests {
     #[test]
     fn frontier_verdict_serde_roundtrip() {
         for verdict in [FrontierVerdict::Pass, FrontierVerdict::Fail] {
-            let json = serde_json::to_string(&verdict).expect("serde deserialization should succeed");
-            let back: FrontierVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&verdict).expect("serde deserialization should succeed");
+            let back: FrontierVerdict =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(back, verdict);
         }
     }
@@ -1067,11 +1080,17 @@ mod tests {
         let events = generate_events(&inv);
         assert_eq!(events.len(), inv.evidence.len() + 2);
         assert_eq!(
-            events.first().expect("serde deserialization should succeed").event,
+            events
+                .first()
+                .expect("serde deserialization should succeed")
+                .event,
             "frontier_evidence_run_started"
         );
         assert_eq!(
-            events.last().expect("serde deserialization should succeed").event,
+            events
+                .last()
+                .expect("serde deserialization should succeed")
+                .event,
             "frontier_evidence_run_completed"
         );
     }
@@ -1110,7 +1129,8 @@ mod tests {
             detail: Some("expected=accepted, actual=accepted, verdict=pass".to_string()),
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let back: FrontierEvidenceEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: FrontierEvidenceEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, event);
     }
 
@@ -1137,7 +1157,8 @@ mod tests {
             },
         };
         let json = serde_json::to_string(&manifest).expect("serde deserialization should succeed");
-        let back: FrontierEvidenceRunManifest = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: FrontierEvidenceRunManifest =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, manifest);
     }
 
@@ -1146,8 +1167,10 @@ mod tests {
         let out = unique_temp_dir("frontier-manifest-schema");
         let cmds = vec!["test".to_string()];
         let arts = write_frontier_evidence_bundle(&out, &cmds).expect("write");
-        let manifest: FrontierEvidenceRunManifest =
-            serde_json::from_slice(&fs::read(&arts.run_manifest_path).expect("serde deserialization should succeed")).expect("serde deserialization should succeed");
+        let manifest: FrontierEvidenceRunManifest = serde_json::from_slice(
+            &fs::read(&arts.run_manifest_path).expect("serde deserialization should succeed"),
+        )
+        .expect("serde deserialization should succeed");
         assert_eq!(
             manifest.schema_version,
             PARSER_FRONTIER_MANIFEST_SCHEMA_VERSION
@@ -1161,8 +1184,10 @@ mod tests {
         let out = unique_temp_dir("frontier-rel-paths");
         let cmds = vec!["test".to_string()];
         let arts = write_frontier_evidence_bundle(&out, &cmds).expect("write");
-        let manifest: FrontierEvidenceRunManifest =
-            serde_json::from_slice(&fs::read(&arts.run_manifest_path).expect("serde deserialization should succeed")).expect("serde deserialization should succeed");
+        let manifest: FrontierEvidenceRunManifest = serde_json::from_slice(
+            &fs::read(&arts.run_manifest_path).expect("serde deserialization should succeed"),
+        )
+        .expect("serde deserialization should succeed");
         assert!(!manifest.artifact_paths.evidence_inventory.contains('/'));
         assert!(!manifest.artifact_paths.run_manifest.contains('/'));
         assert!(!manifest.artifact_paths.events_jsonl.contains('/'));
@@ -1174,7 +1199,8 @@ mod tests {
         let out = unique_temp_dir("frontier-cmds-match");
         let cmds = vec!["alpha".to_string(), "beta".to_string(), "gamma".to_string()];
         let arts = write_frontier_evidence_bundle(&out, &cmds).expect("write");
-        let content = fs::read_to_string(&arts.commands_path).expect("serde deserialization should succeed");
+        let content =
+            fs::read_to_string(&arts.commands_path).expect("serde deserialization should succeed");
         assert!(content.contains("alpha"));
         assert!(content.contains("beta"));
         assert!(content.contains("gamma"));
@@ -1193,7 +1219,8 @@ mod tests {
             event_ir_hash: Some("abc123def456".to_string()),
         };
         let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
-        let back: FrontierSpecimenEvidence = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: FrontierSpecimenEvidence =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, ev);
     }
 }

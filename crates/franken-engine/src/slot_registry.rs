@@ -2647,13 +2647,19 @@ mod tests {
         .expect("serde deserialization should succeed");
 
         let json = serde_json::to_string(&reg).expect("serde deserialization should succeed");
-        let roundtrip: SlotRegistry = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let roundtrip: SlotRegistry =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(reg.len(), roundtrip.len());
 
         let orig_id = SlotId::new("parser").expect("serde deserialization should succeed");
         assert_eq!(
-            reg.get(&orig_id).expect("serde deserialization should succeed").kind,
-            roundtrip.get(&orig_id).expect("serde deserialization should succeed").kind
+            reg.get(&orig_id)
+                .expect("serde deserialization should succeed")
+                .kind,
+            roundtrip
+                .get(&orig_id)
+                .expect("serde deserialization should succeed")
+                .kind
         );
     }
 
@@ -2909,7 +2915,8 @@ mod tests {
     fn slot_id_serde_roundtrip() {
         let id = SlotId::new("parser").expect("serde deserialization should succeed");
         let json = serde_json::to_string(&id).expect("serde deserialization should succeed");
-        let back: SlotId = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SlotId =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(id, back);
     }
 
@@ -2930,7 +2937,8 @@ mod tests {
             SlotKind::Builtins,
         ] {
             let json = serde_json::to_value(kind).expect("serde deserialization should succeed");
-            let back: SlotKind = serde_json::from_value(json).expect("serde deserialization should succeed");
+            let back: SlotKind =
+                serde_json::from_value(json).expect("serde deserialization should succeed");
             assert_eq!(kind, back);
         }
     }
@@ -2948,7 +2956,8 @@ mod tests {
             SlotCapability::EmitEvidence,
         ] {
             let json = serde_json::to_value(cap).expect("serde deserialization should succeed");
-            let back: SlotCapability = serde_json::from_value(json).expect("serde deserialization should succeed");
+            let back: SlotCapability =
+                serde_json::from_value(json).expect("serde deserialization should succeed");
             assert_eq!(cap, back);
         }
     }
@@ -2970,8 +2979,10 @@ mod tests {
             },
         ];
         for status in statuses {
-            let json = serde_json::to_string(&status).expect("serde deserialization should succeed");
-            let back: PromotionStatus = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&status).expect("serde deserialization should succeed");
+            let back: PromotionStatus =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(status, back);
         }
     }
@@ -2986,7 +2997,8 @@ mod tests {
             PromotionTransition::RolledBack,
         ] {
             let json = serde_json::to_value(t).expect("serde deserialization should succeed");
-            let back: PromotionTransition = serde_json::from_value(json).expect("serde deserialization should succeed");
+            let back: PromotionTransition =
+                serde_json::from_value(json).expect("serde deserialization should succeed");
             assert_eq!(t, back);
         }
     }
@@ -3020,7 +3032,8 @@ mod tests {
         ];
         for err in errors {
             let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
-            let back: SlotRegistryError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: SlotRegistryError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(err, back);
         }
     }
@@ -3052,7 +3065,8 @@ mod tests {
         ];
         for err in errors {
             let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
-            let back: GaReleaseGuardError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: GaReleaseGuardError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(err, back);
         }
     }
@@ -3061,7 +3075,8 @@ mod tests {
     fn release_slot_class_serde_roundtrip() {
         for class in [ReleaseSlotClass::Core, ReleaseSlotClass::NonCore] {
             let json = serde_json::to_value(class).expect("serde deserialization should succeed");
-            let back: ReleaseSlotClass = serde_json::from_value(json).expect("serde deserialization should succeed");
+            let back: ReleaseSlotClass =
+                serde_json::from_value(json).expect("serde deserialization should succeed");
             assert_eq!(class, back);
         }
     }
@@ -3070,7 +3085,8 @@ mod tests {
     fn ga_release_guard_verdict_serde_roundtrip() {
         for v in [GaReleaseGuardVerdict::Pass, GaReleaseGuardVerdict::Blocked] {
             let json = serde_json::to_value(v).expect("serde deserialization should succeed");
-            let back: GaReleaseGuardVerdict = serde_json::from_value(json).expect("serde deserialization should succeed");
+            let back: GaReleaseGuardVerdict =
+                serde_json::from_value(json).expect("serde deserialization should succeed");
             assert_eq!(v, back);
         }
     }
@@ -3214,7 +3230,8 @@ mod tests {
             "t2".into(),
         )
         .expect("serde deserialization should succeed");
-        reg.demote(&id, "regression".into(), "t3".into()).expect("serde deserialization should succeed");
+        reg.demote(&id, "regression".into(), "t3".into())
+            .expect("serde deserialization should succeed");
 
         let entry = reg.get(&id).expect("serde deserialization should succeed");
         assert_eq!(entry.rollback_target.as_deref(), Some("sha256:d1"));
@@ -3235,7 +3252,8 @@ mod tests {
             ],
         };
         let json = serde_json::to_string(&ae).expect("serde deserialization should succeed");
-        let restored: AuthorityEnvelope = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: AuthorityEnvelope =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ae, restored);
     }
 
@@ -3248,7 +3266,8 @@ mod tests {
             receipt_id: Some("r-1".to_string()),
         };
         let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
-        let restored: LineageEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: LineageEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ev, restored);
     }
 
@@ -3264,7 +3283,8 @@ mod tests {
             expires_at_epoch: 200,
         };
         let json = serde_json::to_string(&ex).expect("serde deserialization should succeed");
-        let restored: CoreSlotExemption = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: CoreSlotExemption =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ex, restored);
     }
 
@@ -3282,7 +3302,8 @@ mod tests {
             detail: "ok".to_string(),
         };
         let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
-        let restored: GaReleaseGuardEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: GaReleaseGuardEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ev, restored);
     }
 
@@ -3300,7 +3321,8 @@ mod tests {
             weighted_expected_value_score_millionths: 150_000,
         };
         let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
-        let restored: ReplacementPriorityCandidate = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: ReplacementPriorityCandidate =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c, restored);
     }
 
@@ -3318,7 +3340,8 @@ mod tests {
             detail: "complete".to_string(),
         };
         let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
-        let restored: ReplacementProgressEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: ReplacementProgressEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ev, restored);
     }
 
@@ -3330,7 +3353,8 @@ mod tests {
             security_risk_reduction_millionths: 100_000,
         };
         let json = serde_json::to_string(&sig).expect("serde deserialization should succeed");
-        let restored: SlotReplacementSignal = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: SlotReplacementSignal =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(sig, restored);
     }
 
@@ -3351,7 +3375,8 @@ mod tests {
         ];
         for err in &errors {
             let json = serde_json::to_string(err).expect("serde deserialization should succeed");
-            let restored: ReplacementProgressError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: ReplacementProgressError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, restored);
         }
     }
@@ -3411,7 +3436,8 @@ mod tests {
             lineage_dashboard_ref: "dash://test".to_string(),
         };
         let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
-        let back: GaReleaseGuardConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GaReleaseGuardConfig =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, back);
     }
 
@@ -3431,7 +3457,8 @@ mod tests {
             delegate_fallback_reachable: false,
         };
         let json = serde_json::to_string(&art).expect("serde deserialization should succeed");
-        let back: GaSignedLineageArtifact = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GaSignedLineageArtifact =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(art, back);
     }
 
@@ -3451,7 +3478,8 @@ mod tests {
             estimated_remediation: "n/a".into(),
         };
         let json = serde_json::to_string(&status).expect("serde deserialization should succeed");
-        let back: GaReleaseSlotStatus = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GaReleaseSlotStatus =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(status, back);
     }
 
@@ -3480,7 +3508,8 @@ mod tests {
             events: vec![],
         };
         let json = serde_json::to_string(&artifact).expect("serde deserialization should succeed");
-        let back: GaReleaseGuardArtifact = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GaReleaseGuardArtifact =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(artifact, back);
     }
 
@@ -3502,7 +3531,8 @@ mod tests {
             events: vec![],
         };
         let json = serde_json::to_string(&snap).expect("serde deserialization should succeed");
-        let back: ReplacementProgressSnapshot = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ReplacementProgressSnapshot =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(snap, back);
     }
 
@@ -3566,11 +3596,16 @@ mod tests {
         let mut reg = SlotRegistry::new();
         register_slot(&mut reg, "parser", SlotKind::Parser, "digest-parser");
         let json = serde_json::to_string(&reg).expect("serde deserialization should succeed");
-        let back: SlotRegistry = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SlotRegistry =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(reg.len(), back.len());
         assert_eq!(
-            reg.get(&SlotId::new("parser").expect("serde deserialization should succeed")).expect("serde deserialization should succeed").kind,
-            back.get(&SlotId::new("parser").expect("serde deserialization should succeed")).expect("serde deserialization should succeed").kind,
+            reg.get(&SlotId::new("parser").expect("serde deserialization should succeed"))
+                .expect("serde deserialization should succeed")
+                .kind,
+            back.get(&SlotId::new("parser").expect("serde deserialization should succeed"))
+                .expect("serde deserialization should succeed")
+                .kind,
         );
     }
 
@@ -3664,7 +3699,8 @@ mod tests {
             remediation_estimates: BTreeMap::new(),
         };
         let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
-        let back: GaReleaseGuardInput = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GaReleaseGuardInput =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(input.trace_id, back.trace_id);
         assert_eq!(input.decision_id, back.decision_id);
         assert_eq!(input.current_epoch, back.current_epoch);
@@ -3701,7 +3737,8 @@ mod tests {
         let entry = reg.get(&id).expect("serde deserialization should succeed");
         assert_eq!(entry.promotion_lineage.len(), 2);
         let json = serde_json::to_string(entry).expect("serde deserialization should succeed");
-        let back: SlotEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SlotEntry =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.promotion_lineage.len(), 2);
         assert_eq!(
             back.promotion_lineage[0].transition,
@@ -3750,7 +3787,8 @@ mod tests {
         let id = SlotId::new("ir-lowering").expect("serde deserialization should succeed");
         let json = serde_json::to_string(&id).expect("serde deserialization should succeed");
         assert_eq!(json, "\"ir-lowering\"");
-        let back: SlotId = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SlotId =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(id, back);
     }
 
@@ -3813,7 +3851,9 @@ mod tests {
             lineage_artifact(&parser, "sha256:delegate-parser", "sha256:wrong-digest");
         input.lineage_artifacts = vec![wrong_lineage];
 
-        let artifact = reg.evaluate_ga_release_guard(&input).expect("serde deserialization should succeed");
+        let artifact = reg
+            .evaluate_ga_release_guard(&input)
+            .expect("serde deserialization should succeed");
         assert_eq!(artifact.verdict, GaReleaseGuardVerdict::Blocked);
         assert_eq!(artifact.core_slots_lineage_mismatch, vec![parser]);
     }
@@ -3836,7 +3876,9 @@ mod tests {
         lineage.equivalence_passed = false;
         input.lineage_artifacts = vec![lineage];
 
-        let artifact = reg.evaluate_ga_release_guard(&input).expect("serde deserialization should succeed");
+        let artifact = reg
+            .evaluate_ga_release_guard(&input)
+            .expect("serde deserialization should succeed");
         assert_eq!(artifact.verdict, GaReleaseGuardVerdict::Blocked);
         assert_eq!(artifact.core_slots_equivalence_failed, vec![parser]);
     }
@@ -3889,13 +3931,21 @@ mod tests {
         let mut reg = SlotRegistry::new();
         let id = register_slot(&mut reg, "parser", SlotKind::Parser, "sha256:d1");
         promote_slot(&mut reg, &id, "sha256:n1");
-        reg.demote(&id, "regression".into(), "t3".into()).expect("serde deserialization should succeed");
-        assert!(reg.get(&id).expect("serde deserialization should succeed").status.is_delegate());
+        reg.demote(&id, "regression".into(), "t3".into())
+            .expect("serde deserialization should succeed");
+        assert!(
+            reg.get(&id)
+                .expect("serde deserialization should succeed")
+                .status
+                .is_delegate()
+        );
 
         reg.begin_candidacy(&id, "sha256:c2".into(), "t4".into())
             .expect("serde deserialization should succeed");
         assert!(matches!(
-            reg.get(&id).expect("serde deserialization should succeed").status,
+            reg.get(&id)
+                .expect("serde deserialization should succeed")
+                .status,
             PromotionStatus::PromotionCandidate { .. }
         ));
         reg.promote(
@@ -3906,8 +3956,19 @@ mod tests {
             "t5".into(),
         )
         .expect("serde deserialization should succeed");
-        assert!(reg.get(&id).expect("serde deserialization should succeed").status.is_native());
-        assert_eq!(reg.get(&id).expect("serde deserialization should succeed").promotion_lineage.len(), 6);
+        assert!(
+            reg.get(&id)
+                .expect("serde deserialization should succeed")
+                .status
+                .is_native()
+        );
+        assert_eq!(
+            reg.get(&id)
+                .expect("serde deserialization should succeed")
+                .promotion_lineage
+                .len(),
+            6
+        );
     }
 
     #[test]
@@ -3916,13 +3977,17 @@ mod tests {
         let id = register_slot(&mut reg, "parser", SlotKind::Parser, "sha256:delegate-v1");
         promote_slot(&mut reg, &id, "sha256:native-v1");
         assert_eq!(
-            reg.get(&id).expect("serde deserialization should succeed").implementation_digest,
+            reg.get(&id)
+                .expect("serde deserialization should succeed")
+                .implementation_digest,
             "sha256:native-v1"
         );
         reg.demote(&id, "perf regression".into(), "t3".into())
             .expect("serde deserialization should succeed");
         assert_eq!(
-            reg.get(&id).expect("serde deserialization should succeed").implementation_digest,
+            reg.get(&id)
+                .expect("serde deserialization should succeed")
+                .implementation_digest,
             "sha256:delegate-v1",
             "implementation_digest should be restored to rollback_target"
         );
@@ -4041,7 +4106,12 @@ mod tests {
         let mut reg = SlotRegistry::new();
         let id = register_slot(&mut reg, "parser", SlotKind::Parser, "sha256:d1");
         promote_slot(&mut reg, &id, "sha256:n1");
-        assert!(reg.get(&id).expect("serde deserialization should succeed").status.is_native());
+        assert!(
+            reg.get(&id)
+                .expect("serde deserialization should succeed")
+                .status
+                .is_native()
+        );
         let err = reg
             .begin_candidacy(&id, "sha256:c2".into(), "t3".into())
             .unwrap_err();
@@ -4065,7 +4135,12 @@ mod tests {
     fn demote_from_delegate_is_invalid_transition() {
         let mut reg = SlotRegistry::new();
         let id = register_slot(&mut reg, "parser", SlotKind::Parser, "sha256:d1");
-        assert!(reg.get(&id).expect("serde deserialization should succeed").status.is_delegate());
+        assert!(
+            reg.get(&id)
+                .expect("serde deserialization should succeed")
+                .status
+                .is_delegate()
+        );
         let err = reg.demote(&id, "reason".into(), "t1".into()).unwrap_err();
         assert!(matches!(err, SlotRegistryError::InvalidTransition { .. }));
     }
@@ -4077,7 +4152,9 @@ mod tests {
         // parser remains delegate, declared as core slot
         let core_slots = BTreeSet::from([parser.clone()]);
         let input = guard_input(core_slots, None);
-        let artifact = reg.evaluate_ga_release_guard(&input).expect("serde deserialization should succeed");
+        let artifact = reg
+            .evaluate_ga_release_guard(&input)
+            .expect("serde deserialization should succeed");
         assert_eq!(artifact.verdict, GaReleaseGuardVerdict::Blocked);
         assert_eq!(artifact.core_delegate_count, 1);
         assert!(!artifact.blocking_slots.is_empty());
@@ -4102,7 +4179,9 @@ mod tests {
         lineage.signature_verified = false;
         input.lineage_artifacts = vec![lineage];
 
-        let artifact = reg.evaluate_ga_release_guard(&input).expect("serde deserialization should succeed");
+        let artifact = reg
+            .evaluate_ga_release_guard(&input)
+            .expect("serde deserialization should succeed");
         assert_eq!(artifact.verdict, GaReleaseGuardVerdict::Blocked);
         assert_eq!(artifact.core_slots_invalid_signature, vec![parser]);
     }

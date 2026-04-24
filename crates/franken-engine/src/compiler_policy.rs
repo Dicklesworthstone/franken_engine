@@ -1286,7 +1286,9 @@ mod tests {
         );
         engine.evaluate(&region, "trace-1", 1000);
         // SAFETY: Test just called evaluate() which should populate proof inputs
-        let inputs = engine.last_applied_proof_inputs().expect("serde deserialization should succeed");
+        let inputs = engine
+            .last_applied_proof_inputs()
+            .expect("serde deserialization should succeed");
         assert_eq!(inputs.len(), 1);
         assert_eq!(inputs[0].proof_type, ProofType::CapabilityWitness);
         assert_eq!(inputs[0].validity_window_ticks, 1000);
@@ -1473,7 +1475,10 @@ mod tests {
 
         assert!(engine.events().len() > events_before);
         // SAFETY: Test just verified events collection is non-empty, so last() returns Some
-        let last_event = engine.events().last().expect("serde deserialization should succeed");
+        let last_event = engine
+            .events()
+            .last()
+            .expect("serde deserialization should succeed");
         assert_eq!(last_event.event, "epoch_change_invalidation");
         assert_eq!(
             last_event.error_code.as_deref(),
@@ -1575,7 +1580,8 @@ mod tests {
             let json = serde_json::to_string(proof).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by to_string of a valid SecurityProof,
             // so from_str back to SecurityProof cannot fail (valid format + matching schema).
-            let decoded: SecurityProof = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let decoded: SecurityProof =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(proof, &decoded);
         }
     }
@@ -1597,7 +1603,8 @@ mod tests {
         let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid CompilerPolicyConfig,
         // so from_str back to CompilerPolicyConfig cannot fail (valid format + matching schema).
-        let decoded: CompilerPolicyConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let decoded: CompilerPolicyConfig =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, decoded);
     }
 
@@ -1620,7 +1627,8 @@ mod tests {
         let json = serde_json::to_string(&decision).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid SpecializationDecision,
         // so from_str back to SpecializationDecision cannot fail (valid format + matching schema).
-        let decoded: SpecializationDecision = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let decoded: SpecializationDecision =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(decision, decoded);
     }
 
@@ -1730,7 +1738,8 @@ mod tests {
             // SAFETY: SpecializationOutcome derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(o).expect("serde deserialization should succeed");
             // SAFETY: JSON was just generated from SpecializationOutcome, deserialization guaranteed to succeed
-            let back: SpecializationOutcome = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: SpecializationOutcome =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*o, back);
         }
     }
@@ -1809,7 +1818,8 @@ mod tests {
             // SAFETY: OptimizationClass derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(c).expect("serde deserialization should succeed");
             // SAFETY: JSON was just generated from OptimizationClass, deserialization guaranteed to succeed
-            let back: OptimizationClass = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: OptimizationClass =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*c, back);
         }
     }
@@ -1828,7 +1838,8 @@ mod tests {
         // SAFETY: CompilerPolicyEvent derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
         // SAFETY: JSON was just generated from CompilerPolicyEvent, deserialization guaranteed to succeed
-        let back: CompilerPolicyEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: CompilerPolicyEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
     }
 
@@ -1884,7 +1895,9 @@ mod tests {
         assert_eq!(store.len(), 1);
 
         // SAFETY: Test just inserted proof with this ID, so get() should succeed
-        let retrieved = store.get(&pid).expect("serde deserialization should succeed");
+        let retrieved = store
+            .get(&pid)
+            .expect("serde deserialization should succeed");
         assert_eq!(retrieved.proof_id(), &pid);
         assert_eq!(retrieved.proof_type(), ProofType::CapabilityWitness);
     }
@@ -1964,7 +1977,8 @@ mod tests {
         // SAFETY: MarkedRegion derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&region).expect("serde deserialization should succeed");
         // SAFETY: JSON was just generated from MarkedRegion, deserialization guaranteed to succeed
-        let back: MarkedRegion = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: MarkedRegion =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(region, back);
     }
 
@@ -1995,7 +2009,8 @@ mod tests {
         // SAFETY: CompilerPolicyEvent derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
         // SAFETY: JSON was just generated from CompilerPolicyEvent, deserialization guaranteed to succeed
-        let back: CompilerPolicyEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: CompilerPolicyEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
         assert_eq!(back.error_code.as_deref(), Some("GLOBAL_DISABLE"));
     }
@@ -2064,7 +2079,8 @@ mod tests {
         // SAFETY: OptimizationClassPolicy derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
         // SAFETY: JSON was just generated from OptimizationClassPolicy, deserialization guaranteed to succeed
-        let back: OptimizationClassPolicy = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: OptimizationClassPolicy =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(policy, back);
     }
 
@@ -2607,7 +2623,8 @@ mod tests {
         // SAFETY: ProofStore derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&store).expect("serde deserialization should succeed");
         // SAFETY: JSON was just generated from ProofStore, deserialization guaranteed to succeed
-        let back: ProofStore = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ProofStore =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert!(back.is_empty());
     }
 
@@ -2622,7 +2639,8 @@ mod tests {
         // SAFETY: ProofStore derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&store).expect("serde deserialization should succeed");
         // SAFETY: JSON was just generated from ProofStore, deserialization guaranteed to succeed
-        let back: ProofStore = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ProofStore =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.len(), 3);
     }
 
@@ -2687,7 +2705,9 @@ mod tests {
             vec![pid],
         );
         engine.evaluate(&region_good, "t2", 1);
-        let inputs = engine.last_applied_proof_inputs().expect("serde deserialization should succeed");
+        let inputs = engine
+            .last_applied_proof_inputs()
+            .expect("serde deserialization should succeed");
         assert_eq!(inputs.len(), 1);
         assert_eq!(inputs[0].proof_type, ProofType::CapabilityWitness);
     }
@@ -2707,7 +2727,9 @@ mod tests {
         let proof = cap_witness_proof("removable", epoch);
         let pid = proof.proof_id().clone();
         store.insert(proof);
-        let removed = store.remove(&pid).expect("serde deserialization should succeed");
+        let removed = store
+            .remove(&pid)
+            .expect("serde deserialization should succeed");
         assert_eq!(removed.proof_id(), &pid);
         assert!(store.is_empty());
     }
@@ -2735,7 +2757,9 @@ mod tests {
         store.insert(p2);
         // Overwrites, len still 1
         assert_eq!(store.len(), 1);
-        let retrieved = store.get(&id).expect("serde deserialization should succeed");
+        let retrieved = store
+            .get(&id)
+            .expect("serde deserialization should succeed");
         assert_eq!(retrieved.validity_window_ticks(), 200);
     }
 

@@ -1060,7 +1060,8 @@ mod tests {
             // SAFETY: EntryKind derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(kind).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by valid EntryKind serialization
-            let back: EntryKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: EntryKind =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*kind, back);
         }
     }
@@ -1087,7 +1088,8 @@ mod tests {
             // SAFETY: CompileTarget derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(t).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by valid CompileTarget serialization
-            let back: CompileTarget = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: CompileTarget =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*t, back);
         }
     }
@@ -1117,7 +1119,8 @@ mod tests {
             // SAFETY: CompileStatus derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(s).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by valid CompileStatus serialization
-            let back: CompileStatus = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: CompileStatus =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*s, back);
         }
     }
@@ -1157,7 +1160,8 @@ mod tests {
             // SAFETY: CompileVerdict derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by valid CompileVerdict serialization
-            let back: CompileVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: CompileVerdict =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -1281,7 +1285,8 @@ mod tests {
         ];
         let graph = make_graph("g1", EntryKind::AppEntry, modules);
         // SAFETY: Test with valid graph, config, and epoch should compile successfully
-        let report = compile_entrygraph(&graph, &default_config(), epoch()).expect("serde deserialization should succeed");
+        let report = compile_entrygraph(&graph, &default_config(), epoch())
+            .expect("serde deserialization should succeed");
         assert_eq!(report.verdict, CompileVerdict::FullyCompiled);
         assert_eq!(report.compiled_count, 3);
         assert_eq!(report.total_modules, 3);
@@ -1295,7 +1300,8 @@ mod tests {
         let mut cfg = default_config();
         cfg.min_module_count = 5;
         // SAFETY: Test with single module below threshold should return BelowThreshold verdict
-        let report = compile_entrygraph(&graph, &cfg, epoch()).expect("serde deserialization should succeed");
+        let report = compile_entrygraph(&graph, &cfg, epoch())
+            .expect("serde deserialization should succeed");
         assert_eq!(report.verdict, CompileVerdict::BelowThreshold);
         assert_eq!(report.compiled_count, 0);
     }
@@ -1309,7 +1315,8 @@ mod tests {
         ];
         let graph = make_graph("g1", EntryKind::PackageMain, modules);
         // SAFETY: Test with valid modules and default config should compile with provenance
-        let report = compile_entrygraph(&graph, &default_config(), epoch()).expect("serde deserialization should succeed");
+        let report = compile_entrygraph(&graph, &default_config(), epoch())
+            .expect("serde deserialization should succeed");
         for r in &report.module_results {
             assert_eq!(r.provenance.len(), 6); // all 6 provenance kinds
             assert!(r.artifact_hash.is_some());
@@ -1327,7 +1334,8 @@ mod tests {
         let mut cfg = default_config();
         cfg.require_provenance = false;
         // SAFETY: Test with valid graph and config with provenance disabled should succeed
-        let report = compile_entrygraph(&graph, &cfg, epoch()).expect("serde deserialization should succeed");
+        let report = compile_entrygraph(&graph, &cfg, epoch())
+            .expect("serde deserialization should succeed");
         for r in &report.module_results {
             assert!(r.provenance.is_empty());
         }
@@ -1343,9 +1351,11 @@ mod tests {
         let g1 = make_graph("g1", EntryKind::AppEntry, modules.clone());
         let g2 = make_graph("g1", EntryKind::AppEntry, modules);
         // SAFETY: Test with identical graphs should produce deterministic artifact hashes
-        let r1 = compile_entrygraph(&g1, &default_config(), epoch()).expect("serde deserialization should succeed");
+        let r1 = compile_entrygraph(&g1, &default_config(), epoch())
+            .expect("serde deserialization should succeed");
         // SAFETY: Test with identical graphs should produce deterministic artifact hashes
-        let r2 = compile_entrygraph(&g2, &default_config(), epoch()).expect("serde deserialization should succeed");
+        let r2 = compile_entrygraph(&g2, &default_config(), epoch())
+            .expect("serde deserialization should succeed");
         assert_eq!(
             r1.module_results[0].artifact_hash,
             r2.module_results[0].artifact_hash
@@ -1363,9 +1373,11 @@ mod tests {
         let mut cfg2 = default_config();
         cfg2.policy_revision = 99;
         // SAFETY: Test with valid graph and default config should compile successfully
-        let r1 = compile_entrygraph(&graph, &default_config(), epoch()).expect("serde deserialization should succeed");
+        let r1 = compile_entrygraph(&graph, &default_config(), epoch())
+            .expect("serde deserialization should succeed");
         // SAFETY: Test with valid graph and modified config should compile successfully
-        let r2 = compile_entrygraph(&graph, &cfg2, epoch()).expect("serde deserialization should succeed");
+        let r2 = compile_entrygraph(&graph, &cfg2, epoch())
+            .expect("serde deserialization should succeed");
         assert_ne!(
             r1.module_results[0].artifact_hash,
             r2.module_results[0].artifact_hash
@@ -1377,7 +1389,8 @@ mod tests {
     #[test]
     fn test_compile_batch_empty() {
         // SAFETY: Compiling empty batch should succeed with zero results
-        let report = compile_batch(&[], &default_config(), epoch()).expect("serde deserialization should succeed");
+        let report = compile_batch(&[], &default_config(), epoch())
+            .expect("serde deserialization should succeed");
         assert_eq!(report.total_graphs, 0);
         assert_eq!(report.usable_graphs, 0);
     }
@@ -1403,7 +1416,8 @@ mod tests {
             ],
         );
         // SAFETY: Test batch compilation with two valid graphs should succeed
-        let report = compile_batch(&[g1, g2], &default_config(), epoch()).expect("serde deserialization should succeed");
+        let report = compile_batch(&[g1, g2], &default_config(), epoch())
+            .expect("serde deserialization should succeed");
         assert_eq!(report.total_graphs, 2);
         assert_eq!(report.usable_graphs, 2);
         assert_eq!(report.aggregate_success_rate_millionths, MILLION);
@@ -1437,7 +1451,8 @@ mod tests {
         ];
         let graph = make_graph("g1", EntryKind::AppEntry, modules);
         // SAFETY: Test with valid graph and default config should compile for receipt building
-        let report = compile_entrygraph(&graph, &default_config(), epoch()).expect("serde deserialization should succeed");
+        let report = compile_entrygraph(&graph, &default_config(), epoch())
+            .expect("serde deserialization should succeed");
         let receipt = build_receipt(&report, graph.graph_hash, &default_config());
         assert_eq!(receipt.schema_version, SCHEMA_VERSION);
         assert_eq!(receipt.component, COMPONENT);
@@ -1455,7 +1470,8 @@ mod tests {
         ];
         let graph = make_graph("gd", EntryKind::PackageMain, modules);
         // SAFETY: Test with valid graph and default config should compile for deterministic receipt
-        let report = compile_entrygraph(&graph, &default_config(), epoch()).expect("serde deserialization should succeed");
+        let report = compile_entrygraph(&graph, &default_config(), epoch())
+            .expect("serde deserialization should succeed");
         let r1 = build_receipt(&report, graph.graph_hash, &default_config());
         let r2 = build_receipt(&report, graph.graph_hash, &default_config());
         assert_eq!(r1.receipt_hash, r2.receipt_hash);
@@ -1516,7 +1532,8 @@ mod tests {
                 make_module("f.js", 50, false),
             ],
         );
-        let batch = compile_batch(&[g1, g2], &default_config(), epoch()).expect("serde deserialization should succeed");
+        let batch = compile_batch(&[g1, g2], &default_config(), epoch())
+            .expect("serde deserialization should succeed");
         let summary = entry_kind_summary(&batch);
         assert_eq!(summary[&EntryKind::AppEntry], (2, 2));
     }
@@ -1532,7 +1549,8 @@ mod tests {
                 make_module("c.js", 50, false),
             ],
         );
-        let batch = compile_batch(&[g], &default_config(), epoch()).expect("serde deserialization should succeed");
+        let batch = compile_batch(&[g], &default_config(), epoch())
+            .expect("serde deserialization should succeed");
         let summary = target_summary(&batch);
         assert_eq!(summary[&CompileTarget::OptimizedBytecode], 1);
     }
@@ -1548,7 +1566,8 @@ mod tests {
                 make_module("c.js", 300, false),
             ],
         );
-        let batch = compile_batch(&[g], &default_config(), epoch()).expect("serde deserialization should succeed");
+        let batch = compile_batch(&[g], &default_config(), epoch())
+            .expect("serde deserialization should succeed");
         assert!(total_compile_time_micros(&batch) > 0);
     }
 
@@ -1647,7 +1666,8 @@ mod tests {
             // SAFETY: CompileError derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(e).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by valid CompileError serialization
-            let back: CompileError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: CompileError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*e, back);
         }
     }
@@ -1682,7 +1702,8 @@ mod tests {
             let mut cfg = default_config();
             cfg.target = *target;
             // SAFETY: Test with valid graph and target-specific config should compile successfully
-            let report = compile_entrygraph(&graph, &cfg, epoch()).expect("serde deserialization should succeed");
+            let report = compile_entrygraph(&graph, &cfg, epoch())
+                .expect("serde deserialization should succeed");
             assert_eq!(report.target, *target);
             assert_eq!(report.verdict, CompileVerdict::FullyCompiled);
         }
@@ -1700,7 +1721,8 @@ mod tests {
             ];
             let graph = make_graph("gk", *kind, modules);
             // SAFETY: Test with valid graph and entry kind should compile successfully
-            let report = compile_entrygraph(&graph, &default_config(), epoch()).expect("serde deserialization should succeed");
+            let report = compile_entrygraph(&graph, &default_config(), epoch())
+                .expect("serde deserialization should succeed");
             assert_eq!(report.entry_kind, *kind);
         }
     }
@@ -1714,11 +1736,13 @@ mod tests {
         ];
         let graph = make_graph("g1", EntryKind::AppEntry, modules);
         // SAFETY: Test with valid graph and default config should compile for serde roundtrip
-        let report = compile_entrygraph(&graph, &default_config(), epoch()).expect("serde deserialization should succeed");
+        let report = compile_entrygraph(&graph, &default_config(), epoch())
+            .expect("serde deserialization should succeed");
         // SAFETY: CompilationReport derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid CompilationReport serialization
-        let back: CompilationReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: CompilationReport =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report, back);
     }
 
@@ -1734,11 +1758,13 @@ mod tests {
             ],
         );
         // SAFETY: Test batch compilation with valid graph should succeed for serde roundtrip
-        let batch = compile_batch(&[g], &default_config(), epoch()).expect("serde deserialization should succeed");
+        let batch = compile_batch(&[g], &default_config(), epoch())
+            .expect("serde deserialization should succeed");
         // SAFETY: BatchReport derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&batch).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid BatchReport serialization
-        let back: BatchReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: BatchReport =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(batch, back);
     }
 
@@ -1751,12 +1777,14 @@ mod tests {
         ];
         let graph = make_graph("g1", EntryKind::AppEntry, modules);
         // SAFETY: Test with valid graph and default config should compile for receipt serde roundtrip
-        let report = compile_entrygraph(&graph, &default_config(), epoch()).expect("serde deserialization should succeed");
+        let report = compile_entrygraph(&graph, &default_config(), epoch())
+            .expect("serde deserialization should succeed");
         let receipt = build_receipt(&report, graph.graph_hash, &default_config());
         // SAFETY: DecisionReceipt derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid DecisionReceipt serialization
-        let back: DecisionReceipt = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DecisionReceipt =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(receipt, back);
     }
 }

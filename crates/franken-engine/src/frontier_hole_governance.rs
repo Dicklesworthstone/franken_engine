@@ -1074,7 +1074,8 @@ mod tests {
         let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid HoleGovernanceSeverity,
         // so from_str back to HoleGovernanceSeverity cannot fail (valid format + matching schema).
-        let back: HoleGovernanceSeverity = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: HoleGovernanceSeverity =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(s, back);
     }
 
@@ -1086,7 +1087,8 @@ mod tests {
         let json = serde_json::to_string(&a).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid GovernanceAction,
         // so from_str back to GovernanceAction cannot fail (valid format + matching schema).
-        let back: GovernanceAction = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GovernanceAction =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(a, back);
     }
 
@@ -1151,7 +1153,11 @@ mod tests {
         ];
         let cov = compute_surface_coverage(&holes);
         // SAFETY: Test uses "parser" surface holes; compute_surface_coverage includes this key.
-        assert_eq!(*cov.get("parser").expect("serde deserialization should succeed"), MILLION);
+        assert_eq!(
+            *cov.get("parser")
+                .expect("serde deserialization should succeed"),
+            MILLION
+        );
     }
 
     #[test]
@@ -1161,7 +1167,11 @@ mod tests {
             make_hole("n1", "parser", false, false),
         ];
         let cov = compute_surface_coverage(&holes);
-        assert_eq!(*cov.get("parser").expect("serde deserialization should succeed"), 500_000);
+        assert_eq!(
+            *cov.get("parser")
+                .expect("serde deserialization should succeed"),
+            500_000
+        );
     }
 
     #[test]
@@ -1171,7 +1181,11 @@ mod tests {
             make_hole("p2", "parser", true, false),
         ];
         let cov = compute_surface_coverage(&holes);
-        assert_eq!(*cov.get("parser").expect("serde deserialization should succeed"), 0);
+        assert_eq!(
+            *cov.get("parser")
+                .expect("serde deserialization should succeed"),
+            0
+        );
     }
 
     #[test]
@@ -1269,9 +1283,16 @@ mod tests {
         let r = RatchetState::new();
         let mut cov = BTreeMap::new();
         cov.insert("parser".to_string(), 800_000u64);
-        let new_r = update_ratchet(&r, &cov, epoch(), &default_config()).expect("serde deserialization should succeed");
+        let new_r = update_ratchet(&r, &cov, epoch(), &default_config())
+            .expect("serde deserialization should succeed");
         assert!(new_r.initialized);
-        assert_eq!(*new_r.surface_levels.get("parser").expect("serde deserialization should succeed"), 800_000);
+        assert_eq!(
+            *new_r
+                .surface_levels
+                .get("parser")
+                .expect("serde deserialization should succeed"),
+            800_000
+        );
     }
 
     #[test]
@@ -1316,7 +1337,8 @@ mod tests {
             (ClaimCategory::Parity, "runtime".to_string()),
         ];
         let ratchet = RatchetState::new();
-        let report = evaluate(&holes, &claims, &ratchet, epoch(), &default_config()).expect("serde deserialization should succeed");
+        let report = evaluate(&holes, &claims, &ratchet, epoch(), &default_config())
+            .expect("serde deserialization should succeed");
         assert_eq!(report.outcome, GovernanceOutcome::AllClear);
         assert_eq!(report.actionable_holes, 0);
     }
@@ -1326,7 +1348,8 @@ mod tests {
         let holes = vec![make_hole("s1", "parser", false, true)];
         let claims = vec![(ClaimCategory::Supremacy, "parser".to_string())];
         let ratchet = RatchetState::new();
-        let report = evaluate(&holes, &claims, &ratchet, epoch(), &default_config()).expect("serde deserialization should succeed");
+        let report = evaluate(&holes, &claims, &ratchet, epoch(), &default_config())
+            .expect("serde deserialization should succeed");
         assert_eq!(report.outcome, GovernanceOutcome::FullSuppression);
     }
 
@@ -1347,7 +1370,8 @@ mod tests {
         ];
         let claims = vec![];
         let ratchet = RatchetState::new();
-        let report = evaluate(&holes, &claims, &ratchet, epoch(), &default_config()).expect("serde deserialization should succeed");
+        let report = evaluate(&holes, &claims, &ratchet, epoch(), &default_config())
+            .expect("serde deserialization should succeed");
         let parser_b = report
             .boundaries
             .iter()
@@ -1365,7 +1389,8 @@ mod tests {
         ];
         let claims = vec![];
         let ratchet = RatchetState::new();
-        let report = evaluate(&holes, &claims, &ratchet, epoch(), &default_config()).expect("serde deserialization should succeed");
+        let report = evaluate(&holes, &claims, &ratchet, epoch(), &default_config())
+            .expect("serde deserialization should succeed");
         assert!(report.mandatory_experiments.contains(&"s1".to_string()));
         assert!(report.mandatory_experiments.contains(&"p1".to_string()));
     }
@@ -1383,7 +1408,8 @@ mod tests {
             (ClaimCategory::Parity, "runtime".to_string()),
         ];
         let ratchet = RatchetState::new();
-        let report = evaluate(&holes, &claims, &ratchet, epoch(), &default_config()).expect("serde deserialization should succeed");
+        let report = evaluate(&holes, &claims, &ratchet, epoch(), &default_config())
+            .expect("serde deserialization should succeed");
         assert_eq!(suppressed_count(&report), 1);
         assert_eq!(allowed_count(&report), 1);
     }
@@ -1396,7 +1422,8 @@ mod tests {
         ];
         let claims = vec![];
         let ratchet = RatchetState::new();
-        let report = evaluate(&holes, &claims, &ratchet, epoch(), &default_config()).expect("serde deserialization should succeed");
+        let report = evaluate(&holes, &claims, &ratchet, epoch(), &default_config())
+            .expect("serde deserialization should succeed");
         let blocked = blocked_surfaces(&report);
         assert!(blocked.contains("parser"));
         assert!(!blocked.contains("runtime"));
@@ -1415,7 +1442,8 @@ mod tests {
             (ClaimCategory::Parity, "react".to_string()),
         ];
         let ratchet = RatchetState::new();
-        let report = evaluate(&holes, &claims, &ratchet, epoch(), &default_config()).expect("serde deserialization should succeed");
+        let report = evaluate(&holes, &claims, &ratchet, epoch(), &default_config())
+            .expect("serde deserialization should succeed");
         let s = summarize(&report);
         assert_eq!(s.total_holes, report.total_holes);
         assert_eq!(s.decisions_count, 2);
@@ -1426,10 +1454,12 @@ mod tests {
         let holes = vec![make_hole("n1", "parser", false, false)];
         let claims = vec![(ClaimCategory::Parity, "parser".to_string())];
         let ratchet = RatchetState::new();
-        let report = evaluate(&holes, &claims, &ratchet, epoch(), &default_config()).expect("serde deserialization should succeed");
+        let report = evaluate(&holes, &claims, &ratchet, epoch(), &default_config())
+            .expect("serde deserialization should succeed");
         let s = summarize(&report);
         let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
-        let back: GovernanceSummary = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GovernanceSummary =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(s, back);
     }
 
@@ -1451,7 +1481,8 @@ mod tests {
             current_millionths: 500_000,
         };
         let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
-        let back: GovernanceError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GovernanceError =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(e, back);
     }
 
@@ -1542,7 +1573,8 @@ mod tests {
     fn config_serde_roundtrip() {
         let cfg = GovernanceConfig::default();
         let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
-        let back: GovernanceConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GovernanceConfig =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cfg, back);
     }
 
@@ -1570,8 +1602,10 @@ mod tests {
         let holes = vec![make_hole("n1", "parser", false, false)];
         let claims = vec![(ClaimCategory::Parity, "parser".to_string())];
         let ratchet = RatchetState::new();
-        let r1 = evaluate(&holes, &claims, &ratchet, epoch(), &default_config()).expect("serde deserialization should succeed");
-        let r2 = evaluate(&holes, &claims, &ratchet, epoch(), &default_config()).expect("serde deserialization should succeed");
+        let r1 = evaluate(&holes, &claims, &ratchet, epoch(), &default_config())
+            .expect("serde deserialization should succeed");
+        let r2 = evaluate(&holes, &claims, &ratchet, epoch(), &default_config())
+            .expect("serde deserialization should succeed");
         assert_eq!(r1.content_hash, r2.content_hash);
     }
 
@@ -1580,7 +1614,8 @@ mod tests {
         let holes = vec![make_hole("s1", "parser", true, false)];
         let claims = vec![(ClaimCategory::Parity, "parser".to_string())];
         let ratchet = RatchetState::new();
-        let report = evaluate(&holes, &claims, &ratchet, epoch(), &default_config()).expect("serde deserialization should succeed");
+        let report = evaluate(&holes, &claims, &ratchet, epoch(), &default_config())
+            .expect("serde deserialization should succeed");
 
         let mut modified = report.clone();
         modified
@@ -1596,9 +1631,11 @@ mod tests {
         let holes = vec![make_hole("n1", "parser", false, false)];
         let claims = vec![(ClaimCategory::Parity, "parser".to_string())];
         let ratchet = RatchetState::new();
-        let report = evaluate(&holes, &claims, &ratchet, epoch(), &default_config()).expect("serde deserialization should succeed");
+        let report = evaluate(&holes, &claims, &ratchet, epoch(), &default_config())
+            .expect("serde deserialization should succeed");
         let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
-        let back: GovernanceReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GovernanceReport =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report, back);
     }
 
@@ -1607,7 +1644,8 @@ mod tests {
         let holes = vec![make_hole("s1", "parser", true, false)];
         let claims = vec![(ClaimCategory::Parity, "parser".to_string())];
         let ratchet = RatchetState::new();
-        let report = evaluate(&holes, &claims, &ratchet, epoch(), &default_config()).expect("serde deserialization should succeed");
+        let report = evaluate(&holes, &claims, &ratchet, epoch(), &default_config())
+            .expect("serde deserialization should succeed");
         let summary = summarize(&report);
 
         let mut modified = report.clone();

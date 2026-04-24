@@ -277,7 +277,8 @@ impl InteropSpecimenEvidence {
     pub fn compute_hash(&self) -> String {
         let mut canonical = self.clone();
         canonical.evidence_hash = None;
-        let canonical_json = serde_json::to_vec(&canonical).expect("serde deserialization should succeed");
+        let canonical_json =
+            serde_json::to_vec(&canonical).expect("serde deserialization should succeed");
         hex_encode(ContentHash::compute(&canonical_json).as_bytes())
     }
 
@@ -2449,7 +2450,10 @@ fn run_single_specimen(specimen: &InteropSpecimen) -> InteropSpecimenEvidence {
             .get(specifier.as_str())
             .copied()
             .expect("async evaluation order should reference a registered specimen module");
-        let deps = async_dependency_map.get(specifier).cloned().expect("serde deserialization should succeed");
+        let deps = async_dependency_map
+            .get(specifier)
+            .cloned()
+            .expect("serde deserialization should succeed");
         let promise = if sm.has_top_level_await {
             let pid: u32 = sm.specifier.as_bytes().iter().map(|&b| b as u32).sum();
             Some(crate::promise_model::PromiseHandle(pid))
@@ -3002,7 +3006,8 @@ mod tests {
     fn family_serde_roundtrip() {
         for f in InteropFamily::ALL {
             let json = serde_json::to_string(f).expect("serde deserialization should succeed");
-            let back: InteropFamily = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: InteropFamily =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*f, back);
         }
     }
@@ -3017,7 +3022,8 @@ mod tests {
         ];
         for o in &outcomes {
             let json = serde_json::to_string(o).expect("serde deserialization should succeed");
-            let back: InteropExpectedOutcome = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: InteropExpectedOutcome =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*o, back);
         }
     }
@@ -3033,21 +3039,26 @@ mod tests {
         ];
         for o in &outcomes {
             let json = serde_json::to_string(o).expect("serde deserialization should succeed");
-            let back: InteropActualOutcome = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: InteropActualOutcome =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*o, back);
         }
     }
 
     #[test]
     fn verdict_serde_roundtrip() {
-        let json_pass = serde_json::to_string(&InteropVerdict::Pass).expect("serde deserialization should succeed");
-        let json_fail = serde_json::to_string(&InteropVerdict::Fail).expect("serde deserialization should succeed");
+        let json_pass = serde_json::to_string(&InteropVerdict::Pass)
+            .expect("serde deserialization should succeed");
+        let json_fail = serde_json::to_string(&InteropVerdict::Fail)
+            .expect("serde deserialization should succeed");
         assert_eq!(
-            serde_json::from_str::<InteropVerdict>(&json_pass).expect("serde deserialization should succeed"),
+            serde_json::from_str::<InteropVerdict>(&json_pass)
+                .expect("serde deserialization should succeed"),
             InteropVerdict::Pass
         );
         assert_eq!(
-            serde_json::from_str::<InteropVerdict>(&json_fail).expect("serde deserialization should succeed"),
+            serde_json::from_str::<InteropVerdict>(&json_fail)
+                .expect("serde deserialization should succeed"),
             InteropVerdict::Fail
         );
     }
@@ -3059,8 +3070,10 @@ mod tests {
             InteropCompatibilityDisposition::Degraded,
             InteropCompatibilityDisposition::Unsupported,
         ] {
-            let json = serde_json::to_string(&disposition).expect("serde deserialization should succeed");
-            let back: InteropCompatibilityDisposition = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&disposition).expect("serde deserialization should succeed");
+            let back: InteropCompatibilityDisposition =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(disposition, back);
         }
     }
@@ -3069,7 +3082,8 @@ mod tests {
     fn remediation_guidance_serde_roundtrip() {
         let guidance = remediation_guidance("g-1", "fix the bridge");
         let json = serde_json::to_string(&guidance).expect("serde deserialization should succeed");
-        let back: InteropRemediationGuidance = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: InteropRemediationGuidance =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(guidance, back);
     }
 
@@ -3233,7 +3247,10 @@ mod tests {
     fn evidence_hashes_64_hex() {
         let inv = run_interop_parity_corpus();
         for ev in &inv.evidence {
-            let hash = ev.evidence_hash.as_ref().expect("serde deserialization should succeed");
+            let hash = ev
+                .evidence_hash
+                .as_ref()
+                .expect("serde deserialization should succeed");
             assert_eq!(
                 hash.len(),
                 64,
@@ -3288,7 +3305,8 @@ mod tests {
     fn inventory_serde_roundtrip() {
         let inv = run_interop_parity_corpus();
         let json = serde_json::to_string(&inv).expect("serde deserialization should succeed");
-        let back: InteropParityInventory = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: InteropParityInventory =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(inv, back);
     }
 
@@ -3297,7 +3315,8 @@ mod tests {
         let inv = run_interop_parity_corpus();
         for ev in &inv.evidence {
             let json = serde_json::to_string(ev).expect("serde deserialization should succeed");
-            let back: InteropSpecimenEvidence = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: InteropSpecimenEvidence =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*ev, back);
         }
     }
@@ -3306,7 +3325,8 @@ mod tests {
     fn specimen_serde_roundtrip() {
         for s in &interop_parity_corpus() {
             let json = serde_json::to_string(s).expect("serde deserialization should succeed");
-            let back: InteropSpecimen = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: InteropSpecimen =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*s, back);
         }
     }
@@ -3335,7 +3355,8 @@ mod tests {
             },
         };
         let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
-        let back: InteropParityRunManifest = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: InteropParityRunManifest =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(m, back);
     }
 
@@ -3352,7 +3373,8 @@ mod tests {
             detail: Some("d".to_string()),
         };
         let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
-        let back: InteropParityEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: InteropParityEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ev, back);
     }
 
@@ -3429,7 +3451,8 @@ mod tests {
     fn actual_outcome_has_graph_construction_failure() {
         let o = InteropActualOutcome::GraphConstructionFailure;
         let json = serde_json::to_string(&o).expect("serde deserialization should succeed");
-        let back: InteropActualOutcome = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: InteropActualOutcome =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(o, back);
     }
 
@@ -3522,7 +3545,8 @@ mod tests {
             commands_txt: "commands.txt".to_string(),
         };
         let json = serde_json::to_string(&paths).expect("serde deserialization should succeed");
-        let back: InteropParityArtifactPaths = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: InteropParityArtifactPaths =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(paths, back);
     }
 
@@ -4778,7 +4802,8 @@ mod tests {
             pass: false,
         };
         let json = serde_json::to_string(&bv).expect("serde deserialization should succeed");
-        let back: BindingVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: BindingVerdict =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(bv, back);
         assert!(!back.pass);
     }
@@ -4792,7 +4817,8 @@ mod tests {
             pass: false,
         };
         let json = serde_json::to_string(&apv).expect("serde deserialization should succeed");
-        let back: AsyncPhaseVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: AsyncPhaseVerdict =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(apv, back);
     }
 
@@ -4809,7 +4835,8 @@ mod tests {
                 expected_state: state,
             };
             let json = serde_json::to_string(&ebs).expect("serde deserialization should succeed");
-            let back: ExpectedBindingState = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ExpectedBindingState =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(ebs, back);
         }
     }
@@ -4828,41 +4855,50 @@ mod tests {
                 expected_phase: phase,
             };
             let json = serde_json::to_string(&eap).expect("serde deserialization should succeed");
-            let back: ExpectedAsyncPhase = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ExpectedAsyncPhase =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(eap, back);
         }
     }
 
     #[test]
     fn interop_family_serde_snake_case_format() {
-        let json = serde_json::to_string(&InteropFamily::EsmImportsCjs).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&InteropFamily::EsmImportsCjs)
+            .expect("serde deserialization should succeed");
         assert_eq!(json, "\"esm_imports_cjs\"");
-        let json = serde_json::to_string(&InteropFamily::CjsRequiresEsm).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&InteropFamily::CjsRequiresEsm)
+            .expect("serde deserialization should succeed");
         assert_eq!(json, "\"cjs_requires_esm\"");
-        let json = serde_json::to_string(&InteropFamily::DefaultNamespace).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&InteropFamily::DefaultNamespace)
+            .expect("serde deserialization should succeed");
         assert_eq!(json, "\"default_namespace\"");
     }
 
     #[test]
     fn interop_expected_outcome_serde_snake_case_format() {
-        let json = serde_json::to_string(&InteropExpectedOutcome::LinkFailure).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&InteropExpectedOutcome::LinkFailure)
+            .expect("serde deserialization should succeed");
         assert_eq!(json, "\"link_failure\"");
-        let json = serde_json::to_string(&InteropExpectedOutcome::EvalFailure).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&InteropExpectedOutcome::EvalFailure)
+            .expect("serde deserialization should succeed");
         assert_eq!(json, "\"eval_failure\"");
-        let json = serde_json::to_string(&InteropExpectedOutcome::CycleDetected).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&InteropExpectedOutcome::CycleDetected)
+            .expect("serde deserialization should succeed");
         assert_eq!(json, "\"cycle_detected\"");
     }
 
     #[test]
     fn interop_actual_outcome_serde_snake_case_format() {
-        let json = serde_json::to_string(&InteropActualOutcome::GraphConstructionFailure).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&InteropActualOutcome::GraphConstructionFailure)
+            .expect("serde deserialization should succeed");
         assert_eq!(json, "\"graph_construction_failure\"");
     }
 
     #[test]
     fn inventory_json_contains_expected_fields() {
         let inv = run_interop_parity_corpus();
-        let json = serde_json::to_string_pretty(&inv).expect("serde deserialization should succeed");
+        let json =
+            serde_json::to_string_pretty(&inv).expect("serde deserialization should succeed");
         assert!(json.contains("schema_version"));
         assert!(json.contains("component"));
         assert!(json.contains("specimen_count"));
@@ -4923,7 +4959,8 @@ mod tests {
             detail: None,
         };
         let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
-        let back: InteropParityEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: InteropParityEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ev, back);
         assert!(back.specimen_id.is_none());
         assert!(back.verdict.is_none());
@@ -4945,7 +4982,8 @@ mod tests {
             has_top_level_await: true,
         };
         let json = serde_json::to_string(&sm).expect("serde deserialization should succeed");
-        let back: SpecimenModule = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SpecimenModule =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(sm, back);
     }
 
@@ -5134,7 +5172,10 @@ mod tests {
                 f.as_str()
             );
             assert!(
-                *inv.family_coverage.get(f.as_str()).expect("serde deserialization should succeed") > 0,
+                *inv.family_coverage
+                    .get(f.as_str())
+                    .expect("serde deserialization should succeed")
+                    > 0,
                 "family {} has zero coverage",
                 f.as_str()
             );

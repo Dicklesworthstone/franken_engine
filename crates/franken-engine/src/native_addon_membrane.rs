@@ -1365,7 +1365,9 @@ mod tests {
     fn make_state_with_addon(addon_id: &str) -> MembraneState {
         let mut state = MembraneState::new();
         let reg = make_registration(addon_id, AddonAbi::NodeApi, &[CapabilityKind::Buffer]);
-        state.register_addon(reg).expect("serde deserialization should succeed");
+        state
+            .register_addon(reg)
+            .expect("serde deserialization should succeed");
         state
     }
 
@@ -1394,7 +1396,8 @@ mod tests {
     fn addon_abi_serde_roundtrip() {
         for abi in AddonAbi::ALL {
             let json = serde_json::to_string(abi).expect("serde deserialization should succeed");
-            let back: AddonAbi = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: AddonAbi =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*abi, back);
         }
     }
@@ -1431,7 +1434,8 @@ mod tests {
     fn handle_kind_serde_roundtrip() {
         for kind in HandleKind::ALL {
             let json = serde_json::to_string(kind).expect("serde deserialization should succeed");
-            let back: HandleKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: HandleKind =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*kind, back);
         }
     }
@@ -1463,7 +1467,8 @@ mod tests {
     fn handle_state_serde_roundtrip() {
         for st in HandleState::ALL {
             let json = serde_json::to_string(st).expect("serde deserialization should succeed");
-            let back: HandleState = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: HandleState =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*st, back);
         }
     }
@@ -1490,7 +1495,8 @@ mod tests {
     fn crash_containment_serde_roundtrip() {
         for mode in CrashContainmentMode::ALL {
             let json = serde_json::to_string(mode).expect("serde deserialization should succeed");
-            let back: CrashContainmentMode = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: CrashContainmentMode =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*mode, back);
         }
     }
@@ -1545,7 +1551,8 @@ mod tests {
         ];
         for d in &decisions {
             let json = serde_json::to_string(d).expect("serde deserialization should succeed");
-            let back: RouteDecision = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: RouteDecision =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*d, back);
         }
     }
@@ -1578,7 +1585,8 @@ mod tests {
     fn capability_kind_serde_roundtrip() {
         for cap in CapabilityKind::ALL {
             let json = serde_json::to_string(cap).expect("serde deserialization should succeed");
-            let back: CapabilityKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: CapabilityKind =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*cap, back);
         }
     }
@@ -1613,7 +1621,8 @@ mod tests {
     fn violation_kind_serde_roundtrip() {
         for kind in ViolationKind::ALL {
             let json = serde_json::to_string(kind).expect("serde deserialization should succeed");
-            let back: ViolationKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ViolationKind =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*kind, back);
         }
     }
@@ -1645,7 +1654,8 @@ mod tests {
     fn membrane_verdict_serde_roundtrip() {
         for v in MembraneVerdict::ALL {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: MembraneVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: MembraneVerdict =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -1674,7 +1684,8 @@ mod tests {
     fn handle_record_serde_roundtrip() {
         let rec = HandleRecord::new(42, HandleKind::BufferHandle, "test", epoch(5));
         let json = serde_json::to_string(&rec).expect("serde deserialization should succeed");
-        let back: HandleRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: HandleRecord =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(rec, back);
     }
 
@@ -1694,7 +1705,8 @@ mod tests {
     fn membrane_policy_serde_roundtrip() {
         let p = MembranePolicy::default();
         let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
-        let back: MembranePolicy = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: MembranePolicy =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(p, back);
     }
 
@@ -1720,7 +1732,8 @@ mod tests {
     fn routing_config_serde_roundtrip() {
         let r = RoutingConfig::default();
         let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
-        let back: RoutingConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: RoutingConfig =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 
@@ -1747,7 +1760,8 @@ mod tests {
     fn addon_registration_serde_roundtrip() {
         let reg = make_registration("test", AddonAbi::WasiPreview1, &[CapabilityKind::Network]);
         let json = serde_json::to_string(&reg).expect("serde deserialization should succeed");
-        let back: AddonRegistration = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: AddonRegistration =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(reg, back);
     }
 
@@ -1766,7 +1780,8 @@ mod tests {
     fn violation_serde_roundtrip() {
         let v = Violation::new(ViolationKind::AbiMismatch, "a", "b", 42);
         let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
-        let back: Violation = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: Violation =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, back);
     }
 
@@ -1800,7 +1815,8 @@ mod tests {
     fn register_addon_duplicate_error() {
         let mut s = MembraneState::new();
         let reg = make_registration("a", AddonAbi::NodeApi, &[]);
-        s.register_addon(reg).expect("serde deserialization should succeed");
+        s.register_addon(reg)
+            .expect("serde deserialization should succeed");
         let reg2 = make_registration("a", AddonAbi::WasiPreview1, &[]);
         assert!(matches!(
             s.register_addon(reg2),
@@ -1919,7 +1935,12 @@ mod tests {
         assert!(s.revoke_handle(id).is_ok());
         assert_eq!(s.active_handles, 0);
         assert_eq!(s.revoked_handles, 1);
-        assert_eq!(s.get_handle(id).expect("serde deserialization should succeed").state, HandleState::Revoked);
+        assert_eq!(
+            s.get_handle(id)
+                .expect("serde deserialization should succeed")
+                .state,
+            HandleState::Revoked
+        );
     }
 
     #[test]
@@ -1938,7 +1959,8 @@ mod tests {
         let id = s
             .allocate_handle("a", HandleKind::ValueHandle, epoch(1), &policy)
             .expect("serde deserialization should succeed");
-        s.revoke_handle(id).expect("serde deserialization should succeed");
+        s.revoke_handle(id)
+            .expect("serde deserialization should succeed");
         assert!(matches!(
             s.revoke_handle(id),
             Err(MembraneError::HandleAlreadyRevoked { .. })
@@ -1952,7 +1974,8 @@ mod tests {
         let id = s
             .allocate_handle("a", HandleKind::ValueHandle, epoch(1), &policy)
             .expect("serde deserialization should succeed");
-        s.finalize_handle(id).expect("serde deserialization should succeed");
+        s.finalize_handle(id)
+            .expect("serde deserialization should succeed");
         assert!(matches!(
             s.revoke_handle(id),
             Err(MembraneError::HandleAlreadyFinalized { .. })
@@ -1968,7 +1991,12 @@ mod tests {
             .expect("serde deserialization should succeed");
         assert!(s.finalize_handle(id).is_ok());
         assert_eq!(s.active_handles, 0);
-        assert_eq!(s.get_handle(id).expect("serde deserialization should succeed").state, HandleState::Finalized);
+        assert_eq!(
+            s.get_handle(id)
+                .expect("serde deserialization should succeed")
+                .state,
+            HandleState::Finalized
+        );
     }
 
     #[test]
@@ -1978,9 +2006,15 @@ mod tests {
         let id = s
             .allocate_handle("a", HandleKind::ValueHandle, epoch(1), &policy)
             .expect("serde deserialization should succeed");
-        s.revoke_handle(id).expect("serde deserialization should succeed");
+        s.revoke_handle(id)
+            .expect("serde deserialization should succeed");
         assert!(s.finalize_handle(id).is_ok());
-        assert_eq!(s.get_handle(id).expect("serde deserialization should succeed").state, HandleState::Finalized);
+        assert_eq!(
+            s.get_handle(id)
+                .expect("serde deserialization should succeed")
+                .state,
+            HandleState::Finalized
+        );
     }
 
     #[test]
@@ -1990,7 +2024,8 @@ mod tests {
         let id = s
             .allocate_handle("a", HandleKind::ValueHandle, epoch(1), &policy)
             .expect("serde deserialization should succeed");
-        s.finalize_handle(id).expect("serde deserialization should succeed");
+        s.finalize_handle(id)
+            .expect("serde deserialization should succeed");
         assert!(matches!(
             s.finalize_handle(id),
             Err(MembraneError::HandleAlreadyFinalized { .. })
@@ -2005,7 +2040,12 @@ mod tests {
             .allocate_handle("a", HandleKind::ValueHandle, epoch(1), &policy)
             .expect("serde deserialization should succeed");
         assert!(s.mark_handle_escaped(id, 1000).is_ok());
-        assert_eq!(s.get_handle(id).expect("serde deserialization should succeed").state, HandleState::Escaped);
+        assert_eq!(
+            s.get_handle(id)
+                .expect("serde deserialization should succeed")
+                .state,
+            HandleState::Escaped
+        );
         assert_eq!(s.active_handles, 0);
         assert_eq!(s.violations.len(), 1);
         assert_eq!(s.violations[0].kind, ViolationKind::HandleEscaped);
@@ -2018,7 +2058,8 @@ mod tests {
         let id = s
             .allocate_handle("a", HandleKind::CallbackHandle, epoch(1), &policy)
             .expect("serde deserialization should succeed");
-        s.mark_handle_escaped(id, 5000).expect("serde deserialization should succeed");
+        s.mark_handle_escaped(id, 5000)
+            .expect("serde deserialization should succeed");
         assert_eq!(s.violations.len(), 1);
         assert_eq!(s.violations[0].addon_id, "a");
         assert_eq!(s.violations[0].timestamp_micros, 5000);
@@ -2031,9 +2072,15 @@ mod tests {
         let id = s
             .allocate_handle("a", HandleKind::ValueHandle, epoch(1), &policy)
             .expect("serde deserialization should succeed");
-        s.mark_handle_escaped(id, 1000).expect("serde deserialization should succeed");
+        s.mark_handle_escaped(id, 1000)
+            .expect("serde deserialization should succeed");
         assert!(s.revoke_handle(id).is_ok());
-        assert_eq!(s.get_handle(id).expect("serde deserialization should succeed").state, HandleState::Revoked);
+        assert_eq!(
+            s.get_handle(id)
+                .expect("serde deserialization should succeed")
+                .state,
+            HandleState::Revoked
+        );
     }
 
     #[test]
@@ -2050,7 +2097,8 @@ mod tests {
     fn route_call_slow_path_non_fast_abi() {
         let mut s = MembraneState::new();
         let reg = make_registration("a", AddonAbi::CustomFfi, &[]);
-        s.register_addon(reg).expect("serde deserialization should succeed");
+        s.register_addon(reg)
+            .expect("serde deserialization should succeed");
         let config = default_routing();
         let decision = s.route_call("a", &config);
         assert_eq!(decision, RouteDecision::SlowPath);
@@ -2117,7 +2165,8 @@ mod tests {
             .allocate_handle("a", HandleKind::BufferHandle, epoch(1), &policy)
             .expect("serde deserialization should succeed");
         assert_eq!(s.count_handles_in_state(HandleState::Active), 2);
-        s.revoke_handle(id1).expect("serde deserialization should succeed");
+        s.revoke_handle(id1)
+            .expect("serde deserialization should succeed");
         assert_eq!(s.count_handles_in_state(HandleState::Active), 1);
         assert_eq!(s.count_handles_in_state(HandleState::Revoked), 1);
     }
@@ -2127,8 +2176,10 @@ mod tests {
         let mut s = MembraneState::new();
         let reg_a = make_registration("a", AddonAbi::NodeApi, &[]);
         let reg_b = make_registration("b", AddonAbi::NodeApi, &[]);
-        s.register_addon(reg_a).expect("serde deserialization should succeed");
-        s.register_addon(reg_b).expect("serde deserialization should succeed");
+        s.register_addon(reg_a)
+            .expect("serde deserialization should succeed");
+        s.register_addon(reg_b)
+            .expect("serde deserialization should succeed");
         let policy = default_policy();
         s.allocate_handle("a", HandleKind::ValueHandle, epoch(1), &policy)
             .expect("serde deserialization should succeed");
@@ -2195,7 +2246,8 @@ mod tests {
         let id = s
             .allocate_handle("a", HandleKind::ValueHandle, epoch(1), &policy)
             .expect("serde deserialization should succeed");
-        s.mark_handle_escaped(id, 100).expect("serde deserialization should succeed");
+        s.mark_handle_escaped(id, 100)
+            .expect("serde deserialization should succeed");
         let report = evaluate_membrane(&s, &policy, &epoch(1), 1000);
         assert_eq!(report.verdict, MembraneVerdict::Breached);
     }
@@ -2335,8 +2387,10 @@ mod tests {
         let mut s = MembraneState::new();
         let reg_a = make_registration("a", AddonAbi::NodeApi, &[]);
         let reg_b = make_registration("b", AddonAbi::NodeApi, &[]);
-        s.register_addon(reg_a).expect("serde deserialization should succeed");
-        s.register_addon(reg_b).expect("serde deserialization should succeed");
+        s.register_addon(reg_a)
+            .expect("serde deserialization should succeed");
+        s.register_addon(reg_b)
+            .expect("serde deserialization should succeed");
         let policy = default_policy();
         s.allocate_handle("a", HandleKind::ValueHandle, epoch(1), &policy)
             .expect("serde deserialization should succeed");
@@ -2395,7 +2449,8 @@ mod tests {
             detail: "full".into(),
         };
         let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
-        let back: MembraneError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: MembraneError =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(e, back);
     }
 
@@ -2407,7 +2462,8 @@ mod tests {
         let policy = default_policy();
         let report = evaluate_membrane(&s, &policy, &epoch(1), 1000);
         let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
-        let back: MembraneReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: MembraneReport =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report, back);
     }
 
@@ -2441,9 +2497,15 @@ mod tests {
         let id = s
             .allocate_handle("a", HandleKind::ValueHandle, epoch(1), &policy)
             .expect("serde deserialization should succeed");
-        s.mark_handle_escaped(id, 100).expect("serde deserialization should succeed");
+        s.mark_handle_escaped(id, 100)
+            .expect("serde deserialization should succeed");
         assert!(s.finalize_handle(id).is_ok());
-        assert_eq!(s.get_handle(id).expect("serde deserialization should succeed").state, HandleState::Finalized);
+        assert_eq!(
+            s.get_handle(id)
+                .expect("serde deserialization should succeed")
+                .state,
+            HandleState::Finalized
+        );
     }
 
     #[test]
@@ -2453,7 +2515,8 @@ mod tests {
         let id = s
             .allocate_handle("a", HandleKind::ValueHandle, epoch(1), &policy)
             .expect("serde deserialization should succeed");
-        s.finalize_handle(id).expect("serde deserialization should succeed");
+        s.finalize_handle(id)
+            .expect("serde deserialization should succeed");
         assert!(matches!(
             s.mark_handle_escaped(id, 100),
             Err(MembraneError::HandleAlreadyFinalized { .. })
@@ -2541,7 +2604,8 @@ mod tests {
             .expect("serde deserialization should succeed");
         s.record_crash("a", "boom", 100);
         let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
-        let back: MembraneState = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: MembraneState =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(s, back);
     }
 

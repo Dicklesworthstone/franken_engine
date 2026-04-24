@@ -1283,7 +1283,8 @@ mod tests {
         ];
         for err in &errors {
             let json = serde_json::to_string(err).expect("serde deserialization should succeed");
-            let restored: ChainError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: ChainError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, restored);
         }
     }
@@ -1292,7 +1293,8 @@ mod tests {
     fn delegation_chain_serde_roundtrip() {
         let (chain, _, _) = valid_chain_fixture();
         let json = serde_json::to_string(&chain).expect("serde deserialization should succeed");
-        let restored: DelegationChain = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: DelegationChain =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(chain, restored);
     }
 
@@ -1310,7 +1312,8 @@ mod tests {
         .expect("serde deserialization should succeed");
 
         let json = serde_json::to_string(&proof).expect("serde deserialization should succeed");
-        let restored: AuthorizationProof = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: AuthorizationProof =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(proof, restored);
     }
 
@@ -1327,7 +1330,8 @@ mod tests {
             expiry_tick: 1000,
         };
         let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
-        let restored: DelegationLinkSummary = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: DelegationLinkSummary =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(summary, restored);
     }
 
@@ -1348,7 +1352,8 @@ mod tests {
             required_zone: Some("zone-a".to_string()),
         };
         let json = serde_json::to_string(&ctx).expect("serde deserialization should succeed");
-        let restored: DelegationVerificationContext = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: DelegationVerificationContext =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ctx, restored);
     }
 
@@ -1522,7 +1527,8 @@ mod tests {
     fn delegation_chain_empty_serde_roundtrip() {
         let empty = DelegationChain::new(Vec::new());
         let json = serde_json::to_string(&empty).expect("serde deserialization should succeed");
-        let restored: DelegationChain = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: DelegationChain =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(empty, restored);
         assert!(restored.is_empty());
     }
@@ -1601,7 +1607,8 @@ mod tests {
             required_zone: None,
         };
         let json = serde_json::to_string(&ctx).expect("serde deserialization should succeed");
-        let restored: DelegationVerificationContext = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: DelegationVerificationContext =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ctx, restored);
         assert_eq!(restored.authorized_roots.len(), 3);
     }
@@ -1758,7 +1765,8 @@ mod tests {
             )
             .expect("serde deserialization should succeed");
         let json = serde_json::to_string(&proof).expect("serde deserialization should succeed");
-        let restored: AuthorizationProof = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: AuthorizationProof =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(proof, restored);
     }
 
@@ -1872,7 +1880,10 @@ mod tests {
                 &NoRevocationOracle,
             )
             .expect("serde deserialization should succeed");
-        let last = proof.chain_summary.last().expect("serde deserialization should succeed");
+        let last = proof
+            .chain_summary
+            .last()
+            .expect("serde deserialization should succeed");
         assert_eq!(last.delegate, leaf_delegate);
     }
 
@@ -1944,7 +1955,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let restored: ChainError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: ChainError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, restored);
         }
     }
@@ -1979,7 +1991,8 @@ mod tests {
             expiry_tick: 900,
         };
         let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
-        let restored: DelegationLinkSummary = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: DelegationLinkSummary =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(summary, restored);
     }
 

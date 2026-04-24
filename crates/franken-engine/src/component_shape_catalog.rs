@@ -1433,7 +1433,9 @@ mod tests {
         catalog.register(shape2);
 
         assert_eq!(catalog.component_count(), 1);
-        let card = catalog.get("Card").expect("serde deserialization should succeed");
+        let card = catalog
+            .get("Card")
+            .expect("serde deserialization should succeed");
         assert!(card.observation_count > 1);
     }
 
@@ -1447,7 +1449,9 @@ mod tests {
             ..Default::default()
         };
         catalog.register_from_evidence("DataTable", &manifest, &analysis);
-        let shape = catalog.get("DataTable").expect("serde deserialization should succeed");
+        let shape = catalog
+            .get("DataTable")
+            .expect("serde deserialization should succeed");
         assert_eq!(shape.hook_profile.state_hooks, 1);
         assert_eq!(shape.hook_profile.memo_hooks, 1);
     }
@@ -1552,7 +1556,10 @@ mod tests {
         shape.has_spread_props = true;
         catalog.register(shape);
         assert_eq!(
-            catalog.get("Reclass").expect("serde deserialization should succeed").render_purity,
+            catalog
+                .get("Reclass")
+                .expect("serde deserialization should succeed")
+                .render_purity,
             RenderPurityClass::ConditionallyPure
         );
 
@@ -1560,7 +1567,10 @@ mod tests {
         catalog.config.max_conditional_severity = 1_000_000;
         catalog.reclassify_all();
         assert_eq!(
-            catalog.get("Reclass").expect("serde deserialization should succeed").render_purity,
+            catalog
+                .get("Reclass")
+                .expect("serde deserialization should succeed")
+                .render_purity,
             RenderPurityClass::ConditionallyPure
         );
     }
@@ -1576,7 +1586,10 @@ mod tests {
         catalog.register(shape);
         // With min_observations=1, should classify even with 1 observation.
         assert_ne!(
-            catalog.get("Quick").expect("serde deserialization should succeed").render_purity,
+            catalog
+                .get("Quick")
+                .expect("serde deserialization should succeed")
+                .render_purity,
             RenderPurityClass::Unknown
         );
     }
@@ -1587,7 +1600,8 @@ mod tests {
     fn serde_roundtrip_prop_flow_kind() {
         let val = PropFlowKind::Computed;
         let json = serde_json::to_string(&val).expect("serde deserialization should succeed");
-        let back: PropFlowKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: PropFlowKind =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(val, back);
     }
 
@@ -1595,7 +1609,8 @@ mod tests {
     fn serde_roundtrip_purity_class() {
         let val = RenderPurityClass::ConditionallyPure;
         let json = serde_json::to_string(&val).expect("serde deserialization should succeed");
-        let back: RenderPurityClass = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: RenderPurityClass =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(val, back);
     }
 
@@ -1610,7 +1625,8 @@ mod tests {
         ));
         shape.compute_evidence_hash();
         let json = serde_json::to_string(&shape).expect("serde deserialization should succeed");
-        let back: ComponentShape = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ComponentShape =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(shape, back);
     }
 
@@ -1623,7 +1639,8 @@ mod tests {
             ..Default::default()
         };
         let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
-        let back: CatalogSummary = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: CatalogSummary =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(summary, back);
     }
 
@@ -1639,7 +1656,8 @@ mod tests {
             component_hashes: vec![("Comp".to_string(), "hash".to_string())],
         };
         let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
-        let back: CatalogReceipt = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: CatalogReceipt =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(receipt, back);
     }
 
@@ -1656,8 +1674,10 @@ mod tests {
             ImpurityReason::NonDeterministic,
             ImpurityReason::InsufficientEvidence,
         ] {
-            let json = serde_json::to_string(&reason).expect("serde deserialization should succeed");
-            let back: ImpurityReason = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&reason).expect("serde deserialization should succeed");
+            let back: ImpurityReason =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(reason, back);
         }
     }
@@ -1672,7 +1692,8 @@ mod tests {
             ..Default::default()
         };
         let json = serde_json::to_string(&profile).expect("serde deserialization should succeed");
-        let back: HookProfile = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: HookProfile =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(profile, back);
     }
 

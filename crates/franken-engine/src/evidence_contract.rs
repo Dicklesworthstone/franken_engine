@@ -660,7 +660,8 @@ mod tests {
     fn evidence_contract_serialization_round_trip() {
         let contract = valid_contract();
         let json = serde_json::to_string(&contract).expect("serde deserialization should succeed");
-        let restored: EvidenceContract = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: EvidenceContract =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(contract, restored);
     }
 
@@ -693,7 +694,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let restored: ContractValidationError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: ContractValidationError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, restored);
         }
     }
@@ -714,7 +716,8 @@ mod tests {
             EvTier::HighImpact,
         ] {
             let json = serde_json::to_string(&tier).expect("serde deserialization should succeed");
-            let restored: EvTier = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: EvTier =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(tier, restored);
         }
     }
@@ -728,7 +731,8 @@ mod tests {
             RolloutStage::Default,
         ] {
             let json = serde_json::to_string(&stage).expect("serde deserialization should succeed");
-            let restored: RolloutStage = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: RolloutStage =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(stage, restored);
         }
     }
@@ -746,7 +750,8 @@ mod tests {
     fn contract_version_serialization() {
         let v = ContractVersion::CURRENT;
         let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
-        let restored: ContractVersion = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: ContractVersion =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, restored);
     }
 

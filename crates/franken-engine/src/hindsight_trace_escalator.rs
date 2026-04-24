@@ -1147,7 +1147,8 @@ mod tests {
         t.correlation_id = Some("corr-42".into());
         t.metadata.insert("key".into(), "value".into());
         let json = serde_json::to_string(&t).expect("serde deserialization should succeed");
-        let back: EscalationTrigger = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: EscalationTrigger =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(t, back);
     }
 
@@ -1155,7 +1156,8 @@ mod tests {
     fn escalation_policy_serde_roundtrip() {
         let policy = EscalationPolicy::default();
         let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
-        let back: EscalationPolicy = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: EscalationPolicy =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(policy, back);
     }
 
@@ -1166,7 +1168,8 @@ mod tests {
         let t = test_trigger(TriggerCategory::Regression, TriggerSeverity::Warning);
         let d = escalator.evaluate(t);
         let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
-        let back: EscalationDecision = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: EscalationDecision =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(d, back);
     }
 
@@ -1176,7 +1179,8 @@ mod tests {
         let escalator = HindsightTraceEscalator::new(policy, test_epoch());
         let summary = escalator.summary();
         let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
-        let back: EscalatorSummary = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: EscalatorSummary =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(summary, back);
     }
 
@@ -1194,7 +1198,8 @@ mod tests {
             manifest_hash: "hash".into(),
         };
         let json = serde_json::to_string(&manifest).expect("serde deserialization should succeed");
-        let back: SupportBundleManifest = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SupportBundleManifest =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(manifest, back);
     }
 
@@ -1713,7 +1718,8 @@ mod tests {
         let t = test_trigger(TriggerCategory::Regression, TriggerSeverity::Warning);
         escalator.evaluate(t);
         let json = serde_json::to_string(&escalator).expect("serde deserialization should succeed");
-        let back: HindsightTraceEscalator = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: HindsightTraceEscalator =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(escalator, back);
     }
 
@@ -1727,7 +1733,8 @@ mod tests {
         state.category_counts.insert("regression".into(), 5);
         state.level_counts.insert("extended".into(), 3);
         let json = serde_json::to_string(&state).expect("serde deserialization should succeed");
-        let back: EscalatorState = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: EscalatorState =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(state, back);
     }
 
@@ -1741,7 +1748,8 @@ mod tests {
             estimated_bytes: 999_999,
         };
         let json = serde_json::to_string(&spec).expect("serde deserialization should succeed");
-        let back: BundleArtifactSpec = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: BundleArtifactSpec =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(spec, back);
     }
 
@@ -1754,7 +1762,8 @@ mod tests {
             EscalationLevel::Forensic,
         ] {
             let json = serde_json::to_string(&level).expect("serde deserialization should succeed");
-            let back: EscalationLevel = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: EscalationLevel =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(level, back);
         }
     }
@@ -1772,7 +1781,8 @@ mod tests {
             TriggerCategory::DeterminismViolation,
         ] {
             let json = serde_json::to_string(&cat).expect("serde deserialization should succeed");
-            let back: TriggerCategory = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: TriggerCategory =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(cat, back);
         }
     }
@@ -1786,7 +1796,8 @@ mod tests {
             TriggerSeverity::Fatal,
         ] {
             let json = serde_json::to_string(&sev).expect("serde deserialization should succeed");
-            let back: TriggerSeverity = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: TriggerSeverity =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(sev, back);
         }
     }
@@ -1922,7 +1933,8 @@ mod tests {
         ];
         for v in variants {
             let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
-            let back: EscalationVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: EscalationVerdict =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(v, back);
         }
     }
@@ -2082,19 +2094,23 @@ mod tests {
     #[test]
     fn escalation_level_serde_exact_snake_case_strings() {
         assert_eq!(
-            serde_json::to_string(&EscalationLevel::Minimal).expect("serde deserialization should succeed"),
+            serde_json::to_string(&EscalationLevel::Minimal)
+                .expect("serde deserialization should succeed"),
             "\"minimal\""
         );
         assert_eq!(
-            serde_json::to_string(&EscalationLevel::Extended).expect("serde deserialization should succeed"),
+            serde_json::to_string(&EscalationLevel::Extended)
+                .expect("serde deserialization should succeed"),
             "\"extended\""
         );
         assert_eq!(
-            serde_json::to_string(&EscalationLevel::Full).expect("serde deserialization should succeed"),
+            serde_json::to_string(&EscalationLevel::Full)
+                .expect("serde deserialization should succeed"),
             "\"full\""
         );
         assert_eq!(
-            serde_json::to_string(&EscalationLevel::Forensic).expect("serde deserialization should succeed"),
+            serde_json::to_string(&EscalationLevel::Forensic)
+                .expect("serde deserialization should succeed"),
             "\"forensic\""
         );
     }
@@ -2102,35 +2118,43 @@ mod tests {
     #[test]
     fn trigger_category_serde_exact_snake_case_strings() {
         assert_eq!(
-            serde_json::to_string(&TriggerCategory::PerformanceAnomaly).expect("serde deserialization should succeed"),
+            serde_json::to_string(&TriggerCategory::PerformanceAnomaly)
+                .expect("serde deserialization should succeed"),
             "\"performance_anomaly\""
         );
         assert_eq!(
-            serde_json::to_string(&TriggerCategory::SecurityEvent).expect("serde deserialization should succeed"),
+            serde_json::to_string(&TriggerCategory::SecurityEvent)
+                .expect("serde deserialization should succeed"),
             "\"security_event\""
         );
         assert_eq!(
-            serde_json::to_string(&TriggerCategory::CorrectnessFailure).expect("serde deserialization should succeed"),
+            serde_json::to_string(&TriggerCategory::CorrectnessFailure)
+                .expect("serde deserialization should succeed"),
             "\"correctness_failure\""
         );
         assert_eq!(
-            serde_json::to_string(&TriggerCategory::UserVisibleError).expect("serde deserialization should succeed"),
+            serde_json::to_string(&TriggerCategory::UserVisibleError)
+                .expect("serde deserialization should succeed"),
             "\"user_visible_error\""
         );
         assert_eq!(
-            serde_json::to_string(&TriggerCategory::Regression).expect("serde deserialization should succeed"),
+            serde_json::to_string(&TriggerCategory::Regression)
+                .expect("serde deserialization should succeed"),
             "\"regression\""
         );
         assert_eq!(
-            serde_json::to_string(&TriggerCategory::OperatorRequest).expect("serde deserialization should succeed"),
+            serde_json::to_string(&TriggerCategory::OperatorRequest)
+                .expect("serde deserialization should succeed"),
             "\"operator_request\""
         );
         assert_eq!(
-            serde_json::to_string(&TriggerCategory::ResourceExhaustion).expect("serde deserialization should succeed"),
+            serde_json::to_string(&TriggerCategory::ResourceExhaustion)
+                .expect("serde deserialization should succeed"),
             "\"resource_exhaustion\""
         );
         assert_eq!(
-            serde_json::to_string(&TriggerCategory::DeterminismViolation).expect("serde deserialization should succeed"),
+            serde_json::to_string(&TriggerCategory::DeterminismViolation)
+                .expect("serde deserialization should succeed"),
             "\"determinism_violation\""
         );
     }
@@ -2138,19 +2162,23 @@ mod tests {
     #[test]
     fn trigger_severity_serde_exact_snake_case_strings() {
         assert_eq!(
-            serde_json::to_string(&TriggerSeverity::Info).expect("serde deserialization should succeed"),
+            serde_json::to_string(&TriggerSeverity::Info)
+                .expect("serde deserialization should succeed"),
             "\"info\""
         );
         assert_eq!(
-            serde_json::to_string(&TriggerSeverity::Warning).expect("serde deserialization should succeed"),
+            serde_json::to_string(&TriggerSeverity::Warning)
+                .expect("serde deserialization should succeed"),
             "\"warning\""
         );
         assert_eq!(
-            serde_json::to_string(&TriggerSeverity::Critical).expect("serde deserialization should succeed"),
+            serde_json::to_string(&TriggerSeverity::Critical)
+                .expect("serde deserialization should succeed"),
             "\"critical\""
         );
         assert_eq!(
-            serde_json::to_string(&TriggerSeverity::Fatal).expect("serde deserialization should succeed"),
+            serde_json::to_string(&TriggerSeverity::Fatal)
+                .expect("serde deserialization should succeed"),
             "\"fatal\""
         );
     }
@@ -2291,7 +2319,8 @@ mod tests {
             content_hash: "deadbeef01234567".into(),
         };
         let json = serde_json::to_string(&art).expect("serde deserialization should succeed");
-        let back: SupportBundleArtifact = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SupportBundleArtifact =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(art, back);
     }
 
@@ -2343,7 +2372,8 @@ mod tests {
             .severity_minimums
             .insert("fatal".into(), EscalationLevel::Forensic);
         let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
-        let back: EscalationPolicy = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: EscalationPolicy =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(policy.severity_minimums, back.severity_minimums);
     }
 

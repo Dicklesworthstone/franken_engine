@@ -1035,7 +1035,9 @@ impl EvidenceLog {
         self.receipt_counter += 1;
 
         // SAFETY: We just pushed a receipt above, so receipts is non-empty and last() cannot return None
-        self.receipts.last().expect("serde deserialization should succeed")
+        self.receipts
+            .last()
+            .expect("serde deserialization should succeed")
     }
 
     /// Verify the integrity of the entire receipt chain.
@@ -16175,9 +16177,13 @@ fn requested_hook_action_from_error(action: &str, reason: Option<String>) -> Opt
         "sandbox" => Some(HookAction::Sandbox),
         "suspend" => Some(HookAction::Suspend),
         // SAFETY: terminate action requires reason, validated by caller
-        "terminate" => Some(HookAction::Terminate(reason.expect("serde deserialization should succeed"))),
+        "terminate" => Some(HookAction::Terminate(
+            reason.expect("serde deserialization should succeed"),
+        )),
         // SAFETY: quarantine action requires reason, validated by caller
-        "quarantine" => Some(HookAction::Quarantine(reason.expect("serde deserialization should succeed"))),
+        "quarantine" => Some(HookAction::Quarantine(
+            reason.expect("serde deserialization should succeed"),
+        )),
         _ => None,
     }
 }
@@ -16805,7 +16811,9 @@ mod tests {
     }
 
     fn seed_array(core: &mut InterpreterCore, length: i64, values: &[(usize, Value)]) -> ObjectId {
-        let array_id = core.alloc_object_with_prototype(None).expect("serde deserialization should succeed");
+        let array_id = core
+            .alloc_object_with_prototype(None)
+            .expect("serde deserialization should succeed");
         for (index, value) in values {
             core.set_object_property(array_id, index.to_string(), value.clone())
                 .expect("serde deserialization should succeed");
@@ -17271,7 +17279,10 @@ mod tests {
 
         fn records(&self) -> Vec<HookRecord> {
             // SAFETY: Test-only unwrap for uncontended Mutex in single-threaded test context
-            self.records.lock().expect("serde deserialization should succeed").clone()
+            self.records
+                .lock()
+                .expect("serde deserialization should succeed")
+                .clone()
         }
     }
 
@@ -17283,21 +17294,27 @@ mod tests {
             key: &PropertyKey,
         ) -> HookAction {
             // SAFETY: Test-only unwrap for uncontended Mutex in single-threaded test context
-            self.records.lock().expect("serde deserialization should succeed").push(HookRecord::Property {
-                ctx: ctx.clone(),
-                target: *target,
-                key: key.clone(),
-            });
+            self.records
+                .lock()
+                .expect("serde deserialization should succeed")
+                .push(HookRecord::Property {
+                    ctx: ctx.clone(),
+                    target: *target,
+                    key: key.clone(),
+                });
             self.property_action.clone()
         }
 
         fn pre_call(&self, ctx: &HookContext, callee: &FunctionRef, args: &[Value]) -> HookAction {
             // SAFETY: Test-only unwrap for uncontended Mutex in single-threaded test context
-            self.records.lock().expect("serde deserialization should succeed").push(HookRecord::Call {
-                ctx: ctx.clone(),
-                callee: callee.clone(),
-                args: args.to_vec(),
-            });
+            self.records
+                .lock()
+                .expect("serde deserialization should succeed")
+                .push(HookRecord::Call {
+                    ctx: ctx.clone(),
+                    callee: callee.clone(),
+                    args: args.to_vec(),
+                });
             self.call_action.clone()
         }
 
@@ -17308,20 +17325,26 @@ mod tests {
             size_hint: usize,
         ) -> HookAction {
             // SAFETY: Test-only unwrap for uncontended Mutex in single-threaded test context
-            self.records.lock().expect("serde deserialization should succeed").push(HookRecord::Allocation {
-                ctx: ctx.clone(),
-                kind,
-                size_hint,
-            });
+            self.records
+                .lock()
+                .expect("serde deserialization should succeed")
+                .push(HookRecord::Allocation {
+                    ctx: ctx.clone(),
+                    kind,
+                    size_hint,
+                });
             self.allocation_action.clone()
         }
 
         fn pre_import(&self, ctx: &HookContext, specifier: &str) -> HookAction {
             // SAFETY: Test-only unwrap for uncontended Mutex in single-threaded test context
-            self.records.lock().expect("serde deserialization should succeed").push(HookRecord::Import {
-                ctx: ctx.clone(),
-                specifier: specifier.to_string(),
-            });
+            self.records
+                .lock()
+                .expect("serde deserialization should succeed")
+                .push(HookRecord::Import {
+                    ctx: ctx.clone(),
+                    specifier: specifier.to_string(),
+                });
             self.import_action.clone()
         }
     }
@@ -17334,7 +17357,9 @@ mod tests {
         core.set_hook(hook.clone());
 
         // SAFETY: Test-only unwrap expecting object allocation to succeed with valid parameters
-        let oid = core.alloc_object_with_prototype(None).expect("serde deserialization should succeed");
+        let oid = core
+            .alloc_object_with_prototype(None)
+            .expect("serde deserialization should succeed");
         core.heap[oid.0 as usize]
             .properties
             .insert("secret".to_string(), Value::Int(99));
@@ -17498,7 +17523,9 @@ mod tests {
         core.set_hook(hook);
 
         // SAFETY: Test-only unwrap expecting object allocation to succeed with valid parameters
-        let oid = core.alloc_object_with_prototype(None).expect("serde deserialization should succeed");
+        let oid = core
+            .alloc_object_with_prototype(None)
+            .expect("serde deserialization should succeed");
         core.registers[1] = Value::Object(oid);
         core.registers[2] = Value::Str("key".to_string());
         core.registers[3] = Value::Int(7);
@@ -17574,7 +17601,9 @@ mod tests {
     fn interpreter_hook_none_preserves_execution_when_unset() {
         let config = InterpreterConfig::quickjs_defaults();
         let mut core = InterpreterCore::new(config, "test-trace");
-        let oid = core.alloc_object_with_prototype(None).expect("serde deserialization should succeed");
+        let oid = core
+            .alloc_object_with_prototype(None)
+            .expect("serde deserialization should succeed");
         core.heap[oid.0 as usize]
             .properties
             .insert("stable".to_string(), Value::Int(12));
@@ -17610,7 +17639,9 @@ mod tests {
         ]);
         module.header.source_label = "extension://hook-test".to_string();
 
-        let result = core.execute(&module).expect("serde deserialization should succeed");
+        let result = core
+            .execute(&module)
+            .expect("serde deserialization should succeed");
         assert!(matches!(result.value, Value::Object(_)));
         assert_eq!(
             hook.records(),
@@ -17931,7 +17962,9 @@ mod tests {
         // Pre-set registers: r3 = callee function, r1 = argument.
         core.registers[3] = Value::Function(0);
         core.registers[1] = Value::Int(5);
-        let result = core.execute(&m).expect("serde deserialization should succeed");
+        let result = core
+            .execute(&m)
+            .expect("serde deserialization should succeed");
         assert_eq!(result.value, Value::Int(15));
     }
 
@@ -17959,7 +17992,9 @@ mod tests {
         core.registers[1] = Value::Function(0);
         core.registers[2] = Value::Int(10);
 
-        let result = core.execute(&module).expect("serde deserialization should succeed");
+        let result = core
+            .execute(&module)
+            .expect("serde deserialization should succeed");
         assert_eq!(result.value, Value::Int(16));
     }
 
@@ -17982,7 +18017,9 @@ mod tests {
         core.registers[0] = Value::Object(array_id);
         core.registers[1] = Value::Function(0);
 
-        let result = core.execute(&module).expect("serde deserialization should succeed");
+        let result = core
+            .execute(&module)
+            .expect("serde deserialization should succeed");
         assert_eq!(result.value, Value::Int(12));
     }
 
@@ -18047,7 +18084,9 @@ mod tests {
         core.registers[1] = Value::Function(0);
         core.registers[2] = Value::Int(0);
 
-        let result = core.execute(&module).expect("serde deserialization should succeed");
+        let result = core
+            .execute(&module)
+            .expect("serde deserialization should succeed");
         assert_eq!(result.value, Value::Int(12));
         assert_eq!(
             core.heap[array_id.0 as usize].properties.get("lastIndex"),
@@ -18082,12 +18121,16 @@ mod tests {
                 (1, Value::Str("second".to_string())),
             ],
         );
-        let accumulator_id = core.alloc_object_with_prototype(None).expect("serde deserialization should succeed");
+        let accumulator_id = core
+            .alloc_object_with_prototype(None)
+            .expect("serde deserialization should succeed");
         core.registers[0] = Value::Object(array_id);
         core.registers[1] = Value::Function(0);
         core.registers[2] = Value::Object(accumulator_id);
 
-        let result = core.execute(&module).expect("serde deserialization should succeed");
+        let result = core
+            .execute(&module)
+            .expect("serde deserialization should succeed");
         assert_eq!(result.value, Value::Object(accumulator_id));
         assert_eq!(
             core.heap[accumulator_id.0 as usize]
@@ -18118,7 +18161,9 @@ mod tests {
             );
             core.registers[0] = Value::Object(array_id);
             core.registers[1] = Value::Function(0);
-            core.execute(&module).expect("serde deserialization should succeed").value
+            core.execute(&module)
+                .expect("serde deserialization should succeed")
+                .value
         };
 
         let initial_zero = {
@@ -18132,7 +18177,9 @@ mod tests {
             core.registers[0] = Value::Object(array_id);
             core.registers[1] = Value::Function(0);
             core.registers[2] = Value::Int(0);
-            core.execute(&module).expect("serde deserialization should succeed").value
+            core.execute(&module)
+                .expect("serde deserialization should succeed")
+                .value
         };
 
         assert_eq!(no_initial, initial_zero);
@@ -18219,17 +18266,43 @@ mod tests {
             .expect("serde deserialization should succeed");
         assert!(matches!(iterator, Value::Iterator(_)));
         assert_eq!(
-            core.init_for_of_iterator(iterator.clone()).expect("serde deserialization should succeed"),
+            core.init_for_of_iterator(iterator.clone())
+                .expect("serde deserialization should succeed"),
             iterator
         );
 
-        let first = core.advance_for_of_iterator(iterator.clone()).expect("serde deserialization should succeed");
-        assert_entry_pair(&core, first.expect("serde deserialization should succeed"), 0, Value::Str("first".to_string()));
-        let second = core.advance_for_of_iterator(iterator.clone()).expect("serde deserialization should succeed");
-        assert_entry_pair(&core, second.expect("serde deserialization should succeed"), 1, Value::Undefined);
-        let third = core.advance_for_of_iterator(iterator.clone()).expect("serde deserialization should succeed");
-        assert_entry_pair(&core, third.expect("serde deserialization should succeed"), 2, Value::Str("third".to_string()));
-        assert_eq!(core.advance_for_of_iterator(iterator).expect("serde deserialization should succeed"), None);
+        let first = core
+            .advance_for_of_iterator(iterator.clone())
+            .expect("serde deserialization should succeed");
+        assert_entry_pair(
+            &core,
+            first.expect("serde deserialization should succeed"),
+            0,
+            Value::Str("first".to_string()),
+        );
+        let second = core
+            .advance_for_of_iterator(iterator.clone())
+            .expect("serde deserialization should succeed");
+        assert_entry_pair(
+            &core,
+            second.expect("serde deserialization should succeed"),
+            1,
+            Value::Undefined,
+        );
+        let third = core
+            .advance_for_of_iterator(iterator.clone())
+            .expect("serde deserialization should succeed");
+        assert_entry_pair(
+            &core,
+            third.expect("serde deserialization should succeed"),
+            2,
+            Value::Str("third".to_string()),
+        );
+        assert_eq!(
+            core.advance_for_of_iterator(iterator)
+                .expect("serde deserialization should succeed"),
+            None
+        );
     }
 
     #[test]
@@ -18261,31 +18334,45 @@ mod tests {
             .expect("serde deserialization should succeed");
 
         assert_eq!(
-            core.advance_for_of_iterator(keys.clone()).expect("serde deserialization should succeed"),
+            core.advance_for_of_iterator(keys.clone())
+                .expect("serde deserialization should succeed"),
             Some(Value::Int(0))
         );
         assert_eq!(
-            core.advance_for_of_iterator(keys.clone()).expect("serde deserialization should succeed"),
+            core.advance_for_of_iterator(keys.clone())
+                .expect("serde deserialization should succeed"),
             Some(Value::Int(1))
         );
         assert_eq!(
-            core.advance_for_of_iterator(keys.clone()).expect("serde deserialization should succeed"),
+            core.advance_for_of_iterator(keys.clone())
+                .expect("serde deserialization should succeed"),
             Some(Value::Int(2))
         );
-        assert_eq!(core.advance_for_of_iterator(keys).expect("serde deserialization should succeed"), None);
         assert_eq!(
-            core.advance_for_of_iterator(values.clone()).expect("serde deserialization should succeed"),
+            core.advance_for_of_iterator(keys)
+                .expect("serde deserialization should succeed"),
+            None
+        );
+        assert_eq!(
+            core.advance_for_of_iterator(values.clone())
+                .expect("serde deserialization should succeed"),
             Some(Value::Str("first".to_string()))
         );
         assert_eq!(
-            core.advance_for_of_iterator(values.clone()).expect("serde deserialization should succeed"),
+            core.advance_for_of_iterator(values.clone())
+                .expect("serde deserialization should succeed"),
             Some(Value::Undefined)
         );
         assert_eq!(
-            core.advance_for_of_iterator(values.clone()).expect("serde deserialization should succeed"),
+            core.advance_for_of_iterator(values.clone())
+                .expect("serde deserialization should succeed"),
             Some(Value::Str("third".to_string()))
         );
-        assert_eq!(core.advance_for_of_iterator(values).expect("serde deserialization should succeed"), None);
+        assert_eq!(
+            core.advance_for_of_iterator(values)
+                .expect("serde deserialization should succeed"),
+            None
+        );
     }
 
     #[test]
@@ -18377,14 +18464,19 @@ mod tests {
         assert_iterator_result(&core, first_result, false, Value::Int(10));
 
         assert_eq!(
-            core.advance_for_of_iterator(iterator.clone()).expect("serde deserialization should succeed"),
+            core.advance_for_of_iterator(iterator.clone())
+                .expect("serde deserialization should succeed"),
             Some(Value::Int(20))
         );
 
         let third_result = iterator_next_via_property(&mut core, iterator.clone());
         assert_iterator_result(&core, third_result, false, Value::Int(30));
 
-        assert_eq!(core.advance_for_of_iterator(iterator).expect("serde deserialization should succeed"), None);
+        assert_eq!(
+            core.advance_for_of_iterator(iterator)
+                .expect("serde deserialization should succeed"),
+            None
+        );
     }
 
     #[test]
@@ -18484,10 +18576,14 @@ mod tests {
         core.registers[1] = Value::Int(5);
         core.registers[3] = Value::Function(0);
 
-        let first = core.execute(&m).expect("serde deserialization should succeed");
+        let first = core
+            .execute(&m)
+            .expect("serde deserialization should succeed");
         assert_eq!(first.value, Value::Int(15));
 
-        let second = core.execute(&m).expect("serde deserialization should succeed");
+        let second = core
+            .execute(&m)
+            .expect("serde deserialization should succeed");
         assert_eq!(second.value, Value::Int(15));
     }
 
@@ -18615,7 +18711,9 @@ mod tests {
         let mut config = InterpreterConfig::quickjs_defaults();
         config.granted_capabilities = BTreeSet::from([RuntimeCapability::NetworkEgress]);
         let lane = QuickJsLane::with_config(config);
-        let result = lane.execute(&m, "test").expect("serde deserialization should succeed");
+        let result = lane
+            .execute(&m, "test")
+            .expect("serde deserialization should succeed");
         assert_eq!(result.value, Value::Undefined);
     }
 
@@ -18737,7 +18835,9 @@ mod tests {
         let mut config = InterpreterConfig::quickjs_defaults();
         config.granted_capabilities = BTreeSet::from([RuntimeCapability::FsRead]);
         let lane = QuickJsLane::with_config(config);
-        let result = lane.execute(&m, "test").expect("serde deserialization should succeed");
+        let result = lane
+            .execute(&m, "test")
+            .expect("serde deserialization should succeed");
 
         assert!(
             result
@@ -18797,7 +18897,9 @@ mod tests {
             Ir3Instruction::Halt,
         ]);
         let router = LaneRouter::new();
-        let result = router.execute(&m, "test", None).expect("serde deserialization should succeed");
+        let result = router
+            .execute(&m, "test", None)
+            .expect("serde deserialization should succeed");
         assert_eq!(result.lane, LaneChoice::QuickJs);
         assert_eq!(result.reason, LaneReason::DefaultFallback);
     }
@@ -18807,7 +18909,9 @@ mod tests {
         let mut m = test_module(vec![Ir3Instruction::Halt]);
         m.required_capabilities = vec![CapabilityTag("net".to_string())];
         let router = LaneRouter::new();
-        let result = router.execute(&m, "test", None).expect("serde deserialization should succeed");
+        let result = router
+            .execute(&m, "test", None)
+            .expect("serde deserialization should succeed");
         assert_eq!(result.lane, LaneChoice::QuickJs);
         assert_eq!(result.reason, LaneReason::SecuritySensitive);
     }
@@ -18820,7 +18924,9 @@ mod tests {
             .collect();
         let m = test_module(instrs);
         let router = LaneRouter::new();
-        let result = router.execute(&m, "test", None).expect("serde deserialization should succeed");
+        let result = router
+            .execute(&m, "test", None)
+            .expect("serde deserialization should succeed");
         assert_eq!(result.lane, LaneChoice::V8);
         assert_eq!(result.reason, LaneReason::ThroughputOptimized);
     }
@@ -18832,7 +18938,9 @@ mod tests {
             Ir3Instruction::Halt,
         ]);
         let router = LaneRouter::new();
-        let result = router.execute(&m, "test", Some(LaneChoice::V8)).expect("serde deserialization should succeed");
+        let result = router
+            .execute(&m, "test", Some(LaneChoice::V8))
+            .expect("serde deserialization should succeed");
         assert_eq!(result.lane, LaneChoice::V8);
         assert_eq!(result.reason, LaneReason::PolicyDirective);
     }
@@ -18968,7 +19076,8 @@ mod tests {
             Value::Function(3),
         ] {
             let json = serde_json::to_string(&val).expect("serde deserialization should succeed");
-            let deser: Value = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let deser: Value =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(val, deser);
         }
     }
@@ -18980,7 +19089,8 @@ mod tests {
             budget: 50,
         };
         let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
-        let deser: InterpreterError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let deser: InterpreterError =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, deser);
     }
 
@@ -18988,7 +19098,8 @@ mod tests {
     fn config_serde_roundtrip() {
         let config = InterpreterConfig::quickjs_defaults();
         let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
-        let deser: InterpreterConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let deser: InterpreterConfig =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, deser);
     }
 
@@ -19225,7 +19336,8 @@ mod tests {
     fn lane_choice_serde_roundtrip() {
         for choice in &[LaneChoice::QuickJs, LaneChoice::V8] {
             let json = serde_json::to_string(choice).expect("serde deserialization should succeed");
-            let back: LaneChoice = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: LaneChoice =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*choice, back);
         }
     }
@@ -19332,7 +19444,8 @@ mod tests {
     fn object_id_serde_roundtrip() {
         let id = ObjectId(42);
         let json = serde_json::to_string(&id).expect("serde deserialization should succeed");
-        let back: ObjectId = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ObjectId =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(id, back);
     }
 
@@ -19352,7 +19465,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: LaneReason = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: LaneReason =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -19367,7 +19481,8 @@ mod tests {
             error_code: None,
         };
         let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
-        let back: InterpreterEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: InterpreterEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ev, back);
     }
 
@@ -19381,7 +19496,8 @@ mod tests {
             error_code: Some("BUDGET_EXHAUSTED".to_string()),
         };
         let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
-        let back: InterpreterEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: InterpreterEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ev.error_code, back.error_code);
     }
 
@@ -19477,7 +19593,9 @@ mod tests {
         instrs.push(Ir3Instruction::Halt);
         let m = test_module(instrs);
         let router = LaneRouter::new();
-        let result = router.execute(&m, "test", None).expect("serde deserialization should succeed");
+        let result = router
+            .execute(&m, "test", None)
+            .expect("serde deserialization should succeed");
         assert_eq!(result.lane, LaneChoice::V8);
         assert_eq!(result.reason, LaneReason::ThroughputOptimized);
     }
@@ -19488,10 +19606,14 @@ mod tests {
         let mut core = InterpreterCore::new(config, "test");
         assert_eq!(core.heap_size(), 0);
         assert_eq!(core.estimated_memory_bytes(), 0);
-        let id = core.alloc_object_with_prototype(None).expect("serde deserialization should succeed");
+        let id = core
+            .alloc_object_with_prototype(None)
+            .expect("serde deserialization should succeed");
         assert_eq!(id, ObjectId(0));
         assert_eq!(core.heap_size(), 1);
-        let id2 = core.alloc_object_with_prototype(None).expect("serde deserialization should succeed");
+        let id2 = core
+            .alloc_object_with_prototype(None)
+            .expect("serde deserialization should succeed");
         assert_eq!(id2, ObjectId(1));
         assert_eq!(core.heap_size(), 2);
         assert!(core.estimated_memory_bytes() > 0);
@@ -19502,8 +19624,16 @@ mod tests {
         let mut config = InterpreterConfig::quickjs_defaults();
         config.max_heap_objects = 2;
         let mut core = InterpreterCore::new(config, "heap-budget");
-        assert_eq!(core.alloc_object_with_prototype(None).expect("serde deserialization should succeed"), ObjectId(0));
-        assert_eq!(core.alloc_object_with_prototype(None).expect("serde deserialization should succeed"), ObjectId(1));
+        assert_eq!(
+            core.alloc_object_with_prototype(None)
+                .expect("serde deserialization should succeed"),
+            ObjectId(0)
+        );
+        assert_eq!(
+            core.alloc_object_with_prototype(None)
+                .expect("serde deserialization should succeed"),
+            ObjectId(1)
+        );
         let err = core.alloc_object_with_prototype(None).unwrap_err();
         assert!(matches!(
             err,
@@ -19522,7 +19652,8 @@ mod tests {
         let mut core = InterpreterCore::new(config, "custom-heap-budget");
         for expected in 0_u32..10 {
             assert_eq!(
-                core.alloc_object_with_prototype(None).expect("serde deserialization should succeed"),
+                core.alloc_object_with_prototype(None)
+                    .expect("serde deserialization should succeed"),
                 ObjectId(expected)
             );
         }
@@ -19541,12 +19672,15 @@ mod tests {
     fn estimated_memory_bytes_tracks_property_growth() {
         let config = InterpreterConfig::quickjs_defaults();
         let mut core = InterpreterCore::new(config, "memory-estimate");
-        let oid = core.alloc_object_with_prototype(None).expect("serde deserialization should succeed");
+        let oid = core
+            .alloc_object_with_prototype(None)
+            .expect("serde deserialization should succeed");
         let before = core.estimated_memory_bytes();
         core.heap[oid.0 as usize]
             .properties
             .insert("payload".to_string(), Value::Str("hello world".to_string()));
-        core.sync_estimated_memory_bytes().expect("serde deserialization should succeed");
+        core.sync_estimated_memory_bytes()
+            .expect("serde deserialization should succeed");
         assert!(core.estimated_memory_bytes() > before);
     }
 
@@ -19674,7 +19808,9 @@ mod tests {
         let mut config = InterpreterConfig::quickjs_defaults();
         config.max_scope_depth = 4;
         let mut core = InterpreterCore::new(config, "scope-snapshot-budget");
-        core.scope_chain.push(core.config.max_scope_depth).expect("serde deserialization should succeed");
+        core.scope_chain
+            .push(core.config.max_scope_depth)
+            .expect("serde deserialization should succeed");
         core.scope_chain.current_mut().bindings.insert(
             "payload".to_string(),
             ScopeBinding {
@@ -19683,7 +19819,8 @@ mod tests {
                 initialized: true,
             },
         );
-        core.sync_estimated_memory_bytes().expect("serde deserialization should succeed");
+        core.sync_estimated_memory_bytes()
+            .expect("serde deserialization should succeed");
         let snapshot_bytes = InterpreterCore::estimate_scope_chain_bytes(&core.scope_chain.frames);
         core.config.max_total_memory_bytes = core
             .estimated_memory_bytes()
@@ -19705,7 +19842,8 @@ mod tests {
                 initialized: true,
             },
         );
-        core.sync_estimated_memory_bytes().expect("serde deserialization should succeed");
+        core.sync_estimated_memory_bytes()
+            .expect("serde deserialization should succeed");
 
         let snapshot_bytes = InterpreterCore::estimate_scope_chain_bytes(&core.scope_chain.frames);
         core.config.max_total_memory_bytes = core
@@ -19772,13 +19910,16 @@ mod tests {
         });
 
         let mut core = InterpreterCore::new(InterpreterConfig::quickjs_defaults(), "generator");
-        let result = core.execute(&module).expect("serde deserialization should succeed");
+        let result = core
+            .execute(&module)
+            .expect("serde deserialization should succeed");
         assert_eq!(result.value, Value::Generator(0));
 
         let clone_bytes =
             InterpreterCore::estimate_scope_chain_bytes(&core.closures[0].captured_env);
         core.scope_chain.frames = vec![ScopeFrame::new()];
-        core.sync_estimated_memory_bytes().expect("serde deserialization should succeed");
+        core.sync_estimated_memory_bytes()
+            .expect("serde deserialization should succeed");
         let baseline_memory = core.estimated_memory_bytes();
         core.config.max_total_memory_bytes = baseline_memory
             .saturating_add(clone_bytes)
@@ -19792,7 +19933,9 @@ mod tests {
         assert_eq!(core.estimated_memory_bytes(), baseline_memory);
 
         core.config.max_total_memory_bytes = u64::MAX;
-        let yielded = core.generator_next(&module, 0, Value::Undefined).expect("serde deserialization should succeed");
+        let yielded = core
+            .generator_next(&module, 0, Value::Undefined)
+            .expect("serde deserialization should succeed");
         assert_eq!(core.generators[0].phase, GeneratorPhase::SuspendedYield);
 
         let Value::Object(result_id) = yielded else {
@@ -19887,7 +20030,9 @@ mod tests {
 
         // Push 4 additional frames (starting with 1 global = 5 total)
         for _ in 0..4 {
-            core.scope_chain.push(core.config.max_scope_depth).expect("serde deserialization should succeed");
+            core.scope_chain
+                .push(core.config.max_scope_depth)
+                .expect("serde deserialization should succeed");
         }
 
         let snapshot = core.scope_chain.snapshot();
@@ -19903,7 +20048,9 @@ mod tests {
         // Build scope chain with depth 10, adding a binding at each level
         for i in 0..10 {
             if i > 0 {
-                core.scope_chain.push(core.config.max_scope_depth).expect("serde deserialization should succeed");
+                core.scope_chain
+                    .push(core.config.max_scope_depth)
+                    .expect("serde deserialization should succeed");
             }
             let binding_name = format!("var{}", i);
             let binding_value = format!("value{}", i);
@@ -19920,7 +20067,9 @@ mod tests {
         assert_eq!(core.scope_chain.depth(), 10);
 
         // Create a closure by capturing the scope chain
-        let captured_env = core.snapshot_scope_chain().expect("serde deserialization should succeed");
+        let captured_env = core
+            .snapshot_scope_chain()
+            .expect("serde deserialization should succeed");
         assert_eq!(captured_env.len(), 10);
 
         // Verify all bindings are preserved in the capture
@@ -20056,7 +20205,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: InterpreterError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: InterpreterError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -20070,7 +20220,9 @@ mod tests {
         core.registers.resize(4, Value::Undefined);
         core.registers[0] = Value::Int(1);
         core.registers[1] = Value::Float(Float64::new(0.5));
-        let result = core.eval_add(0, 1).expect("serde deserialization should succeed");
+        let result = core
+            .eval_add(0, 1)
+            .expect("serde deserialization should succeed");
         assert_eq!(result, Value::Float(Float64::new(1.5)));
     }
 
@@ -20081,7 +20233,9 @@ mod tests {
         core.registers.resize(4, Value::Undefined);
         core.registers[0] = Value::Float(Float64::new(2.5));
         core.registers[1] = Value::Int(3);
-        let result = core.eval_add(0, 1).expect("serde deserialization should succeed");
+        let result = core
+            .eval_add(0, 1)
+            .expect("serde deserialization should succeed");
         assert_eq!(result, Value::Float(Float64::new(5.5)));
     }
 
@@ -20092,7 +20246,9 @@ mod tests {
         core.registers.resize(4, Value::Undefined);
         core.registers[0] = Value::Int(6);
         core.registers[1] = Value::Int(3);
-        let result = core.eval_div(0, 1).expect("serde deserialization should succeed");
+        let result = core
+            .eval_div(0, 1)
+            .expect("serde deserialization should succeed");
         assert_eq!(result, Value::Int(2));
     }
 
@@ -20103,7 +20259,9 @@ mod tests {
         core.registers.resize(4, Value::Undefined);
         core.registers[0] = Value::Int(7);
         core.registers[1] = Value::Int(3);
-        let result = core.eval_div(0, 1).expect("serde deserialization should succeed");
+        let result = core
+            .eval_div(0, 1)
+            .expect("serde deserialization should succeed");
         if let Value::Float(f) = result {
             let v = f.inner();
             assert!((v - 2.333333333333333).abs() < 1e-10);
@@ -20119,7 +20277,9 @@ mod tests {
         core.registers.resize(4, Value::Undefined);
         core.registers[0] = Value::Int(1);
         core.registers[1] = Value::Int(0);
-        let result = core.eval_div(0, 1).expect("serde deserialization should succeed");
+        let result = core
+            .eval_div(0, 1)
+            .expect("serde deserialization should succeed");
         if let Value::Float(f) = result {
             assert!(f.inner().is_infinite() && f.inner() > 0.0);
         } else {
@@ -20134,7 +20294,9 @@ mod tests {
         core.registers.resize(4, Value::Undefined);
         core.registers[0] = Value::Int(0);
         core.registers[1] = Value::Int(0);
-        let result = core.eval_div(0, 1).expect("serde deserialization should succeed");
+        let result = core
+            .eval_div(0, 1)
+            .expect("serde deserialization should succeed");
         if let Value::Float(f) = result {
             assert!(f.inner().is_nan());
         } else {
@@ -20149,7 +20311,9 @@ mod tests {
         core.registers.resize(4, Value::Undefined);
         core.registers[0] = Value::Float(Float64::new(f64::NAN));
         core.registers[1] = Value::Int(1);
-        let result = core.eval_add(0, 1).expect("serde deserialization should succeed");
+        let result = core
+            .eval_add(0, 1)
+            .expect("serde deserialization should succeed");
         if let Value::Float(f) = result {
             assert!(f.inner().is_nan());
         } else {
@@ -20164,7 +20328,9 @@ mod tests {
         core.registers.resize(4, Value::Undefined);
         core.registers[0] = Value::Float(Float64::new(f64::INFINITY));
         core.registers[1] = Value::Int(0);
-        let result = core.eval_arith(0, 1, "mul").expect("serde deserialization should succeed");
+        let result = core
+            .eval_arith(0, 1, "mul")
+            .expect("serde deserialization should succeed");
         if let Value::Float(f) = result {
             assert!(f.inner().is_nan());
         } else {
@@ -20179,7 +20345,9 @@ mod tests {
         core.registers.resize(4, Value::Undefined);
         core.registers[0] = Value::Float(Float64::new(5.5));
         core.registers[1] = Value::Float(Float64::new(2.0));
-        let result = core.eval_mod(0, 1).expect("serde deserialization should succeed");
+        let result = core
+            .eval_mod(0, 1)
+            .expect("serde deserialization should succeed");
         if let Value::Float(f) = result {
             assert!((f.inner() - 1.5).abs() < 1e-10);
         } else {
@@ -20193,7 +20361,9 @@ mod tests {
         let mut core = quickjs_test_core();
         core.registers.resize(4, Value::Undefined);
         core.registers[0] = Value::Float(Float64::new(1.5));
-        let result = core.eval_unary_neg(0).expect("serde deserialization should succeed");
+        let result = core
+            .eval_unary_neg(0)
+            .expect("serde deserialization should succeed");
         assert_eq!(result, Value::Float(Float64::new(-1.5)));
     }
 
@@ -20204,7 +20374,9 @@ mod tests {
         core.registers.resize(4, Value::Undefined);
         core.registers[0] = Value::Float(Float64::new(0.1));
         core.registers[1] = Value::Float(Float64::new(0.2));
-        let result = core.eval_add(0, 1).expect("serde deserialization should succeed");
+        let result = core
+            .eval_add(0, 1)
+            .expect("serde deserialization should succeed");
         if let Value::Float(f) = result {
             // The exact value is 0.30000000000000004
             assert!((f.inner() - 0.30000000000000004).abs() < 1e-16);
@@ -20256,7 +20428,9 @@ mod tests {
         core.registers.resize(4, Value::Undefined);
         core.registers[0] = Value::Float(Float64::new(1.0));
         core.registers[1] = Value::Float(Float64::new(-0.0));
-        let result = core.eval_div(0, 1).expect("serde deserialization should succeed");
+        let result = core
+            .eval_div(0, 1)
+            .expect("serde deserialization should succeed");
         if let Value::Float(f) = result {
             assert!(f.inner().is_infinite() && f.inner() < 0.0);
         } else {
@@ -20271,7 +20445,9 @@ mod tests {
         core.registers.resize(4, Value::Undefined);
         core.registers[0] = Value::Float(Float64::new(-1.0));
         core.registers[1] = Value::Int(0);
-        let result = core.eval_div(0, 1).expect("serde deserialization should succeed");
+        let result = core
+            .eval_div(0, 1)
+            .expect("serde deserialization should succeed");
         if let Value::Float(f) = result {
             assert!(f.inner().is_infinite() && f.inner() < 0.0);
         } else {
@@ -20664,7 +20840,9 @@ mod tests {
         assert_eq!(core1.active_timers.len(), 1);
         assert_eq!(core2.active_timers.len(), 1);
 
-        let timer_id_val = timer_id_1.as_int().expect("serde deserialization should succeed") as u32;
+        let timer_id_val = timer_id_1
+            .as_int()
+            .expect("serde deserialization should succeed") as u32;
         assert!(core1.active_timers.contains_key(&timer_id_val));
         assert!(core2.active_timers.contains_key(&timer_id_val));
     }
@@ -20720,12 +20898,18 @@ mod tests {
         // Verify timers are stored in active_timers
         assert_eq!(core.active_timers.len(), 2, "Both timers should be active");
         assert!(
-            core.active_timers
-                .contains_key(&(timer_id_1.as_int().expect("serde deserialization should succeed") as u32))
+            core.active_timers.contains_key(
+                &(timer_id_1
+                    .as_int()
+                    .expect("serde deserialization should succeed") as u32)
+            )
         );
         assert!(
-            core.active_timers
-                .contains_key(&(timer_id_2.as_int().expect("serde deserialization should succeed") as u32))
+            core.active_timers.contains_key(
+                &(timer_id_2
+                    .as_int()
+                    .expect("serde deserialization should succeed") as u32)
+            )
         );
     }
 
@@ -20791,13 +20975,18 @@ mod tests {
             "Only one timer should remain active"
         );
         assert!(
-            !core
-                .active_timers
-                .contains_key(&(timer_id_1.as_int().expect("serde deserialization should succeed") as u32))
+            !core.active_timers.contains_key(
+                &(timer_id_1
+                    .as_int()
+                    .expect("serde deserialization should succeed") as u32)
+            )
         );
         assert!(
-            core.active_timers
-                .contains_key(&(timer_id_2.as_int().expect("serde deserialization should succeed") as u32))
+            core.active_timers.contains_key(
+                &(timer_id_2
+                    .as_int()
+                    .expect("serde deserialization should succeed") as u32)
+            )
         );
 
         // Clear the second timer
@@ -21110,7 +21299,8 @@ mod tests {
             };
 
             let signature = log.sign_receipt(&receipt);
-            let mut expected_mac = Hmac::<Sha256>::new_from_slice(&key).expect("serde deserialization should succeed");
+            let mut expected_mac =
+                Hmac::<Sha256>::new_from_slice(&key).expect("serde deserialization should succeed");
             expected_mac.update(log.receipt_signing_message(&receipt).as_bytes());
             let expected = format!(
                 "hmac-sha256-{}",
@@ -21154,14 +21344,22 @@ mod tests {
                 .handle_containment_action(HookAction::Sandbox)
                 .ok();
 
-            let json_export = interpreter.export_decision_receipts().expect("serde deserialization should succeed");
-            let parsed: serde_json::Value = serde_json::from_str(&json_export).expect("serde deserialization should succeed");
+            let json_export = interpreter
+                .export_decision_receipts()
+                .expect("serde deserialization should succeed");
+            let parsed: serde_json::Value =
+                serde_json::from_str(&json_export).expect("serde deserialization should succeed");
 
             assert_eq!(parsed["evidence_type"], "guardplane_decision_chain");
             assert_eq!(parsed["receipt_count"], 1);
             assert_eq!(parsed["chain_verified"], true);
             assert!(parsed["receipts"].is_array());
-            assert!(parsed["exported_at"].as_u64().expect("serde deserialization should succeed") > 0);
+            assert!(
+                parsed["exported_at"]
+                    .as_u64()
+                    .expect("serde deserialization should succeed")
+                    > 0
+            );
         }
 
         #[test]
@@ -21237,13 +21435,18 @@ mod tests {
             core.registers[0] = Value::Promise(handle.0);
 
             // Test that we can read the promise value
-            let promise_val = core.read_reg(0).expect("serde deserialization should succeed");
+            let promise_val = core
+                .read_reg(0)
+                .expect("serde deserialization should succeed");
             match promise_val {
                 Value::Promise(h) => {
                     assert_eq!(h, handle.0);
 
                     // Verify the promise is resolved
-                    let record = core.promise_store.get(handle).expect("serde deserialization should succeed");
+                    let record = core
+                        .promise_store
+                        .get(handle)
+                        .expect("serde deserialization should succeed");
                     assert!(record.state.is_fulfilled());
                 }
                 _ => panic!("Expected Promise value"),
@@ -21773,9 +21976,18 @@ mod tests {
             // Verify sorting order is correct (by string representation, but preserving types)
             // Expected order: "3.14", "42", "[object Object]", "apple", "true"
             if let Some(final_obj) = interpreter.heap.get(array_id.0 as usize) {
-                let elem_0 = final_obj.properties.get("0").expect("serde deserialization should succeed");
-                let elem_1 = final_obj.properties.get("1").expect("serde deserialization should succeed");
-                let elem_4 = final_obj.properties.get("4").expect("serde deserialization should succeed");
+                let elem_0 = final_obj
+                    .properties
+                    .get("0")
+                    .expect("serde deserialization should succeed");
+                let elem_1 = final_obj
+                    .properties
+                    .get("1")
+                    .expect("serde deserialization should succeed");
+                let elem_4 = final_obj
+                    .properties
+                    .get("4")
+                    .expect("serde deserialization should succeed");
 
                 // First element should be 3.14 (string "3.14" comes first lexicographically)
                 assert!(
@@ -21814,7 +22026,9 @@ mod tests {
             let mut interpreter = test_interpreter();
 
             // Recreate RegExp object with source property used by the canonical impl.
-            let regexp_obj_id = interpreter.alloc_object_with_prototype(None).expect("serde deserialization should succeed");
+            let regexp_obj_id = interpreter
+                .alloc_object_with_prototype(None)
+                .expect("serde deserialization should succeed");
             interpreter
                 .set_object_property(
                     regexp_obj_id,
@@ -21973,12 +22187,30 @@ mod tests {
                 // Verify the array was sorted correctly
                 if let Some(sorted_obj) = interpreter.heap.get(array_id.0 as usize) {
                     // Expected lexicographic order: "1.5", "3", "[object Object]", "banana", "false", "undefined"
-                    let elem_0 = sorted_obj.properties.get("0").expect("serde deserialization should succeed");
-                    let elem_1 = sorted_obj.properties.get("1").expect("serde deserialization should succeed");
-                    let elem_2 = sorted_obj.properties.get("2").expect("serde deserialization should succeed");
-                    let elem_3 = sorted_obj.properties.get("3").expect("serde deserialization should succeed");
-                    let elem_4 = sorted_obj.properties.get("4").expect("serde deserialization should succeed");
-                    let elem_5 = sorted_obj.properties.get("5").expect("serde deserialization should succeed");
+                    let elem_0 = sorted_obj
+                        .properties
+                        .get("0")
+                        .expect("serde deserialization should succeed");
+                    let elem_1 = sorted_obj
+                        .properties
+                        .get("1")
+                        .expect("serde deserialization should succeed");
+                    let elem_2 = sorted_obj
+                        .properties
+                        .get("2")
+                        .expect("serde deserialization should succeed");
+                    let elem_3 = sorted_obj
+                        .properties
+                        .get("3")
+                        .expect("serde deserialization should succeed");
+                    let elem_4 = sorted_obj
+                        .properties
+                        .get("4")
+                        .expect("serde deserialization should succeed");
+                    let elem_5 = sorted_obj
+                        .properties
+                        .get("5")
+                        .expect("serde deserialization should succeed");
 
                     // Verify elements are in correct sorted order and types preserved
                     assert!(
@@ -22028,14 +22260,18 @@ mod tests {
         let mut core = InterpreterCore::new(test_quickjs_config(), "test-trace");
 
         // Create first array [1]
-        let arr1_id = core.alloc_object_with_prototype(None).expect("serde deserialization should succeed");
+        let arr1_id = core
+            .alloc_object_with_prototype(None)
+            .expect("serde deserialization should succeed");
         core.set_object_property(arr1_id, "0".to_string(), Value::Int(1))
             .expect("serde deserialization should succeed");
         core.set_object_property(arr1_id, "length".to_string(), Value::Int(1))
             .expect("serde deserialization should succeed");
 
         // Create second array [2]
-        let arr2_id = core.alloc_object_with_prototype(None).expect("serde deserialization should succeed");
+        let arr2_id = core
+            .alloc_object_with_prototype(None)
+            .expect("serde deserialization should succeed");
         core.set_object_property(arr2_id, "0".to_string(), Value::Int(2))
             .expect("serde deserialization should succeed");
         core.set_object_property(arr2_id, "length".to_string(), Value::Int(1))
@@ -22076,7 +22312,9 @@ mod tests {
         let mut core = InterpreterCore::new(test_quickjs_config(), "test-trace");
 
         // Create array [1]
-        let arr_id = core.alloc_object_with_prototype(None).expect("serde deserialization should succeed");
+        let arr_id = core
+            .alloc_object_with_prototype(None)
+            .expect("serde deserialization should succeed");
         core.set_object_property(arr_id, "0".to_string(), Value::Int(1))
             .expect("serde deserialization should succeed");
         core.set_object_property(arr_id, "length".to_string(), Value::Int(1))
@@ -22120,14 +22358,18 @@ mod tests {
         let mut core = InterpreterCore::new(test_quickjs_config(), "test-trace");
 
         // Create array [1]
-        let arr1_id = core.alloc_object_with_prototype(None).expect("serde deserialization should succeed");
+        let arr1_id = core
+            .alloc_object_with_prototype(None)
+            .expect("serde deserialization should succeed");
         core.set_object_property(arr1_id, "0".to_string(), Value::Int(1))
             .expect("serde deserialization should succeed");
         core.set_object_property(arr1_id, "length".to_string(), Value::Int(1))
             .expect("serde deserialization should succeed");
 
         // Create array [2, 3]
-        let arr2_id = core.alloc_object_with_prototype(None).expect("serde deserialization should succeed");
+        let arr2_id = core
+            .alloc_object_with_prototype(None)
+            .expect("serde deserialization should succeed");
         core.set_object_property(arr2_id, "0".to_string(), Value::Int(2))
             .expect("serde deserialization should succeed");
         core.set_object_property(arr2_id, "1".to_string(), Value::Int(3))
@@ -22136,7 +22378,9 @@ mod tests {
             .expect("serde deserialization should succeed");
 
         // Create array [4]
-        let arr3_id = core.alloc_object_with_prototype(None).expect("serde deserialization should succeed");
+        let arr3_id = core
+            .alloc_object_with_prototype(None)
+            .expect("serde deserialization should succeed");
         core.set_object_property(arr3_id, "0".to_string(), Value::Int(4))
             .expect("serde deserialization should succeed");
         core.set_object_property(arr3_id, "length".to_string(), Value::Int(1))
@@ -22396,7 +22640,10 @@ mod tests {
             // Should create Date object with deterministic timestamp
             if let Value::Object(date_id) = core.registers[10] {
                 let date_obj = &core.heap[date_id.0 as usize];
-                let timestamp = date_obj.properties.get("__timestamp").expect("serde deserialization should succeed");
+                let timestamp = date_obj
+                    .properties
+                    .get("__timestamp")
+                    .expect("serde deserialization should succeed");
 
                 if let Value::Float(f) = timestamp {
                     assert_eq!(f.inner(), deterministic_epoch_ms);
@@ -22588,8 +22835,11 @@ mod tests {
     fn string_prototype_replace_object_coercion() {
         // Test that objects are properly coerced to "[object Object]"
         let mut core = InterpreterCore::new(InterpreterConfig::quickjs_defaults(), "test");
-        let obj_id = core.alloc_object_with_prototype(None).expect("serde deserialization should succeed");
-        core.set_register(0, Value::Object(obj_id)).expect("serde deserialization should succeed");
+        let obj_id = core
+            .alloc_object_with_prototype(None)
+            .expect("serde deserialization should succeed");
+        core.set_register(0, Value::Object(obj_id))
+            .expect("serde deserialization should succeed");
         core.set_register(1, Value::Str("object".to_string()))
             .expect("serde deserialization should succeed");
         core.set_register(2, Value::Str("replacement".to_string()))
@@ -22605,7 +22855,9 @@ mod tests {
         ]))
         .expect("serde deserialization should succeed");
 
-        let result = core.read_register(3).expect("serde deserialization should succeed");
+        let result = core
+            .read_register(3)
+            .expect("serde deserialization should succeed");
         assert_eq!(result, Value::Str("[replacement Object]".to_string()));
     }
 
@@ -22626,7 +22878,9 @@ mod tests {
         ]))
         .expect("serde deserialization should succeed");
 
-        let result = core.read_register(1).expect("serde deserialization should succeed");
+        let result = core
+            .read_register(1)
+            .expect("serde deserialization should succeed");
         assert_eq!(result, Value::Str("hello world".to_string()));
     }
 
@@ -22653,7 +22907,9 @@ mod tests {
         ]))
         .expect("serde deserialization should succeed");
 
-        let result = core.read_register(3).expect("serde deserialization should succeed");
+        let result = core
+            .read_register(3)
+            .expect("serde deserialization should succeed");
         assert_eq!(result, Value::Str("[replaced Object]".to_string()));
     }
 
@@ -22679,7 +22935,9 @@ mod tests {
         ]))
         .expect("serde deserialization should succeed");
 
-        let result = core.read_register(3).expect("serde deserialization should succeed");
+        let result = core
+            .read_register(3)
+            .expect("serde deserialization should succeed");
         assert_eq!(result, Value::Str("[function Object]".to_string()));
     }
 
@@ -23020,8 +23278,12 @@ mod tests {
         core2.ip = 10;
 
         // Call Math.random on both cores
-        let result1 = core1.math_random_impl().expect("serde deserialization should succeed");
-        let result2 = core2.math_random_impl().expect("serde deserialization should succeed");
+        let result1 = core1
+            .math_random_impl()
+            .expect("serde deserialization should succeed");
+        let result2 = core2
+            .math_random_impl()
+            .expect("serde deserialization should succeed");
 
         // Should produce identical results (deterministic)
         assert_eq!(
@@ -23049,8 +23311,12 @@ mod tests {
         core1.instructions_executed = 10;
         core2.instructions_executed = 20;
 
-        let result1 = core1.math_random_impl().expect("serde deserialization should succeed");
-        let result2 = core2.math_random_impl().expect("serde deserialization should succeed");
+        let result1 = core1
+            .math_random_impl()
+            .expect("serde deserialization should succeed");
+        let result2 = core2
+            .math_random_impl()
+            .expect("serde deserialization should succeed");
 
         // Should produce different results
         assert_ne!(
@@ -23067,7 +23333,8 @@ mod tests {
         core.set_register(0, Value::Str("Hello".to_string()))
             .expect("serde deserialization should succeed");
         // SAFETY: Register 1 is valid in a fresh interpreter and the index is immediate.
-        core.set_register(1, Value::Int(0)).expect("serde deserialization should succeed"); // index 0
+        core.set_register(1, Value::Int(0))
+            .expect("serde deserialization should succeed"); // index 0
 
         // SAFETY: The inline module uses initialized registers and a registered builtin id.
         core.execute_module(test_module(vec![
@@ -23082,7 +23349,9 @@ mod tests {
 
         // "Hello"[0] = 'H' = 72
         // SAFETY: StringPrototypeCharCodeAt writes destination register 2 before halt.
-        let result = core.read_register(2).expect("serde deserialization should succeed");
+        let result = core
+            .read_register(2)
+            .expect("serde deserialization should succeed");
         assert_eq!(result, Value::Int(72), "charCodeAt('H') should be 72");
     }
 
@@ -23093,11 +23362,13 @@ mod tests {
 
         // U+1F600 (😀) is encoded as surrogate pair: 0xD83D 0xDE00
         // SAFETY: Register 0 is valid in a fresh interpreter and owns the test string.
-        core.set_register(0, Value::Str("😀".to_string())).expect("serde deserialization should succeed");
+        core.set_register(0, Value::Str("😀".to_string()))
+            .expect("serde deserialization should succeed");
 
         // Get first surrogate (high surrogate)
         // SAFETY: Register 1 is valid in a fresh interpreter and the index is immediate.
-        core.set_register(1, Value::Int(0)).expect("serde deserialization should succeed");
+        core.set_register(1, Value::Int(0))
+            .expect("serde deserialization should succeed");
         // SAFETY: The inline module uses initialized registers and a registered builtin id.
         core.execute_module(test_module(vec![
             Ir3Instruction::CallBuiltinId {
@@ -23110,7 +23381,9 @@ mod tests {
         .expect("serde deserialization should succeed");
 
         // SAFETY: StringPrototypeCharCodeAt writes destination register 2 before halt.
-        let result1 = core.read_register(2).expect("serde deserialization should succeed");
+        let result1 = core
+            .read_register(2)
+            .expect("serde deserialization should succeed");
         assert_eq!(
             result1,
             Value::Int(0xD83D),
@@ -23119,7 +23392,8 @@ mod tests {
 
         // Get second surrogate (low surrogate)
         // SAFETY: Register 1 remains valid and is overwritten with the second index.
-        core.set_register(1, Value::Int(1)).expect("serde deserialization should succeed");
+        core.set_register(1, Value::Int(1))
+            .expect("serde deserialization should succeed");
         // SAFETY: The inline module uses initialized registers and a registered builtin id.
         core.execute_module(test_module(vec![
             Ir3Instruction::CallBuiltinId {
@@ -23132,7 +23406,9 @@ mod tests {
         .expect("serde deserialization should succeed");
 
         // SAFETY: StringPrototypeCharCodeAt writes destination register 3 before halt.
-        let result2 = core.read_register(3).expect("serde deserialization should succeed");
+        let result2 = core
+            .read_register(3)
+            .expect("serde deserialization should succeed");
         assert_eq!(
             result2,
             Value::Int(0xDE00),
@@ -23145,9 +23421,11 @@ mod tests {
         // Test charCodeAt with out-of-bounds index returns NaN
         let mut core = InterpreterCore::new(InterpreterConfig::quickjs_defaults(), "test");
         // SAFETY: Register 0 is valid in a fresh interpreter and owns the test string.
-        core.set_register(0, Value::Str("Hi".to_string())).expect("serde deserialization should succeed");
+        core.set_register(0, Value::Str("Hi".to_string()))
+            .expect("serde deserialization should succeed");
         // SAFETY: Register 1 is valid in a fresh interpreter and the out-of-bounds index is intentional.
-        core.set_register(1, Value::Int(5)).expect("serde deserialization should succeed"); // index 5 (out of bounds)
+        core.set_register(1, Value::Int(5))
+            .expect("serde deserialization should succeed"); // index 5 (out of bounds)
 
         // SAFETY: The inline module uses initialized registers and a registered builtin id.
         core.execute_module(test_module(vec![
@@ -23161,7 +23439,9 @@ mod tests {
         .expect("serde deserialization should succeed");
 
         // SAFETY: StringPrototypeCharCodeAt writes destination register 2 before halt.
-        let result = core.read_register(2).expect("serde deserialization should succeed");
+        let result = core
+            .read_register(2)
+            .expect("serde deserialization should succeed");
         if let Value::Float(f) = result {
             assert!(
                 f.inner().is_nan(),
@@ -23178,7 +23458,8 @@ mod tests {
         let mut core = InterpreterCore::new(InterpreterConfig::quickjs_defaults(), "test");
         core.set_register(0, Value::Str("Test".to_string()))
             .expect("serde deserialization should succeed");
-        core.set_register(1, Value::Int(-1)).expect("serde deserialization should succeed"); // negative index
+        core.set_register(1, Value::Int(-1))
+            .expect("serde deserialization should succeed"); // negative index
 
         core.execute_module(test_module(vec![
             Ir3Instruction::CallBuiltinId {
@@ -23191,7 +23472,9 @@ mod tests {
         .expect("serde deserialization should succeed");
 
         // Should return first character 'T' = 84
-        let result = core.read_register(2).expect("serde deserialization should succeed");
+        let result = core
+            .read_register(2)
+            .expect("serde deserialization should succeed");
         assert_eq!(
             result,
             Value::Int(84),
@@ -23203,7 +23486,8 @@ mod tests {
     fn string_prototype_char_code_at_no_index() {
         // Test charCodeAt with no index argument (should default to 0)
         let mut core = InterpreterCore::new(InterpreterConfig::quickjs_defaults(), "test");
-        core.set_register(0, Value::Str("ABC".to_string())).expect("serde deserialization should succeed");
+        core.set_register(0, Value::Str("ABC".to_string()))
+            .expect("serde deserialization should succeed");
 
         core.execute_module(test_module(vec![
             Ir3Instruction::CallBuiltinId {
@@ -23216,7 +23500,9 @@ mod tests {
         .expect("serde deserialization should succeed");
 
         // Should return first character 'A' = 65
-        let result = core.read_register(1).expect("serde deserialization should succeed");
+        let result = core
+            .read_register(1)
+            .expect("serde deserialization should succeed");
         assert_eq!(result, Value::Int(65), "No index should default to 0");
     }
 
@@ -23225,9 +23511,11 @@ mod tests {
         // Test charCodeAt with non-string values (should coerce to string)
         let mut core = InterpreterCore::new(InterpreterConfig::quickjs_defaults(), "test");
         // SAFETY: Register 0 is a valid test register and Value::Int needs no heap allocation.
-        core.set_register(0, Value::Int(123)).expect("serde deserialization should succeed"); // should become "123"
+        core.set_register(0, Value::Int(123))
+            .expect("serde deserialization should succeed"); // should become "123"
         // SAFETY: Register 1 is a valid test register and the index value is immediate.
-        core.set_register(1, Value::Int(1)).expect("serde deserialization should succeed"); // index 1
+        core.set_register(1, Value::Int(1))
+            .expect("serde deserialization should succeed"); // index 1
 
         // SAFETY: The inline module only calls a registered builtin with initialized registers.
         core.execute_module(test_module(vec![
@@ -23242,7 +23530,9 @@ mod tests {
 
         // "123"[1] = '2' = 50
         // SAFETY: The builtin writes destination register 2 before the halt instruction.
-        let result = core.read_register(2).expect("serde deserialization should succeed");
+        let result = core
+            .read_register(2)
+            .expect("serde deserialization should succeed");
         assert_eq!(
             result,
             Value::Int(50),
@@ -23258,7 +23548,8 @@ mod tests {
         core.set_register(0, Value::Str("Hello".to_string()))
             .expect("serde deserialization should succeed");
         // SAFETY: Register 1 is valid in a fresh interpreter and the index is immediate.
-        core.set_register(1, Value::Int(1)).expect("serde deserialization should succeed"); // index 1
+        core.set_register(1, Value::Int(1))
+            .expect("serde deserialization should succeed"); // index 1
 
         // SAFETY: The inline module uses initialized registers and a registered builtin id.
         core.execute_module(test_module(vec![
@@ -23273,7 +23564,9 @@ mod tests {
 
         // "Hello"[1] = 'e'
         // SAFETY: StringPrototypeCharAt writes destination register 2 before halt.
-        let result = core.read_register(2).expect("serde deserialization should succeed");
+        let result = core
+            .read_register(2)
+            .expect("serde deserialization should succeed");
         assert_eq!(
             result,
             Value::Str("e".to_string()),
@@ -23287,10 +23580,12 @@ mod tests {
         let mut core = InterpreterCore::new(InterpreterConfig::quickjs_defaults(), "test");
 
         // U+1F600 (😀) is encoded as surrogate pair: 0xD83D 0xDE00
-        core.set_register(0, Value::Str("😀".to_string())).expect("serde deserialization should succeed");
+        core.set_register(0, Value::Str("😀".to_string()))
+            .expect("serde deserialization should succeed");
 
         // Get first surrogate character (high surrogate)
-        core.set_register(1, Value::Int(0)).expect("serde deserialization should succeed");
+        core.set_register(1, Value::Int(0))
+            .expect("serde deserialization should succeed");
         core.execute_module(test_module(vec![
             Ir3Instruction::CallBuiltinId {
                 id: 30, // StringPrototypeCharAt
@@ -23301,7 +23596,9 @@ mod tests {
         ]))
         .expect("serde deserialization should succeed");
 
-        let result1 = core.read_register(2).expect("serde deserialization should succeed");
+        let result1 = core
+            .read_register(2)
+            .expect("serde deserialization should succeed");
         if let Value::Str(s) = result1 {
             // Should be the high surrogate character represented as a string
             assert_eq!(s.len(), 3, "High surrogate should be 3 bytes in UTF-8"); // UTF-8 encoding of high surrogate
@@ -23315,7 +23612,8 @@ mod tests {
         }
 
         // Get second surrogate character (low surrogate)
-        core.set_register(1, Value::Int(1)).expect("serde deserialization should succeed");
+        core.set_register(1, Value::Int(1))
+            .expect("serde deserialization should succeed");
         core.execute_module(test_module(vec![
             Ir3Instruction::CallBuiltinId {
                 id: 30, // StringPrototypeCharAt
@@ -23326,7 +23624,9 @@ mod tests {
         ]))
         .expect("serde deserialization should succeed");
 
-        let result2 = core.read_register(3).expect("serde deserialization should succeed");
+        let result2 = core
+            .read_register(3)
+            .expect("serde deserialization should succeed");
         if let Value::Str(s) = result2 {
             // Should be the low surrogate character represented as a string
             assert_eq!(s.len(), 3, "Low surrogate should be 3 bytes in UTF-8"); // UTF-8 encoding of low surrogate
@@ -23345,9 +23645,11 @@ mod tests {
         // Test charAt with out-of-bounds index returns empty string
         let mut core = InterpreterCore::new(InterpreterConfig::quickjs_defaults(), "test");
         // SAFETY: test setup writes to valid registers in a fresh interpreter.
-        core.set_register(0, Value::Str("Hi".to_string())).expect("serde deserialization should succeed");
+        core.set_register(0, Value::Str("Hi".to_string()))
+            .expect("serde deserialization should succeed");
         // SAFETY: test setup writes to valid registers in a fresh interpreter.
-        core.set_register(1, Value::Int(5)).expect("serde deserialization should succeed"); // index 5 (out of bounds)
+        core.set_register(1, Value::Int(5))
+            .expect("serde deserialization should succeed"); // index 5 (out of bounds)
 
         // SAFETY: the test module is well-formed and should execute successfully.
         core.execute_module(test_module(vec![
@@ -23361,7 +23663,9 @@ mod tests {
         .expect("serde deserialization should succeed");
 
         // SAFETY: the executed module writes its result to register 2.
-        let result = core.read_register(2).expect("serde deserialization should succeed");
+        let result = core
+            .read_register(2)
+            .expect("serde deserialization should succeed");
         assert_eq!(
             result,
             Value::Str("".to_string()),
@@ -23377,7 +23681,8 @@ mod tests {
         core.set_register(0, Value::Str("Test".to_string()))
             .expect("serde deserialization should succeed");
         // SAFETY: test setup writes to valid registers in a fresh interpreter.
-        core.set_register(1, Value::Int(-1)).expect("serde deserialization should succeed"); // negative index
+        core.set_register(1, Value::Int(-1))
+            .expect("serde deserialization should succeed"); // negative index
 
         // SAFETY: the test module is well-formed and should execute successfully.
         core.execute_module(test_module(vec![
@@ -23392,7 +23697,9 @@ mod tests {
 
         // Should return first character 'T'
         // SAFETY: the executed module writes its result to register 2.
-        let result = core.read_register(2).expect("serde deserialization should succeed");
+        let result = core
+            .read_register(2)
+            .expect("serde deserialization should succeed");
         assert_eq!(
             result,
             Value::Str("T".to_string()),
@@ -23405,7 +23712,8 @@ mod tests {
         // Test charAt with no index argument (should default to 0)
         let mut core = InterpreterCore::new(InterpreterConfig::quickjs_defaults(), "test");
         // SAFETY: test setup writes to a valid register in a fresh interpreter.
-        core.set_register(0, Value::Str("ABC".to_string())).expect("serde deserialization should succeed");
+        core.set_register(0, Value::Str("ABC".to_string()))
+            .expect("serde deserialization should succeed");
 
         // SAFETY: the test module is well-formed and should execute successfully.
         core.execute_module(test_module(vec![
@@ -23420,7 +23728,9 @@ mod tests {
 
         // Should return first character 'A'
         // SAFETY: the executed module writes its result to register 1.
-        let result = core.read_register(1).expect("serde deserialization should succeed");
+        let result = core
+            .read_register(1)
+            .expect("serde deserialization should succeed");
         assert_eq!(
             result,
             Value::Str("A".to_string()),
@@ -23432,8 +23742,10 @@ mod tests {
     fn string_prototype_char_at_type_coercion() {
         // Test charAt with non-string values (should coerce to string)
         let mut core = InterpreterCore::new(InterpreterConfig::quickjs_defaults(), "test");
-        core.set_register(0, Value::Int(456)).expect("serde deserialization should succeed"); // should become "456"
-        core.set_register(1, Value::Int(2)).expect("serde deserialization should succeed"); // index 2
+        core.set_register(0, Value::Int(456))
+            .expect("serde deserialization should succeed"); // should become "456"
+        core.set_register(1, Value::Int(2))
+            .expect("serde deserialization should succeed"); // index 2
 
         core.execute_module(test_module(vec![
             Ir3Instruction::CallBuiltinId {
@@ -23446,7 +23758,9 @@ mod tests {
         .expect("serde deserialization should succeed");
 
         // "456"[2] = '6'
-        let result = core.read_register(2).expect("serde deserialization should succeed");
+        let result = core
+            .read_register(2)
+            .expect("serde deserialization should succeed");
         assert_eq!(
             result,
             Value::Str("6".to_string()),
@@ -23473,7 +23787,9 @@ mod tests {
         ]))
         .expect("serde deserialization should succeed");
 
-        let result = core.read_register(1).expect("serde deserialization should succeed");
+        let result = core
+            .read_register(1)
+            .expect("serde deserialization should succeed");
         match result {
             Value::Float(f) => {
                 let val = f.inner();
@@ -23500,7 +23816,9 @@ mod tests {
         ]))
         .expect("serde deserialization should succeed");
 
-        let result = core.read_register(1).expect("serde deserialization should succeed");
+        let result = core
+            .read_register(1)
+            .expect("serde deserialization should succeed");
         assert_eq!(
             result,
             Value::Int(-1),
@@ -23526,7 +23844,9 @@ mod tests {
         ]))
         .expect("serde deserialization should succeed");
 
-        let result = core.read_register(1).expect("serde deserialization should succeed");
+        let result = core
+            .read_register(1)
+            .expect("serde deserialization should succeed");
         match result {
             Value::Float(f) => {
                 let val = f.inner();
@@ -23553,7 +23873,9 @@ mod tests {
         ]))
         .expect("serde deserialization should succeed");
 
-        let result = core.read_register(1).expect("serde deserialization should succeed");
+        let result = core
+            .read_register(1)
+            .expect("serde deserialization should succeed");
         assert_eq!(
             result,
             Value::Int(1),
@@ -23574,7 +23896,9 @@ mod tests {
         ]))
         .expect("serde deserialization should succeed");
 
-        let result = core.read_register(1).expect("serde deserialization should succeed");
+        let result = core
+            .read_register(1)
+            .expect("serde deserialization should succeed");
         match result {
             Value::Float(f) => assert!(f.inner().is_nan(), "Math.round(NaN) should be NaN"),
             _ => panic!("Math.round(NaN) should be NaN, got {:?}", result),
@@ -23593,7 +23917,9 @@ mod tests {
         ]))
         .expect("serde deserialization should succeed");
 
-        let result = core.read_register(1).expect("serde deserialization should succeed");
+        let result = core
+            .read_register(1)
+            .expect("serde deserialization should succeed");
         match result {
             Value::Float(f) => assert_eq!(
                 f.inner(),
@@ -23619,7 +23945,9 @@ mod tests {
         ]))
         .expect("serde deserialization should succeed");
 
-        let result = core.read_register(1).expect("serde deserialization should succeed");
+        let result = core
+            .read_register(1)
+            .expect("serde deserialization should succeed");
         match result {
             Value::Float(f) => assert_eq!(
                 f.inner(),
@@ -23923,7 +24251,10 @@ mod tests {
         );
 
         // Verify the array was modified (elements should be reversed)
-        let obj = core.heap.get(array_id.0 as usize).expect("serde deserialization should succeed");
+        let obj = core
+            .heap
+            .get(array_id.0 as usize)
+            .expect("serde deserialization should succeed");
         if let Some(Value::Str(first)) = obj.properties.get("0") {
             assert_eq!(
                 first, "third",
@@ -23964,7 +24295,9 @@ mod tests {
         run_to_string(&mut core, Value::Str("test".to_string()), "[object String]");
 
         // Array-like object with length property should not be treated as an array.
-        let object_id = core.alloc_object_with_prototype(None).expect("serde deserialization should succeed");
+        let object_id = core
+            .alloc_object_with_prototype(None)
+            .expect("serde deserialization should succeed");
         core.set_object_property(object_id, "length".to_string(), Value::Int(1))
             .expect("serde deserialization should succeed");
         core.set_object_property(object_id, "0".to_string(), Value::Int(99))

@@ -1276,7 +1276,8 @@ mod tests {
     fn test_string_lane_serde_roundtrip() {
         for lane in StringLane::ALL {
             let json = serde_json::to_string(lane).expect("serde deserialization should succeed");
-            let back: StringLane = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: StringLane =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*lane, back);
         }
     }
@@ -1304,7 +1305,8 @@ mod tests {
     fn test_regexp_feature_serde_roundtrip() {
         for feat in RegexpFeature::ALL {
             let json = serde_json::to_string(feat).expect("serde deserialization should succeed");
-            let back: RegexpFeature = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: RegexpFeature =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*feat, back);
         }
     }
@@ -1559,7 +1561,8 @@ mod tests {
     fn test_verdict_serde_roundtrip() {
         let v = GovernanceVerdict::TailRiskExceeded;
         let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
-        let back: GovernanceVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GovernanceVerdict =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, back);
     }
 
@@ -1951,7 +1954,8 @@ mod tests {
         ];
         for s in &subjects {
             let json = serde_json::to_string(s).expect("serde deserialization should succeed");
-            let back: ParitySubject = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ParitySubject =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*s, back);
         }
     }
@@ -1960,7 +1964,8 @@ mod tests {
     fn test_benchmark_category_serde() {
         let c = BenchmarkCategory::Regexp;
         let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
-        let back: BenchmarkCategory = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: BenchmarkCategory =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c, back);
     }
 
@@ -1968,7 +1973,8 @@ mod tests {
     fn test_governance_config_serde_roundtrip() {
         let cfg = GovernanceConfig::default();
         let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
-        let back: GovernanceConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GovernanceConfig =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cfg, back);
     }
 
@@ -1981,7 +1987,8 @@ mod tests {
         ));
         let receipt = ev.evaluate();
         let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
-        let back: GovernanceReceipt = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GovernanceReceipt =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(receipt, back);
     }
 

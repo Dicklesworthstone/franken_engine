@@ -1406,7 +1406,8 @@ mod tests {
             let j = serde_json::to_string(s).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by to_string of a valid LayoutStrategy,
             // so from_str back to LayoutStrategy cannot fail (valid format + matching schema).
-            let back: LayoutStrategy = serde_json::from_str(&j).expect("serde deserialization should succeed");
+            let back: LayoutStrategy =
+                serde_json::from_str(&j).expect("serde deserialization should succeed");
             assert_eq!(*s, back);
         }
     }
@@ -1468,7 +1469,8 @@ mod tests {
             let j = serde_json::to_string(c).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by to_string of a valid StallCategory,
             // so from_str back to StallCategory cannot fail (valid format + matching schema).
-            let back: StallCategory = serde_json::from_str(&j).expect("serde deserialization should succeed");
+            let back: StallCategory =
+                serde_json::from_str(&j).expect("serde deserialization should succeed");
             assert_eq!(*c, back);
         }
     }
@@ -1681,7 +1683,8 @@ mod tests {
             .with_known_hardware(hw_set(&["zen3"]))
             .with_required_strategies(strat_set(&[LayoutStrategy::LoopAlignment]));
         let j = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
-        let back: GovernanceConfig = serde_json::from_str(&j).expect("serde deserialization should succeed");
+        let back: GovernanceConfig =
+            serde_json::from_str(&j).expect("serde deserialization should succeed");
         assert_eq!(cfg, back);
     }
 
@@ -1811,7 +1814,8 @@ mod tests {
         ];
         for v in &verdicts {
             let j = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: GovernanceVerdict = serde_json::from_str(&j).expect("serde deserialization should succeed");
+            let back: GovernanceVerdict =
+                serde_json::from_str(&j).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }

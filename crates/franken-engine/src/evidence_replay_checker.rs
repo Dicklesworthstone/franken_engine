@@ -983,7 +983,9 @@ mod tests {
             let req = make_request(&format!("action_{i}"), ts);
             // SAFETY: emit() with valid test inputs (valid context and request structure)
             // cannot fail under normal test conditions.
-            emitter.emit(&mut cx, &req).expect("serde deserialization should succeed");
+            emitter
+                .emit(&mut cx, &req)
+                .expect("serde deserialization should succeed");
         }
         emitter.entries().to_vec()
     }
@@ -1033,7 +1035,8 @@ mod tests {
         // SAFETY: ReplayViolationType derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&vt).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid ReplayViolationType serialization
-        let back: ReplayViolationType = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ReplayViolationType =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(vt, back);
     }
 
@@ -1055,7 +1058,8 @@ mod tests {
         // SAFETY: ReplayConfig derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid ReplayConfig serialization
-        let back: ReplayConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ReplayConfig =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cfg, back);
     }
 
@@ -1346,7 +1350,10 @@ mod tests {
         let result = checker.replay(&ledger, None);
         assert!(result.passed);
         assert!(!checker.events().is_empty());
-        let last = checker.events().last().expect("serde deserialization should succeed");
+        let last = checker
+            .events()
+            .last()
+            .expect("serde deserialization should succeed");
         assert_eq!(last.event, "replay_complete");
         assert_eq!(last.outcome, "pass");
     }
@@ -1357,7 +1364,10 @@ mod tests {
         let replay = diverging_action_replay();
         let mut checker = EvidenceReplayChecker::new(ReplayConfig::default());
         checker.replay(&ledger, Some(&replay));
-        let last = checker.events().last().expect("serde deserialization should succeed");
+        let last = checker
+            .events()
+            .last()
+            .expect("serde deserialization should succeed");
         assert_eq!(last.event, "replay_complete");
         assert_eq!(last.outcome, "fail");
     }
@@ -1374,7 +1384,8 @@ mod tests {
         // SAFETY: ReplayResult derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid ReplayResult serialization
-        let back: ReplayResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ReplayResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, back);
     }
 
@@ -1390,7 +1401,8 @@ mod tests {
             actual: Some("b".to_string()),
         };
         let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
-        let back: ReplayViolation = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ReplayViolation =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, back);
     }
 
@@ -1406,7 +1418,8 @@ mod tests {
             error_code: None,
         };
         let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
-        let back: ReplayEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ReplayEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(e, back);
     }
 
@@ -1599,7 +1612,8 @@ mod tests {
         let mut checker = EvidenceReplayChecker::new(ReplayConfig::default());
         let artifact = checker.replay_and_collect(&ledger, None);
         let json = serde_json::to_string(&artifact).expect("serde deserialization should succeed");
-        let back: ReplayEvidenceArtifact = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ReplayEvidenceArtifact =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(artifact, back);
     }
 
@@ -1648,7 +1662,16 @@ mod tests {
         let result = checker.replay(&ledger, None);
         assert!(result.diagnostics.first_ts.is_some());
         assert!(result.diagnostics.last_ts.is_some());
-        assert!(result.diagnostics.first_ts.expect("serde deserialization should succeed") <= result.diagnostics.last_ts.expect("serde deserialization should succeed"));
+        assert!(
+            result
+                .diagnostics
+                .first_ts
+                .expect("serde deserialization should succeed")
+                <= result
+                    .diagnostics
+                    .last_ts
+                    .expect("serde deserialization should succeed")
+        );
     }
 
     #[test]
@@ -1657,7 +1680,10 @@ mod tests {
         let mut checker = EvidenceReplayChecker::new(ReplayConfig::default());
         let result = checker.replay(&ledger, None);
         assert!(result.diagnostics.epoch_range.is_some());
-        let (lo, hi) = result.diagnostics.epoch_range.expect("serde deserialization should succeed");
+        let (lo, hi) = result
+            .diagnostics
+            .epoch_range
+            .expect("serde deserialization should succeed");
         assert!(lo <= hi);
     }
 
@@ -1692,7 +1718,8 @@ mod tests {
         let result = checker.replay(&ledger, None);
         let manifest = result.manifest(&config, &ledger);
         let json = serde_json::to_string(&manifest).expect("serde deserialization should succeed");
-        let back: ReplayManifest = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ReplayManifest =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(manifest, back);
     }
 
@@ -1889,7 +1916,8 @@ mod tests {
         config.allowed_policy_ids.insert("p1".to_string());
         config.allowed_policy_ids.insert("p2".to_string());
         let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
-        let back: ReplayConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ReplayConfig =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, back);
     }
 
@@ -1964,8 +1992,10 @@ mod tests {
         let ledger = build_ledger(5);
         let mut checker = EvidenceReplayChecker::new(ReplayConfig::default());
         let result = checker.replay(&ledger, None);
-        let json = serde_json::to_string(&result.diagnostics).expect("serde deserialization should succeed");
-        let back: ReplayDiagnostics = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result.diagnostics)
+            .expect("serde deserialization should succeed");
+        let back: ReplayDiagnostics =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result.diagnostics, back);
     }
 
@@ -2028,7 +2058,8 @@ mod tests {
         let mut checker = EvidenceReplayChecker::new(ReplayConfig::default());
         checker.set_epoch(SecurityEpoch::from_raw(42));
         let json = serde_json::to_string(&checker).expect("serde deserialization should succeed");
-        let back: EvidenceReplayChecker = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: EvidenceReplayChecker =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(checker.config(), back.config());
         assert_eq!(checker.events().len(), back.events().len());
     }
@@ -2079,7 +2110,8 @@ mod tests {
         let artifact = checker.replay_and_collect(&ledger, Some(&replay));
         assert!(!artifact.gate_passed);
         let json = serde_json::to_string(&artifact).expect("serde deserialization should succeed");
-        let back: ReplayEvidenceArtifact = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ReplayEvidenceArtifact =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(artifact, back);
     }
 
@@ -2137,7 +2169,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: ReplayErrorCode = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ReplayErrorCode =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, v);
         }
         assert_eq!(variants.len(), 12);
@@ -2161,7 +2194,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: ReplayViolationType = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ReplayViolationType =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, v);
         }
         assert_eq!(variants.len(), 12);

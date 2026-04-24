@@ -623,7 +623,8 @@ fn coupling_score_millionths(
 }
 
 fn graph_id_from_edges(controller_names: &[String], edges: &[ControllerInteractionEdge]) -> String {
-    let json = serde_json::to_vec(&(controller_names, edges)).expect("serde deserialization should succeed");
+    let json = serde_json::to_vec(&(controller_names, edges))
+        .expect("serde deserialization should succeed");
     format!("graph-{}", to_hex(&hash_bytes(&json)[..12]))
 }
 
@@ -1576,7 +1577,8 @@ mod tests {
     fn controller_role_serde_roundtrip() {
         for role in ControllerRole::all() {
             let json = serde_json::to_string(role).expect("serde deserialization should succeed");
-            let back: ControllerRole = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ControllerRole =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*role, back);
         }
     }
@@ -1639,7 +1641,8 @@ mod tests {
         ];
         for class in &classes {
             let json = serde_json::to_string(class).expect("serde deserialization should succeed");
-            let back: InteractionClass = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: InteractionClass =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*class, back);
         }
     }
@@ -1789,7 +1792,8 @@ mod tests {
     fn matrix_serde_roundtrip() {
         let matrix = ControllerCompositionMatrix::default_matrix();
         let json = serde_json::to_string(&matrix).expect("serde deserialization should succeed");
-        let back: ControllerCompositionMatrix = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ControllerCompositionMatrix =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(matrix, back);
     }
 
@@ -1879,7 +1883,8 @@ mod tests {
     fn microbench_config_serde_roundtrip() {
         let config = MicrobenchConfig::default();
         let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
-        let back: MicrobenchConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: MicrobenchConfig =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, back);
     }
 
@@ -1895,7 +1900,8 @@ mod tests {
             budget_exceeded: false,
         };
         let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
-        let back: MicrobenchEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: MicrobenchEntry =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, back);
     }
 
@@ -1909,7 +1915,8 @@ mod tests {
             pairs_over_budget: 0,
         };
         let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
-        let back: MicrobenchResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: MicrobenchResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, back);
     }
 
@@ -2104,7 +2111,10 @@ mod tests {
         };
         let result = evaluate_composition_gate("trace-bench", &controllers, &matrix, &config);
         assert!(result.microbench.is_some());
-        let mb = result.microbench.as_ref().expect("serde deserialization should succeed");
+        let mb = result
+            .microbench
+            .as_ref()
+            .expect("serde deserialization should succeed");
         assert_eq!(mb.pairs_measured, 1);
     }
 
@@ -2258,7 +2268,8 @@ mod tests {
             controller_b: "b".to_string(),
         };
         let json = serde_json::to_string(&reason).expect("serde deserialization should succeed");
-        let back: GateFailureReason = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GateFailureReason =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(reason, back);
     }
 
@@ -2273,8 +2284,10 @@ mod tests {
     #[test]
     fn gate_verdict_serde_roundtrip() {
         for verdict in &[GateVerdict::Approved, GateVerdict::Rejected] {
-            let json = serde_json::to_string(verdict).expect("serde deserialization should succeed");
-            let back: GateVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(verdict).expect("serde deserialization should succeed");
+            let back: GateVerdict =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*verdict, back);
         }
     }
@@ -2292,7 +2305,8 @@ mod tests {
     fn gate_config_serde_roundtrip() {
         let config = GateConfig::default();
         let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
-        let back: GateConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GateConfig =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, back);
     }
 
@@ -2366,7 +2380,8 @@ mod tests {
             lines: vec!["test".to_string()],
         };
         let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
-        let back: OperatorSummary = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: OperatorSummary =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(summary, back);
     }
 
@@ -2381,7 +2396,8 @@ mod tests {
             detail: "1 controller".to_string(),
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let back: GateLogEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GateLogEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
     }
 
@@ -2397,7 +2413,8 @@ mod tests {
         };
         let result = evaluate_composition_gate("trace-serde", &controllers, &matrix, &config);
         let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
-        let back: GateResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GateResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, back);
     }
 
@@ -2413,7 +2430,8 @@ mod tests {
             rationale: "test".to_string(),
         };
         let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
-        let back: MatrixEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: MatrixEntry =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(entry, back);
     }
 
@@ -2423,7 +2441,8 @@ mod tests {
     fn controller_timescale_serde_roundtrip() {
         let ts = ctrl("test", ControllerRole::Router, 100_000, 200_000);
         let json = serde_json::to_string(&ts).expect("serde deserialization should succeed");
-        let back: ControllerTimescale = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ControllerTimescale =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ts, back);
     }
 

@@ -1057,7 +1057,9 @@ mod tests {
         assert_eq!(orch.active_count(), 1);
         assert_eq!(orch.total_count(), 1);
 
-        let saga = orch.get("s1").expect("serde deserialization should succeed");
+        let saga = orch
+            .get("s1")
+            .expect("serde deserialization should succeed");
         assert_eq!(saga.state, SagaState::Pending);
         assert_eq!(saga.steps.len(), 3);
     }
@@ -1105,7 +1107,9 @@ mod tests {
             Err(SagaError::SagaAlreadyExists { .. })
         ));
 
-        let saga = orch.get("dup").expect("serde deserialization should succeed");
+        let saga = orch
+            .get("dup")
+            .expect("serde deserialization should succeed");
         assert_eq!(saga.saga_type, SagaType::Publish);
         assert_eq!(saga.trace_id, "t1");
         assert_eq!(orch.active_count(), 1);
@@ -1121,7 +1125,9 @@ mod tests {
         orch.create_saga("s1", SagaType::Publish, simple_steps(), "t1", 0)
             .expect("serde deserialization should succeed");
 
-        let (idx, step) = orch.begin_step("s1").expect("serde deserialization should succeed");
+        let (idx, step) = orch
+            .begin_step("s1")
+            .expect("serde deserialization should succeed");
         assert_eq!(idx, 0);
         assert_eq!(step.step_name, "step_a");
     }
@@ -1131,7 +1137,8 @@ mod tests {
         let mut orch = SagaOrchestrator::new(test_epoch(), 10);
         orch.create_saga("s1", SagaType::Publish, simple_steps(), "t1", 0)
             .expect("serde deserialization should succeed");
-        orch.begin_step("s1").expect("serde deserialization should succeed");
+        orch.begin_step("s1")
+            .expect("serde deserialization should succeed");
 
         let state = orch
             .complete_step(
@@ -1154,7 +1161,8 @@ mod tests {
             .expect("serde deserialization should succeed");
 
         for i in 0..3 {
-            orch.begin_step("s1").expect("serde deserialization should succeed");
+            orch.begin_step("s1")
+                .expect("serde deserialization should succeed");
             orch.complete_step(
                 "s1",
                 i,
@@ -1167,7 +1175,9 @@ mod tests {
             .expect("serde deserialization should succeed");
         }
 
-        let saga = orch.get("s1").expect("serde deserialization should succeed");
+        let saga = orch
+            .get("s1")
+            .expect("serde deserialization should succeed");
         assert_eq!(saga.state, SagaState::Completed);
         assert!(saga.is_terminal());
         assert_eq!(saga.step_records.len(), 3);
@@ -1182,7 +1192,8 @@ mod tests {
             .expect("serde deserialization should succeed");
 
         // Step 0 succeeds.
-        orch.begin_step("s1").expect("serde deserialization should succeed");
+        orch.begin_step("s1")
+            .expect("serde deserialization should succeed");
         orch.complete_step(
             "s1",
             0,
@@ -1195,7 +1206,8 @@ mod tests {
         .expect("serde deserialization should succeed");
 
         // Step 1 fails.
-        orch.begin_step("s1").expect("serde deserialization should succeed");
+        orch.begin_step("s1")
+            .expect("serde deserialization should succeed");
         let state = orch
             .complete_step(
                 "s1",
@@ -1216,7 +1228,8 @@ mod tests {
         orch.create_saga("s1", SagaType::Quarantine, simple_steps(), "t1", 0)
             .expect("serde deserialization should succeed");
 
-        orch.begin_step("s1").expect("serde deserialization should succeed");
+        orch.begin_step("s1")
+            .expect("serde deserialization should succeed");
         let state = orch
             .complete_step(
                 "s1",
@@ -1241,7 +1254,8 @@ mod tests {
 
         // Steps 0, 1 succeed.
         for i in 0..2 {
-            orch.begin_step("s1").expect("serde deserialization should succeed");
+            orch.begin_step("s1")
+                .expect("serde deserialization should succeed");
             orch.complete_step(
                 "s1",
                 i,
@@ -1255,7 +1269,8 @@ mod tests {
         }
 
         // Step 2 fails.
-        orch.begin_step("s1").expect("serde deserialization should succeed");
+        orch.begin_step("s1")
+            .expect("serde deserialization should succeed");
         orch.complete_step(
             "s1",
             2,
@@ -1268,7 +1283,10 @@ mod tests {
         .expect("serde deserialization should succeed");
 
         // Compensation should start at step 1 (reverse from last completed).
-        let (idx, step) = orch.next_compensation_step("s1").expect("serde deserialization should succeed").expect("serde deserialization should succeed");
+        let (idx, step) = orch
+            .next_compensation_step("s1")
+            .expect("serde deserialization should succeed")
+            .expect("serde deserialization should succeed");
         assert_eq!(idx, 1);
         assert_eq!(step.compensating_action, "undo_b");
 
@@ -1300,7 +1318,9 @@ mod tests {
             .expect("serde deserialization should succeed");
         assert!(matches!(state, SagaState::Failed { .. }));
 
-        let saga = orch.get("s1").expect("serde deserialization should succeed");
+        let saga = orch
+            .get("s1")
+            .expect("serde deserialization should succeed");
         assert!(saga.is_terminal());
         // 2 forward + 1 failed forward + 2 compensation = 5 records
         assert_eq!(saga.step_records.len(), 5);
@@ -1313,7 +1333,8 @@ mod tests {
             .expect("serde deserialization should succeed");
 
         // Step 0 succeeds, step 1 fails.
-        orch.begin_step("s1").expect("serde deserialization should succeed");
+        orch.begin_step("s1")
+            .expect("serde deserialization should succeed");
         orch.complete_step(
             "s1",
             0,
@@ -1325,7 +1346,8 @@ mod tests {
         )
         .expect("serde deserialization should succeed");
 
-        orch.begin_step("s1").expect("serde deserialization should succeed");
+        orch.begin_step("s1")
+            .expect("serde deserialization should succeed");
         orch.complete_step(
             "s1",
             1,
@@ -1361,13 +1383,16 @@ mod tests {
         let mut orch = SagaOrchestrator::new(test_epoch(), 10);
         orch.create_saga("s1", SagaType::Publish, simple_steps(), "t1", 0)
             .expect("serde deserialization should succeed");
-        orch.begin_step("s1").expect("serde deserialization should succeed");
+        orch.begin_step("s1")
+            .expect("serde deserialization should succeed");
 
         let invalidated = orch.advance_epoch(SecurityEpoch::from_raw(2), "t-epoch");
         assert_eq!(invalidated.len(), 1);
         assert_eq!(invalidated[0], "s1");
 
-        let saga = orch.get("s1").expect("serde deserialization should succeed");
+        let saga = orch
+            .get("s1")
+            .expect("serde deserialization should succeed");
         assert!(saga.is_terminal());
     }
 
@@ -1394,7 +1419,8 @@ mod tests {
 
         // Complete s1.
         for i in 0..3 {
-            orch.begin_step("s1").expect("serde deserialization should succeed");
+            orch.begin_step("s1")
+                .expect("serde deserialization should succeed");
             orch.complete_step(
                 "s1",
                 i,
@@ -1421,7 +1447,8 @@ mod tests {
             .expect("serde deserialization should succeed");
         // Complete it.
         for i in 0..3 {
-            orch.begin_step("s1").expect("serde deserialization should succeed");
+            orch.begin_step("s1")
+                .expect("serde deserialization should succeed");
             orch.complete_step(
                 "s1",
                 i,
@@ -1472,7 +1499,8 @@ mod tests {
             .expect("serde deserialization should succeed");
         orch.drain_events();
 
-        orch.begin_step("s1").expect("serde deserialization should succeed");
+        orch.begin_step("s1")
+            .expect("serde deserialization should succeed");
         orch.complete_step(
             "s1",
             0,
@@ -1498,7 +1526,8 @@ mod tests {
         orch.create_saga("s1", SagaType::Quarantine, simple_steps(), "t1", 0)
             .expect("serde deserialization should succeed");
 
-        orch.begin_step("s1").expect("serde deserialization should succeed");
+        orch.begin_step("s1")
+            .expect("serde deserialization should succeed");
         orch.complete_step(
             "s1",
             0,
@@ -1509,7 +1538,8 @@ mod tests {
             100,
         )
         .expect("serde deserialization should succeed");
-        orch.begin_step("s1").expect("serde deserialization should succeed");
+        orch.begin_step("s1")
+            .expect("serde deserialization should succeed");
         orch.complete_step(
             "s1",
             1,
@@ -1544,7 +1574,8 @@ mod tests {
         let mut orch = SagaOrchestrator::new(test_epoch(), 10);
         orch.create_saga("s1", SagaType::Publish, simple_steps(), "t1", 0)
             .expect("serde deserialization should succeed");
-        orch.begin_step("s1").expect("serde deserialization should succeed");
+        orch.begin_step("s1")
+            .expect("serde deserialization should succeed");
         orch.complete_step(
             "s1",
             0,
@@ -1603,7 +1634,8 @@ mod tests {
     fn saga_id_serialization_round_trip() {
         let id = SagaId::from_trace("test-123");
         let json = serde_json::to_string(&id).expect("serde deserialization should succeed");
-        let restored: SagaId = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: SagaId =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(id, restored);
     }
 
@@ -1620,7 +1652,8 @@ mod tests {
         ];
         for state in &states {
             let json = serde_json::to_string(state).expect("serde deserialization should succeed");
-            let restored: SagaState = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: SagaState =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*state, restored);
         }
     }
@@ -1634,7 +1667,8 @@ mod tests {
             timeout_ticks: 100,
         };
         let json = serde_json::to_string(&step).expect("serde deserialization should succeed");
-        let restored: SagaStep = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: SagaStep =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(step, restored);
     }
 
@@ -1652,7 +1686,8 @@ mod tests {
             event: "step_complete".to_string(),
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let restored: SagaEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: SagaEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, restored);
     }
 
@@ -1669,7 +1704,8 @@ mod tests {
         ];
         for err in &errors {
             let json = serde_json::to_string(err).expect("serde deserialization should succeed");
-            let restored: SagaError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: SagaError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, restored);
         }
     }
@@ -1689,7 +1725,8 @@ mod tests {
         ];
         for o in &outcomes {
             let json = serde_json::to_string(o).expect("serde deserialization should succeed");
-            let restored: StepOutcome = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: StepOutcome =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*o, restored);
         }
     }
@@ -1727,7 +1764,8 @@ mod tests {
         orch.create_saga("s1", SagaType::Publish, simple_steps(), "t1", 0)
             .expect("serde deserialization should succeed");
 
-        orch.begin_step("s1").expect("serde deserialization should succeed");
+        orch.begin_step("s1")
+            .expect("serde deserialization should succeed");
         orch.complete_step(
             "s1",
             0,
@@ -1739,10 +1777,13 @@ mod tests {
         )
         .expect("serde deserialization should succeed");
 
-        let saga = orch.get("s1").expect("serde deserialization should succeed");
+        let saga = orch
+            .get("s1")
+            .expect("serde deserialization should succeed");
         assert_eq!(saga.last_completed_forward_step(), Some(0));
 
-        orch.begin_step("s1").expect("serde deserialization should succeed");
+        orch.begin_step("s1")
+            .expect("serde deserialization should succeed");
         orch.complete_step(
             "s1",
             1,
@@ -1754,7 +1795,9 @@ mod tests {
         )
         .expect("serde deserialization should succeed");
 
-        let saga = orch.get("s1").expect("serde deserialization should succeed");
+        let saga = orch
+            .get("s1")
+            .expect("serde deserialization should succeed");
         assert_eq!(saga.last_completed_forward_step(), Some(1));
     }
 
@@ -1766,7 +1809,8 @@ mod tests {
             let mut orch = SagaOrchestrator::new(SecurityEpoch::from_raw(1), 10);
             orch.create_saga("s1", SagaType::Quarantine, simple_steps(), "t1", 0)
                 .expect("serde deserialization should succeed");
-            orch.begin_step("s1").expect("serde deserialization should succeed");
+            orch.begin_step("s1")
+                .expect("serde deserialization should succeed");
             orch.complete_step(
                 "s1",
                 0,
@@ -1777,7 +1821,8 @@ mod tests {
                 100,
             )
             .expect("serde deserialization should succeed");
-            orch.begin_step("s1").expect("serde deserialization should succeed");
+            orch.begin_step("s1")
+                .expect("serde deserialization should succeed");
             orch.complete_step(
                 "s1",
                 1,
@@ -1816,7 +1861,8 @@ mod tests {
             .expect("serde deserialization should succeed");
 
         for i in 0..4 {
-            orch.begin_step("q1").expect("serde deserialization should succeed");
+            orch.begin_step("q1")
+                .expect("serde deserialization should succeed");
             orch.complete_step(
                 "q1",
                 i,
@@ -1829,7 +1875,9 @@ mod tests {
             .expect("serde deserialization should succeed");
         }
 
-        let saga = orch.get("q1").expect("serde deserialization should succeed");
+        let saga = orch
+            .get("q1")
+            .expect("serde deserialization should succeed");
         assert_eq!(saga.state, SagaState::Completed);
         assert_eq!(saga.step_records.len(), 4);
         assert_eq!(orch.active_count(), 0);
@@ -1844,7 +1892,8 @@ mod tests {
 
         // Steps 0, 1 succeed.
         for i in 0..2 {
-            orch.begin_step("p1").expect("serde deserialization should succeed");
+            orch.begin_step("p1")
+                .expect("serde deserialization should succeed");
             orch.complete_step(
                 "p1",
                 i,
@@ -1858,7 +1907,8 @@ mod tests {
         }
 
         // Step 2 fails (commit fails).
-        orch.begin_step("p1").expect("serde deserialization should succeed");
+        orch.begin_step("p1")
+            .expect("serde deserialization should succeed");
         orch.complete_step(
             "p1",
             2,
@@ -1872,7 +1922,10 @@ mod tests {
 
         // Compensate in reverse: step 1, then step 0.
         for i in (0..2).rev() {
-            let (comp_idx, _step) = orch.next_compensation_step("p1").expect("serde deserialization should succeed").expect("serde deserialization should succeed");
+            let (comp_idx, _step) = orch
+                .next_compensation_step("p1")
+                .expect("serde deserialization should succeed")
+                .expect("serde deserialization should succeed");
             assert_eq!(comp_idx, i);
             orch.complete_compensation(
                 "p1",
@@ -1886,7 +1939,9 @@ mod tests {
             .expect("serde deserialization should succeed");
         }
 
-        let saga = orch.get("p1").expect("serde deserialization should succeed");
+        let saga = orch
+            .get("p1")
+            .expect("serde deserialization should succeed");
         assert!(saga.is_terminal());
         // 2 success + 1 fail + 2 compensations = 5 records
         assert_eq!(saga.step_records.len(), 5);
@@ -1927,7 +1982,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let restored: SagaType = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: SagaType =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, restored);
         }
     }
@@ -1937,7 +1993,8 @@ mod tests {
         let variants = [ActionType::Forward, ActionType::Compensate];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let restored: ActionType = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: ActionType =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, restored);
         }
     }
@@ -1961,7 +2018,8 @@ mod tests {
             idempotency_key_hex: "abc123".to_string(),
         };
         let json = serde_json::to_string(&record).expect("serde deserialization should succeed");
-        let restored: StepRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: StepRecord =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(record, restored);
     }
 
@@ -1987,7 +2045,8 @@ mod tests {
             created_at: 50,
         };
         let json = serde_json::to_string(&saga).expect("serde deserialization should succeed");
-        let restored: Saga = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: Saga =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(saga, restored);
     }
 
@@ -2020,7 +2079,8 @@ mod tests {
         ];
         for err in &errors {
             let json = serde_json::to_string(err).expect("serde deserialization should succeed");
-            let restored: SagaError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: SagaError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, restored);
         }
     }
@@ -2098,7 +2158,8 @@ mod tests {
             .expect("serde deserialization should succeed");
 
         // Step 0 succeeds.
-        orch.begin_step("s1").expect("serde deserialization should succeed");
+        orch.begin_step("s1")
+            .expect("serde deserialization should succeed");
         orch.complete_step(
             "s1",
             0,
@@ -2111,7 +2172,8 @@ mod tests {
         .expect("serde deserialization should succeed");
 
         // Step 1 cancelled.
-        orch.begin_step("s1").expect("serde deserialization should succeed");
+        orch.begin_step("s1")
+            .expect("serde deserialization should succeed");
         let state = orch
             .complete_step(
                 "s1",
@@ -2131,7 +2193,8 @@ mod tests {
         let mut orch = SagaOrchestrator::new(test_epoch(), 10);
         orch.create_saga("s1", SagaType::Publish, simple_steps(), "t1", 0)
             .expect("serde deserialization should succeed");
-        orch.begin_step("s1").expect("serde deserialization should succeed");
+        orch.begin_step("s1")
+            .expect("serde deserialization should succeed");
 
         let state1 = orch
             .complete_step(
@@ -2160,7 +2223,9 @@ mod tests {
         assert_eq!(state1, SagaState::InProgress { step_index: 1 });
         assert_eq!(state2, SagaState::InProgress { step_index: 1 });
 
-        let saga = orch.get("s1").expect("serde deserialization should succeed");
+        let saga = orch
+            .get("s1")
+            .expect("serde deserialization should succeed");
         assert_eq!(saga.step_records.len(), 1);
     }
 
@@ -2171,12 +2236,17 @@ mod tests {
             .expect("serde deserialization should succeed");
 
         // Pending state — no compensation step.
-        let result = orch.next_compensation_step("s1").expect("serde deserialization should succeed");
+        let result = orch
+            .next_compensation_step("s1")
+            .expect("serde deserialization should succeed");
         assert!(result.is_none());
 
         // In-progress state — still no compensation step.
-        orch.begin_step("s1").expect("serde deserialization should succeed");
-        let result = orch.next_compensation_step("s1").expect("serde deserialization should succeed");
+        orch.begin_step("s1")
+            .expect("serde deserialization should succeed");
+        let result = orch
+            .next_compensation_step("s1")
+            .expect("serde deserialization should succeed");
         assert!(result.is_none());
     }
 
@@ -2187,7 +2257,8 @@ mod tests {
             .expect("serde deserialization should succeed");
         // Complete s1.
         for i in 0..3 {
-            orch.begin_step("s1").expect("serde deserialization should succeed");
+            orch.begin_step("s1")
+                .expect("serde deserialization should succeed");
             orch.complete_step(
                 "s1",
                 i,
@@ -2209,7 +2280,9 @@ mod tests {
         assert_eq!(invalidated.len(), 1);
         assert_eq!(invalidated[0], "s2");
 
-        let s1 = orch.get("s1").expect("serde deserialization should succeed");
+        let s1 = orch
+            .get("s1")
+            .expect("serde deserialization should succeed");
         assert_eq!(s1.state, SagaState::Completed);
     }
 
@@ -2220,7 +2293,8 @@ mod tests {
             .expect("serde deserialization should succeed");
         // Complete s1.
         for i in 0..3 {
-            orch.begin_step("s1").expect("serde deserialization should succeed");
+            orch.begin_step("s1")
+                .expect("serde deserialization should succeed");
             orch.complete_step(
                 "s1",
                 i,
@@ -2308,7 +2382,8 @@ mod tests {
     fn saga_id_serde_roundtrip() {
         let id = SagaId::from_trace("trace-99");
         let json = serde_json::to_string(&id).expect("serde deserialization should succeed");
-        let restored: SagaId = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: SagaId =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(id, restored);
     }
 
@@ -2321,7 +2396,8 @@ mod tests {
             timeout_ticks: 5000,
         };
         let json = serde_json::to_string(&step).expect("serde deserialization should succeed");
-        let restored: SagaStep = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: SagaStep =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(step, restored);
     }
 
@@ -2339,7 +2415,8 @@ mod tests {
             event: "step_complete".to_string(),
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let restored: SagaEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: SagaEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, restored);
     }
 
@@ -2358,7 +2435,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let restored: StepOutcome = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: StepOutcome =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, restored);
         }
     }
@@ -2376,7 +2454,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let restored: SagaState = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: SagaState =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, restored);
         }
     }
@@ -2402,7 +2481,8 @@ mod tests {
         let mut orch = SagaOrchestrator::new(test_epoch(), 10);
         orch.create_saga("s1", SagaType::Publish, simple_steps(), "t1", 0)
             .expect("serde deserialization should succeed");
-        orch.begin_step("s1").expect("serde deserialization should succeed");
+        orch.begin_step("s1")
+            .expect("serde deserialization should succeed");
         orch.complete_step(
             "s1",
             0,
@@ -2415,9 +2495,24 @@ mod tests {
         .expect("serde deserialization should succeed");
 
         let counts = orch.event_counts();
-        assert_eq!(*counts.get("saga_created").expect("serde deserialization should succeed"), 1);
-        assert_eq!(*counts.get("step_begin").expect("serde deserialization should succeed"), 1);
-        assert_eq!(*counts.get("step_complete").expect("serde deserialization should succeed"), 1);
+        assert_eq!(
+            *counts
+                .get("saga_created")
+                .expect("serde deserialization should succeed"),
+            1
+        );
+        assert_eq!(
+            *counts
+                .get("step_begin")
+                .expect("serde deserialization should succeed"),
+            1
+        );
+        assert_eq!(
+            *counts
+                .get("step_complete")
+                .expect("serde deserialization should succeed"),
+            1
+        );
     }
 
     // -- Enrichment: saga step builder helpers --
@@ -2464,7 +2559,8 @@ mod tests {
         let mut orch = SagaOrchestrator::new(test_epoch(), 10);
         orch.create_saga("s1", SagaType::Eviction, simple_steps(), "t1", 0)
             .expect("serde deserialization should succeed");
-        orch.begin_step("s1").expect("serde deserialization should succeed");
+        orch.begin_step("s1")
+            .expect("serde deserialization should succeed");
 
         let state = orch
             .complete_step(
@@ -2480,7 +2576,11 @@ mod tests {
 
         // Step 0 failure means nothing to compensate → direct Failed.
         assert!(matches!(state, SagaState::Failed { .. }));
-        assert!(orch.get("s1").expect("serde deserialization should succeed").is_terminal());
+        assert!(
+            orch.get("s1")
+                .expect("serde deserialization should succeed")
+                .is_terminal()
+        );
     }
 
     #[test]
@@ -2490,7 +2590,8 @@ mod tests {
             .expect("serde deserialization should succeed");
 
         // Step 0 success.
-        orch.begin_step("s1").expect("serde deserialization should succeed");
+        orch.begin_step("s1")
+            .expect("serde deserialization should succeed");
         orch.complete_step(
             "s1",
             0,
@@ -2503,7 +2604,8 @@ mod tests {
         .expect("serde deserialization should succeed");
 
         // Step 1 failure → compensating at step 0.
-        orch.begin_step("s1").expect("serde deserialization should succeed");
+        orch.begin_step("s1")
+            .expect("serde deserialization should succeed");
         orch.complete_step(
             "s1",
             1,
@@ -2529,7 +2631,9 @@ mod tests {
             .expect("serde deserialization should succeed");
 
         assert!(matches!(state, SagaState::Failed { .. }));
-        let saga = orch.get("s1").expect("serde deserialization should succeed");
+        let saga = orch
+            .get("s1")
+            .expect("serde deserialization should succeed");
         assert!(saga.is_terminal());
     }
 
@@ -2590,7 +2694,8 @@ mod tests {
         orch.create_saga("s1", SagaType::Publish, simple_steps(), "t1", 0)
             .expect("serde deserialization should succeed");
         for i in 0..3 {
-            orch.begin_step("s1").expect("serde deserialization should succeed");
+            orch.begin_step("s1")
+                .expect("serde deserialization should succeed");
             orch.complete_step(
                 "s1",
                 i,
@@ -2629,7 +2734,8 @@ mod tests {
         let mut orch = SagaOrchestrator::new(test_epoch(), 10);
         orch.create_saga("s1", SagaType::Publish, simple_steps(), "t1", 0)
             .expect("serde deserialization should succeed");
-        orch.begin_step("s1").expect("serde deserialization should succeed");
+        orch.begin_step("s1")
+            .expect("serde deserialization should succeed");
         let err = orch
             .complete_step(
                 "s1",
@@ -2649,7 +2755,8 @@ mod tests {
         let mut orch = SagaOrchestrator::new(test_epoch(), 10);
         orch.create_saga("s1", SagaType::Publish, simple_steps(), "t1", 0)
             .expect("serde deserialization should succeed");
-        orch.begin_step("s1").expect("serde deserialization should succeed");
+        orch.begin_step("s1")
+            .expect("serde deserialization should succeed");
         // Saga is InProgress { step_index: 0 }; trying to complete step 1 should fail.
         let err = orch
             .complete_step(
@@ -2672,7 +2779,8 @@ mod tests {
         let mut orch = SagaOrchestrator::new(test_epoch(), 10);
         orch.create_saga("s1", SagaType::Publish, simple_steps(), "t1", 0)
             .expect("serde deserialization should succeed");
-        orch.begin_step("s1").expect("serde deserialization should succeed");
+        orch.begin_step("s1")
+            .expect("serde deserialization should succeed");
         orch.complete_step(
             "s1",
             0,
@@ -2683,7 +2791,8 @@ mod tests {
             100,
         )
         .expect("serde deserialization should succeed");
-        orch.begin_step("s1").expect("serde deserialization should succeed");
+        orch.begin_step("s1")
+            .expect("serde deserialization should succeed");
         orch.complete_step(
             "s1",
             1,
@@ -2714,7 +2823,8 @@ mod tests {
         orch.create_saga("s1", SagaType::Publish, simple_steps(), "t1", 0)
             .expect("serde deserialization should succeed");
         // Step 0 success, step 1 failure → compensating at 0.
-        orch.begin_step("s1").expect("serde deserialization should succeed");
+        orch.begin_step("s1")
+            .expect("serde deserialization should succeed");
         orch.complete_step(
             "s1",
             0,
@@ -2725,7 +2835,8 @@ mod tests {
             100,
         )
         .expect("serde deserialization should succeed");
-        orch.begin_step("s1").expect("serde deserialization should succeed");
+        orch.begin_step("s1")
+            .expect("serde deserialization should succeed");
         orch.complete_step(
             "s1",
             1,
@@ -2769,7 +2880,8 @@ mod tests {
         let mut orch = SagaOrchestrator::new(test_epoch(), 10);
         orch.create_saga("s1", SagaType::Publish, simple_steps(), "t1", 0)
             .expect("serde deserialization should succeed");
-        orch.begin_step("s1").expect("serde deserialization should succeed");
+        orch.begin_step("s1")
+            .expect("serde deserialization should succeed");
         // Saga is InProgress — not compensating.
         let err = orch
             .complete_compensation(
@@ -2936,7 +3048,10 @@ mod tests {
         }
 
         assert_eq!(
-            *orch.event_counts().get("saga_epoch_invalidated").expect("serde deserialization should succeed"),
+            *orch
+                .event_counts()
+                .get("saga_epoch_invalidated")
+                .expect("serde deserialization should succeed"),
             2
         );
     }
@@ -2954,13 +3069,19 @@ mod tests {
         let mut orch = SagaOrchestrator::new(SecurityEpoch::from_raw(5), 10);
         orch.create_saga("s1", SagaType::Publish, simple_steps(), "t1", 0)
             .expect("serde deserialization should succeed");
-        orch.begin_step("s1").expect("serde deserialization should succeed");
+        orch.begin_step("s1")
+            .expect("serde deserialization should succeed");
         orch.drain_events();
 
         let invalidated = orch.advance_epoch(SecurityEpoch::from_raw(4), "t-regress");
         assert!(invalidated.is_empty());
         assert_eq!(orch.epoch(), SecurityEpoch::from_raw(5));
-        assert!(!orch.get("s1").expect("serde deserialization should succeed").is_terminal());
+        assert!(
+            !orch
+                .get("s1")
+                .expect("serde deserialization should succeed")
+                .is_terminal()
+        );
         assert!(orch.drain_events().is_empty());
     }
 
@@ -3026,7 +3147,8 @@ mod tests {
             orch.create_saga(&id, SagaType::Publish, simple_steps(), "t", 100)
                 .expect("serde deserialization should succeed");
             for j in 0..3 {
-                orch.begin_step(&id).expect("serde deserialization should succeed");
+                orch.begin_step(&id)
+                    .expect("serde deserialization should succeed");
                 orch.complete_step(
                     &id,
                     j,
@@ -3053,7 +3175,8 @@ mod tests {
         orch.create_saga("s1", SagaType::Publish, simple_steps(), "t1", 0)
             .expect("serde deserialization should succeed");
         for i in 0..3 {
-            orch.begin_step("s1").expect("serde deserialization should succeed");
+            orch.begin_step("s1")
+                .expect("serde deserialization should succeed");
             orch.complete_step(
                 "s1",
                 i,
@@ -3073,7 +3196,8 @@ mod tests {
         let mut orch = SagaOrchestrator::new(test_epoch(), 10);
         orch.create_saga("s1", SagaType::Publish, simple_steps(), "t1", 0)
             .expect("serde deserialization should succeed");
-        orch.begin_step("s1").expect("serde deserialization should succeed");
+        orch.begin_step("s1")
+            .expect("serde deserialization should succeed");
         orch.complete_step(
             "s1",
             0,
@@ -3084,7 +3208,8 @@ mod tests {
             100,
         )
         .expect("serde deserialization should succeed");
-        orch.begin_step("s1").expect("serde deserialization should succeed");
+        orch.begin_step("s1")
+            .expect("serde deserialization should succeed");
         orch.complete_step(
             "s1",
             1,

@@ -1370,9 +1370,15 @@ mod tests {
             })
             .expect("serde deserialization should succeed");
 
-        lattice.use_declassification("d1", "t1").expect("serde deserialization should succeed");
-        lattice.use_declassification("d1", "t2").expect("serde deserialization should succeed");
-        lattice.use_declassification("d1", "t3").expect("serde deserialization should succeed");
+        lattice
+            .use_declassification("d1", "t1")
+            .expect("serde deserialization should succeed");
+        lattice
+            .use_declassification("d1", "t2")
+            .expect("serde deserialization should succeed");
+        lattice
+            .use_declassification("d1", "t3")
+            .expect("serde deserialization should succeed");
 
         // Fourth use should fail
         let err = lattice.use_declassification("d1", "t4").unwrap_err();
@@ -1420,7 +1426,9 @@ mod tests {
             max_uses: 0,
             use_count: 0,
         };
-        lattice.register_obligation(ob.clone()).expect("serde deserialization should succeed");
+        lattice
+            .register_obligation(ob.clone())
+            .expect("serde deserialization should succeed");
         let err = lattice.register_obligation(ob).unwrap_err();
         assert_eq!(
             err,
@@ -1610,7 +1618,8 @@ mod tests {
             })
             .expect("serde deserialization should succeed");
 
-        let signing_key = SigningKey::from_bytes([9u8; 32]).expect("serde deserialization should succeed");
+        let signing_key =
+            SigningKey::from_bytes([9u8; 32]).expect("serde deserialization should succeed");
         let mut receipt = DeclassificationReceipt {
             receipt_id: "rcpt-2".to_string(),
             source_label: Label::Secret,
@@ -1626,7 +1635,9 @@ mod tests {
             schema_version: crate::ifc_artifacts::IfcSchemaVersion::CURRENT,
             signature: Signature::from_bytes(SIGNATURE_SENTINEL),
         };
-        receipt.sign(&signing_key).expect("serde deserialization should succeed");
+        receipt
+            .sign(&signing_key)
+            .expect("serde deserialization should succeed");
         lattice.trust_receipt_authorizer_for_contract("decision-2", signing_key.verification_key());
 
         lattice
@@ -1664,7 +1675,8 @@ mod tests {
             })
             .expect("serde deserialization should succeed");
 
-        let signing_key = SigningKey::from_bytes([3u8; 32]).expect("serde deserialization should succeed");
+        let signing_key =
+            SigningKey::from_bytes([3u8; 32]).expect("serde deserialization should succeed");
         let mut denied_receipt = DeclassificationReceipt {
             receipt_id: "rcpt-deny".to_string(),
             source_label: Label::Secret,
@@ -1680,7 +1692,9 @@ mod tests {
             schema_version: crate::ifc_artifacts::IfcSchemaVersion::CURRENT,
             signature: Signature::from_bytes(SIGNATURE_SENTINEL),
         };
-        denied_receipt.sign(&signing_key).expect("serde deserialization should succeed");
+        denied_receipt
+            .sign(&signing_key)
+            .expect("serde deserialization should succeed");
         lattice.trust_receipt_authorizer_for_contract("decision-3", signing_key.verification_key());
 
         let err = lattice
@@ -1718,7 +1732,8 @@ mod tests {
             })
             .expect("serde deserialization should succeed");
 
-        let signing_key = SigningKey::from_bytes([4u8; 32]).expect("serde deserialization should succeed");
+        let signing_key =
+            SigningKey::from_bytes([4u8; 32]).expect("serde deserialization should succeed");
         let mut tampered_receipt = DeclassificationReceipt {
             receipt_id: "rcpt-tampered".to_string(),
             source_label: Label::Secret,
@@ -1734,7 +1749,9 @@ mod tests {
             schema_version: crate::ifc_artifacts::IfcSchemaVersion::CURRENT,
             signature: Signature::from_bytes(SIGNATURE_SENTINEL),
         };
-        tampered_receipt.sign(&signing_key).expect("serde deserialization should succeed");
+        tampered_receipt
+            .sign(&signing_key)
+            .expect("serde deserialization should succeed");
         lattice.trust_receipt_authorizer_for_contract("decision-4", signing_key.verification_key());
         // Tamper after signing to simulate malicious receipt mutation.
         tampered_receipt.replay_linkage = "trace-modified".to_string();
@@ -1785,7 +1802,8 @@ mod tests {
             })
             .expect("serde deserialization should succeed");
 
-        let signing_key = SigningKey::from_bytes([5u8; 32]).expect("serde deserialization should succeed");
+        let signing_key =
+            SigningKey::from_bytes([5u8; 32]).expect("serde deserialization should succeed");
         let mut receipt = DeclassificationReceipt {
             receipt_id: "rcpt-untrusted".to_string(),
             source_label: Label::Secret,
@@ -1801,7 +1819,9 @@ mod tests {
             schema_version: crate::ifc_artifacts::IfcSchemaVersion::CURRENT,
             signature: Signature::from_bytes(SIGNATURE_SENTINEL),
         };
-        receipt.sign(&signing_key).expect("serde deserialization should succeed");
+        receipt
+            .sign(&signing_key)
+            .expect("serde deserialization should succeed");
 
         let err = lattice
             .use_declassification_with_receipt("obl-5", &receipt, "trace-rt")
@@ -1842,7 +1862,8 @@ mod tests {
             })
             .expect("serde deserialization should succeed");
 
-        let signing_key = SigningKey::from_bytes([6u8; 32]).expect("serde deserialization should succeed");
+        let signing_key =
+            SigningKey::from_bytes([6u8; 32]).expect("serde deserialization should succeed");
         let mut receipt = DeclassificationReceipt {
             receipt_id: "rcpt-cross-trace".to_string(),
             source_label: Label::Secret,
@@ -1858,7 +1879,9 @@ mod tests {
             schema_version: crate::ifc_artifacts::IfcSchemaVersion::CURRENT,
             signature: Signature::from_bytes(SIGNATURE_SENTINEL),
         };
-        receipt.sign(&signing_key).expect("serde deserialization should succeed");
+        receipt
+            .sign(&signing_key)
+            .expect("serde deserialization should succeed");
         lattice.trust_receipt_authorizer_for_contract("decision-6", signing_key.verification_key());
 
         let err = lattice
@@ -1898,7 +1921,8 @@ mod tests {
             LabelClass::TopSecret,
         ] {
             let json = serde_json::to_string(&label).expect("serde deserialization should succeed");
-            let decoded: LabelClass = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let decoded: LabelClass =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(label, decoded);
         }
     }
@@ -1912,8 +1936,10 @@ mod tests {
             Clearance::SealedSink,
             Clearance::NeverSink,
         ] {
-            let json = serde_json::to_string(&clearance).expect("serde deserialization should succeed");
-            let decoded: Clearance = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&clearance).expect("serde deserialization should succeed");
+            let decoded: Clearance =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(clearance, decoded);
         }
     }
@@ -1931,7 +1957,8 @@ mod tests {
             use_count: 2,
         };
         let json = serde_json::to_string(&ob).expect("serde deserialization should succeed");
-        let decoded: DeclassificationObligation = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let decoded: DeclassificationObligation =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ob, decoded);
     }
 
@@ -1949,7 +1976,8 @@ mod tests {
         ];
         for r in &results {
             let json = serde_json::to_string(r).expect("serde deserialization should succeed");
-            let decoded: FlowCheckResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let decoded: FlowCheckResult =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(r, &decoded);
         }
     }
@@ -2035,7 +2063,9 @@ mod tests {
         );
 
         // Exercise the declassification
-        lattice.use_declassification("auth-api", "t2").expect("serde deserialization should succeed");
+        lattice
+            .use_declassification("auth-api", "t2")
+            .expect("serde deserialization should succeed");
     }
 
     #[test]
@@ -2075,7 +2105,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: DataSource = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: DataSource =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -2095,7 +2126,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: DataSource = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: DataSource =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -2112,7 +2144,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: SinkKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: SinkKind =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -2305,7 +2338,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: FlowLatticeError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: FlowLatticeError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -2327,7 +2361,8 @@ mod tests {
             receipt_replay_command: None,
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let back: FlowLatticeEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: FlowLatticeEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
     }
 
@@ -2498,7 +2533,8 @@ mod tests {
             use_count: 0,
         };
         for expected in 1..=5 {
-            ob.record_use().expect("serde deserialization should succeed");
+            ob.record_use()
+                .expect("serde deserialization should succeed");
             assert_eq!(ob.use_count, expected);
         }
         // 6th use should fail
@@ -2566,7 +2602,9 @@ mod tests {
         );
 
         // Exhaust alpha
-        lattice.use_declassification("alpha", "t-use").expect("serde deserialization should succeed");
+        lattice
+            .use_declassification("alpha", "t-use")
+            .expect("serde deserialization should succeed");
 
         // Now alpha is exhausted, beta should be returned
         let result2 = lattice.check_flow(&LabelClass::TopSecret, &Clearance::NeverSink, "t2");
@@ -2636,7 +2674,8 @@ mod tests {
             })
             .expect("serde deserialization should succeed");
 
-        let signing_key = SigningKey::from_bytes([7u8; 32]).expect("serde deserialization should succeed");
+        let signing_key =
+            SigningKey::from_bytes([7u8; 32]).expect("serde deserialization should succeed");
         // Receipt's source_label is Public but obligation expects Secret
         let mut receipt = DeclassificationReceipt {
             receipt_id: "rcpt-m".into(),
@@ -2653,7 +2692,9 @@ mod tests {
             schema_version: crate::ifc_artifacts::IfcSchemaVersion::CURRENT,
             signature: Signature::from_bytes(SIGNATURE_SENTINEL),
         };
-        receipt.sign(&signing_key).expect("serde deserialization should succeed");
+        receipt
+            .sign(&signing_key)
+            .expect("serde deserialization should succeed");
         lattice.trust_receipt_authorizer_for_contract("dc-m", signing_key.verification_key());
 
         let err = lattice
@@ -2671,7 +2712,13 @@ mod tests {
             receipt.declassification_route_ref.as_str(),
         );
         // Obligation use_count should not be advanced
-        assert_eq!(lattice.obligation("obl-m").expect("serde deserialization should succeed").use_count, 0);
+        assert_eq!(
+            lattice
+                .obligation("obl-m")
+                .expect("serde deserialization should succeed")
+                .use_count,
+            0
+        );
     }
 
     #[test]
@@ -2690,7 +2737,8 @@ mod tests {
             })
             .expect("serde deserialization should succeed");
 
-        let signing_key = SigningKey::from_bytes([8u8; 32]).expect("serde deserialization should succeed");
+        let signing_key =
+            SigningKey::from_bytes([8u8; 32]).expect("serde deserialization should succeed");
         let mut receipt = DeclassificationReceipt {
             receipt_id: "rcpt-sink".into(),
             source_label: Label::Secret,
@@ -2706,7 +2754,9 @@ mod tests {
             schema_version: crate::ifc_artifacts::IfcSchemaVersion::CURRENT,
             signature: Signature::from_bytes(SIGNATURE_SENTINEL),
         };
-        receipt.sign(&signing_key).expect("serde deserialization should succeed");
+        receipt
+            .sign(&signing_key)
+            .expect("serde deserialization should succeed");
         lattice.trust_receipt_authorizer_for_contract("dc-sink", signing_key.verification_key());
 
         let err = lattice
@@ -2723,7 +2773,13 @@ mod tests {
             "rcpt-sink",
             receipt.declassification_route_ref.as_str(),
         );
-        assert_eq!(lattice.obligation("obl-sink").expect("serde deserialization should succeed").use_count, 0);
+        assert_eq!(
+            lattice
+                .obligation("obl-sink")
+                .expect("serde deserialization should succeed")
+                .use_count,
+            0
+        );
     }
 
     #[test]
@@ -2742,7 +2798,8 @@ mod tests {
             })
             .expect("serde deserialization should succeed");
 
-        let signing_key = SigningKey::from_bytes([11u8; 32]).expect("serde deserialization should succeed");
+        let signing_key =
+            SigningKey::from_bytes([11u8; 32]).expect("serde deserialization should succeed");
         let mut receipt = DeclassificationReceipt {
             receipt_id: "rcpt-custom".into(),
             source_label: Label::Secret,
@@ -2761,7 +2818,9 @@ mod tests {
             schema_version: crate::ifc_artifacts::IfcSchemaVersion::CURRENT,
             signature: Signature::from_bytes(SIGNATURE_SENTINEL),
         };
-        receipt.sign(&signing_key).expect("serde deserialization should succeed");
+        receipt
+            .sign(&signing_key)
+            .expect("serde deserialization should succeed");
         lattice.trust_receipt_authorizer_for_contract("dc-custom", signing_key.verification_key());
 
         let err = lattice
@@ -2778,7 +2837,13 @@ mod tests {
             "rcpt-custom",
             receipt.declassification_route_ref.as_str(),
         );
-        assert_eq!(lattice.obligation("obl-custom").expect("serde deserialization should succeed").use_count, 0);
+        assert_eq!(
+            lattice
+                .obligation("obl-custom")
+                .expect("serde deserialization should succeed")
+                .use_count,
+            0
+        );
     }
 
     #[test]
@@ -2797,7 +2862,8 @@ mod tests {
             })
             .expect("serde deserialization should succeed");
 
-        let signing_key = SigningKey::from_bytes([12u8; 32]).expect("serde deserialization should succeed");
+        let signing_key =
+            SigningKey::from_bytes([12u8; 32]).expect("serde deserialization should succeed");
         let mut receipt = DeclassificationReceipt {
             receipt_id: "rcpt-contract".into(),
             source_label: Label::Secret,
@@ -2813,7 +2879,9 @@ mod tests {
             schema_version: crate::ifc_artifacts::IfcSchemaVersion::CURRENT,
             signature: Signature::from_bytes(SIGNATURE_SENTINEL),
         };
-        receipt.sign(&signing_key).expect("serde deserialization should succeed");
+        receipt
+            .sign(&signing_key)
+            .expect("serde deserialization should succeed");
         lattice.trust_receipt_authorizer_for_contract("dc-other", signing_key.verification_key());
 
         let err = lattice
@@ -2830,7 +2898,13 @@ mod tests {
             "rcpt-contract",
             receipt.declassification_route_ref.as_str(),
         );
-        assert_eq!(lattice.obligation("obl-contract").expect("serde deserialization should succeed").use_count, 0);
+        assert_eq!(
+            lattice
+                .obligation("obl-contract")
+                .expect("serde deserialization should succeed")
+                .use_count,
+            0
+        );
     }
 
     #[test]
@@ -2849,7 +2923,8 @@ mod tests {
             })
             .expect("serde deserialization should succeed");
 
-        let signing_key = SigningKey::from_bytes([13u8; 32]).expect("serde deserialization should succeed");
+        let signing_key =
+            SigningKey::from_bytes([13u8; 32]).expect("serde deserialization should succeed");
         let mut receipt = DeclassificationReceipt {
             receipt_id: "rcpt-binding".into(),
             source_label: Label::Secret,
@@ -2865,7 +2940,9 @@ mod tests {
             schema_version: crate::ifc_artifacts::IfcSchemaVersion::CURRENT,
             signature: Signature::from_bytes(SIGNATURE_SENTINEL),
         };
-        receipt.sign(&signing_key).expect("serde deserialization should succeed");
+        receipt
+            .sign(&signing_key)
+            .expect("serde deserialization should succeed");
         lattice
             .trust_receipt_authorizer_for_contract("dc-expected", signing_key.verification_key());
 
@@ -2883,7 +2960,13 @@ mod tests {
             "rcpt-binding",
             receipt.declassification_route_ref.as_str(),
         );
-        assert_eq!(lattice.obligation("obl-binding").expect("serde deserialization should succeed").use_count, 0);
+        assert_eq!(
+            lattice
+                .obligation("obl-binding")
+                .expect("serde deserialization should succeed")
+                .use_count,
+            0
+        );
     }
 
     #[test]

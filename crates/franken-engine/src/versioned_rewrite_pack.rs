@@ -1149,7 +1149,8 @@ mod tests {
         let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid PackVersion,
         // so from_str back to PackVersion cannot fail (valid format + matching schema).
-        let back: PackVersion = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: PackVersion =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, back);
     }
 
@@ -1180,7 +1181,8 @@ mod tests {
             // SAFETY: to_string cannot fail on derived Serialize enum
             let json = serde_json::to_string(class).expect("serde deserialization should succeed");
             // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-            let back: InstructionCostClass = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: InstructionCostClass =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*class, back);
         }
     }
@@ -1222,7 +1224,8 @@ mod tests {
         // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&model).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let back: DeterministicCostModel = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DeterministicCostModel =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(model, back);
     }
 
@@ -1357,7 +1360,8 @@ mod tests {
             // SAFETY: to_string cannot fail on derived Serialize enum
             let json = serde_json::to_string(&cat).expect("serde deserialization should succeed");
             // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-            let back: RewriteCategory = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: RewriteCategory =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(cat, back);
         }
     }
@@ -1385,7 +1389,8 @@ mod tests {
             // SAFETY: to_string cannot fail on derived Serialize enum
             let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
             // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-            let back: RuleInterferenceKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: RuleInterferenceKind =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(kind, back);
         }
     }
@@ -1478,7 +1483,8 @@ mod tests {
         // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&meta).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let back: InterferenceMetadata = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: InterferenceMetadata =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(meta, back);
     }
 
@@ -1674,7 +1680,8 @@ mod tests {
         // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&pack).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let back: RewritePack = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: RewritePack =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(pack, back);
     }
 
@@ -2143,7 +2150,8 @@ mod tests {
     fn catalog_serde_roundtrip() {
         let catalog = PackCatalog::new("serde");
         let json = serde_json::to_string(&catalog).expect("serde deserialization should succeed");
-        let back: PackCatalog = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: PackCatalog =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(catalog, back);
     }
 
@@ -2180,7 +2188,10 @@ mod tests {
             )]),
         ));
 
-        let metadata = catalog.cross_interference.remove("a::b").expect("serde deserialization should succeed");
+        let metadata = catalog
+            .cross_interference
+            .remove("a::b")
+            .expect("serde deserialization should succeed");
         catalog.cross_interference.insert("b::a".into(), metadata);
 
         assert!(!catalog.is_canonical());
@@ -2219,7 +2230,8 @@ mod tests {
     fn rule_entry_serde_roundtrip() {
         let rule = test_rule("serde-rule", RewriteCategory::EffectHoisting, true);
         let json = serde_json::to_string(&rule).expect("serde deserialization should succeed");
-        let back: RewriteRuleEntry = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: RewriteRuleEntry =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(rule, back);
     }
 
@@ -2482,7 +2494,8 @@ mod tests {
     fn rule_interference_serde() {
         let interf = test_interference("a", "b", RuleInterferenceKind::BudgetContention);
         let json = serde_json::to_string(&interf).expect("serde deserialization should succeed");
-        let back: RuleInterference = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: RuleInterference =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(interf, back);
     }
 }

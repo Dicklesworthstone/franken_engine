@@ -652,7 +652,8 @@ mod tests {
             let json = serde_json::to_string(kind).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by to_string of a valid GateKind,
             // so from_str back to GateKind cannot fail (valid format + matching schema).
-            let restored: GateKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: GateKind =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*kind, restored);
         }
     }
@@ -729,7 +730,8 @@ mod tests {
             let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by to_string of a valid GateVerdict,
             // so from_str back to GateVerdict cannot fail (valid format + matching schema).
-            let restored: GateVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: GateVerdict =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(v, restored);
         }
     }
@@ -761,7 +763,8 @@ mod tests {
             let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by to_string of a valid OverallVerdict,
             // so from_str back to OverallVerdict cannot fail (valid format + matching schema).
-            let restored: OverallVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: OverallVerdict =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(v, restored);
         }
     }
@@ -793,7 +796,8 @@ mod tests {
         let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid GateConfig,
         // so from_str back to GateConfig cannot fail (valid format + matching schema).
-        let restored: GateConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: GateConfig =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cfg, restored);
     }
 
@@ -927,7 +931,8 @@ mod tests {
         let report = runner.run(&mut cx);
 
         let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
-        let restored: GateReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: GateReport =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report, restored);
     }
 
@@ -943,7 +948,8 @@ mod tests {
         let report = runner.run(&mut cx);
 
         let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
-        let parsed: serde_json::Value = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
 
         // Verify key fields exist for CI consumption
         assert!(parsed.get("seed").is_some());
@@ -966,7 +972,8 @@ mod tests {
             error_code: None,
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let restored: GateEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: GateEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, restored);
     }
 
@@ -976,7 +983,8 @@ mod tests {
     fn gate_result_serde_roundtrip() {
         let result = GateResult::pass(GateKind::FrankenlabScenarios, 10);
         let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
-        let restored: GateResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: GateResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, restored);
     }
 
@@ -1214,7 +1222,8 @@ mod tests {
             error_code: Some("replay_divergence".to_string()),
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let restored: GateEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: GateEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, restored);
         assert_eq!(restored.error_code.as_deref(), Some("replay_divergence"));
     }
@@ -1282,7 +1291,8 @@ mod tests {
             18,
         );
         let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
-        let restored: GateResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: GateResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, restored);
     }
 
@@ -1293,7 +1303,8 @@ mod tests {
             "harness unavailable".to_string(),
         );
         let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
-        let restored: GateResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: GateResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, restored);
     }
 

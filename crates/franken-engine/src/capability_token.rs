@@ -950,7 +950,8 @@ mod tests {
         let sk = make_sk(1);
         let token = build_basic_token(&sk);
         let ctx = basic_ctx();
-        verify_token(&token, &make_principal(10), &ctx).expect("serde deserialization should succeed");
+        verify_token(&token, &make_principal(10), &ctx)
+            .expect("serde deserialization should succeed");
     }
 
     #[test]
@@ -1034,7 +1035,8 @@ mod tests {
         let sk = make_sk(1);
         let token = build_basic_token(&sk);
         let ctx = VerificationContext::new(100, 10, 5); // exactly nbf
-        verify_token(&token, &make_principal(10), &ctx).expect("serde deserialization should succeed");
+        verify_token(&token, &make_principal(10), &ctx)
+            .expect("serde deserialization should succeed");
     }
 
     #[test]
@@ -1042,7 +1044,8 @@ mod tests {
         let sk = make_sk(1);
         let token = build_basic_token(&sk);
         let ctx = VerificationContext::new(1000, 10, 5); // exactly expiry
-        verify_token(&token, &make_principal(10), &ctx).expect("serde deserialization should succeed");
+        verify_token(&token, &make_principal(10), &ctx)
+            .expect("serde deserialization should succeed");
     }
 
     // -- Verification: checkpoint binding --
@@ -1092,7 +1095,8 @@ mod tests {
         .expect("serde deserialization should succeed");
 
         let ctx = basic_ctx(); // verifier_checkpoint_seq = 10
-        verify_token(&token, &make_principal(10), &ctx).expect("serde deserialization should succeed");
+        verify_token(&token, &make_principal(10), &ctx)
+            .expect("serde deserialization should succeed");
     }
 
     #[test]
@@ -1165,7 +1169,8 @@ mod tests {
         .expect("serde deserialization should succeed");
 
         let ctx = basic_ctx(); // verifier_revocation_seq = 5
-        verify_token(&token, &make_principal(10), &ctx).expect("serde deserialization should succeed");
+        verify_token(&token, &make_principal(10), &ctx)
+            .expect("serde deserialization should succeed");
     }
 
     #[test]
@@ -1261,7 +1266,8 @@ mod tests {
         let sk = make_sk(1);
         let token = build_basic_token(&sk);
         let json = serde_json::to_string(&token).expect("serde deserialization should succeed");
-        let restored: CapabilityToken = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: CapabilityToken =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(token, restored);
     }
 
@@ -1285,7 +1291,8 @@ mod tests {
         .expect("serde deserialization should succeed");
 
         let json = serde_json::to_string(&token).expect("serde deserialization should succeed");
-        let restored: CapabilityToken = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: CapabilityToken =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(token, restored);
     }
 
@@ -1320,7 +1327,8 @@ mod tests {
         ];
         for err in &errors {
             let json = serde_json::to_string(err).expect("serde deserialization should succeed");
-            let restored: TokenError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: TokenError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, restored);
         }
     }
@@ -1502,7 +1510,8 @@ mod tests {
         ];
         for err in &errors {
             let json = serde_json::to_string(err).expect("serde deserialization should succeed");
-            let restored: TokenError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: TokenError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, restored);
         }
     }
@@ -1528,7 +1537,8 @@ mod tests {
     fn principal_id_serde_roundtrip() {
         let p = make_principal(0xCD);
         let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
-        let restored: PrincipalId = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: PrincipalId =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(p, restored);
     }
 
@@ -1536,7 +1546,8 @@ mod tests {
     fn checkpoint_ref_serde_roundtrip() {
         let cr = make_checkpoint_ref(42);
         let json = serde_json::to_string(&cr).expect("serde deserialization should succeed");
-        let restored: CheckpointRef = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: CheckpointRef =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cr, restored);
     }
 
@@ -1544,7 +1555,8 @@ mod tests {
     fn revocation_freshness_ref_serde_roundtrip() {
         let rf = make_revocation_ref(99);
         let json = serde_json::to_string(&rf).expect("serde deserialization should succeed");
-        let restored: RevocationFreshnessRef = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: RevocationFreshnessRef =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(rf, restored);
     }
 
@@ -1552,7 +1564,8 @@ mod tests {
     fn token_version_serde_roundtrip() {
         let v = TokenVersion::V2;
         let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
-        let restored: TokenVersion = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: TokenVersion =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, restored);
     }
 
@@ -1566,7 +1579,8 @@ mod tests {
             trace_id: "trace-abc".to_string(),
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let restored: TokenEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: TokenEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, restored);
     }
 
@@ -1607,7 +1621,8 @@ mod tests {
         .expect("serde deserialization should succeed");
 
         let ctx = VerificationContext::new(500, 10, 5);
-        verify_token(&token, &make_principal(10), &ctx).expect("serde deserialization should succeed");
+        verify_token(&token, &make_principal(10), &ctx)
+            .expect("serde deserialization should succeed");
     }
 
     #[test]
@@ -1760,7 +1775,8 @@ mod tests {
 
         assert_eq!(token.audience.len(), 3);
         let json = serde_json::to_string(&token).expect("serde deserialization should succeed");
-        let back: CapabilityToken = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: CapabilityToken =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(token, back);
     }
 
@@ -1769,7 +1785,8 @@ mod tests {
         let sk = make_sk(1);
         let token = build_basic_token(&sk); // nbf=100, expiry=1000
         let ctx = VerificationContext::new(100, 10, 5); // exactly at nbf
-        verify_token(&token, &make_principal(10), &ctx).expect("serde deserialization should succeed");
+        verify_token(&token, &make_principal(10), &ctx)
+            .expect("serde deserialization should succeed");
     }
 
     // -----------------------------------------------------------------------
@@ -2076,14 +2093,19 @@ mod tests {
             builder = builder.add_audience(make_principal(i));
         }
 
-        let token = builder.build().expect("serde deserialization should succeed");
+        let token = builder
+            .build()
+            .expect("serde deserialization should succeed");
         assert_eq!(token.audience.len(), 50);
 
         // Verify any audience member can verify.
         let ctx = VerificationContext::new(100, 0, 0);
-        verify_token(&token, &make_principal(0), &ctx).expect("serde deserialization should succeed");
-        verify_token(&token, &make_principal(25), &ctx).expect("serde deserialization should succeed");
-        verify_token(&token, &make_principal(49), &ctx).expect("serde deserialization should succeed");
+        verify_token(&token, &make_principal(0), &ctx)
+            .expect("serde deserialization should succeed");
+        verify_token(&token, &make_principal(25), &ctx)
+            .expect("serde deserialization should succeed");
+        verify_token(&token, &make_principal(49), &ctx)
+            .expect("serde deserialization should succeed");
     }
 
     #[test]
@@ -2121,7 +2143,8 @@ mod tests {
 
         assert_eq!(token.capabilities.len(), 16);
         let json = serde_json::to_string(&token).expect("serde deserialization should succeed");
-        let back: CapabilityToken = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: CapabilityToken =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(token, back);
     }
 
@@ -2316,7 +2339,8 @@ mod tests {
         ];
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: TokenEventType = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: TokenEventType =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*v, back);
         }
     }
@@ -2379,7 +2403,8 @@ mod tests {
 
         let json = serde_json::to_string(&token).expect("serde deserialization should succeed");
         assert!(json.contains("null") || json.contains("\"checkpoint_binding\":null"));
-        let back: CapabilityToken = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: CapabilityToken =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(token, back);
     }
 
@@ -2399,7 +2424,8 @@ mod tests {
         .expect("serde deserialization should succeed");
 
         let json = serde_json::to_string(&token).expect("serde deserialization should succeed");
-        let back: CapabilityToken = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: CapabilityToken =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(token, back);
     }
 
@@ -2477,9 +2503,14 @@ mod tests {
         .build()
         .expect("serde deserialization should succeed");
 
-        let ctx = VerificationContext::new(500, 42, 5)
-            .with_checkpoint_ref(token.checkpoint_binding.as_ref().expect("serde deserialization should succeed"));
-        verify_token(&token, &make_principal(10), &ctx).expect("serde deserialization should succeed");
+        let ctx = VerificationContext::new(500, 42, 5).with_checkpoint_ref(
+            token
+                .checkpoint_binding
+                .as_ref()
+                .expect("serde deserialization should succeed"),
+        );
+        verify_token(&token, &make_principal(10), &ctx)
+            .expect("serde deserialization should succeed");
     }
 
     #[test]
@@ -2498,9 +2529,14 @@ mod tests {
         .build()
         .expect("serde deserialization should succeed");
 
-        let ctx = VerificationContext::new(500, 10, 42)
-            .with_revocation_freshness(token.revocation_freshness.as_ref().expect("serde deserialization should succeed"));
-        verify_token(&token, &make_principal(10), &ctx).expect("serde deserialization should succeed");
+        let ctx = VerificationContext::new(500, 10, 42).with_revocation_freshness(
+            token
+                .revocation_freshness
+                .as_ref()
+                .expect("serde deserialization should succeed"),
+        );
+        verify_token(&token, &make_principal(10), &ctx)
+            .expect("serde deserialization should succeed");
     }
 
     #[test]
@@ -2522,19 +2558,38 @@ mod tests {
 
         // Both bindings satisfied.
         let ctx_ok = VerificationContext::new(500, 25, 20)
-            .with_checkpoint_ref(token.checkpoint_binding.as_ref().expect("serde deserialization should succeed"))
-            .with_revocation_freshness(token.revocation_freshness.as_ref().expect("serde deserialization should succeed"));
-        verify_token(&token, &make_principal(10), &ctx_ok).expect("serde deserialization should succeed");
+            .with_checkpoint_ref(
+                token
+                    .checkpoint_binding
+                    .as_ref()
+                    .expect("serde deserialization should succeed"),
+            )
+            .with_revocation_freshness(
+                token
+                    .revocation_freshness
+                    .as_ref()
+                    .expect("serde deserialization should succeed"),
+            );
+        verify_token(&token, &make_principal(10), &ctx_ok)
+            .expect("serde deserialization should succeed");
 
         // Checkpoint fails, revocation ok.
-        let ctx_cp_fail = VerificationContext::new(500, 10, 20)
-            .with_revocation_freshness(token.revocation_freshness.as_ref().expect("serde deserialization should succeed"));
+        let ctx_cp_fail = VerificationContext::new(500, 10, 20).with_revocation_freshness(
+            token
+                .revocation_freshness
+                .as_ref()
+                .expect("serde deserialization should succeed"),
+        );
         let err = verify_token(&token, &make_principal(10), &ctx_cp_fail).unwrap_err();
         assert!(matches!(err, TokenError::CheckpointBindingFailed { .. }));
 
         // Checkpoint ok, revocation fails.
-        let ctx_rv_fail = VerificationContext::new(500, 25, 10)
-            .with_checkpoint_ref(token.checkpoint_binding.as_ref().expect("serde deserialization should succeed"));
+        let ctx_rv_fail = VerificationContext::new(500, 25, 10).with_checkpoint_ref(
+            token
+                .checkpoint_binding
+                .as_ref()
+                .expect("serde deserialization should succeed"),
+        );
         let err = verify_token(&token, &make_principal(10), &ctx_rv_fail).unwrap_err();
         assert!(matches!(err, TokenError::RevocationFreshnessStale { .. }));
     }
@@ -2597,7 +2652,8 @@ mod tests {
 
         assert_eq!(token.zone, "");
         let ctx = VerificationContext::new(500, 0, 0);
-        verify_token(&token, &make_principal(1), &ctx).expect("serde deserialization should succeed");
+        verify_token(&token, &make_principal(1), &ctx)
+            .expect("serde deserialization should succeed");
     }
 
     // -- Empty audience security tests (bd-3pa1u.3) --
@@ -2668,7 +2724,8 @@ mod tests {
         let token = build_basic_token(&sk);
         let ctx = basic_ctx();
         // Presenter principal(10) is in audience
-        verify_token(&token, &make_principal(10), &ctx).expect("serde deserialization should succeed");
+        verify_token(&token, &make_principal(10), &ctx)
+            .expect("serde deserialization should succeed");
     }
 
     #[test]
@@ -2696,7 +2753,8 @@ mod tests {
 
         // Manually set audience to empty to simulate an old insecure token
         token.audience = BTreeSet::new();
-        token.signature = sign_preimage(&sk, &token.preimage_bytes()).expect("serde deserialization should succeed");
+        token.signature = sign_preimage(&sk, &token.preimage_bytes())
+            .expect("serde deserialization should succeed");
 
         let ctx = basic_ctx();
         let presenter = make_principal(10); // Any presenter should fail with empty audience

@@ -1025,9 +1025,12 @@ mod tests {
             Label::Internal,
             FlowDecision::Allowed,
         );
-        idx.insert_flow_event(&ev, &ctx).expect("serde deserialization should succeed");
+        idx.insert_flow_event(&ev, &ctx)
+            .expect("serde deserialization should succeed");
 
-        let results = idx.flow_events_by_extension("ext-a", &ctx).expect("serde deserialization should succeed");
+        let results = idx
+            .flow_events_by_extension("ext-a", &ctx)
+            .expect("serde deserialization should succeed");
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].event_id, "ev1");
     }
@@ -1037,9 +1040,12 @@ mod tests {
         let mut idx = make_index();
         let ctx = test_ctx();
         let proof = flow_proof("p1", "ext-a", Label::Public, Label::Internal, 1);
-        idx.insert_flow_proof(&proof, &ctx).expect("serde deserialization should succeed");
+        idx.insert_flow_proof(&proof, &ctx)
+            .expect("serde deserialization should succeed");
 
-        let results = idx.flow_proofs_by_extension("ext-a", &ctx).expect("serde deserialization should succeed");
+        let results = idx
+            .flow_proofs_by_extension("ext-a", &ctx)
+            .expect("serde deserialization should succeed");
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].proof_id, "p1");
     }
@@ -1055,9 +1061,12 @@ mod tests {
             Label::Public,
             DeclassificationDecision::Allow,
         );
-        idx.insert_declass_receipt(&receipt, &ctx).expect("serde deserialization should succeed");
+        idx.insert_declass_receipt(&receipt, &ctx)
+            .expect("serde deserialization should succeed");
 
-        let results = idx.declass_receipts_by_extension("ext-a", &ctx).expect("serde deserialization should succeed");
+        let results = idx
+            .declass_receipts_by_extension("ext-a", &ctx)
+            .expect("serde deserialization should succeed");
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].receipt_id, "r1");
         assert_eq!(results[0].declassification_route_ref, "route-r1");
@@ -1069,9 +1078,12 @@ mod tests {
         let mut idx = make_index();
         let ctx = test_ctx();
         let claim = confinement_claim("c1", "ext-a", ClaimStrength::Full, 1);
-        idx.insert_confinement_claim(&claim, &ctx).expect("serde deserialization should succeed");
+        idx.insert_confinement_claim(&claim, &ctx)
+            .expect("serde deserialization should succeed");
 
-        let results = idx.confinement_claims_by_extension("ext-a", &ctx).expect("serde deserialization should succeed");
+        let results = idx
+            .confinement_claims_by_extension("ext-a", &ctx)
+            .expect("serde deserialization should succeed");
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].claim_id, "c1");
     }
@@ -1196,9 +1208,13 @@ mod tests {
         );
         ev.receipt_ref = Some("  r1  ".to_string());
 
-        idx.insert_flow_event(&ev, &ctx).expect("serde deserialization should succeed");
+        idx.insert_flow_event(&ev, &ctx)
+            .expect("serde deserialization should succeed");
 
-        let stored = idx.get_flow_event("ev1", &ctx).expect("serde deserialization should succeed").expect("serde deserialization should succeed");
+        let stored = idx
+            .get_flow_event("ev1", &ctx)
+            .expect("serde deserialization should succeed")
+            .expect("serde deserialization should succeed");
         assert_eq!(stored.receipt_ref.as_deref(), Some("r1"));
     }
 
@@ -1214,12 +1230,18 @@ mod tests {
             FlowDecision::Allowed,
         );
 
-        idx.insert_flow_event(&ev, &ctx).expect("serde deserialization should succeed");
+        idx.insert_flow_event(&ev, &ctx)
+            .expect("serde deserialization should succeed");
 
-        let stored = idx.get_flow_event("ev1", &ctx).expect("serde deserialization should succeed").expect("serde deserialization should succeed");
+        let stored = idx
+            .get_flow_event("ev1", &ctx)
+            .expect("serde deserialization should succeed")
+            .expect("serde deserialization should succeed");
         assert_eq!(stored.extension_id, "ext-a");
         assert_eq!(
-            idx.flow_events_by_extension("ext-a", &ctx).expect("serde deserialization should succeed").len(),
+            idx.flow_events_by_extension("ext-a", &ctx)
+                .expect("serde deserialization should succeed")
+                .len(),
             1
         );
         assert_eq!(
@@ -1242,11 +1264,19 @@ mod tests {
             FlowDecision::Allowed,
         );
 
-        idx.insert_flow_event(&ev, &ctx).expect("serde deserialization should succeed");
+        idx.insert_flow_event(&ev, &ctx)
+            .expect("serde deserialization should succeed");
 
-        let stored = idx.get_flow_event("ev1", &ctx).expect("serde deserialization should succeed").expect("serde deserialization should succeed");
+        let stored = idx
+            .get_flow_event("ev1", &ctx)
+            .expect("serde deserialization should succeed")
+            .expect("serde deserialization should succeed");
         assert_eq!(stored.event_id, "ev1");
-        assert!(idx.get_flow_event("  ev1  ", &ctx).expect("serde deserialization should succeed").is_some());
+        assert!(
+            idx.get_flow_event("  ev1  ", &ctx)
+                .expect("serde deserialization should succeed")
+                .is_some()
+        );
     }
 
     #[test]
@@ -1273,11 +1303,19 @@ mod tests {
         let ctx = test_ctx();
         let proof = flow_proof("  p1  ", "ext-a", Label::Public, Label::Internal, 1);
 
-        idx.insert_flow_proof(&proof, &ctx).expect("serde deserialization should succeed");
+        idx.insert_flow_proof(&proof, &ctx)
+            .expect("serde deserialization should succeed");
 
-        let stored = idx.get_flow_proof("p1", &ctx).expect("serde deserialization should succeed").expect("serde deserialization should succeed");
+        let stored = idx
+            .get_flow_proof("p1", &ctx)
+            .expect("serde deserialization should succeed")
+            .expect("serde deserialization should succeed");
         assert_eq!(stored.proof_id, "p1");
-        assert!(idx.get_flow_proof("  p1  ", &ctx).expect("serde deserialization should succeed").is_some());
+        assert!(
+            idx.get_flow_proof("  p1  ", &ctx)
+                .expect("serde deserialization should succeed")
+                .is_some()
+        );
     }
 
     #[test]
@@ -1365,11 +1403,19 @@ mod tests {
         let ctx = test_ctx();
         let claim = confinement_claim("  c1  ", "ext-a", ClaimStrength::Full, 1);
 
-        idx.insert_confinement_claim(&claim, &ctx).expect("serde deserialization should succeed");
+        idx.insert_confinement_claim(&claim, &ctx)
+            .expect("serde deserialization should succeed");
 
-        let stored = idx.get_confinement_claim("c1", &ctx).expect("serde deserialization should succeed").expect("serde deserialization should succeed");
+        let stored = idx
+            .get_confinement_claim("c1", &ctx)
+            .expect("serde deserialization should succeed")
+            .expect("serde deserialization should succeed");
         assert_eq!(stored.claim_id, "c1");
-        assert!(idx.get_confinement_claim("  c1  ", &ctx).expect("serde deserialization should succeed").is_some());
+        assert!(
+            idx.get_confinement_claim("  c1  ", &ctx)
+                .expect("serde deserialization should succeed")
+                .is_some()
+        );
     }
 
     // -- extension isolation ------------------------------------------------
@@ -1401,11 +1447,15 @@ mod tests {
         )
         .expect("serde deserialization should succeed");
 
-        let a = idx.flow_events_by_extension("ext-a", &ctx).expect("serde deserialization should succeed");
+        let a = idx
+            .flow_events_by_extension("ext-a", &ctx)
+            .expect("serde deserialization should succeed");
         assert_eq!(a.len(), 1);
         assert_eq!(a[0].event_id, "ev1");
 
-        let b = idx.flow_events_by_extension("ext-b", &ctx).expect("serde deserialization should succeed");
+        let b = idx
+            .flow_events_by_extension("ext-b", &ctx)
+            .expect("serde deserialization should succeed");
         assert_eq!(b.len(), 1);
         assert_eq!(b[0].event_id, "ev2");
     }
@@ -1573,7 +1623,9 @@ mod tests {
     fn sink_provenance_empty_for_no_match() {
         let mut idx = make_index();
         let ctx = test_ctx();
-        let sources = idx.sink_provenance("ext-a", &Label::Secret, &ctx).expect("serde deserialization should succeed");
+        let sources = idx
+            .sink_provenance("ext-a", &Label::Secret, &ctx)
+            .expect("serde deserialization should succeed");
         assert!(sources.is_empty());
     }
 
@@ -1622,7 +1674,9 @@ mod tests {
         )
         .expect("serde deserialization should succeed");
 
-        let status = idx.confinement_status("ext-a", &ctx).expect("serde deserialization should succeed");
+        let status = idx
+            .confinement_status("ext-a", &ctx)
+            .expect("serde deserialization should succeed");
         assert_eq!(status.extension_id, "ext-a");
         assert_eq!(status.proven_flows, 1);
         assert_eq!(status.unproven_flows, 1);
@@ -1657,7 +1711,9 @@ mod tests {
         )
         .expect("serde deserialization should succeed");
 
-        let status = idx.confinement_status("ext-a", &ctx).expect("serde deserialization should succeed");
+        let status = idx
+            .confinement_status("ext-a", &ctx)
+            .expect("serde deserialization should succeed");
         assert_eq!(status.proven_flows, 1);
         assert_eq!(status.unproven_flows, 0);
         assert_eq!(status.strongest_claim, Some(ClaimStrength::Full));
@@ -1668,7 +1724,9 @@ mod tests {
     fn confinement_status_empty_extension() {
         let mut idx = make_index();
         let ctx = test_ctx();
-        let status = idx.confinement_status("ext-empty", &ctx).expect("serde deserialization should succeed");
+        let status = idx
+            .confinement_status("ext-empty", &ctx)
+            .expect("serde deserialization should succeed");
         assert_eq!(status.proven_flows, 0);
         assert_eq!(status.unproven_flows, 0);
         assert!(status.strongest_claim.is_none());
@@ -1690,7 +1748,8 @@ mod tests {
             FlowDecision::Declassified,
         );
         ev.receipt_ref = Some("r1".to_string());
-        idx.insert_flow_event(&ev, &ctx).expect("serde deserialization should succeed");
+        idx.insert_flow_event(&ev, &ctx)
+            .expect("serde deserialization should succeed");
 
         idx.insert_declass_receipt(
             &declass_receipt(
@@ -1704,16 +1763,33 @@ mod tests {
         )
         .expect("serde deserialization should succeed");
 
-        let joined = idx.join_events_with_receipts("ext-a", &ctx).expect("serde deserialization should succeed");
+        let joined = idx
+            .join_events_with_receipts("ext-a", &ctx)
+            .expect("serde deserialization should succeed");
         assert_eq!(joined.len(), 1);
         assert!(joined[0].1.is_some());
-        assert_eq!(joined[0].1.as_ref().expect("serde deserialization should succeed").receipt_id, "r1");
         assert_eq!(
-            joined[0].1.as_ref().expect("serde deserialization should succeed").declassification_route_ref,
+            joined[0]
+                .1
+                .as_ref()
+                .expect("serde deserialization should succeed")
+                .receipt_id,
+            "r1"
+        );
+        assert_eq!(
+            joined[0]
+                .1
+                .as_ref()
+                .expect("serde deserialization should succeed")
+                .declassification_route_ref,
             "route-r1"
         );
         assert_eq!(
-            joined[0].1.as_ref().expect("serde deserialization should succeed").decision_contract_id,
+            joined[0]
+                .1
+                .as_ref()
+                .expect("serde deserialization should succeed")
+                .decision_contract_id,
             "decision-r1"
         );
     }
@@ -1730,9 +1806,12 @@ mod tests {
             Label::Internal,
             FlowDecision::Allowed,
         );
-        idx.insert_flow_event(&ev, &ctx).expect("serde deserialization should succeed");
+        idx.insert_flow_event(&ev, &ctx)
+            .expect("serde deserialization should succeed");
 
-        let joined = idx.join_events_with_receipts("ext-a", &ctx).expect("serde deserialization should succeed");
+        let joined = idx
+            .join_events_with_receipts("ext-a", &ctx)
+            .expect("serde deserialization should succeed");
         assert_eq!(joined.len(), 1);
         assert!(joined[0].1.is_none());
     }
@@ -1749,7 +1828,8 @@ mod tests {
             FlowDecision::Allowed,
         );
         let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
-        let deser: FlowEventRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let deser: FlowEventRecord =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ev, deser);
     }
 
@@ -1757,7 +1837,8 @@ mod tests {
     fn flow_proof_record_serde_roundtrip() {
         let proof = flow_proof("p1", "ext-a", Label::Internal, Label::Confidential, 1);
         let json = serde_json::to_string(&proof).expect("serde deserialization should succeed");
-        let deser: FlowProofRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let deser: FlowProofRecord =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(proof, deser);
     }
 
@@ -1771,7 +1852,8 @@ mod tests {
             DeclassificationDecision::Allow,
         );
         let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
-        let deser: DeclassReceiptRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let deser: DeclassReceiptRecord =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(receipt, deser);
     }
 
@@ -1793,7 +1875,8 @@ mod tests {
             .as_object_mut()
             .expect("serde deserialization should succeed")
             .remove("decision_contract_id");
-        let deser: DeclassReceiptRecord = serde_json::from_value(value).expect("serde deserialization should succeed");
+        let deser: DeclassReceiptRecord =
+            serde_json::from_value(value).expect("serde deserialization should succeed");
         assert_eq!(deser.receipt_id, "r1");
         assert!(deser.declassification_route_ref.is_empty());
         assert!(deser.decision_contract_id.is_empty());
@@ -1803,7 +1886,8 @@ mod tests {
     fn confinement_claim_record_serde_roundtrip() {
         let claim = confinement_claim("c1", "ext-a", ClaimStrength::Full, 1);
         let json = serde_json::to_string(&claim).expect("serde deserialization should succeed");
-        let deser: ConfinementClaimRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let deser: ConfinementClaimRecord =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(claim, deser);
     }
 
@@ -1815,7 +1899,8 @@ mod tests {
             FlowDecision::Declassified,
         ] {
             let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
-            let deser: FlowDecision = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let deser: FlowDecision =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(d, deser);
         }
     }
@@ -1828,7 +1913,8 @@ mod tests {
             LineageEvidenceType::DeclassificationReceipt,
         ] {
             let json = serde_json::to_string(&t).expect("serde deserialization should succeed");
-            let deser: LineageEvidenceType = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let deser: LineageEvidenceType =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(t, deser);
         }
     }
@@ -1843,7 +1929,8 @@ mod tests {
             latest_proof_epoch: Some(3),
         };
         let json = serde_json::to_string(&status).expect("serde deserialization should succeed");
-        let deser: ConfinementStatus = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let deser: ConfinementStatus =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(status, deser);
     }
 
@@ -1866,7 +1953,8 @@ mod tests {
         ];
         for err in errors {
             let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
-            let deser: ProvenanceError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let deser: ProvenanceError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(err, deser);
         }
     }
@@ -1883,7 +1971,8 @@ mod tests {
             record_count: Some(1),
         };
         let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
-        let deser: ProvenanceEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let deser: ProvenanceEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ev, deser);
     }
 
@@ -1969,7 +2058,8 @@ mod tests {
             Label::Internal,
             FlowDecision::Allowed,
         );
-        idx.insert_flow_event(&ev, &ctx).expect("serde deserialization should succeed");
+        idx.insert_flow_event(&ev, &ctx)
+            .expect("serde deserialization should succeed");
         assert_eq!(idx.events().len(), 1);
         assert_eq!(idx.events()[0].event, "flow_event_inserted");
     }
@@ -2011,9 +2101,13 @@ mod tests {
             .expect("serde deserialization should succeed");
         }
 
-        let events = idx.flow_events_by_extension("ext-a", &ctx).expect("serde deserialization should succeed");
+        let events = idx
+            .flow_events_by_extension("ext-a", &ctx)
+            .expect("serde deserialization should succeed");
         assert_eq!(events.len(), 5);
-        let proofs = idx.flow_proofs_by_extension("ext-a", &ctx).expect("serde deserialization should succeed");
+        let proofs = idx
+            .flow_proofs_by_extension("ext-a", &ctx)
+            .expect("serde deserialization should succeed");
         assert_eq!(proofs.len(), 3);
     }
 
@@ -2063,7 +2157,11 @@ mod tests {
             .expect("serde deserialization should succeed");
         // Should include: 1-hop (Public→Internal), 2-hop (Public→Internal→Confidential),
         // 3-hop (Public→Internal→Confidential→Secret).
-        let max_hops = paths.iter().map(|p| p.hops.len()).max().expect("serde deserialization should succeed");
+        let max_hops = paths
+            .iter()
+            .map(|p| p.hops.len())
+            .max()
+            .expect("serde deserialization should succeed");
         assert_eq!(max_hops, 3);
         assert!(paths.len() >= 3);
         // The 3-hop path should trace Public→Internal→Confidential→Secret.
@@ -2176,7 +2274,9 @@ mod tests {
         )
         .expect("serde deserialization should succeed");
 
-        let sources = idx.sink_provenance("ext-a", &Label::Public, &ctx).expect("serde deserialization should succeed");
+        let sources = idx
+            .sink_provenance("ext-a", &Label::Public, &ctx)
+            .expect("serde deserialization should succeed");
         assert_eq!(sources.len(), 1);
         assert!(sources.contains(&Label::Secret));
     }
@@ -2212,9 +2312,12 @@ mod tests {
         );
         ev3.timestamp_ms = 300;
 
-        idx.insert_flow_event(&ev1, &ctx).expect("serde deserialization should succeed");
-        idx.insert_flow_event(&ev2, &ctx).expect("serde deserialization should succeed");
-        idx.insert_flow_event(&ev3, &ctx).expect("serde deserialization should succeed");
+        idx.insert_flow_event(&ev1, &ctx)
+            .expect("serde deserialization should succeed");
+        idx.insert_flow_event(&ev2, &ctx)
+            .expect("serde deserialization should succeed");
+        idx.insert_flow_event(&ev3, &ctx)
+            .expect("serde deserialization should succeed");
 
         let results = idx
             .flow_events_by_time_range("ext-a", 150, 250, &ctx)
@@ -2235,7 +2338,8 @@ mod tests {
             FlowDecision::Allowed,
         );
         ev.timestamp_ms = 500;
-        idx.insert_flow_event(&ev, &ctx).expect("serde deserialization should succeed");
+        idx.insert_flow_event(&ev, &ctx)
+            .expect("serde deserialization should succeed");
 
         // Exact boundaries should be inclusive.
         let results = idx
@@ -2255,7 +2359,8 @@ mod tests {
             Label::Internal,
             FlowDecision::Allowed,
         );
-        idx.insert_flow_event(&ev, &ctx).expect("serde deserialization should succeed");
+        idx.insert_flow_event(&ev, &ctx)
+            .expect("serde deserialization should succeed");
 
         let results = idx
             .flow_events_by_time_range("ext-a", 5000, 6000, &ctx)
@@ -2285,9 +2390,13 @@ mod tests {
         )
         .expect("serde deserialization should succeed");
 
-        let epoch1 = idx.flow_proofs_by_epoch("ext-a", 1, &ctx).expect("serde deserialization should succeed");
+        let epoch1 = idx
+            .flow_proofs_by_epoch("ext-a", 1, &ctx)
+            .expect("serde deserialization should succeed");
         assert_eq!(epoch1.len(), 2);
-        let epoch2 = idx.flow_proofs_by_epoch("ext-a", 2, &ctx).expect("serde deserialization should succeed");
+        let epoch2 = idx
+            .flow_proofs_by_epoch("ext-a", 2, &ctx)
+            .expect("serde deserialization should succeed");
         assert_eq!(epoch2.len(), 1);
         assert_eq!(epoch2[0].proof_id, "p2");
     }
@@ -2302,7 +2411,9 @@ mod tests {
         )
         .expect("serde deserialization should succeed");
 
-        let results = idx.flow_proofs_by_epoch("ext-a", 99, &ctx).expect("serde deserialization should succeed");
+        let results = idx
+            .flow_proofs_by_epoch("ext-a", 99, &ctx)
+            .expect("serde deserialization should succeed");
         assert!(results.is_empty());
     }
 
@@ -2319,18 +2430,28 @@ mod tests {
             Label::Internal,
             FlowDecision::Allowed,
         );
-        idx.insert_flow_event(&ev, &ctx).expect("serde deserialization should succeed");
+        idx.insert_flow_event(&ev, &ctx)
+            .expect("serde deserialization should succeed");
 
-        let result = idx.get_flow_event("e1", &ctx).expect("serde deserialization should succeed");
+        let result = idx
+            .get_flow_event("e1", &ctx)
+            .expect("serde deserialization should succeed");
         assert!(result.is_some());
-        assert_eq!(result.expect("serde deserialization should succeed").event_id, "e1");
+        assert_eq!(
+            result
+                .expect("serde deserialization should succeed")
+                .event_id,
+            "e1"
+        );
     }
 
     #[test]
     fn get_flow_event_missing() {
         let mut idx = make_index();
         let ctx = test_ctx();
-        let result = idx.get_flow_event("nonexistent", &ctx).expect("serde deserialization should succeed");
+        let result = idx
+            .get_flow_event("nonexistent", &ctx)
+            .expect("serde deserialization should succeed");
         assert!(result.is_none());
     }
 
@@ -2339,18 +2460,28 @@ mod tests {
         let mut idx = make_index();
         let ctx = test_ctx();
         let proof = flow_proof("p1", "ext-a", Label::Public, Label::Internal, 1);
-        idx.insert_flow_proof(&proof, &ctx).expect("serde deserialization should succeed");
+        idx.insert_flow_proof(&proof, &ctx)
+            .expect("serde deserialization should succeed");
 
-        let result = idx.get_flow_proof("p1", &ctx).expect("serde deserialization should succeed");
+        let result = idx
+            .get_flow_proof("p1", &ctx)
+            .expect("serde deserialization should succeed");
         assert!(result.is_some());
-        assert_eq!(result.expect("serde deserialization should succeed").proof_id, "p1");
+        assert_eq!(
+            result
+                .expect("serde deserialization should succeed")
+                .proof_id,
+            "p1"
+        );
     }
 
     #[test]
     fn get_flow_proof_missing() {
         let mut idx = make_index();
         let ctx = test_ctx();
-        let result = idx.get_flow_proof("nonexistent", &ctx).expect("serde deserialization should succeed");
+        let result = idx
+            .get_flow_proof("nonexistent", &ctx)
+            .expect("serde deserialization should succeed");
         assert!(result.is_none());
     }
 
@@ -2365,18 +2496,28 @@ mod tests {
             Label::Public,
             DeclassificationDecision::Allow,
         );
-        idx.insert_declass_receipt(&receipt, &ctx).expect("serde deserialization should succeed");
+        idx.insert_declass_receipt(&receipt, &ctx)
+            .expect("serde deserialization should succeed");
 
-        let result = idx.get_declass_receipt("r1", &ctx).expect("serde deserialization should succeed");
+        let result = idx
+            .get_declass_receipt("r1", &ctx)
+            .expect("serde deserialization should succeed");
         assert!(result.is_some());
-        assert_eq!(result.expect("serde deserialization should succeed").receipt_id, "r1");
+        assert_eq!(
+            result
+                .expect("serde deserialization should succeed")
+                .receipt_id,
+            "r1"
+        );
     }
 
     #[test]
     fn get_declass_receipt_missing() {
         let mut idx = make_index();
         let ctx = test_ctx();
-        let result = idx.get_declass_receipt("nonexistent", &ctx).expect("serde deserialization should succeed");
+        let result = idx
+            .get_declass_receipt("nonexistent", &ctx)
+            .expect("serde deserialization should succeed");
         assert!(result.is_none());
     }
 
@@ -2385,18 +2526,28 @@ mod tests {
         let mut idx = make_index();
         let ctx = test_ctx();
         let claim = confinement_claim("c1", "ext-a", ClaimStrength::Full, 1);
-        idx.insert_confinement_claim(&claim, &ctx).expect("serde deserialization should succeed");
+        idx.insert_confinement_claim(&claim, &ctx)
+            .expect("serde deserialization should succeed");
 
-        let result = idx.get_confinement_claim("c1", &ctx).expect("serde deserialization should succeed");
+        let result = idx
+            .get_confinement_claim("c1", &ctx)
+            .expect("serde deserialization should succeed");
         assert!(result.is_some());
-        assert_eq!(result.expect("serde deserialization should succeed").claim_id, "c1");
+        assert_eq!(
+            result
+                .expect("serde deserialization should succeed")
+                .claim_id,
+            "c1"
+        );
     }
 
     #[test]
     fn get_confinement_claim_missing() {
         let mut idx = make_index();
         let ctx = test_ctx();
-        let result = idx.get_confinement_claim("nonexistent", &ctx).expect("serde deserialization should succeed");
+        let result = idx
+            .get_confinement_claim("nonexistent", &ctx)
+            .expect("serde deserialization should succeed");
         assert!(result.is_none());
     }
 
@@ -2405,10 +2556,26 @@ mod tests {
         let mut idx = make_index();
         let ctx = test_ctx();
 
-        assert!(idx.get_flow_event("   ", &ctx).expect("serde deserialization should succeed").is_none());
-        assert!(idx.get_flow_proof("   ", &ctx).expect("serde deserialization should succeed").is_none());
-        assert!(idx.get_declass_receipt("   ", &ctx).expect("serde deserialization should succeed").is_none());
-        assert!(idx.get_confinement_claim("   ", &ctx).expect("serde deserialization should succeed").is_none());
+        assert!(
+            idx.get_flow_event("   ", &ctx)
+                .expect("serde deserialization should succeed")
+                .is_none()
+        );
+        assert!(
+            idx.get_flow_proof("   ", &ctx)
+                .expect("serde deserialization should succeed")
+                .is_none()
+        );
+        assert!(
+            idx.get_declass_receipt("   ", &ctx)
+                .expect("serde deserialization should succeed")
+                .is_none()
+        );
+        assert!(
+            idx.get_confinement_claim("   ", &ctx)
+                .expect("serde deserialization should succeed")
+                .is_none()
+        );
     }
 
     // -- record counts ------------------------------------------------------
@@ -2462,7 +2629,9 @@ mod tests {
         )
         .expect("serde deserialization should succeed");
 
-        let counts = idx.record_counts("ext-a", &ctx).expect("serde deserialization should succeed");
+        let counts = idx
+            .record_counts("ext-a", &ctx)
+            .expect("serde deserialization should succeed");
         assert_eq!(counts.flow_events, 2);
         assert_eq!(counts.flow_proofs, 1);
         assert_eq!(counts.declass_receipts, 1);
@@ -2475,7 +2644,9 @@ mod tests {
         let mut idx = make_index();
         let ctx = test_ctx();
 
-        let counts = idx.record_counts("ext-none", &ctx).expect("serde deserialization should succeed");
+        let counts = idx
+            .record_counts("ext-none", &ctx)
+            .expect("serde deserialization should succeed");
         assert_eq!(counts.flow_events, 0);
         assert_eq!(counts.flow_proofs, 0);
         assert_eq!(counts.declass_receipts, 0);
@@ -2511,9 +2682,13 @@ mod tests {
         )
         .expect("serde deserialization should succeed");
 
-        let counts_a = idx.record_counts("ext-a", &ctx).expect("serde deserialization should succeed");
+        let counts_a = idx
+            .record_counts("ext-a", &ctx)
+            .expect("serde deserialization should succeed");
         assert_eq!(counts_a.flow_events, 1);
-        let counts_b = idx.record_counts("ext-b", &ctx).expect("serde deserialization should succeed");
+        let counts_b = idx
+            .record_counts("ext-b", &ctx)
+            .expect("serde deserialization should succeed");
         assert_eq!(counts_b.flow_events, 1);
     }
 
@@ -2565,7 +2740,8 @@ mod tests {
             confinement_claims: 2,
         };
         let json = serde_json::to_string(&counts).expect("serde deserialization should succeed");
-        let deser: RecordCounts = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let deser: RecordCounts =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(counts, deser);
         assert_eq!(deser.total(), 20);
     }
@@ -2616,7 +2792,9 @@ mod tests {
         )
         .expect("serde deserialization should succeed");
 
-        let results = idx.flow_events_by_extension("ext-a", &ctx).expect("serde deserialization should succeed");
+        let results = idx
+            .flow_events_by_extension("ext-a", &ctx)
+            .expect("serde deserialization should succeed");
         assert_eq!(results.len(), 3);
         // Results should be sorted by Ord (event_id is first field in struct).
         for i in 1..results.len() {
@@ -2675,7 +2853,8 @@ mod tests {
             evidence_type: LineageEvidenceType::FlowEvent,
         };
         let json = serde_json::to_string(&hop).expect("serde deserialization should succeed");
-        let deser: LineageHop = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let deser: LineageHop =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(hop, deser);
     }
 
@@ -2691,7 +2870,8 @@ mod tests {
             }],
         };
         let json = serde_json::to_string(&path).expect("serde deserialization should succeed");
-        let deser: LineagePath = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let deser: LineagePath =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(path, deser);
     }
 
@@ -2799,7 +2979,8 @@ mod tests {
             FlowDecision::Declassified,
         );
         ev1.receipt_ref = Some("r1".to_string());
-        idx.insert_flow_event(&ev1, &ctx).expect("serde deserialization should succeed");
+        idx.insert_flow_event(&ev1, &ctx)
+            .expect("serde deserialization should succeed");
 
         let mut ev2 = flow_event(
             "ev2",
@@ -2809,7 +2990,8 @@ mod tests {
             FlowDecision::Declassified,
         );
         ev2.receipt_ref = Some("r2".to_string());
-        idx.insert_flow_event(&ev2, &ctx).expect("serde deserialization should succeed");
+        idx.insert_flow_event(&ev2, &ctx)
+            .expect("serde deserialization should succeed");
 
         idx.insert_declass_receipt(
             &declass_receipt(
@@ -2834,7 +3016,9 @@ mod tests {
         )
         .expect("serde deserialization should succeed");
 
-        let joined = idx.join_events_with_receipts("ext-a", &ctx).expect("serde deserialization should succeed");
+        let joined = idx
+            .join_events_with_receipts("ext-a", &ctx)
+            .expect("serde deserialization should succeed");
         assert_eq!(joined.len(), 2);
         assert!(joined.iter().all(|(_, receipt)| receipt.is_some()));
     }
@@ -2954,7 +3138,8 @@ mod tests {
                 evidence_type: *et,
             };
             let json = serde_json::to_string(&hop).expect("serde deserialization should succeed");
-            let back: LineageHop = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: LineageHop =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(hop, back);
         }
     }
@@ -2998,7 +3183,8 @@ mod tests {
             record_count: None,
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let back: ProvenanceEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ProvenanceEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
         assert!(back.error_code.is_none());
         assert!(back.extension_id.is_none());
@@ -3149,7 +3335,9 @@ mod tests {
         )
         .expect("serde deserialization should succeed");
 
-        let status = idx.confinement_status("ext-a", &ctx).expect("serde deserialization should succeed");
+        let status = idx
+            .confinement_status("ext-a", &ctx)
+            .expect("serde deserialization should succeed");
         assert_eq!(
             status.strongest_claim,
             Some(ClaimStrength::Full),
@@ -3219,7 +3407,8 @@ mod tests {
         );
         ev.receipt_ref = Some("r1".to_string());
         let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
-        let back: FlowEventRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: FlowEventRecord =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ev, back);
         assert_eq!(back.receipt_ref, Some("r1".to_string()));
     }
@@ -3238,9 +3427,13 @@ mod tests {
         receipt.declassification_route_ref = "  route-r1  ".to_string();
         receipt.decision_contract_id = "  decision-r1  ".to_string();
 
-        idx.insert_declass_receipt(&receipt, &ctx).expect("serde deserialization should succeed");
+        idx.insert_declass_receipt(&receipt, &ctx)
+            .expect("serde deserialization should succeed");
 
-        let stored = idx.get_declass_receipt("r1", &ctx).expect("serde deserialization should succeed").expect("serde deserialization should succeed");
+        let stored = idx
+            .get_declass_receipt("r1", &ctx)
+            .expect("serde deserialization should succeed")
+            .expect("serde deserialization should succeed");
         assert_eq!(stored.receipt_id, "r1");
         assert_eq!(stored.extension_id, "ext-a");
         assert_eq!(stored.declassification_route_ref, "route-r1");
@@ -3253,12 +3446,18 @@ mod tests {
         let ctx = test_ctx();
         let proof = flow_proof("p1", "  ext-a  ", Label::Public, Label::Internal, 1);
 
-        idx.insert_flow_proof(&proof, &ctx).expect("serde deserialization should succeed");
+        idx.insert_flow_proof(&proof, &ctx)
+            .expect("serde deserialization should succeed");
 
-        let stored = idx.get_flow_proof("p1", &ctx).expect("serde deserialization should succeed").expect("serde deserialization should succeed");
+        let stored = idx
+            .get_flow_proof("p1", &ctx)
+            .expect("serde deserialization should succeed")
+            .expect("serde deserialization should succeed");
         assert_eq!(stored.extension_id, "ext-a");
         assert_eq!(
-            idx.flow_proofs_by_extension("ext-a", &ctx).expect("serde deserialization should succeed").len(),
+            idx.flow_proofs_by_extension("ext-a", &ctx)
+                .expect("serde deserialization should succeed")
+                .len(),
             1
         );
         assert_eq!(
@@ -3275,9 +3474,13 @@ mod tests {
         let ctx = test_ctx();
         let claim = confinement_claim("c1", "  ext-a  ", ClaimStrength::Full, 1);
 
-        idx.insert_confinement_claim(&claim, &ctx).expect("serde deserialization should succeed");
+        idx.insert_confinement_claim(&claim, &ctx)
+            .expect("serde deserialization should succeed");
 
-        let stored = idx.get_confinement_claim("c1", &ctx).expect("serde deserialization should succeed").expect("serde deserialization should succeed");
+        let stored = idx
+            .get_confinement_claim("c1", &ctx)
+            .expect("serde deserialization should succeed")
+            .expect("serde deserialization should succeed");
         assert_eq!(stored.extension_id, "ext-a");
         assert_eq!(
             idx.confinement_claims_by_extension("ext-a", &ctx)
@@ -3305,7 +3508,8 @@ mod tests {
             record_count: Some(0),
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let back: ProvenanceEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ProvenanceEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
         assert_eq!(back.error_code.as_deref(), Some("PROV_EMPTY_ID"));
     }
@@ -3341,7 +3545,9 @@ mod tests {
         )
         .expect("serde deserialization should succeed");
 
-        let status = idx.confinement_status("ext-a", &ctx).expect("serde deserialization should succeed");
+        let status = idx
+            .confinement_status("ext-a", &ctx)
+            .expect("serde deserialization should succeed");
         assert_eq!(
             status.latest_proof_epoch,
             Some(7),

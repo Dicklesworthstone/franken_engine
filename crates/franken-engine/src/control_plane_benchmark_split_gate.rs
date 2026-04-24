@@ -2169,7 +2169,8 @@ mod tests {
             BenchmarkSplit::FullIntegration,
         ] {
             let json = serde_json::to_string(&split).expect("serde deserialization should succeed");
-            let back: BenchmarkSplit = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: BenchmarkSplit =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(back, split);
         }
     }
@@ -2233,7 +2234,8 @@ mod tests {
             BenchmarkSplitFailureCode::PreviousRunRegressionExceeded,
         ] {
             let json = serde_json::to_string(&code).expect("serde deserialization should succeed");
-            let back: BenchmarkSplitFailureCode = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: BenchmarkSplitFailureCode =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(back, code);
         }
     }
@@ -2252,7 +2254,8 @@ mod tests {
     fn thresholds_serde_roundtrip() {
         let t = BenchmarkSplitThresholds::default();
         let json = serde_json::to_string(&t).expect("serde deserialization should succeed");
-        let back: BenchmarkSplitThresholds = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: BenchmarkSplitThresholds =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.min_baseline_runs, t.min_baseline_runs);
         assert_eq!(
             back.max_baseline_cv_millionths,
@@ -2491,7 +2494,8 @@ mod tests {
 
     #[test]
     fn coefficient_of_variation_normal() {
-        let cv = coefficient_of_variation_millionths(&[100, 110, 90, 105, 95]).expect("serde deserialization should succeed");
+        let cv = coefficient_of_variation_millionths(&[100, 110, 90, 105, 95])
+            .expect("serde deserialization should succeed");
         assert!(cv > 0);
         assert!(cv < 100_000); // should be around 7%
     }
@@ -2588,7 +2592,8 @@ mod tests {
             &BenchmarkSplitThresholds::default(),
         );
         let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
-        let back: BenchmarkSplitGateDecision = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: BenchmarkSplitGateDecision =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back.decision_id, d.decision_id);
         assert_eq!(back.pass, d.pass);
         assert_eq!(back.evaluations, d.evaluations);
@@ -2605,7 +2610,8 @@ mod tests {
             threshold_millionths: Some(50),
         };
         let json = serde_json::to_string(&f).expect("serde deserialization should succeed");
-        let back: BenchmarkSplitFinding = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: BenchmarkSplitFinding =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, f);
     }
 
@@ -2617,7 +2623,8 @@ mod tests {
         );
         for log in &d.logs {
             let json = serde_json::to_string(log).expect("serde deserialization should succeed");
-            let back: BenchmarkSplitLogEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: BenchmarkSplitLogEvent =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, log);
         }
     }
@@ -2630,7 +2637,8 @@ mod tests {
         );
         for eval in &d.evaluations {
             let json = serde_json::to_string(eval).expect("serde deserialization should succeed");
-            let back: SplitBenchmarkEvaluation = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: SplitBenchmarkEvaluation =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, eval);
         }
     }
@@ -2639,7 +2647,8 @@ mod tests {
     fn split_metrics_serde_roundtrip() {
         let m = metrics(1_000_000, 500_000, 800_000, 900_000, 1024);
         let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
-        let back: SplitBenchmarkMetrics = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SplitBenchmarkMetrics =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, m);
     }
 
@@ -2693,7 +2702,8 @@ mod tests {
             p99_ns: 3_000,
         };
         let json = serde_json::to_string(&stats).expect("serde deserialization should succeed");
-        let back: LatencyStatsNs = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: LatencyStatsNs =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(stats, back);
     }
 
@@ -2701,7 +2711,8 @@ mod tests {
     fn split_benchmark_metrics_serde_roundtrip() {
         let m = metrics(500_000, 100, 200, 300, 1024);
         let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
-        let back: SplitBenchmarkMetrics = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SplitBenchmarkMetrics =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(m, back);
     }
 
@@ -2709,7 +2720,8 @@ mod tests {
     fn benchmark_split_snapshot_serde_roundtrip() {
         let snap = previous_snapshot();
         let json = serde_json::to_string(&snap).expect("serde deserialization should succeed");
-        let back: BenchmarkSplitSnapshot = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: BenchmarkSplitSnapshot =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(snap, back);
     }
 
@@ -2922,8 +2934,11 @@ mod tests {
             p95_ns: 200,
             p99_ns: 300,
         };
-        let val: serde_json::Value = serde_json::to_value(&stats).expect("serde deserialization should succeed");
-        let obj = val.as_object().expect("serde deserialization should succeed");
+        let val: serde_json::Value =
+            serde_json::to_value(&stats).expect("serde deserialization should succeed");
+        let obj = val
+            .as_object()
+            .expect("serde deserialization should succeed");
         assert!(obj.contains_key("p50_ns"));
         assert!(obj.contains_key("p95_ns"));
         assert!(obj.contains_key("p99_ns"));
@@ -2941,8 +2956,11 @@ mod tests {
             },
             peak_rss_delta_bytes: 1024,
         };
-        let val: serde_json::Value = serde_json::to_value(&m).expect("serde deserialization should succeed");
-        let obj = val.as_object().expect("serde deserialization should succeed");
+        let val: serde_json::Value =
+            serde_json::to_value(&m).expect("serde deserialization should succeed");
+        let obj = val
+            .as_object()
+            .expect("serde deserialization should succeed");
         assert!(obj.contains_key("throughput_ops_per_sec"));
         assert!(obj.contains_key("latency_ns"));
         assert!(obj.contains_key("peak_rss_delta_bytes"));
@@ -2959,8 +2977,11 @@ mod tests {
             observed_millionths: None,
             threshold_millionths: None,
         };
-        let val: serde_json::Value = serde_json::to_value(&f).expect("serde deserialization should succeed");
-        let obj = val.as_object().expect("serde deserialization should succeed");
+        let val: serde_json::Value =
+            serde_json::to_value(&f).expect("serde deserialization should succeed");
+        let obj = val
+            .as_object()
+            .expect("serde deserialization should succeed");
         assert!(obj.contains_key("code"));
         assert!(obj.contains_key("split"));
         assert!(obj.contains_key("metric"));
@@ -2983,8 +3004,11 @@ mod tests {
             split: None,
             metric: None,
         };
-        let val: serde_json::Value = serde_json::to_value(&ev).expect("serde deserialization should succeed");
-        let obj = val.as_object().expect("serde deserialization should succeed");
+        let val: serde_json::Value =
+            serde_json::to_value(&ev).expect("serde deserialization should succeed");
+        let obj = val
+            .as_object()
+            .expect("serde deserialization should succeed");
         assert!(obj.contains_key("trace_id"));
         assert!(obj.contains_key("decision_id"));
         assert!(obj.contains_key("policy_id"));
@@ -3067,7 +3091,8 @@ mod tests {
             threshold_millionths: Some(100_000),
         };
         let json = serde_json::to_string(&f).expect("serde deserialization should succeed");
-        let back: BenchmarkSplitFinding = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: BenchmarkSplitFinding =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(f, back);
     }
 
@@ -3085,7 +3110,8 @@ mod tests {
             metric: Some("throughput".into()),
         };
         let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
-        let back: BenchmarkSplitLogEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: BenchmarkSplitLogEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ev, back);
     }
 
@@ -3093,7 +3119,8 @@ mod tests {
     fn thresholds_serde_roundtrip_enrichment() {
         let t = BenchmarkSplitThresholds::default();
         let json = serde_json::to_string(&t).expect("serde deserialization should succeed");
-        let back: BenchmarkSplitThresholds = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: BenchmarkSplitThresholds =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(t, back);
     }
 

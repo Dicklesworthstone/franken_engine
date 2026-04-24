@@ -842,7 +842,8 @@ mod tests {
             SecurityEpoch::from_raw(10),
         );
         let json = serde_json::to_string(&meta).expect("serde deserialization should succeed");
-        let restored: EpochMetadata = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: EpochMetadata =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(meta, restored);
     }
 
@@ -857,7 +858,8 @@ mod tests {
             .expect("serde deserialization should succeed");
 
         let json = serde_json::to_string(&tracker).expect("serde deserialization should succeed");
-        let restored: EpochTracker = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: EpochTracker =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(restored.current().as_u64(), 2);
         assert_eq!(restored.transition_count(), 2);
         assert_eq!(restored.transition_counts()["policy_key_rotation"], 1);
@@ -870,7 +872,8 @@ mod tests {
             artifact_epoch: SecurityEpoch::from_raw(7),
         };
         let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
-        let restored: EpochValidationError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: EpochValidationError =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, restored);
     }
 
@@ -896,7 +899,8 @@ mod tests {
         ];
         for err in &errors {
             let json = serde_json::to_string(err).expect("serde deserialization should succeed");
-            let restored: EpochValidationError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: EpochValidationError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, restored);
         }
     }
@@ -968,7 +972,8 @@ mod tests {
         for val in [0, 1, 42, u64::MAX] {
             let epoch = SecurityEpoch::from_raw(val);
             let json = serde_json::to_string(&epoch).expect("serde deserialization should succeed");
-            let restored: SecurityEpoch = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: SecurityEpoch =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(epoch, restored);
         }
     }
@@ -1000,7 +1005,8 @@ mod tests {
         ];
         for reason in &reasons {
             let json = serde_json::to_string(reason).expect("serde deserialization should succeed");
-            let restored: TransitionReason = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: TransitionReason =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*reason, restored);
         }
     }
@@ -1016,7 +1022,8 @@ mod tests {
             trace_id: "t-record".to_string(),
         };
         let json = serde_json::to_string(&record).expect("serde deserialization should succeed");
-        let restored: TransitionRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: TransitionRecord =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(record, restored);
     }
 
@@ -1029,7 +1036,8 @@ mod tests {
             attempted: SecurityEpoch::from_raw(5),
         };
         let json = serde_json::to_string(&violation).expect("serde deserialization should succeed");
-        let restored: MonotonicityViolation = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: MonotonicityViolation =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(violation, restored);
     }
 
@@ -1378,7 +1386,8 @@ mod tests {
         let meta = EpochMetadata::open_ended(SecurityEpoch::from_raw(7));
         let json = serde_json::to_string(&meta).expect("serde deserialization should succeed");
         assert!(json.contains("\"valid_until_epoch\":null"));
-        let restored: EpochMetadata = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: EpochMetadata =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(meta, restored);
         assert!(restored.valid_until_epoch.is_none());
     }
@@ -1395,7 +1404,9 @@ mod tests {
             TransitionReason::OperatorManualBump,
         ];
         for (i, reason) in reasons.iter().enumerate() {
-            tracker.advance(reason.clone(), &format!("t{i}")).expect("serde deserialization should succeed");
+            tracker
+                .advance(reason.clone(), &format!("t{i}"))
+                .expect("serde deserialization should succeed");
         }
         assert_eq!(tracker.transition_counts().len(), 6);
         for reason in &reasons {
@@ -1510,7 +1521,8 @@ mod tests {
             .advance(TransitionReason::LossMatrixUpdate, "t3")
             .expect("serde deserialization should succeed");
         let json = serde_json::to_string(&tracker).expect("serde deserialization should succeed");
-        let restored: EpochTracker = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: EpochTracker =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(restored.current().as_u64(), 3);
         assert_eq!(restored.transition_count(), 3);
         assert_eq!(restored.transitions()[0].trace_id, "t1");

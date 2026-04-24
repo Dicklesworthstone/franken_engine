@@ -1138,7 +1138,10 @@ mod tests {
         // Should have: frankenlab, evidence replay, obligation, completeness, and final verdict.
         assert!(result.gate_events.len() >= 5);
         // SAFETY: Test just verified gate_events has at least 5 elements, so last() returns Some
-        let final_event = result.gate_events.last().expect("serde deserialization should succeed");
+        let final_event = result
+            .gate_events
+            .last()
+            .expect("serde deserialization should succeed");
         assert_eq!(final_event.event, "release_gate_evaluated");
         assert_eq!(final_event.outcome, "pass");
     }
@@ -1528,7 +1531,8 @@ mod tests {
         let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid GateFailureReport,
         // so from_str back to GateFailureReport cannot fail (valid format + matching schema).
-        let back: GateFailureReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GateFailureReport =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report, back);
     }
 
@@ -1626,7 +1630,8 @@ mod tests {
         let result = gate.evaluate(&mut cx);
 
         let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
-        let back: ReleaseGateResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ReleaseGateResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, back);
     }
 
@@ -1641,7 +1646,8 @@ mod tests {
             items_passed: 7,
         };
         let json = serde_json::to_string(&check).expect("serde deserialization should succeed");
-        let back: GateCheckResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GateCheckResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(check, back);
     }
 
@@ -1654,7 +1660,8 @@ mod tests {
             actual: "false".to_string(),
         };
         let json = serde_json::to_string(&detail).expect("serde deserialization should succeed");
-        let back: GateFailureDetail = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GateFailureDetail =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(detail, back);
     }
 
@@ -1662,7 +1669,8 @@ mod tests {
     fn exception_policy_serde_roundtrip() {
         let policy = ExceptionPolicy::default();
         let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
-        let back: ExceptionPolicy = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ExceptionPolicy =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(policy, back);
     }
 
@@ -1679,7 +1687,8 @@ mod tests {
             metadata: BTreeMap::new(),
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let back: GateEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GateEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
     }
 
@@ -1687,7 +1696,8 @@ mod tests {
     fn gate_config_serde_roundtrip() {
         let config = GateConfig::default();
         let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
-        let back: GateConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GateConfig =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, back);
     }
 
@@ -1700,8 +1710,10 @@ mod tests {
             first_digest: "abcdef0123456789".to_string(),
             second_digest: "abcdef0123456789".to_string(),
         };
-        let json = serde_json::to_string(&verification).expect("serde deserialization should succeed");
-        let back: IdempotencyVerification = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json =
+            serde_json::to_string(&verification).expect("serde deserialization should succeed");
+        let back: IdempotencyVerification =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(verification, back);
     }
 
@@ -1934,7 +1946,8 @@ mod tests {
             result_digest: "0123456789abcdef".to_string(),
         };
         let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
-        let back: GateFailureReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GateFailureReport =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report, back);
         assert!(!back.blocked);
     }
@@ -1958,7 +1971,8 @@ mod tests {
             metadata,
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let back: GateEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GateEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
         assert_eq!(
             back.error_code.as_deref(),
@@ -2094,7 +2108,8 @@ mod tests {
         ];
         for kind in &kinds {
             let json = serde_json::to_string(kind).expect("serde deserialization should succeed");
-            let back: GateCheckKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: GateCheckKind =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*kind, back);
         }
     }
@@ -2103,7 +2118,8 @@ mod tests {
     fn gate_config_serde_roundtrip_default() {
         let config = GateConfig::default();
         let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
-        let back: GateConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GateConfig =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, back);
     }
 
@@ -2111,7 +2127,8 @@ mod tests {
     fn exception_policy_serde_roundtrip_default() {
         let policy = ExceptionPolicy::default();
         let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
-        let back: ExceptionPolicy = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ExceptionPolicy =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(policy, back);
     }
 
@@ -2165,7 +2182,8 @@ mod tests {
             actual: "false".into(),
         };
         let json = serde_json::to_string(&detail).expect("serde deserialization should succeed");
-        let back: GateFailureDetail = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GateFailureDetail =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(detail, back);
     }
 
@@ -2185,7 +2203,8 @@ mod tests {
             items_passed: 4,
         };
         let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
-        let back: GateCheckResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GateCheckResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, back);
     }
 
@@ -2195,7 +2214,8 @@ mod tests {
         let mut cx = mock_cx(200000);
         let result = gate.evaluate(&mut cx);
         let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
-        let back: ReleaseGateResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ReleaseGateResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, back);
     }
 
@@ -2255,7 +2275,8 @@ mod tests {
         };
         assert!(v.is_hermetic());
         let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
-        let back: IdempotencyVerification = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: IdempotencyVerification =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(v, back);
     }
 
@@ -2423,7 +2444,8 @@ mod tests {
             .expect("serde deserialization should succeed");
         assert!(result.exception_applied);
         let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
-        let back: ReleaseGateResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ReleaseGateResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(result, back);
         assert!(back.exception_applied);
         assert_eq!(back.exception_justification, "critical CVE fix");
@@ -2659,7 +2681,8 @@ mod tests {
             justification: "test exception".to_string(),
         };
         let json = serde_json::to_string(&verdict).expect("serde deserialization should succeed");
-        let back: Verdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: Verdict =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(verdict, back);
     }
 
@@ -2671,8 +2694,10 @@ mod tests {
             signed_hash: "sha256:abc123".to_string(),
             reviewer_signature: "sig:def456".to_string(),
         };
-        let json = serde_json::to_string(&attestation).expect("serde deserialization should succeed");
-        let back: SecurityReviewAttestation = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json =
+            serde_json::to_string(&attestation).expect("serde deserialization should succeed");
+        let back: SecurityReviewAttestation =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(attestation, back);
     }
 }

@@ -1051,7 +1051,8 @@ mod tests {
         // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&key).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let restored: DerivedKey = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: DerivedKey =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(key, restored);
     }
 
@@ -1067,7 +1068,8 @@ mod tests {
         // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let restored: DerivationEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: DerivationEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, restored);
     }
 
@@ -1079,7 +1081,8 @@ mod tests {
         // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&ctx).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let restored: DerivationContext = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: DerivationContext =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ctx, restored);
     }
 
@@ -1144,7 +1147,8 @@ mod tests {
             // SAFETY: to_string cannot fail on derived Serialize enum
             let json = serde_json::to_string(err).expect("serde deserialization should succeed");
             // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-            let restored: KeyDerivationError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let restored: KeyDerivationError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, restored);
         }
     }
@@ -1320,9 +1324,13 @@ mod tests {
         );
         let ctx = DerivationContext::empty();
         // SAFETY: cache operation with test deriver should succeed
-        cache.get_or_derive(KeyDomain::Symbol, &ctx, "t1").expect("serde deserialization should succeed");
+        cache
+            .get_or_derive(KeyDomain::Symbol, &ctx, "t1")
+            .expect("serde deserialization should succeed");
         // SAFETY: cache operation with test deriver should succeed
-        cache.get_or_derive(KeyDomain::Session, &ctx, "t2").expect("serde deserialization should succeed");
+        cache
+            .get_or_derive(KeyDomain::Session, &ctx, "t2")
+            .expect("serde deserialization should succeed");
         assert_eq!(cache.cached_count(), 2);
         assert_eq!(cache.events().len(), 2);
     }
@@ -1453,7 +1461,8 @@ mod tests {
         // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&req).expect("serde deserialization should succeed");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let back: DerivationRequest = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DerivationRequest =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, req);
     }
 
@@ -1508,7 +1517,8 @@ mod tests {
             // SAFETY: to_string cannot fail on derived Serialize enum
             let json = serde_json::to_string(domain).expect("serde deserialization should succeed");
             // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-            let back: KeyDomain = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: KeyDomain =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*domain, back);
         }
     }
@@ -1712,7 +1722,10 @@ mod tests {
         let mut key_bytes_set = std::collections::BTreeSet::new();
         for domain in KeyDomain::ALL {
             // SAFETY: cache operation with test deriver should succeed
-            let key = cache.get_or_derive(*domain, &ctx, "t").expect("serde deserialization should succeed").clone();
+            let key = cache
+                .get_or_derive(*domain, &ctx, "t")
+                .expect("serde deserialization should succeed")
+                .clone();
             key_bytes_set.insert(key.key_bytes);
         }
         assert_eq!(key_bytes_set.len(), 5, "all 5 domains produce unique keys");
@@ -1775,7 +1788,9 @@ mod tests {
         assert_eq!(cache.events()[0].epoch, SecurityEpoch::from_raw(10));
 
         // SAFETY: advancing cache epoch with valid epoch should succeed
-        cache.advance_epoch(SecurityEpoch::from_raw(11)).expect("serde deserialization should succeed");
+        cache
+            .advance_epoch(SecurityEpoch::from_raw(11))
+            .expect("serde deserialization should succeed");
         cache
             .get_or_derive(KeyDomain::Symbol, &DerivationContext::empty(), "t2")
             .expect("serde deserialization should succeed");

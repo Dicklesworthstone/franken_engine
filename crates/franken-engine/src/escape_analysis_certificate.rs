@@ -518,7 +518,8 @@ pub fn analyze_escape(
             abstention_count += 1;
         }
 
-        let liveness_json = serde_json::to_string(&liveness).expect("serde deserialization should succeed");
+        let liveness_json =
+            serde_json::to_string(&liveness).expect("serde deserialization should succeed");
         let hash_input = format!(
             "cert:{}:{}:{}:{}:{}:{}:{}:{}:{}",
             site.site_id,
@@ -1085,7 +1086,8 @@ fn run_single_escape_specimen(specimen: &EscapeCertSpecimen) -> EscapeCertSpecim
             ];
             let env = analyze_escape("fn_serde", &sites, &[], &config, epoch);
             let json = serde_json::to_string(&env).expect("serde deserialization should succeed");
-            let back: OptimizationEligibilityEnvelope = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: OptimizationEligibilityEnvelope =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             actual = "roundtrip ok".into();
             if env != back {
                 verdict = EscapeCertVerdict::Fail;
@@ -1354,7 +1356,8 @@ mod tests {
     fn escape_state_serde_roundtrip() {
         for s in EscapeState::ALL {
             let json = serde_json::to_string(s).expect("serde deserialization should succeed");
-            let back: EscapeState = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: EscapeState =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*s, back);
         }
     }
@@ -1477,7 +1480,8 @@ mod tests {
         let config = EscapeAnalyzerConfig::default();
         let env = analyze_escape("fn", &sites, &[], &config, SecurityEpoch::from_raw(1));
         let json = serde_json::to_string(&env).expect("serde deserialization should succeed");
-        let back: OptimizationEligibilityEnvelope = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: OptimizationEligibilityEnvelope =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(env, back);
     }
 
@@ -1501,7 +1505,8 @@ mod tests {
     fn inventory_serde_roundtrip() {
         let inv = run_escape_cert_corpus();
         let json = serde_json::to_string(&inv).expect("serde deserialization should succeed");
-        let back: EscapeCertEvidenceInventory = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: EscapeCertEvidenceInventory =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(inv, back);
     }
 
@@ -1589,7 +1594,8 @@ mod tests {
             AliasRelation::MustAlias,
         ] {
             let json = serde_json::to_string(&rel).expect("serde deserialization should succeed");
-            let back: AliasRelation = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: AliasRelation =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(rel, back);
         }
     }
@@ -1598,7 +1604,8 @@ mod tests {
     fn allocation_kind_serde_roundtrip() {
         for kind in AllocationKind::ALL {
             let json = serde_json::to_string(kind).expect("serde deserialization should succeed");
-            let back: AllocationKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: AllocationKind =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*kind, back);
         }
     }
@@ -1620,8 +1627,10 @@ mod tests {
             InvalidationReason::BudgetExceeded,
             InvalidationReason::CrossModuleUnresolvable,
         ] {
-            let json = serde_json::to_string(&reason).expect("serde deserialization should succeed");
-            let back: InvalidationReason = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&reason).expect("serde deserialization should succeed");
+            let back: InvalidationReason =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(reason, back);
         }
     }
@@ -1674,7 +1683,8 @@ mod tests {
     fn escape_cert_specimen_family_serde_roundtrip() {
         for family in EscapeCertSpecimenFamily::ALL {
             let json = serde_json::to_string(family).expect("serde deserialization should succeed");
-            let back: EscapeCertSpecimenFamily = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: EscapeCertSpecimenFamily =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*family, back);
         }
     }
@@ -1682,8 +1692,10 @@ mod tests {
     #[test]
     fn escape_cert_verdict_serde_roundtrip() {
         for verdict in [EscapeCertVerdict::Pass, EscapeCertVerdict::Fail] {
-            let json = serde_json::to_string(&verdict).expect("serde deserialization should succeed");
-            let back: EscapeCertVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&verdict).expect("serde deserialization should succeed");
+            let back: EscapeCertVerdict =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(verdict, back);
         }
     }
@@ -1702,8 +1714,10 @@ mod tests {
             EscapeCertExpectedOutcome::CertificateDenied,
             EscapeCertExpectedOutcome::RoundtripPreserved,
         ] {
-            let json = serde_json::to_string(&outcome).expect("serde deserialization should succeed");
-            let back: EscapeCertExpectedOutcome = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&outcome).expect("serde deserialization should succeed");
+            let back: EscapeCertExpectedOutcome =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(outcome, back);
         }
     }

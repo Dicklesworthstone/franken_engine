@@ -966,7 +966,8 @@ impl IncidentBundleBuilder {
         if self.include_failovers
             && let Some(fc) = failover
         {
-            let data = serde_json::to_vec(&fc.records).expect("serde deserialization should succeed");
+            let data =
+                serde_json::to_vec(&fc.records).expect("serde deserialization should succeed");
             bundle.add_artifact(IncidentArtifact::new(
                 "failover_log",
                 ArtifactKind::FailoverLog,
@@ -978,7 +979,8 @@ impl IncidentBundleBuilder {
             && let Some(re) = replay
             && !re.divergences.is_empty()
         {
-            let data = serde_json::to_vec(&re.divergences).expect("serde deserialization should succeed");
+            let data =
+                serde_json::to_vec(&re.divergences).expect("serde deserialization should succeed");
             bundle.add_artifact(IncidentArtifact::new(
                 "divergence_report",
                 ArtifactKind::DivergenceReport,
@@ -1027,7 +1029,8 @@ mod tests {
     fn source_serde_roundtrip() {
         for source in &NondeterminismSource::ALL {
             let json = serde_json::to_string(source).expect("serde deserialization should succeed");
-            let back: NondeterminismSource = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: NondeterminismSource =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*source, back);
         }
     }
@@ -1087,7 +1090,8 @@ mod tests {
             "router",
         );
         let json = serde_json::to_string(&trace).expect("serde deserialization should succeed");
-        let back: NondeterminismTrace = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: NondeterminismTrace =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(trace, back);
     }
 
@@ -1393,7 +1397,8 @@ mod tests {
         fc.record_failover(FailoverReason::Manual, "a", "b", 100, true)
             .expect("serde deserialization should succeed");
         let json = serde_json::to_string(&fc).expect("serde deserialization should succeed");
-        let back: FailoverController = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: FailoverController =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(fc, back);
     }
 
@@ -1422,7 +1427,8 @@ mod tests {
         ];
         for reason in &reasons {
             let json = serde_json::to_string(reason).expect("serde deserialization should succeed");
-            let back: FailoverReason = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: FailoverReason =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*reason, back);
         }
     }
@@ -1543,7 +1549,8 @@ mod tests {
         ));
         bundle.finalise();
         let json = serde_json::to_string(&bundle).expect("serde deserialization should succeed");
-        let back: IncidentBundle = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: IncidentBundle =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(bundle, back);
     }
 
@@ -1675,7 +1682,8 @@ mod tests {
     fn artifact_kind_serde() {
         let kind = ArtifactKind::DivergenceReport;
         let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
-        let back: ArtifactKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ArtifactKind =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(kind, back);
     }
 
@@ -1791,7 +1799,8 @@ mod tests {
             DivergenceSeverity::Critical,
         ] {
             let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
-            let back: DivergenceSeverity = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: DivergenceSeverity =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(s, back);
         }
     }
@@ -1842,7 +1851,8 @@ mod tests {
         ];
         for err in &errors {
             let json = serde_json::to_string(err).expect("serde deserialization should succeed");
-            let back: ReplayError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ReplayError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, back);
         }
     }
@@ -1857,7 +1867,8 @@ mod tests {
             ReplayMode::Validate,
         ] {
             let json = serde_json::to_string(&mode).expect("serde deserialization should succeed");
-            let back: ReplayMode = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ReplayMode =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(mode, back);
         }
     }
@@ -1875,7 +1886,8 @@ mod tests {
         ];
         for err in &errors {
             let json = serde_json::to_string(err).expect("serde deserialization should succeed");
-            let back: FailoverError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: FailoverError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*err, back);
         }
     }
@@ -1889,8 +1901,10 @@ mod tests {
             FailoverStrategy::ImmediateBaseline,
             FailoverStrategy::Halt,
         ] {
-            let json = serde_json::to_string(&strategy).expect("serde deserialization should succeed");
-            let back: FailoverStrategy = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&strategy).expect("serde deserialization should succeed");
+            let back: FailoverStrategy =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(strategy, back);
         }
     }
@@ -1932,7 +1946,9 @@ mod tests {
             component: "clk".to_string(),
         };
         let json = serde_json::to_value(&ev).expect("serde deserialization should succeed");
-        let obj = json.as_object().expect("serde deserialization should succeed");
+        let obj = json
+            .as_object()
+            .expect("serde deserialization should succeed");
         assert!(obj.contains_key("sequence"));
         assert!(obj.contains_key("source"));
         assert!(obj.contains_key("value"));
@@ -1945,7 +1961,9 @@ mod tests {
     fn json_field_names_nondeterminism_trace() {
         let t = NondeterminismTrace::new("sess");
         let json = serde_json::to_value(&t).expect("serde deserialization should succeed");
-        let obj = json.as_object().expect("serde deserialization should succeed");
+        let obj = json
+            .as_object()
+            .expect("serde deserialization should succeed");
         assert!(obj.contains_key("session_id"));
         assert!(obj.contains_key("events"));
         assert!(obj.contains_key("next_sequence"));
@@ -1965,7 +1983,9 @@ mod tests {
             severity: DivergenceSeverity::Benign,
         };
         let json = serde_json::to_value(&d).expect("serde deserialization should succeed");
-        let obj = json.as_object().expect("serde deserialization should succeed");
+        let obj = json
+            .as_object()
+            .expect("serde deserialization should succeed");
         assert!(obj.contains_key("sequence"));
         assert!(obj.contains_key("source"));
         assert!(obj.contains_key("expected_value"));
@@ -1980,7 +2000,9 @@ mod tests {
         let trace = NondeterminismTrace::new("s");
         let eng = ReplayEngine::new(trace, ReplayMode::Strict);
         let json = serde_json::to_value(&eng).expect("serde deserialization should succeed");
-        let obj = json.as_object().expect("serde deserialization should succeed");
+        let obj = json
+            .as_object()
+            .expect("serde deserialization should succeed");
         assert!(obj.contains_key("mode"));
         assert!(obj.contains_key("trace"));
         assert!(obj.contains_key("cursor"));
@@ -2002,7 +2024,9 @@ mod tests {
             success: false,
         };
         let json = serde_json::to_value(&rec).expect("serde deserialization should succeed");
-        let obj = json.as_object().expect("serde deserialization should succeed");
+        let obj = json
+            .as_object()
+            .expect("serde deserialization should succeed");
         for key in &[
             "sequence",
             "reason",
@@ -2021,7 +2045,9 @@ mod tests {
     fn json_field_names_failover_controller() {
         let fc = FailoverController::with_defaults();
         let json = serde_json::to_value(&fc).expect("serde deserialization should succeed");
-        let obj = json.as_object().expect("serde deserialization should succeed");
+        let obj = json
+            .as_object()
+            .expect("serde deserialization should succeed");
         for key in &[
             "default_strategy",
             "strategy_overrides",
@@ -2041,7 +2067,9 @@ mod tests {
     fn json_field_names_incident_artifact() {
         let art = IncidentArtifact::new("nm", ArtifactKind::DecisionLog, vec![9]);
         let json = serde_json::to_value(&art).expect("serde deserialization should succeed");
-        let obj = json.as_object().expect("serde deserialization should succeed");
+        let obj = json
+            .as_object()
+            .expect("serde deserialization should succeed");
         for key in &["name", "kind", "data", "content_hash"] {
             assert!(obj.contains_key(*key), "missing key: {key}");
         }
@@ -2052,7 +2080,9 @@ mod tests {
     fn json_field_names_incident_bundle() {
         let b = IncidentBundle::new("id", IncidentSeverity::Info, "s", "c", 0);
         let json = serde_json::to_value(&b).expect("serde deserialization should succeed");
-        let obj = json.as_object().expect("serde deserialization should succeed");
+        let obj = json
+            .as_object()
+            .expect("serde deserialization should succeed");
         for key in &[
             "incident_id",
             "severity",
@@ -2072,7 +2102,9 @@ mod tests {
     fn json_field_names_incident_bundle_builder() {
         let bb = IncidentBundleBuilder::new("id", IncidentSeverity::Info, "s", "c", 0);
         let json = serde_json::to_value(&bb).expect("serde deserialization should succeed");
-        let obj = json.as_object().expect("serde deserialization should succeed");
+        let obj = json
+            .as_object()
+            .expect("serde deserialization should succeed");
         for key in &[
             "incident_id",
             "severity",
@@ -2458,7 +2490,8 @@ mod tests {
             component: "api-proxy".to_string(),
         };
         let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
-        let back: TraceEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: TraceEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ev, back);
     }
 
@@ -2473,7 +2506,8 @@ mod tests {
             severity: DivergenceSeverity::Critical,
         };
         let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
-        let back: ReplayDivergence = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ReplayDivergence =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(d, back);
     }
 
@@ -2487,7 +2521,8 @@ mod tests {
             .expect("serde deserialization should succeed");
         assert_eq!(eng.divergence_count(), 1);
         let json = serde_json::to_string(&eng).expect("serde deserialization should succeed");
-        let back: ReplayEngine = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ReplayEngine =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(eng, back);
     }
 
@@ -2506,7 +2541,8 @@ mod tests {
             success: true,
         };
         let json = serde_json::to_string(&rec).expect("serde deserialization should succeed");
-        let back: FailoverRecord = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: FailoverRecord =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(rec, back);
     }
 
@@ -2514,7 +2550,8 @@ mod tests {
     fn serde_roundtrip_incident_artifact() {
         let art = IncidentArtifact::new("perf", ArtifactKind::PerformanceMetrics, vec![9, 8, 7]);
         let json = serde_json::to_string(&art).expect("serde deserialization should succeed");
-        let back: IncidentArtifact = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: IncidentArtifact =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(art, back);
     }
 
@@ -2527,7 +2564,8 @@ mod tests {
                 .with_failovers(false)
                 .with_divergences(true);
         let json = serde_json::to_string(&bb).expect("serde deserialization should succeed");
-        let back: IncidentBundleBuilder = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: IncidentBundleBuilder =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(bb, back);
     }
 
@@ -2544,7 +2582,8 @@ mod tests {
         };
         let id = ev.derive_id();
         let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
-        let back: TraceEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: TraceEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ev, back);
         assert_eq!(id, back.derive_id());
     }
@@ -2555,7 +2594,8 @@ mod tests {
         trace.capture(NondeterminismSource::TimerRead, vec![1], u64::MAX, "clk");
         assert_eq!(trace.events[0].virtual_ts, u64::MAX);
         let json = serde_json::to_string(&trace).expect("serde deserialization should succeed");
-        let back: NondeterminismTrace = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: NondeterminismTrace =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(trace, back);
     }
 
@@ -2720,7 +2760,8 @@ mod tests {
     fn replay_error_trace_not_finalised_serde() {
         let err = ReplayError::TraceNotFinalised;
         let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
-        let back: ReplayError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ReplayError =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, back);
     }
 
@@ -2978,7 +3019,8 @@ mod tests {
         ];
         for &v in &values {
             let encoded = encode_fp_for_trace(v);
-            let decoded = decode_fp_from_trace(&encoded).expect("serde deserialization should succeed");
+            let decoded =
+                decode_fp_from_trace(&encoded).expect("serde deserialization should succeed");
             if v.is_nan() {
                 assert!(decoded.is_nan());
             } else {
@@ -2997,7 +3039,9 @@ mod tests {
         let mut engine = ReplayEngine::new(trace, ReplayMode::BestEffort);
         // Live value differs slightly
         let live = std::f64::consts::PI + 1e-15;
-        let result = engine.replay_fp_result(live).expect("serde deserialization should succeed");
+        let result = engine
+            .replay_fp_result(live)
+            .expect("serde deserialization should succeed");
         // Should return the traced value, not live
         assert_eq!(result, original);
     }
@@ -3232,7 +3276,9 @@ mod tests {
 
         let mut engine = ReplayEngine::new(trace, ReplayMode::Validate);
         let live = 2.500001_f64;
-        let result = engine.replay_fp_result(live).expect("serde deserialization should succeed");
+        let result = engine
+            .replay_fp_result(live)
+            .expect("serde deserialization should succeed");
 
         // In Validate mode, returns live value (not traced)
         assert_eq!(result.to_bits(), live.to_bits());
@@ -3322,7 +3368,10 @@ mod tests {
         // Exact match should succeed
         let result = engine.replay_next(NondeterminismSource::TimerRead, &[42]);
         assert!(result.is_ok());
-        assert_eq!(result.expect("serde deserialization should succeed"), vec![42]);
+        assert_eq!(
+            result.expect("serde deserialization should succeed"),
+            vec![42]
+        );
         assert_eq!(engine.divergence_count(), 0);
     }
 
@@ -3336,7 +3385,10 @@ mod tests {
         // Benign divergence should succeed in BestEffort mode
         let result = engine.replay_next(NondeterminismSource::TimerRead, &[20]);
         assert!(result.is_ok());
-        assert_eq!(result.expect("serde deserialization should succeed"), vec![10]); // Returns traced value
+        assert_eq!(
+            result.expect("serde deserialization should succeed"),
+            vec![10]
+        ); // Returns traced value
         assert_eq!(engine.divergence_count(), 1);
     }
 
@@ -3350,7 +3402,10 @@ mod tests {
         // Validate mode should return live value, not traced value
         let result = engine.replay_next(NondeterminismSource::TimerRead, &[20]);
         assert!(result.is_ok());
-        assert_eq!(result.expect("serde deserialization should succeed"), vec![20]); // Returns live value
+        assert_eq!(
+            result.expect("serde deserialization should succeed"),
+            vec![20]
+        ); // Returns live value
         assert_eq!(engine.divergence_count(), 1);
     }
 }

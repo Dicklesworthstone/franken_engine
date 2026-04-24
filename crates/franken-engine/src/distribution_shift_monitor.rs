@@ -565,8 +565,8 @@ pub fn detect_shift(
             ),
         };
         // SAFETY: Tuple of ContentHash and ShiftVerdict types derive Serialize
-        let cert_bytes =
-            serde_json::to_vec(&(&benchmark.window_hash, &live.window_hash, &verdict)).expect("serde deserialization should succeed");
+        let cert_bytes = serde_json::to_vec(&(&benchmark.window_hash, &live.window_hash, &verdict))
+            .expect("serde deserialization should succeed");
         return ShiftCertificate {
             schema_version: SHIFT_MONITOR_SCHEMA_VERSION.to_string(),
             benchmark_window: benchmark.clone(),
@@ -587,8 +587,8 @@ pub fn detect_shift(
             available,
             required: config.window.min_samples,
         };
-        let cert_bytes =
-            serde_json::to_vec(&(&benchmark.window_hash, &live.window_hash, &verdict)).expect("serde deserialization should succeed");
+        let cert_bytes = serde_json::to_vec(&(&benchmark.window_hash, &live.window_hash, &verdict))
+            .expect("serde deserialization should succeed");
         return ShiftCertificate {
             schema_version: SHIFT_MONITOR_SCHEMA_VERSION.to_string(),
             benchmark_window: benchmark.clone(),
@@ -635,7 +635,8 @@ pub fn detect_shift(
                 reason: "MMD computation failed".to_string(),
             };
             let cert_bytes =
-                serde_json::to_vec(&(&benchmark.window_hash, &live.window_hash, &verdict)).expect("serde deserialization should succeed");
+                serde_json::to_vec(&(&benchmark.window_hash, &live.window_hash, &verdict))
+                    .expect("serde deserialization should succeed");
             ShiftCertificate {
                 schema_version: SHIFT_MONITOR_SCHEMA_VERSION.to_string(),
                 benchmark_window: benchmark.clone(),
@@ -711,7 +712,8 @@ pub fn run_shift_evidence() -> ShiftEvidenceManifest {
         .filter(|c| matches!(c.verdict, ShiftVerdict::Abstained { .. }))
         .count() as u32;
 
-    let hash_data = serde_json::to_vec(&certificates).expect("serde deserialization should succeed");
+    let hash_data =
+        serde_json::to_vec(&certificates).expect("serde deserialization should succeed");
 
     ShiftEvidenceManifest {
         schema_version: SHIFT_MONITOR_SCHEMA_VERSION.to_string(),
@@ -770,7 +772,8 @@ mod tests {
             // SAFETY: StreamKind derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(kind).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by valid StreamKind serialization
-            let back: StreamKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: StreamKind =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, kind);
         }
     }
@@ -787,7 +790,8 @@ mod tests {
         // SAFETY: WindowConfig derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&wc).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid WindowConfig serialization
-        let back: WindowConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: WindowConfig =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, wc);
     }
 
@@ -799,7 +803,8 @@ mod tests {
         // SAFETY: KernelKind derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&k).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid KernelKind serialization
-        let back: KernelKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: KernelKind =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, k);
     }
 
@@ -809,7 +814,8 @@ mod tests {
         // SAFETY: KernelKind derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&k).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid KernelKind serialization
-        let back: KernelKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: KernelKind =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, k);
     }
 
@@ -821,7 +827,8 @@ mod tests {
         // SAFETY: KernelKind derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&k).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid KernelKind serialization
-        let back: KernelKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: KernelKind =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, k);
     }
 
@@ -833,7 +840,8 @@ mod tests {
         // SAFETY: EmbeddingVector derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by valid EmbeddingVector serialization
-        let back: EmbeddingVector = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: EmbeddingVector =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, ev);
     }
 
@@ -969,7 +977,8 @@ mod tests {
     #[test]
     fn test_mmd_identical_sets() {
         let vecs: Vec<EmbeddingVector> = (0..5).map(|_| emb(&[500_000, 500_000])).collect();
-        let result = compute_mmd_squared(&vecs, &vecs, &KernelKind::Linear).expect("serde deserialization should succeed");
+        let result = compute_mmd_squared(&vecs, &vecs, &KernelKind::Linear)
+            .expect("serde deserialization should succeed");
         assert_eq!(result.mmd_squared_millionths, 0);
         assert_eq!(result.sample_count_left, 5);
         assert_eq!(result.sample_count_right, 5);
@@ -979,7 +988,8 @@ mod tests {
     fn test_mmd_different_sets() {
         let left: Vec<EmbeddingVector> = (0..3).map(|_| emb(&[200_000])).collect();
         let right: Vec<EmbeddingVector> = (0..3).map(|_| emb(&[800_000])).collect();
-        let result = compute_mmd_squared(&left, &right, &KernelKind::Linear).expect("serde deserialization should succeed");
+        let result = compute_mmd_squared(&left, &right, &KernelKind::Linear)
+            .expect("serde deserialization should succeed");
         // Should be non-zero because distributions differ.
         assert!(result.mmd_squared_millionths > 0);
     }
@@ -1156,7 +1166,8 @@ mod tests {
     fn test_monitor_config_serde() {
         let c = MonitorConfig::default_config();
         let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
-        let back: MonitorConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: MonitorConfig =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, c);
     }
 
@@ -1166,7 +1177,8 @@ mod tests {
     fn test_shift_verdict_serde_no_shift() {
         let v = ShiftVerdict::NoShift;
         let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
-        let back: ShiftVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ShiftVerdict =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, v);
     }
 
@@ -1176,7 +1188,8 @@ mod tests {
             mmd_squared: 42_000,
         };
         let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
-        let back: ShiftVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ShiftVerdict =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, v);
     }
 
@@ -1187,7 +1200,8 @@ mod tests {
             required: 20,
         };
         let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
-        let back: ShiftVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ShiftVerdict =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, v);
     }
 
@@ -1197,7 +1211,8 @@ mod tests {
             reason: "too few".to_string(),
         };
         let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
-        let back: ShiftVerdict = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ShiftVerdict =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, v);
     }
 
@@ -1242,7 +1257,8 @@ mod tests {
         ];
         for e in &errors {
             let json = serde_json::to_string(e).expect("serde deserialization should succeed");
-            let back: ShiftError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: ShiftError =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(&back, e);
         }
     }
@@ -1258,7 +1274,8 @@ mod tests {
             state_hash: ContentHash::compute(b"test-state"),
         };
         let json = serde_json::to_string(&state).expect("serde deserialization should succeed");
-        let back: MonitorState = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: MonitorState =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, state);
     }
 
@@ -1286,7 +1303,8 @@ mod tests {
     fn test_evidence_manifest_serde() {
         let manifest = run_shift_evidence();
         let json = serde_json::to_string(&manifest).expect("serde deserialization should succeed");
-        let back: ShiftEvidenceManifest = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ShiftEvidenceManifest =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, manifest);
     }
 
@@ -1328,7 +1346,8 @@ mod tests {
             sample_count_right: 10,
         };
         let json = serde_json::to_string(&mmd).expect("serde deserialization should succeed");
-        let back: MmdResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: MmdResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, mmd);
     }
 }

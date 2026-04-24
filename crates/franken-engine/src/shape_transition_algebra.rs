@@ -1766,15 +1766,18 @@ mod tests {
             commands: vec!["cargo test --test bytecode_vm".to_string()],
         };
         let artifact_dir = unique_artifact_dir("bundle");
-        let report = emit_shape_lattice_bundle(&artifact_dir, &bundle).expect("serde deserialization should succeed");
+        let report = emit_shape_lattice_bundle(&artifact_dir, &bundle)
+            .expect("serde deserialization should succeed");
 
         assert!(report.shape_lattice_manifest_path.exists());
         assert!(report.run_manifest_path.exists());
         assert!(report.events_path.exists());
         assert!(report.commands_path.exists());
         assert!(report.trace_ids_path.exists());
-        let manifest: serde_json::Value =
-            serde_json::from_slice(&fs::read(report.run_manifest_path).expect("serde deserialization should succeed")).expect("serde deserialization should succeed");
+        let manifest: serde_json::Value = serde_json::from_slice(
+            &fs::read(report.run_manifest_path).expect("serde deserialization should succeed"),
+        )
+        .expect("serde deserialization should succeed");
         assert_eq!(
             manifest["artifact_paths"]["shape_lattice_manifest"],
             "shape_lattice_manifest.json"
@@ -1885,11 +1888,17 @@ mod tests {
         let count = table.invalidate_shape(1);
         assert_eq!(count, 2);
         assert_eq!(
-            table.get(1, "a").expect("serde deserialization should succeed").state,
+            table
+                .get(1, "a")
+                .expect("serde deserialization should succeed")
+                .state,
             super::PropertyCellState::Invalidated
         );
         assert_eq!(
-            table.get(2, "c").expect("serde deserialization should succeed").state,
+            table
+                .get(2, "c")
+                .expect("serde deserialization should succeed")
+                .state,
             super::PropertyCellState::Constant
         );
     }
@@ -2116,7 +2125,8 @@ mod tests {
     fn serde_round_trip_cell_state() {
         let state = super::PropertyCellState::Stable;
         let json = serde_json::to_string(&state).expect("serde deserialization should succeed");
-        let back: super::PropertyCellState = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: super::PropertyCellState =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(state, back);
     }
 
@@ -2138,7 +2148,8 @@ mod tests {
             total_hits: 15,
         };
         let json = serde_json::to_string(&ic).expect("serde deserialization should succeed");
-        let back: super::InlineCacheState = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: super::InlineCacheState =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ic, back);
     }
 
@@ -2151,7 +2162,8 @@ mod tests {
             1,
         );
         let json = serde_json::to_string(&w).expect("serde deserialization should succeed");
-        let back: super::ShapeGuardWitness = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: super::ShapeGuardWitness =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(w, back);
     }
 
@@ -2169,7 +2181,8 @@ mod tests {
             witness_count: 2,
         };
         let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
-        let back: super::InlineCacheSummary = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: super::InlineCacheSummary =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(s, back);
     }
 
@@ -2271,7 +2284,9 @@ mod tests {
     fn shape_descriptor_property_count() {
         let mut algebra = ShapeTransitionAlgebra::new();
         let root = algebra.root_shape_id();
-        let root_shape = algebra.shape(root).expect("serde deserialization should succeed");
+        let root_shape = algebra
+            .shape(root)
+            .expect("serde deserialization should succeed");
         assert_eq!(root_shape.property_count(), 0);
         let outcome = algebra
             .apply_mutation(
@@ -2336,7 +2351,9 @@ mod tests {
     fn lineage_root_has_zero_depth() {
         let algebra = ShapeTransitionAlgebra::new();
         let root = algebra.root_shape_id();
-        let lineage = algebra.lineage(root).expect("serde deserialization should succeed");
+        let lineage = algebra
+            .lineage(root)
+            .expect("serde deserialization should succeed");
         assert_eq!(lineage.depth, 0);
         assert!(lineage.steps.is_empty());
     }
@@ -2354,7 +2371,9 @@ mod tests {
                 },
             )
             .expect("serde deserialization should succeed");
-        let lineage = algebra.lineage(outcome.shape.shape_id).expect("serde deserialization should succeed");
+        let lineage = algebra
+            .lineage(outcome.shape.shape_id)
+            .expect("serde deserialization should succeed");
         assert_eq!(lineage.depth, 1);
         assert_eq!(lineage.steps[0].from_shape_id, root);
         assert_eq!(lineage.steps[0].to_shape_id, outcome.shape.shape_id);
@@ -2570,7 +2589,8 @@ mod tests {
             property_key: Some("x".into()),
         };
         let json = serde_json::to_string(&step).expect("serde deserialization should succeed");
-        let back: super::LineageStep = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: super::LineageStep =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(step, back);
     }
 
@@ -2584,7 +2604,8 @@ mod tests {
             invalidated_assumption_count: 1,
         };
         let json = serde_json::to_string(&evt).expect("serde deserialization should succeed");
-        let back: super::DeoptEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: super::DeoptEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(evt, back);
     }
 
@@ -2595,7 +2616,8 @@ mod tests {
             source_shape_ids: vec![1, 2, 3],
         };
         let json = serde_json::to_string(&w).expect("serde deserialization should succeed");
-        let back: super::ConvergenceWitness = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: super::ConvergenceWitness =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(w, back);
     }
 
@@ -2611,7 +2633,8 @@ mod tests {
             expected_transition_count: 1,
         };
         let json = serde_json::to_string(&specimen).expect("serde deserialization should succeed");
-        let back: super::ShapeTransitionSpecimen = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: super::ShapeTransitionSpecimen =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(specimen.label, back.label);
     }
 }

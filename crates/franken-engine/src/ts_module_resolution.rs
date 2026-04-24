@@ -2052,7 +2052,8 @@ mod tests {
             // SAFETY: TsModuleResolutionMode derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(&mode).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by valid TsModuleResolutionMode serialization
-            let back: TsModuleResolutionMode = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: TsModuleResolutionMode =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(mode, back);
         }
     }
@@ -2063,7 +2064,8 @@ mod tests {
             // SAFETY: TsRequestStyle derives Serialize and has no non-serializable fields
             let json = serde_json::to_string(&style).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by valid TsRequestStyle serialization
-            let back: TsRequestStyle = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: TsRequestStyle =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(style, back);
         }
     }
@@ -2109,7 +2111,8 @@ mod tests {
     fn config_serde_roundtrip() {
         let config = TsModuleResolutionConfig::default();
         let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
-        let back: TsModuleResolutionConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: TsModuleResolutionConfig =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(config, back);
     }
 
@@ -2179,7 +2182,8 @@ mod tests {
             traces: vec![],
         };
         let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
-        let back: TsModuleResolutionError = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: TsModuleResolutionError =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(err, back);
     }
 
@@ -2220,7 +2224,9 @@ mod tests {
         let mut resolver = default_resolver();
         resolver.register_file("/project/src/helper.ts");
         let req = import_request("./helper").with_referrer("/project/src/main.ts");
-        let outcome = resolver.resolve(&req, &ctx()).expect("serde deserialization should succeed");
+        let outcome = resolver
+            .resolve(&req, &ctx())
+            .expect("serde deserialization should succeed");
         assert_eq!(outcome.resolved_path, "/project/src/helper.ts");
         assert_eq!(outcome.style, TsRequestStyle::Import);
     }
@@ -2232,7 +2238,9 @@ mod tests {
         // /project/src/utils (parent of /project/src/deep is /project/src).
         resolver.register_file("/project/src/utils.ts");
         let req = import_request("../utils").with_referrer("/project/src/deep/file.ts");
-        let outcome = resolver.resolve(&req, &ctx()).expect("serde deserialization should succeed");
+        let outcome = resolver
+            .resolve(&req, &ctx())
+            .expect("serde deserialization should succeed");
         assert_eq!(outcome.resolved_path, "/project/src/utils.ts");
     }
 
@@ -2241,7 +2249,9 @@ mod tests {
         let mut resolver = default_resolver();
         resolver.register_file("/project/absolute.ts");
         let req = import_request("/project/absolute");
-        let outcome = resolver.resolve(&req, &ctx()).expect("serde deserialization should succeed");
+        let outcome = resolver
+            .resolve(&req, &ctx())
+            .expect("serde deserialization should succeed");
         assert_eq!(outcome.resolved_path, "/project/absolute.ts");
     }
 
@@ -2250,7 +2260,9 @@ mod tests {
         let mut resolver = default_resolver();
         resolver.register_file("/project/src/components/index.ts");
         let req = import_request("./components").with_referrer("/project/src/main.ts");
-        let outcome = resolver.resolve(&req, &ctx()).expect("serde deserialization should succeed");
+        let outcome = resolver
+            .resolve(&req, &ctx())
+            .expect("serde deserialization should succeed");
         assert_eq!(outcome.resolved_path, "/project/src/components/index.ts");
     }
 
@@ -2259,7 +2271,9 @@ mod tests {
         let mut resolver = default_resolver();
         resolver.register_file("/project/src/App.tsx");
         let req = import_request("./App").with_referrer("/project/src/main.ts");
-        let outcome = resolver.resolve(&req, &ctx()).expect("serde deserialization should succeed");
+        let outcome = resolver
+            .resolve(&req, &ctx())
+            .expect("serde deserialization should succeed");
         assert_eq!(outcome.resolved_path, "/project/src/App.tsx");
     }
 
@@ -2268,7 +2282,9 @@ mod tests {
         let mut resolver = default_resolver();
         resolver.register_file("/project/src/config.cts");
         let req = require_request("./config").with_referrer("/project/src/main.ts");
-        let outcome = resolver.resolve(&req, &ctx()).expect("serde deserialization should succeed");
+        let outcome = resolver
+            .resolve(&req, &ctx())
+            .expect("serde deserialization should succeed");
         assert_eq!(outcome.resolved_path, "/project/src/config.cts");
     }
 
@@ -2341,7 +2357,9 @@ mod tests {
         resolver.register_file("/project/node_modules/react/dist/index.mjs");
 
         let req = import_request("react");
-        let outcome = resolver.resolve(&req, &ctx()).expect("serde deserialization should succeed");
+        let outcome = resolver
+            .resolve(&req, &ctx())
+            .expect("serde deserialization should succeed");
         assert_eq!(
             outcome.resolved_path,
             "/project/node_modules/react/dist/index.mjs"
@@ -2366,7 +2384,9 @@ mod tests {
         resolver.register_file("/project/node_modules/lodash/dist/index.cjs");
 
         let req = require_request("lodash");
-        let outcome = resolver.resolve(&req, &ctx()).expect("serde deserialization should succeed");
+        let outcome = resolver
+            .resolve(&req, &ctx())
+            .expect("serde deserialization should succeed");
         assert_eq!(
             outcome.resolved_path,
             "/project/node_modules/lodash/dist/index.cjs"
@@ -2387,7 +2407,9 @@ mod tests {
         resolver.register_file("/project/node_modules/fallback-pkg/lib/main.js");
 
         let req = import_request("fallback-pkg");
-        let outcome = resolver.resolve(&req, &ctx()).expect("serde deserialization should succeed");
+        let outcome = resolver
+            .resolve(&req, &ctx())
+            .expect("serde deserialization should succeed");
         assert_eq!(
             outcome.resolved_path,
             "/project/node_modules/fallback-pkg/lib/main.js"
@@ -2409,7 +2431,9 @@ mod tests {
         resolver.register_file("/project/node_modules/@scope/pkg/index.mjs");
 
         let req = import_request("@scope/pkg");
-        let outcome = resolver.resolve(&req, &ctx()).expect("serde deserialization should succeed");
+        let outcome = resolver
+            .resolve(&req, &ctx())
+            .expect("serde deserialization should succeed");
         assert_eq!(outcome.package_name.as_deref(), Some("@scope/pkg"));
     }
 
@@ -2428,7 +2452,9 @@ mod tests {
         resolver.register_file("/project/node_modules/toolkit/utils.mjs");
 
         let req = import_request("toolkit/utils");
-        let outcome = resolver.resolve(&req, &ctx()).expect("serde deserialization should succeed");
+        let outcome = resolver
+            .resolve(&req, &ctx())
+            .expect("serde deserialization should succeed");
         assert_eq!(
             outcome.resolved_path,
             "/project/node_modules/toolkit/utils.mjs"
@@ -2467,7 +2493,9 @@ mod tests {
         resolver.register_file("/project/src/utils/math.ts");
 
         let req = import_request("@utils/math");
-        let outcome = resolver.resolve(&req, &ctx()).expect("serde deserialization should succeed");
+        let outcome = resolver
+            .resolve(&req, &ctx())
+            .expect("serde deserialization should succeed");
         assert_eq!(outcome.resolved_path, "/project/src/utils/math.ts");
     }
 
@@ -2488,7 +2516,9 @@ mod tests {
         resolver.register_file("/project/lib/foo.ts");
 
         let req = import_request("@lib/foo");
-        let outcome = resolver.resolve(&req, &ctx()).expect("serde deserialization should succeed");
+        let outcome = resolver
+            .resolve(&req, &ctx())
+            .expect("serde deserialization should succeed");
         assert_eq!(outcome.resolved_path, "/project/lib/foo.ts");
     }
 
@@ -2499,7 +2529,9 @@ mod tests {
         let mut resolver = default_resolver();
         resolver.register_file("/project/src/found.ts");
         let req = import_request("./src/found").with_referrer("/project/package.json");
-        let outcome = resolver.resolve(&req, &ctx()).expect("serde deserialization should succeed");
+        let outcome = resolver
+            .resolve(&req, &ctx())
+            .expect("serde deserialization should succeed");
         assert!(!outcome.traces.is_empty());
         for trace in &outcome.traces {
             assert_eq!(trace.trace_id, "trace-test");
@@ -2522,7 +2554,9 @@ mod tests {
         let mut resolver = default_resolver();
         resolver.register_file("/project/src/a.tsx");
         let req = import_request("./a").with_referrer("/project/src/main.ts");
-        let outcome = resolver.resolve(&req, &ctx()).expect("serde deserialization should succeed");
+        let outcome = resolver
+            .resolve(&req, &ctx())
+            .expect("serde deserialization should succeed");
         let probes = outcome.probe_sequence();
         assert!(!probes.is_empty());
     }
@@ -2541,7 +2575,8 @@ mod tests {
             candidate: Some("/a/b.ts".to_string()),
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let back: TsResolutionTraceEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: TsResolutionTraceEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(event, back);
     }
 
@@ -2606,7 +2641,8 @@ mod tests {
     fn drift_report_serde_roundtrip() {
         let report = classify_resolution_drift(&["a".to_string()], &["b".to_string()]);
         let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
-        let back: TsResolutionDriftReport = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: TsResolutionDriftReport =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(report, back);
     }
 
@@ -2705,28 +2741,32 @@ mod tests {
 
     #[test]
     fn parse_package_specifier_bare() {
-        let (name, key) = parse_package_specifier("react").expect("serde deserialization should succeed");
+        let (name, key) =
+            parse_package_specifier("react").expect("serde deserialization should succeed");
         assert_eq!(name, "react");
         assert_eq!(key, ".");
     }
 
     #[test]
     fn parse_package_specifier_subpath() {
-        let (name, key) = parse_package_specifier("react/jsx-runtime").expect("serde deserialization should succeed");
+        let (name, key) = parse_package_specifier("react/jsx-runtime")
+            .expect("serde deserialization should succeed");
         assert_eq!(name, "react");
         assert_eq!(key, "./jsx-runtime");
     }
 
     #[test]
     fn parse_package_specifier_scoped() {
-        let (name, key) = parse_package_specifier("@scope/pkg").expect("serde deserialization should succeed");
+        let (name, key) =
+            parse_package_specifier("@scope/pkg").expect("serde deserialization should succeed");
         assert_eq!(name, "@scope/pkg");
         assert_eq!(key, ".");
     }
 
     #[test]
     fn parse_package_specifier_scoped_subpath() {
-        let (name, key) = parse_package_specifier("@scope/pkg/utils").expect("serde deserialization should succeed");
+        let (name, key) = parse_package_specifier("@scope/pkg/utils")
+            .expect("serde deserialization should succeed");
         assert_eq!(name, "@scope/pkg");
         assert_eq!(key, "./utils");
     }
@@ -2773,7 +2813,8 @@ mod tests {
             traces: vec![],
         };
         let json = serde_json::to_string(&outcome).expect("serde deserialization should succeed");
-        let back: TsModuleResolutionOutcome = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: TsModuleResolutionOutcome =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(outcome, back);
     }
 
@@ -2782,7 +2823,8 @@ mod tests {
         let mut resolver = default_resolver();
         resolver.register_file("/project/src/a.ts");
         let json = serde_json::to_string(&resolver).expect("serde deserialization should succeed");
-        let back: DeterministicTsModuleResolver = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DeterministicTsModuleResolver =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(resolver, back);
     }
 
@@ -2805,7 +2847,8 @@ mod tests {
             },
         };
         let json = serde_json::to_string(&manifest).expect("serde deserialization should succeed");
-        let back: TsResolutionRunManifest = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: TsResolutionRunManifest =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(manifest, back);
     }
 
@@ -2876,7 +2919,8 @@ mod tests {
             TsResolutionDriftClass::FullMismatch,
         ] {
             let json = serde_json::to_string(&class).expect("serde deserialization should succeed");
-            let back: TsResolutionDriftClass = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: TsResolutionDriftClass =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(class, back);
         }
     }
@@ -2921,7 +2965,10 @@ mod tests {
                 max_salt_attempts: 0,
             },
         );
-        let package = bundle.export_map_hash_catalog.package("react").expect("serde deserialization should succeed");
+        let package = bundle
+            .export_map_hash_catalog
+            .package("react")
+            .expect("serde deserialization should succeed");
 
         assert!(package.exact_export_mphf.is_none());
         assert!(package.hot_subpath_mphf.is_none());
@@ -2948,7 +2995,9 @@ mod tests {
 
         let bundle = resolver.build_resolution_index_bundle("2026-03-09T00:00:00Z", 100);
         let request = import_request("react/jsx-runtime");
-        let direct = resolver.resolve(&request, &ctx()).expect("serde deserialization should succeed");
+        let direct = resolver
+            .resolve(&request, &ctx())
+            .expect("serde deserialization should succeed");
         let indexed = resolver
             .resolve_with_index_or_fallback(&request, &ctx(), &bundle, 150, 300)
             .expect("serde deserialization should succeed");
@@ -2976,7 +3025,9 @@ mod tests {
         let bundle = resolver.build_resolution_index_bundle("2026-03-09T00:00:00Z", 10);
         let validation = resolver.validate_resolution_index_bundle(&bundle, 500, 60);
         let request = import_request("react");
-        let direct = resolver.resolve(&request, &ctx()).expect("serde deserialization should succeed");
+        let direct = resolver
+            .resolve(&request, &ctx())
+            .expect("serde deserialization should succeed");
         let indexed = resolver
             .resolve_with_index_or_fallback(&request, &ctx(), &bundle, 500, 60)
             .expect("serde deserialization should succeed");

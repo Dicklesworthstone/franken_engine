@@ -924,11 +924,17 @@ fn parse_pin_toml(content: &str) -> io::Result<Test262PinSet> {
             .remove("schema_version")
             .unwrap_or_else(|| TEST262_PIN_SCHEMA.to_string()),
         // SAFETY: source_repo is a required field in Test262 pin TOML format
-        source_repo: values.remove("source_repo").expect("serde deserialization should succeed"),
+        source_repo: values
+            .remove("source_repo")
+            .expect("serde deserialization should succeed"),
         // SAFETY: es_profile is a required field in Test262 pin TOML format
-        es_profile: values.remove("es_profile").expect("serde deserialization should succeed"),
+        es_profile: values
+            .remove("es_profile")
+            .expect("serde deserialization should succeed"),
         // SAFETY: test262_commit is a required field in Test262 pin TOML format
-        test262_commit: values.remove("test262_commit").expect("serde deserialization should succeed"),
+        test262_commit: values
+            .remove("test262_commit")
+            .expect("serde deserialization should succeed"),
     })
 }
 
@@ -1568,10 +1574,12 @@ mod tests {
         ] {
             // SAFETY: Test262WaiverReason derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json = serde_json::to_string(&reason).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&reason).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by to_string of a valid Test262WaiverReason,
             // so from_str back to Test262WaiverReason cannot fail (valid format + matching schema).
-            let back: Test262WaiverReason = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: Test262WaiverReason =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(back, reason);
         }
     }
@@ -1788,10 +1796,12 @@ mod tests {
         ] {
             // SAFETY: Test262Outcome derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json = serde_json::to_string(&outcome).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&outcome).expect("serde deserialization should succeed");
             // SAFETY: JSON was just produced by to_string of a valid Test262Outcome,
             // so from_str back to Test262Outcome cannot fail (valid format + matching schema).
-            let back: Test262Outcome = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: Test262Outcome =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(back, outcome);
         }
     }
@@ -1804,8 +1814,10 @@ mod tests {
             Test262ObservedOutcome::Timeout,
             Test262ObservedOutcome::Crash,
         ] {
-            let json = serde_json::to_string(&outcome).expect("serde deserialization should succeed");
-            let back: Test262ObservedOutcome = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json =
+                serde_json::to_string(&outcome).expect("serde deserialization should succeed");
+            let back: Test262ObservedOutcome =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(back, outcome);
         }
     }
@@ -2156,7 +2168,8 @@ reason_code = "harness_gap"
     fn pin_set_serde_round_trip() {
         let pin = valid_pin();
         let json = serde_json::to_string(&pin).expect("serde deserialization should succeed");
-        let back: Test262PinSet = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: Test262PinSet =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, pin);
     }
 
@@ -2164,7 +2177,8 @@ reason_code = "harness_gap"
     fn profile_serde_round_trip() {
         let profile = valid_profile();
         let json = serde_json::to_string(&profile).expect("serde deserialization should succeed");
-        let back: Test262Profile = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: Test262Profile =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, profile);
     }
 
@@ -2172,7 +2186,8 @@ reason_code = "harness_gap"
     fn waiver_set_serde_round_trip() {
         let ws = valid_waiver_set();
         let json = serde_json::to_string(&ws).expect("serde deserialization should succeed");
-        let back: Test262WaiverSet = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: Test262WaiverSet =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, ws);
     }
 
@@ -2180,7 +2195,8 @@ reason_code = "harness_gap"
     fn runner_config_serde_round_trip() {
         let cfg = Test262RunnerConfig::default();
         let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
-        let back: Test262RunnerConfig = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: Test262RunnerConfig =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, cfg);
     }
 
@@ -2600,7 +2616,11 @@ reason_code = "harness_gap"
             )
             .expect("serde deserialization should succeed");
         assert!(result.blocked);
-        let warning = result.summary.pass_regression_warning.as_ref().expect("serde deserialization should succeed");
+        let warning = result
+            .summary
+            .pass_regression_warning
+            .as_ref()
+            .expect("serde deserialization should succeed");
         assert_eq!(warning.previous_high_water_mark, 10);
         assert_eq!(warning.current_pass_count, 1);
         assert!(warning.acknowledgement_required);
@@ -2685,8 +2705,11 @@ reason_code = "harness_gap"
         let dir = std::env::temp_dir().join("franken_t262_hwm_test");
         let _ = fs::create_dir_all(&dir);
         let path = dir.join("hwm.json");
-        hwm.write_json(&path).expect("serde deserialization should succeed");
-        let loaded = Test262HighWaterMark::load_json(&path).expect("serde deserialization should succeed").expect("serde deserialization should succeed");
+        hwm.write_json(&path)
+            .expect("serde deserialization should succeed");
+        let loaded = Test262HighWaterMark::load_json(&path)
+            .expect("serde deserialization should succeed")
+            .expect("serde deserialization should succeed");
         assert_eq!(loaded, hwm);
         let _ = fs::remove_dir_all(&dir);
     }
@@ -2695,7 +2718,8 @@ reason_code = "harness_gap"
     fn hwm_load_nonexistent_returns_none() {
         let path = std::env::temp_dir().join("franken_t262_hwm_nonexistent.json");
         let _ = fs::remove_file(&path);
-        let loaded = Test262HighWaterMark::load_json(&path).expect("serde deserialization should succeed");
+        let loaded =
+            Test262HighWaterMark::load_json(&path).expect("serde deserialization should succeed");
         assert!(loaded.is_none());
     }
 
@@ -2724,15 +2748,19 @@ reason_code = "harness_gap"
 
         let dir = std::env::temp_dir().join("franken_t262_evidence_test");
         let _ = fs::remove_dir_all(&dir);
-        let collector = Test262EvidenceCollector::new(&dir).expect("serde deserialization should succeed");
-        let artifacts = collector.collect(&result, &hwm).expect("serde deserialization should succeed");
+        let collector =
+            Test262EvidenceCollector::new(&dir).expect("serde deserialization should succeed");
+        let artifacts = collector
+            .collect(&result, &hwm)
+            .expect("serde deserialization should succeed");
 
         assert!(artifacts.run_manifest_path.exists());
         assert!(artifacts.evidence_path.exists());
         assert!(artifacts.high_water_mark_path.exists());
 
         // Evidence JSONL should have summary + log lines
-        let evidence = fs::read_to_string(&artifacts.evidence_path).expect("serde deserialization should succeed");
+        let evidence = fs::read_to_string(&artifacts.evidence_path)
+            .expect("serde deserialization should succeed");
         let lines: Vec<&str> = evidence.lines().collect();
         assert!(lines.len() >= 2); // summary + at least 1 log
 
@@ -2835,12 +2863,18 @@ reason_code = "harness_gap"
 
     #[test]
     fn parse_quoted_valid() {
-        assert_eq!(parse_quoted(1, "\"hello\"").expect("serde deserialization should succeed"), "hello");
+        assert_eq!(
+            parse_quoted(1, "\"hello\"").expect("serde deserialization should succeed"),
+            "hello"
+        );
     }
 
     #[test]
     fn parse_quoted_with_whitespace() {
-        assert_eq!(parse_quoted(1, "  \"hello\"  ").expect("serde deserialization should succeed"), "hello");
+        assert_eq!(
+            parse_quoted(1, "  \"hello\"  ").expect("serde deserialization should succeed"),
+            "hello"
+        );
     }
 
     #[test]
@@ -2855,7 +2889,10 @@ reason_code = "harness_gap"
 
     #[test]
     fn parse_quoted_empty_string_ok() {
-        assert_eq!(parse_quoted(1, "\"\"").expect("serde deserialization should succeed"), "");
+        assert_eq!(
+            parse_quoted(1, "\"\"").expect("serde deserialization should succeed"),
+            ""
+        );
     }
 
     #[test]
@@ -2867,7 +2904,8 @@ reason_code = "harness_gap"
 
     #[test]
     fn parse_key_value_valid() {
-        let (k, v) = parse_key_value(1, "name = \"value\"").expect("serde deserialization should succeed");
+        let (k, v) =
+            parse_key_value(1, "name = \"value\"").expect("serde deserialization should succeed");
         assert_eq!(k, "name");
         assert_eq!(v, "value");
     }
@@ -2885,7 +2923,10 @@ reason_code = "harness_gap"
         let _ = fs::create_dir_all(&dir);
         let path = dir.join("test_atomic.txt");
         write_atomic(&path, b"hello world").expect("serde deserialization should succeed");
-        assert_eq!(fs::read_to_string(&path).expect("serde deserialization should succeed"), "hello world");
+        assert_eq!(
+            fs::read_to_string(&path).expect("serde deserialization should succeed"),
+            "hello world"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -3037,7 +3078,8 @@ unknown_field = "value"
     fn canonical_json_bytes_round_trip() {
         let pin = valid_pin();
         let bytes = canonical_json_bytes(&pin).expect("serde deserialization should succeed");
-        let back: Test262PinSet = serde_json::from_slice(&bytes).expect("serde deserialization should succeed");
+        let back: Test262PinSet =
+            serde_json::from_slice(&bytes).expect("serde deserialization should succeed");
         assert_eq!(back, pin);
     }
 
@@ -3060,7 +3102,8 @@ unknown_field = "value"
             worker_index: 0,
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let back: Test262LogEvent = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: Test262LogEvent =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, event);
     }
 
@@ -3084,7 +3127,8 @@ unknown_field = "value"
             pass_regression_warning: None,
         };
         let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
-        let back: Test262RunSummary = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: Test262RunSummary =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, summary);
     }
 
@@ -3099,7 +3143,8 @@ unknown_field = "value"
             acknowledged: false,
         };
         let json = serde_json::to_string(&warning).expect("serde deserialization should succeed");
-        let back: Test262PassRegressionWarning = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: Test262PassRegressionWarning =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, warning);
     }
 
@@ -3117,7 +3162,8 @@ unknown_field = "value"
         let json = serde_json::to_string(&arts).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid Test262CollectedArtifacts,
         // so from_str back to Test262CollectedArtifacts cannot fail (valid format + matching schema).
-        let back: Test262CollectedArtifacts = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: Test262CollectedArtifacts =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, arts);
     }
 
@@ -3182,7 +3228,8 @@ unknown_field = "value"
         let json = serde_json::to_string(&obs).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid Test262ObservedResult,
         // so from_str back to Test262ObservedResult cannot fail (valid format + matching schema).
-        let back: Test262ObservedResult = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: Test262ObservedResult =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, obs);
     }
 
@@ -3200,7 +3247,8 @@ unknown_field = "value"
         let json = serde_json::to_string(&wa).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid DeterministicWorkerAssignment,
         // so from_str back to DeterministicWorkerAssignment cannot fail (valid format + matching schema).
-        let back: DeterministicWorkerAssignment = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DeterministicWorkerAssignment =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(back, wa);
     }
 
@@ -3218,7 +3266,8 @@ unknown_field = "value"
         let json = serde_json::to_string(&inc).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid Test262ProfileInclude,
         // so from_str back to Test262ProfileInclude cannot fail (valid format + matching schema).
-        let back: Test262ProfileInclude = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: Test262ProfileInclude =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(inc, back);
     }
 
@@ -3234,7 +3283,8 @@ unknown_field = "value"
         let json = serde_json::to_string(&exc).expect("serde deserialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid Test262ProfileExclude,
         // so from_str back to Test262ProfileExclude cannot fail (valid format + matching schema).
-        let back: Test262ProfileExclude = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: Test262ProfileExclude =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(exc, back);
     }
 }

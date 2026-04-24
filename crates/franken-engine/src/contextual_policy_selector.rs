@@ -751,7 +751,8 @@ mod tests {
     fn feature_key_serde() {
         for k in FeatureKey::ALL {
             let json = serde_json::to_string(k).expect("serde deserialization should succeed");
-            let back: FeatureKey = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: FeatureKey =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*k, back);
         }
     }
@@ -780,7 +781,8 @@ mod tests {
     fn strategy_kind_serde() {
         for k in StrategyKind::ALL {
             let json = serde_json::to_string(k).expect("serde deserialization should succeed");
-            let back: StrategyKind = serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: StrategyKind =
+                serde_json::from_str(&json).expect("serde deserialization should succeed");
             assert_eq!(*k, back);
         }
     }
@@ -805,7 +807,8 @@ mod tests {
     fn context_serde() {
         let ctx = basic_context();
         let json = serde_json::to_string(&ctx).expect("serde deserialization should succeed");
-        let back: WorkloadContext = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: WorkloadContext =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ctx, back);
     }
 
@@ -842,7 +845,8 @@ mod tests {
     fn strategy_serde() {
         let s = tiering_strategy();
         let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
-        let back: OptimizationStrategy = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: OptimizationStrategy =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(s, back);
     }
 
@@ -888,7 +892,8 @@ mod tests {
             kinds: BTreeSet::from([StrategyKind::Tiering, StrategyKind::CachePolicy]),
         };
         let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
-        let back: PolicyConstraint = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: PolicyConstraint =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c, back);
     }
 
@@ -1053,7 +1058,8 @@ mod tests {
         );
         let d = sel.select(&basic_context(), epoch());
         let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
-        let back: SelectionDecision = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SelectionDecision =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(d, back);
     }
 
@@ -1066,7 +1072,8 @@ mod tests {
             }],
         );
         let json = serde_json::to_string(&sel).expect("serde deserialization should succeed");
-        let back: ContextualSelector = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ContextualSelector =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(sel, back);
     }
 
@@ -1454,7 +1461,8 @@ mod tests {
             "benchmark-workload",
         );
         let json = serde_json::to_string(&ctx).expect("serde deserialization should succeed");
-        let back: WorkloadContext = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: WorkloadContext =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(ctx, back);
         assert_eq!(back.label.as_deref(), Some("benchmark-workload"));
     }
@@ -1525,7 +1533,8 @@ mod tests {
             limit: 30_000,
         };
         let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
-        let back: SelectionReason = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SelectionReason =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 
@@ -1536,7 +1545,8 @@ mod tests {
             budget: 100_000,
         };
         let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
-        let back: SelectionReason = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SelectionReason =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 
@@ -1546,7 +1556,8 @@ mod tests {
             missing: BTreeSet::from([FeatureKey::HotFunctionCount, FeatureKey::GcPauseFrequency]),
         };
         let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
-        let back: SelectionReason = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SelectionReason =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 
@@ -1554,7 +1565,8 @@ mod tests {
     fn selection_reason_serde_fallback() {
         let r = SelectionReason::FallbackToDefault;
         let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
-        let back: SelectionReason = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SelectionReason =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(r, back);
     }
 
@@ -1690,7 +1702,8 @@ mod tests {
         let d = sel.select(&basic_context(), epoch());
         assert!(d.is_fallback());
         let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
-        let back: SelectionDecision = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SelectionDecision =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(d, back);
         assert!(back.selected_strategy_id.is_none());
         assert!(back.selected_kind.is_none());
@@ -1709,7 +1722,8 @@ mod tests {
         let d = sel.select(&basic_context(), epoch());
         assert!(d.is_override());
         let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
-        let back: SelectionDecision = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SelectionDecision =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(d, back);
     }
 
@@ -1745,7 +1759,8 @@ mod tests {
             strategy_ids: BTreeSet::from(["a".to_string(), "b".to_string()]),
         };
         let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
-        let back: PolicyConstraint = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: PolicyConstraint =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c, back);
     }
 
@@ -1755,7 +1770,8 @@ mod tests {
             limit_millionths: 42_000,
         };
         let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
-        let back: PolicyConstraint = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: PolicyConstraint =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c, back);
     }
 
@@ -1765,7 +1781,8 @@ mod tests {
             threshold_millionths: 99_999,
         };
         let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
-        let back: PolicyConstraint = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: PolicyConstraint =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c, back);
     }
 
@@ -1775,7 +1792,8 @@ mod tests {
             strategy_id: "my-forced".into(),
         };
         let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
-        let back: PolicyConstraint = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: PolicyConstraint =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c, back);
     }
 
@@ -1785,7 +1803,8 @@ mod tests {
             limit_millionths: 55_555,
         };
         let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
-        let back: PolicyConstraint = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: PolicyConstraint =
+            serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c, back);
     }
 

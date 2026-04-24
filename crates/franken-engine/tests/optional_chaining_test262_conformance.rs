@@ -27,7 +27,7 @@ pub const OPTIONAL_CHAINING_CONFORMANCE_SCHEMA: &str =
     "franken-engine.optional-chaining-test262.v1";
 
 /// Test result classification.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum OptionalChainingResult {
     Pass,
     Fail { reason: String },
@@ -38,7 +38,7 @@ pub enum OptionalChainingResult {
 // RequirementLevel now imported from shared module
 
 /// Optional chaining test categories.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum OptionalChainingCategory {
     /// Property access: obj?.prop
     PropertyAccess,
@@ -384,9 +384,8 @@ impl OptionalChainingHarness {
         }
 
         // Calculate pass rate
-        statistics.pass_rate_millionths = (statistics.passed * 1_000_000)
-            .checked_div(statistics.total_tests)
-            .unwrap_or(0);
+        statistics.pass_rate_millionths =
+            ratio_millionths(statistics.passed, statistics.total_tests);
 
         OptionalChainingReport {
             schema_version: OPTIONAL_CHAINING_CONFORMANCE_SCHEMA.to_string(),
@@ -471,7 +470,7 @@ impl OptionalChainingHarness {
 }
 
 /// Conformance statistics.
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ConformanceStatistics {
     pub total_tests: u64,
     pub passed: u64,
@@ -482,14 +481,14 @@ pub struct ConformanceStatistics {
 }
 
 /// Category coverage statistics.
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct CategoryCoverage {
     pub total: u64,
     pub passed: u64,
 }
 
 /// Optional chaining conformance report.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct OptionalChainingReport {
     pub schema_version: String,
     pub security_epoch: SecurityEpoch,
@@ -497,6 +496,13 @@ pub struct OptionalChainingReport {
     pub test_results: BTreeMap<String, OptionalChainingResult>,
     pub statistics: ConformanceStatistics,
     pub coverage_by_category: BTreeMap<OptionalChainingCategory, CategoryCoverage>,
+}
+
+fn ratio_millionths(passed: u64, total: u64) -> u64 {
+    if total == 0 {
+        return 0;
+    }
+    ((u128::from(passed) * 1_000_000_u128) / u128::from(total)).min(1_000_000_u128) as u64
 }
 
 impl OptionalChainingReport {
@@ -584,6 +590,27 @@ mod tests {
         assert_eq!(report.security_epoch, epoch);
         assert!(!report.test_results.is_empty());
         assert!(report.statistics.pass_rate_millionths <= 1_000_000);
+    }
+
+    #[test]
+    fn pass_rate_millionths_saturates_without_overflow() {
+        assert_eq!(ratio_millionths(u64::MAX, u64::MAX), 1_000_000);
+        assert_eq!(ratio_millionths(u64::MAX, 1), 1_000_000);
+        assert_eq!(ratio_millionths(1, 0), 0);
+    }
+
+    #[test]
+    fn report_types_support_exact_comparison() {
+        let harness = OptionalChainingHarness::new();
+        let epoch = SecurityEpoch::from_raw(1);
+        let report = harness.run_conformance(epoch);
+
+        assert_eq!(report.clone(), report);
+        assert_eq!(OptionalChainingResult::Pass, OptionalChainingResult::Pass);
+        assert_eq!(
+            OptionalChainingCategory::PropertyAccess,
+            OptionalChainingCategory::PropertyAccess
+        );
     }
 
     #[test]

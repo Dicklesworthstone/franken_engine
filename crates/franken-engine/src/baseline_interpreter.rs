@@ -305,6 +305,10 @@ pub enum BuiltinFunctionKind {
     Require,
     IteratorNext,
     IteratorSelf,
+    ConsoleLog,
+    ConsoleError,
+    ConsoleWarn,
+    ConsoleInfo,
 }
 
 /// First-class builtin callable value with the module provenance needed for
@@ -343,11 +347,47 @@ impl BuiltinFunction {
         }
     }
 
+    fn console_log() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::ConsoleLog,
+            module_specifier: String::new(),
+            iterator_handle: None,
+        }
+    }
+
+    fn console_error() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::ConsoleError,
+            module_specifier: String::new(),
+            iterator_handle: None,
+        }
+    }
+
+    fn console_warn() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::ConsoleWarn,
+            module_specifier: String::new(),
+            iterator_handle: None,
+        }
+    }
+
+    fn console_info() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::ConsoleInfo,
+            module_specifier: String::new(),
+            iterator_handle: None,
+        }
+    }
+
     fn display_name(&self) -> &'static str {
         match self.kind {
             BuiltinFunctionKind::Require => "require",
             BuiltinFunctionKind::IteratorNext => "next",
             BuiltinFunctionKind::IteratorSelf => "@@iterator",
+            BuiltinFunctionKind::ConsoleLog => "log",
+            BuiltinFunctionKind::ConsoleError => "error",
+            BuiltinFunctionKind::ConsoleWarn => "warn",
+            BuiltinFunctionKind::ConsoleInfo => "info",
         }
     }
 }
@@ -1973,6 +2013,7 @@ impl InterpreterCore {
         let entry_specifier = module.header.source_label.clone();
         self.current_module_specifier = Some(entry_specifier.clone());
         self.ensure_module_record(module, &entry_specifier)?;
+        self.inject_runtime_globals()?;
 
         self.push_event("execution_started", "ok", None);
 
@@ -2132,6 +2173,68 @@ impl InterpreterCore {
         self.pending_captures.clear();
         self.current_module_specifier = Some(module_specifier.to_string());
         self.sync_estimated_memory_bytes()?;
+        self.inject_runtime_globals()?;
+        Ok(())
+    }
+
+    fn inject_runtime_globals(&mut self) -> Result<(), InterpreterError> {
+        let argv = Value::Object(self.alloc_array_from_values(&[])?);
+        let env = Value::Object(self.alloc_object_with_properties(&[])?);
+        let process =
+            Value::Object(self.alloc_object_with_properties(&[("argv", argv), ("env", env)])?);
+        let console = Value::Object(self.alloc_object_with_properties(&[
+            (
+                "log",
+                Value::BuiltinFunction(BuiltinFunction::console_log()),
+            ),
+            (
+                "error",
+                Value::BuiltinFunction(BuiltinFunction::console_error()),
+            ),
+            (
+                "warn",
+                Value::BuiltinFunction(BuiltinFunction::console_warn()),
+            ),
+            (
+                "info",
+                Value::BuiltinFunction(BuiltinFunction::console_info()),
+            ),
+        ])?);
+
+        self.inject_runtime_global_binding("process", process)?;
+        self.inject_runtime_global_binding("console", console)?;
+
+        Ok(())
+    }
+
+    fn inject_runtime_global_binding(
+        &mut self,
+        name: &str,
+        value: Value,
+    ) -> Result<(), InterpreterError> {
+        let replaced = {
+            let frame = self.scope_chain.current_mut()?;
+            let binding_name = name.to_string();
+            let replaced = frame.declare(binding_name.clone(), BindingKind::Var);
+            if let Some(binding) = frame.get_mut(&binding_name) {
+                binding.value = value;
+                binding.initialized = true;
+            }
+            replaced
+        };
+
+        if let Err(err) = self.sync_estimated_memory_bytes() {
+            if let Ok(frame) = self.scope_chain.current_mut() {
+                if let Some(old_binding) = replaced {
+                    frame.bindings.insert(name.to_string(), old_binding);
+                } else {
+                    frame.bindings.remove(name);
+                }
+            }
+            self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+            return Err(err);
+        }
+
         Ok(())
     }
 
@@ -2629,6 +2732,16 @@ impl InterpreterCore {
                             got: "missing iterator handle".to_string(),
                         })?;
                 Ok(Value::Iterator(iterator_handle))
+            }
+            BuiltinFunctionKind::ConsoleLog => self.dispatch_console_hostcall("console:log", args),
+            BuiltinFunctionKind::ConsoleError => {
+                self.dispatch_console_hostcall("console:error", args)
+            }
+            BuiltinFunctionKind::ConsoleWarn => {
+                self.dispatch_console_hostcall("console:warn", args)
+            }
+            BuiltinFunctionKind::ConsoleInfo => {
+                self.dispatch_console_hostcall("console:info", args)
             }
         }
     }

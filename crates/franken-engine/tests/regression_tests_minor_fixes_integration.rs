@@ -23,6 +23,13 @@ fn test_console_operations_integration_regression() {
 }
 
 #[test]
+fn test_process_global_minimal_shape_regression() {
+    assert_eq!(eval_value("typeof process"), "object");
+    assert_eq!(eval_value("typeof process.env"), "object");
+    assert_eq!(eval_value("process.argv.length"), "0");
+}
+
+#[test]
 fn test_undefined_null_handling_regression() {
     assert_eq!(eval_value("undefined"), "undefined");
     assert_eq!(eval_value("null"), "null");

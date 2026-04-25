@@ -2964,20 +2964,26 @@ pub fn lower_ir2_to_ir3(
         .and_then(|ext| ext.to_str())
         .map(|ext| ext.eq_ignore_ascii_case("cjs"))
         .unwrap_or(false);
-    let mut cjs_binding_ids = BTreeSet::<BindingId>::new();
+    let mut scoped_runtime_binding_ids = BTreeSet::<BindingId>::new();
     if is_commonjs {
         if let Some(binding_id) = name_to_binding_id.get("module") {
-            cjs_binding_ids.insert(*binding_id);
+            scoped_runtime_binding_ids.insert(*binding_id);
         }
         if let Some(binding_id) = name_to_binding_id.get("exports") {
-            cjs_binding_ids.insert(*binding_id);
+            scoped_runtime_binding_ids.insert(*binding_id);
         }
         if let Some(binding_id) = name_to_binding_id.get("__filename") {
-            cjs_binding_ids.insert(*binding_id);
+            scoped_runtime_binding_ids.insert(*binding_id);
         }
         if let Some(binding_id) = name_to_binding_id.get("__dirname") {
-            cjs_binding_ids.insert(*binding_id);
+            scoped_runtime_binding_ids.insert(*binding_id);
         }
+    }
+    if let Some(binding_id) = name_to_binding_id.get("process") {
+        scoped_runtime_binding_ids.insert(*binding_id);
+    }
+    if let Some(binding_id) = name_to_binding_id.get("console") {
+        scoped_runtime_binding_ids.insert(*binding_id);
     }
 
     for op in &ir2.ops {
@@ -3065,7 +3071,7 @@ pub fn lower_ir2_to_ir3(
                 value_stack.push(dst);
             }
             Ir1Op::LoadBinding { binding_id } => {
-                if cjs_binding_ids.contains(binding_id) {
+                if scoped_runtime_binding_ids.contains(binding_id) {
                     let name = binding_id_to_name
                         .get(binding_id)
                         .cloned()
@@ -3091,7 +3097,7 @@ pub fn lower_ir2_to_ir3(
             }
             Ir1Op::StoreBinding { binding_id } => {
                 let src = pop_lowering_value(&mut value_stack)?;
-                if cjs_binding_ids.contains(binding_id) {
+                if scoped_runtime_binding_ids.contains(binding_id) {
                     let name = binding_id_to_name
                         .get(binding_id)
                         .cloned()

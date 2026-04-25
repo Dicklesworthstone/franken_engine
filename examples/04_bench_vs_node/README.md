@@ -1,8 +1,10 @@
 # Bench Vs Node
 
-This example compares the same tiny integer-summing workload under `frankenctl run` and Node.
+This example runs the same parser-light integer-summing workload through
+FrankenEngine's `frankenctl run` path and plain Node, then compares the printed
+sum.
 
-From the repository root, capture both outputs into a disposable benchmark directory:
+From the repository root:
 
 ```bash
 bench_dir=/tmp/bench_$$
@@ -17,16 +19,27 @@ if command -v node >/dev/null 2>&1; then
   /usr/bin/time -p -o "$bench_dir/node.time" \
     node examples/04_bench_vs_node/workload.js \
     > "$bench_dir/node.txt"
-  diff -u "$bench_dir/frankenengine.txt" "$bench_dir/node.txt"
 else
-  echo "node not found; skipped Node comparison"
+  printf 'node not found; skipped\n' > "$bench_dir/node.txt"
 fi
+
+diff -u "$bench_dir/frankenengine.txt" "$bench_dir/node.txt"
 ```
 
-`frankenengine.txt` and `node.txt` should both contain `499500`.
+## What The Output Means
 
-Interpret the result carefully:
+Successful runs print `499500` into `frankenengine.txt`. If Node is installed,
+`node.txt` should print the same value and `diff -u` should produce no output.
 
-- `frankenctl run` is an interpreter-mode path through FrankenEngine's native evaluation pipeline.
-- Node runs the same JavaScript file through its JIT/runtime stack.
-- This is only a tiny parser-light sanity benchmark. It is useful for matching observable output and rough timing, not for making broad performance claims.
+`frankenengine.time` and `node.time` capture the wall-clock timings for this
+single run. They are useful as a quick sanity check, not as publishable
+benchmark evidence.
+
+## Caveats
+
+- `frankenctl run` here is FrankenEngine's interpreter-mode execution path.
+- Node executes the same file through its JIT/runtime stack.
+- The workload is intentionally tiny and interpreter-stress-heavy, so it does
+  not justify broad throughput claims on its own.
+- First-run FrankenEngine timing can include local compile cost if the binary is
+  not already built.

@@ -22,6 +22,10 @@ path = "src/bin/franken_architecture_inventory.rs"
 name = "frankenctl"
 path = "src/bin/frankenctl.rs"
 
+[[bin]]
+name = "franken-decision-demo"
+path = "src/bin/franken_decision_demo.rs"
+
 [features]
 default = ["asupersync-integration"]
 asupersync-integration = [

@@ -1,0 +1,15 @@
+{
+  "extension_id": "ext-trusted-calculator-v1.2.3",
+  "trust_chain_status": "revoked",
+  "policy_decision": "fail-closed",
+  "degraded_mode_proof": {
+    "revocation_id": "rev-20260425-calculator-compromise",
+    "signature_hex": "a7b9c8d2e3f456789abcdef012345678901234567890abcdef1234567890abcd",
+    "denied_capabilities": [
+      "read",
+      "write",
+      "exec"
+    ],
+    "explanation": "Extension revoked due to discovered supply chain compromise. All execution capabilities denied until security audit complete. Cryptographic proof prevents capability escalation via degraded execution modes."
+  }
+}

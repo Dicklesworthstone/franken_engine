@@ -1435,6 +1435,57 @@ pub fn build_canonical_gap_matrix(epoch: SecurityEpoch) -> GapMatrix {
 mod tests {
     use super::*;
 
+    // -- Helper functions --
+
+    fn validate_diagonal_coverage(m: GapMatrix) -> Result<(), String> {
+        let diagonals = [
+            (
+                LabSurfaceKind::EvidenceChecker,
+                UpstreamCapability::EvidenceReplay,
+            ),
+            (
+                LabSurfaceKind::CancellationInjector,
+                UpstreamCapability::CancelInjection,
+            ),
+            (
+                LabSurfaceKind::VirtualTimeClock,
+                UpstreamCapability::VirtualTimeControl,
+            ),
+            (
+                LabSurfaceKind::DecisionTraceValidator,
+                UpstreamCapability::TraceValidation,
+            ),
+            (
+                LabSurfaceKind::QuarantineHarness,
+                UpstreamCapability::QuarantineOrchestration,
+            ),
+            (
+                LabSurfaceKind::ReleaseGateRunner,
+                UpstreamCapability::ReleaseGating,
+            ),
+            (
+                LabSurfaceKind::LifecycleTester,
+                UpstreamCapability::LifecycleOrchestration,
+            ),
+            (
+                LabSurfaceKind::ScenarioRunner,
+                UpstreamCapability::ScenarioOrchestration,
+            ),
+        ];
+        for (surface, cap) in diagonals {
+            let entry = m.lookup(surface, cap).ok_or_else(|| {
+                format!("missing diagonal entry for {surface}x{cap}")
+            })?;
+            if entry.status != GapStatus::Covered {
+                return Err(format!(
+                    "diagonal {surface}x{cap} should be Covered, got {:?}",
+                    entry.status
+                ));
+            }
+        }
+        Ok(())
+    }
+
     // -- Constant tests --
 
     #[test]
@@ -1868,53 +1919,30 @@ mod tests {
     #[test]
     fn canonical_matrix_diagonal_surfaces_are_covered() {
         // Each surface's "primary" upstream capability should be Covered.
-        let m = build_canonical_gap_matrix(SecurityEpoch::from_raw(1));
-        let diagonals = [
-            (
-                LabSurfaceKind::EvidenceChecker,
-                UpstreamCapability::EvidenceReplay,
-            ),
-            (
-                LabSurfaceKind::CancellationInjector,
-                UpstreamCapability::CancelInjection,
-            ),
-            (
-                LabSurfaceKind::VirtualTimeClock,
-                UpstreamCapability::VirtualTimeControl,
-            ),
-            (
-                LabSurfaceKind::DecisionTraceValidator,
-                UpstreamCapability::TraceValidation,
-            ),
-            (
-                LabSurfaceKind::QuarantineHarness,
-                UpstreamCapability::QuarantineOrchestration,
-            ),
-            (
-                LabSurfaceKind::ReleaseGateRunner,
-                UpstreamCapability::ReleaseGating,
-            ),
-            (
-                LabSurfaceKind::LifecycleTester,
-                UpstreamCapability::LifecycleOrchestration,
-            ),
-            (
-                LabSurfaceKind::ScenarioRunner,
-                UpstreamCapability::ScenarioOrchestration,
-            ),
-        ];
-        for (surface, cap) in diagonals {
-            let entry = m
-                .lookup(surface, cap)
-                // SAFETY: Test-only panic to validate gap matrix diagonal completeness.
-                // All capabilities should have diagonal entries in coverage matrix.
-                .unwrap_or_else(|| panic!("missing diagonal entry for {surface}x{cap}"));
-            assert_eq!(
-                entry.status,
-                GapStatus::Covered,
-                "diagonal {surface}x{cap} should be Covered"
-            );
-        }
+        validate_diagonal_coverage(build_canonical_gap_matrix(SecurityEpoch::from_raw(1)))
+            .expect("canonical matrix should have complete diagonal coverage");
+    }
+
+    #[test]
+    fn validate_diagonal_coverage_returns_error_on_missing_entry() {
+        // Create an incomplete matrix missing a diagonal entry
+        let incomplete_matrix = GapMatrix {
+            entries: vec![
+                // Deliberately exclude EvidenceChecker + EvidenceReplay diagonal
+                GapMatrixEntry {
+                    lab_surface: LabSurfaceKind::CancellationInjector,
+                    upstream_capability: UpstreamCapability::CancelInjection,
+                    status: GapStatus::Covered,
+                    evidence: GapEvidence::default(),
+                },
+            ],
+        };
+
+        let result = validate_diagonal_coverage(incomplete_matrix);
+        assert!(result.is_err());
+        let error_msg = result.unwrap_err();
+        assert!(error_msg.contains("missing diagonal entry for EvidenceCheckerxEvidenceReplay"));
+    }
     }
 
     #[test]

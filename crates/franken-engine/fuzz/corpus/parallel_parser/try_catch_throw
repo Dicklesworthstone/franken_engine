@@ -1,0 +1,10 @@
+function safe(fn) {
+  try {
+    return fn();
+  } catch (e) {
+    if (e instanceof TypeError) throw new Error(`wrapped: ${e.message}`);
+    return null;
+  } finally {
+    cleanup();
+  }
+}

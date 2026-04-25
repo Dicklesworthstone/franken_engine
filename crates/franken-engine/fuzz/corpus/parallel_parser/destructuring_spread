@@ -1,0 +1,4 @@
+const { a, b: { c = 1, d } = {}, ...rest } = obj;
+const [first, second, ...tail] = arr;
+const merged = { ...defaults, ...overrides, key };
+function f({ x, y = 0 }, [z], ...args) { return x + y + z + args.length; }

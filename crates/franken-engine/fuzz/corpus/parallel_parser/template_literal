@@ -1,0 +1,5 @@
+const greeting = `hello ${name}, you have ${count} message${count === 1 ? "" : "s"}`;
+const sql = sqlTag`SELECT * FROM users WHERE id = ${userId} AND active = ${true}`;
+const multiline = `line1
+line2
+${expr}`;

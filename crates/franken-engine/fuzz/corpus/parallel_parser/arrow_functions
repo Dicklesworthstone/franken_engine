@@ -1,0 +1,5 @@
+const sum = (a, b) => a + b;
+const noop = () => {};
+const id = x => x;
+const composed = (...fns) => (x) => fns.reduceRight((v, f) => f(v), x);
+const obj = { f: () => this, g: () => 1 };

@@ -1,0 +1,5 @@
+const π = 3.14159;
+const ω = "omega";
+const é = "é-as-escape";
+function 漢字() { return "japanese"; }
+const obj = { ñame: "tilde", "key with spaces": 1 };

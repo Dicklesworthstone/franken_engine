@@ -1,0 +1,5 @@
+const ipv4 = /^(\d{1,3}\.){3}\d{1,3}$/;
+const flags = /pattern/giu;
+const escaped = /\/path\/to\/file/;
+const unicode = /\p{Letter}+/u;
+const matched = "abc".match(/[a-c]/);

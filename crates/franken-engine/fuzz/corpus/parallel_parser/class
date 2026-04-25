@@ -1,0 +1,8 @@
+class Counter extends Base {
+  static #count = 0;
+  #value;
+  constructor(v) { super(); this.#value = v; Counter.#count++; }
+  get value() { return this.#value; }
+  set value(v) { this.#value = v; }
+  static reset() { Counter.#count = 0; }
+}

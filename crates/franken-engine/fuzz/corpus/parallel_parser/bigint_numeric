@@ -1,0 +1,6 @@
+const big = 9007199254740993n;
+const hex = 0xFF_FF_FF_FFn;
+const sep = 1_000_000.5;
+const sci = 1.5e-10;
+const oct = 0o777;
+const bin = 0b1010_1010;

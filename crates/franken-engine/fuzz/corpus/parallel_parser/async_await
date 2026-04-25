@@ -1,0 +1,7 @@
+async function fetchAll(urls) {
+  const results = await Promise.all(urls.map(async (u) => {
+    const r = await fetch(u);
+    return await r.json();
+  }));
+  return results;
+}

@@ -1,0 +1,8 @@
+for (const [k, v] of map) {
+  if (v == null) continue;
+  process(k, v);
+}
+for (const x in obj) {
+  if (Object.hasOwn(obj, x)) values.push(obj[x]);
+}
+for await (const chunk of stream) yield chunk;

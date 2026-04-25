@@ -1,0 +1,5 @@
+async function loadModule(name) {
+  const mod = await import(`./plugins/${name}.js`);
+  return mod.default ?? mod;
+}
+const lazy = () => import("./heavy.js").then(m => m.init());

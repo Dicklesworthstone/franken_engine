@@ -1,0 +1,14 @@
+function classify(x) {
+  switch (typeof x) {
+    case "number":
+      return x > 0 ? "pos" : x < 0 ? "neg" : "zero";
+    case "string":
+    case "symbol":
+      return "name";
+    case "object":
+      if (x === null) return "null";
+      return Array.isArray(x) ? "array" : "object";
+    default:
+      return "unknown";
+  }
+}

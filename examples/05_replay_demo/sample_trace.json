@@ -1,0 +1,15 @@
+{
+  "session_id": "replay-demo-session-001",
+  "events": [
+    {
+      "sequence": 0,
+      "source": "LaneSelectionRandom",
+      "value": [1, 2, 3, 4],
+      "virtual_ts": 1000,
+      "component": "demo_component"
+    }
+  ],
+  "next_sequence": 1,
+  "capture_started_vts": 1000,
+  "capture_ended_vts": 1000
+}

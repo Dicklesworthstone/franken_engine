@@ -1335,8 +1335,8 @@ impl ProductionHardeningGateExecution {
             && !self.replay_audits.is_empty()
             && self
                 .security_matrix
-            .iter()
-            .all(|e| matches!(e.validation_status, ValidationStatus::Passed))
+                .iter()
+                .all(|e| matches!(e.validation_status, ValidationStatus::Passed))
             && self
                 .fuzz_campaigns
                 .iter()
@@ -1387,14 +1387,12 @@ impl ProductionHardeningGateExecution {
             failures.push("Rollout validation (MISSING): no rollout stages configured".to_string());
         }
         if self.fault_injection_drills.is_empty() {
-            failures.push(
-                "Fault injection drill (MISSING): no fault scenarios configured".to_string(),
-            );
+            failures
+                .push("Fault injection drill (MISSING): no fault scenarios configured".to_string());
         }
         if self.quarantine_drills.is_empty() {
-            failures.push(
-                "Quarantine drill (MISSING): no quarantine scenarios configured".to_string(),
-            );
+            failures
+                .push("Quarantine drill (MISSING): no quarantine scenarios configured".to_string());
         }
         if self.replay_audits.is_empty() {
             failures.push("Replay audit (MISSING): no replay audits configured".to_string());

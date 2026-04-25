@@ -578,14 +578,11 @@ fn validate_non_empty(field: &'static str, value: &str) -> Result<(), GaExitEvid
     Ok(())
 }
 
-fn validate_artifact_fields(
-    artifact: &EvidenceArtifact,
-) -> Result<(), GaExitEvidencePackageError> {
+fn validate_artifact_fields(artifact: &EvidenceArtifact) -> Result<(), GaExitEvidencePackageError> {
     validate_non_empty("artifact_id", &artifact.artifact_id)?;
     validate_non_empty("artifact schema_version", &artifact.schema_version)?;
     validate_non_empty("artifact locator", &artifact.locator)?;
-    if artifact
-        .required
+    if artifact.required
         && artifact
             .replay_command
             .as_deref()
@@ -991,8 +988,8 @@ mod tests {
     }
 
     #[test]
-    fn validation_rejects_public_blank_witness_instruction(
-    ) -> Result<(), GaExitEvidencePackageError> {
+    fn validation_rejects_public_blank_witness_instruction()
+    -> Result<(), GaExitEvidencePackageError> {
         let mut package = complete_package()?;
         package
             .reproducibility_witnesses

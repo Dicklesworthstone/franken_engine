@@ -16,9 +16,18 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::control_plane::ContextAdapter;
+use crate::control_plane::{
+    Budget, ContextAdapter, ControlPlaneAdapterError, DecisionId, PolicyId, TraceId,
+};
+use crate::evidence_emission::{
+    ActionCategory, CanonicalEvidenceEmitter, CanonicalEvidenceEntry, EmitterConfig,
+    EvidenceEmissionRequest,
+};
 use crate::evidence_replay_checker::{EvidenceReplayChecker, ReplayConfig};
-use crate::frankenlab_extension_lifecycle::{ScenarioSuiteResult, run_all_scenarios};
+use crate::extension_host_lifecycle::HostLifecycleEvent;
+use crate::frankenlab_extension_lifecycle::{
+    ScenarioResult, ScenarioSuiteResult, run_all_scenarios,
+};
 use crate::lab_runtime::Verdict;
 
 // ---------------------------------------------------------------------------
@@ -286,6 +295,25 @@ pub struct ReleaseGate {
     policy_id: String,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct ReplayEvidenceCx {
+    trace_id: TraceId,
+}
+
+impl ContextAdapter for ReplayEvidenceCx {
+    fn trace_id(&self) -> TraceId {
+        self.trace_id
+    }
+
+    fn budget(&self) -> Budget {
+        Budget::new(u64::MAX)
+    }
+
+    fn consume_budget(&mut self, _requested_ms: u64) -> Result<(), ControlPlaneAdapterError> {
+        Ok(())
+    }
+}
+
 impl ReleaseGate {
     /// Create a new release gate with the given deterministic seed.
     pub fn new(seed: u64) -> Self {
@@ -342,7 +370,7 @@ impl ReleaseGate {
         checks.push(check);
 
         // 2. Evidence replay
-        let check = self.check_evidence_replay();
+        let check = self.check_evidence_replay(&scenario_suite);
         budget_consumed_ms = budget_consumed_ms.saturating_add(self.estimate_check_cost(&check));
         checks.push(check);
 
@@ -589,11 +617,50 @@ impl ReleaseGate {
         }
     }
 
-    fn check_evidence_replay(&mut self) -> GateCheckResult {
+    fn check_evidence_replay(&mut self, suite: &ScenarioSuiteResult) -> GateCheckResult {
+        let replay_entries = match self.build_replay_entries_from_scenarios(suite) {
+            Ok(entries) => entries,
+            Err(detail) => {
+                self.push_event(
+                    "evidence_replay_checked",
+                    "fail",
+                    Some("EVIDENCE_REPLAY_UNAVAILABLE"),
+                );
+                return GateCheckResult {
+                    kind: GateCheckKind::EvidenceReplay,
+                    passed: false,
+                    summary: "evidence replay: canonical replay ledger unavailable".to_string(),
+                    failure_details: vec![detail],
+                    items_checked: 0,
+                    items_passed: 0,
+                };
+            }
+        };
+
+        if replay_entries.is_empty() {
+            self.push_event(
+                "evidence_replay_checked",
+                "fail",
+                Some("EVIDENCE_REPLAY_EMPTY"),
+            );
+            return GateCheckResult {
+                kind: GateCheckKind::EvidenceReplay,
+                passed: false,
+                summary: "evidence replay: no canonical evidence entries available".to_string(),
+                failure_details: vec![GateFailureDetail {
+                    item_id: "frankenlab".to_string(),
+                    failure_type: "empty_replay_ledger".to_string(),
+                    expected: "at least one canonical evidence entry".to_string(),
+                    actual: "zero entries".to_string(),
+                }],
+                items_checked: 0,
+                items_passed: 0,
+            };
+        }
+
         let config = ReplayConfig::default();
         let mut checker = EvidenceReplayChecker::new(config);
-        let empty_ledger = Vec::new();
-        let result = checker.replay(&empty_ledger, None);
+        let result = checker.replay(&replay_entries, None);
 
         let passed = result.violations.is_empty();
 
@@ -628,8 +695,8 @@ impl ReleaseGate {
                 result.entries_processed
             ),
             failure_details,
-            items_checked: 1,
-            items_passed: if passed { 1 } else { 0 },
+            items_checked: replay_entries.len(),
+            items_passed: if passed { replay_entries.len() } else { 0 },
         }
     }
 
@@ -720,7 +787,99 @@ impl ReleaseGate {
 
     fn estimate_check_cost(&self, check: &GateCheckResult) -> u64 {
         // Deterministic cost model: each item checked costs 10ms simulated.
-        (check.items_checked as u64).saturating_mul(10)
+        usize_to_u64_saturating(check.items_checked).saturating_mul(10)
+    }
+
+    fn build_replay_entries_from_scenarios(
+        &self,
+        suite: &ScenarioSuiteResult,
+    ) -> Result<Vec<CanonicalEvidenceEntry>, GateFailureDetail> {
+        let total_events: usize = suite
+            .scenarios
+            .iter()
+            .map(|scenario| scenario.lifecycle_events.len())
+            .sum();
+        let mut emitter = CanonicalEvidenceEmitter::new(EmitterConfig {
+            buffer_capacity: total_events.max(1),
+            ..EmitterConfig::default()
+        });
+        let mut sequence = 0_u64;
+
+        for scenario in &suite.scenarios {
+            for event in &scenario.lifecycle_events {
+                let trace_id =
+                    event
+                        .trace_id
+                        .parse::<TraceId>()
+                        .map_err(|_| GateFailureDetail {
+                            item_id: replay_item_id(scenario, event),
+                            failure_type: "invalid_trace_id".to_string(),
+                            expected: "hex TraceId emitted by lifecycle manager".to_string(),
+                            actual: event.trace_id.clone(),
+                        })?;
+                let request = self.replay_request_for_lifecycle_event(
+                    suite.seed, sequence, scenario, event, trace_id,
+                );
+                let mut replay_cx = ReplayEvidenceCx { trace_id };
+                emitter
+                    .emit(&mut replay_cx, &request)
+                    .map_err(|err| GateFailureDetail {
+                        item_id: replay_item_id(scenario, event),
+                        failure_type: "canonical_evidence_emit_failed".to_string(),
+                        expected: "canonical evidence emission succeeds".to_string(),
+                        actual: err.to_string(),
+                    })?;
+                let Some(next_sequence) = sequence.checked_add(1) else {
+                    return Err(GateFailureDetail {
+                        item_id: replay_item_id(scenario, event),
+                        failure_type: "replay_sequence_exhausted".to_string(),
+                        expected: "sequence number with valid successor".to_string(),
+                        actual: sequence.to_string(),
+                    });
+                };
+                sequence = next_sequence;
+            }
+        }
+
+        Ok(emitter.entries().to_vec())
+    }
+
+    fn replay_request_for_lifecycle_event(
+        &self,
+        seed: u64,
+        sequence: u64,
+        scenario: &ScenarioResult,
+        event: &HostLifecycleEvent,
+        trace_id: TraceId,
+    ) -> EvidenceEmissionRequest {
+        let mut metadata = BTreeMap::new();
+        metadata.insert("scenario".to_string(), scenario.kind.to_string());
+        metadata.insert("extension_id".to_string(), event.extension_id.clone());
+        metadata.insert("component".to_string(), event.component.clone());
+        metadata.insert("outcome".to_string(), event.outcome.clone());
+        if let Some(session_id) = &event.session_id {
+            metadata.insert("session_id".to_string(), session_id.clone());
+        }
+        if let Some(error_code) = &event.error_code {
+            metadata.insert("error_code".to_string(), error_code.clone());
+        }
+
+        let fallback_active = event.outcome != "ok";
+        EvidenceEmissionRequest {
+            category: action_category_for_event(event),
+            action_name: event.event.clone(),
+            trace_id,
+            decision_id: DecisionId::from_raw((u128::from(seed) << 64) | u128::from(sequence)),
+            policy_id: PolicyId::new("release-gate-frankenlab", 1),
+            ts_unix_ms: seed.saturating_mul(1_000).saturating_add(sequence),
+            posterior: vec![0.5, 0.5],
+            expected_losses: BTreeMap::new(),
+            chosen_expected_loss: if fallback_active { 1.0 } else { 0.0 },
+            calibration_score: 1.0,
+            fallback_active,
+            top_features: vec![("lifecycle_event".to_string(), 1.0)],
+            metadata,
+        }
     }
 
     fn compute_result_digest(result: &ReleaseGateResult) -> String {
@@ -732,15 +891,18 @@ impl ReleaseGate {
         let mut material = Vec::with_capacity(512);
         append_u64(&mut material, result.seed);
         append_verdict(&mut material, &result.verdict);
-        append_u64(&mut material, result.total_checks as u64);
-        append_u64(&mut material, result.passed_checks as u64);
+        append_u64(&mut material, usize_to_u64_saturating(result.total_checks));
+        append_u64(&mut material, usize_to_u64_saturating(result.passed_checks));
         append_bool(&mut material, result.exception_applied);
         append_len_prefixed(&mut material, result.exception_justification.as_bytes());
-        append_u64(&mut material, sorted_checks.len() as u64);
+        append_u64(&mut material, usize_to_u64_saturating(sorted_checks.len()));
         for check in &sorted_checks {
             append_gate_check_result(&mut material, check);
         }
-        append_u64(&mut material, result.gate_events.len() as u64);
+        append_u64(
+            &mut material,
+            usize_to_u64_saturating(result.gate_events.len()),
+        );
         for event in &result.gate_events {
             append_gate_event(&mut material, event);
         }
@@ -790,6 +952,10 @@ fn fnv1a64(bytes: &[u8]) -> u64 {
     hash
 }
 
+fn usize_to_u64_saturating(value: usize) -> u64 {
+    u64::try_from(value).unwrap_or(u64::MAX)
+}
+
 fn append_u64(buf: &mut Vec<u8>, value: u64) {
     buf.extend_from_slice(&value.to_le_bytes());
 }
@@ -799,7 +965,7 @@ fn append_bool(buf: &mut Vec<u8>, value: bool) {
 }
 
 fn append_len_prefixed(buf: &mut Vec<u8>, bytes: &[u8]) {
-    append_u64(buf, bytes.len() as u64);
+    append_u64(buf, usize_to_u64_saturating(bytes.len()));
     buf.extend_from_slice(bytes);
 }
 
@@ -836,8 +1002,8 @@ fn append_gate_check_result(buf: &mut Vec<u8>, check: &GateCheckResult) {
     buf.push(kind_disc);
     append_bool(buf, check.passed);
     append_len_prefixed(buf, check.summary.as_bytes());
-    append_u64(buf, check.items_checked as u64);
-    append_u64(buf, check.items_passed as u64);
+    append_u64(buf, usize_to_u64_saturating(check.items_checked));
+    append_u64(buf, usize_to_u64_saturating(check.items_passed));
 
     let mut sorted_details = check.failure_details.clone();
     sorted_details.sort_by(|left, right| {
@@ -847,7 +1013,7 @@ fn append_gate_check_result(buf: &mut Vec<u8>, check: &GateCheckResult) {
             .then(left.expected.cmp(&right.expected))
             .then(left.actual.cmp(&right.actual))
     });
-    append_u64(buf, sorted_details.len() as u64);
+    append_u64(buf, usize_to_u64_saturating(sorted_details.len()));
     for detail in &sorted_details {
         append_gate_failure_detail(buf, detail);
     }
@@ -867,11 +1033,29 @@ fn append_gate_event(buf: &mut Vec<u8>, event: &GateEvent) {
         }
         None => buf.push(0),
     }
-    append_u64(buf, event.metadata.len() as u64);
+    append_u64(buf, usize_to_u64_saturating(event.metadata.len()));
     for (key, value) in &event.metadata {
         append_len_prefixed(buf, key.as_bytes());
         append_len_prefixed(buf, value.as_bytes());
     }
+}
+
+fn action_category_for_event(event: &HostLifecycleEvent) -> ActionCategory {
+    if event.event.contains("cancel") || event.event.contains("unloaded") {
+        ActionCategory::Cancellation
+    } else if event.event.contains("quarantine")
+        || event.event.contains("revoke")
+        || event.event.contains("suspend")
+        || event.event.contains("terminate")
+    {
+        ActionCategory::ContainmentAction
+    } else {
+        ActionCategory::ExtensionLifecycle
+    }
+}
+
+fn replay_item_id(scenario: &ScenarioResult, event: &HostLifecycleEvent) -> String {
+    format!("{}:{}:{}", scenario.kind, event.extension_id, event.event)
 }
 
 // ---------------------------------------------------------------------------
@@ -967,6 +1151,11 @@ mod tests {
             .find(|c| c.kind == GateCheckKind::EvidenceReplay)
             .expect("serde deserialization should succeed");
         assert!(replay_check.passed);
+        assert!(
+            replay_check.items_checked > 0,
+            "replay gate must not pass by replaying an empty ledger"
+        );
+        assert_eq!(replay_check.items_passed, replay_check.items_checked);
     }
 
     #[test]
@@ -1315,14 +1504,10 @@ mod tests {
 
         // Must be blocked (fail-closed, not fail-open).
         assert!(result.is_blocked());
-        match &result.verdict {
-            Verdict::Fail { reason } => {
-                assert!(reason.contains("GATE_INFRASTRUCTURE_FAILURE"));
-            }
-            // SAFETY: Test-only panic to validate security attestation verdict
-            // expects specific Verdict::Fail from gate infrastructure failure
-            _ => panic!("expected fail verdict"),
-        }
+        assert!(matches!(
+            &result.verdict,
+            Verdict::Fail { reason } if reason.contains("GATE_INFRASTRUCTURE_FAILURE")
+        ));
 
         // Must emit structured error event.
         let infra_event = result
@@ -1343,13 +1528,10 @@ mod tests {
         let result = gate.evaluate(&mut cx);
 
         assert!(result.is_blocked());
-        match &result.verdict {
-            Verdict::Fail { reason } => {
-                assert!(reason.contains("GATE_INFRASTRUCTURE_FAILURE"));
-            }
-            // SAFETY: Test-only panic to validate gate verdict matches expected Fail variant
-            _ => panic!("expected fail verdict"),
-        }
+        assert!(matches!(
+            &result.verdict,
+            Verdict::Fail { reason } if reason.contains("GATE_INFRASTRUCTURE_FAILURE")
+        ));
     }
 
     #[test]
@@ -1368,14 +1550,12 @@ mod tests {
         assert!(result.checks.is_empty());
         assert_eq!(result.total_checks, 0);
         // The verdict carries the infrastructure failure reason.
-        match &result.verdict {
-            Verdict::Fail { reason } => {
-                assert!(reason.contains("GATE_INFRASTRUCTURE_FAILURE"));
-                assert!(reason.contains("misconfigured"));
-            }
-            // SAFETY: Test-only panic to validate gate verdict matches expected Fail variant
-            _ => panic!("expected fail verdict"),
-        }
+        assert!(matches!(
+            &result.verdict,
+            Verdict::Fail { reason }
+                if reason.contains("GATE_INFRASTRUCTURE_FAILURE")
+                    && reason.contains("misconfigured")
+        ));
     }
 
     // -----------------------------------------------------------------------
@@ -1394,13 +1574,10 @@ mod tests {
         let result = gate.evaluate(&mut cx);
 
         assert!(result.is_blocked());
-        match &result.verdict {
-            Verdict::Fail { reason } => {
-                assert!(reason.contains("GATE_TIMEOUT"));
-            }
-            // SAFETY: Test-only panic to validate gate timeout verdict matches expected Fail variant
-            _ => panic!("expected timeout fail verdict"),
-        }
+        assert!(matches!(
+            &result.verdict,
+            Verdict::Fail { reason } if reason.contains("GATE_TIMEOUT")
+        ));
 
         // Partial results should be preserved.
         assert!(!result.checks.is_empty());
@@ -1439,7 +1616,7 @@ mod tests {
         let exact_budget_ms: u64 = baseline
             .checks
             .iter()
-            .map(|check| (check.items_checked as u64).saturating_mul(10))
+            .map(|check| usize_to_u64_saturating(check.items_checked).saturating_mul(10))
             .sum();
 
         let config = GateConfig {

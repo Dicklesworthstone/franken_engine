@@ -362,6 +362,19 @@ impl CanonicalEvidenceEmitter {
             });
         }
 
+        let sequence = self.next_sequence;
+        let Some(next_sequence) = sequence.checked_add(1) else {
+            self.push_event(
+                request,
+                "evidence_emit",
+                "rejected",
+                Some("sequence_exhausted"),
+            );
+            return Err(EvidenceEmissionError::BuildError {
+                detail: "evidence sequence exhausted".to_string(),
+            });
+        };
+
         // Consume budget.
         cx.consume_budget(self.config.budget_cost_ms).map_err(|_| {
             self.push_event(
@@ -406,8 +419,7 @@ impl CanonicalEvidenceEmitter {
         let chain_hash = compute_chain_hash(prev_chain, &artifact_hash);
 
         // Build the canonical entry.
-        let sequence = self.next_sequence;
-        self.next_sequence = self.next_sequence.saturating_add(1);
+        self.next_sequence = next_sequence;
 
         let entry_id = EvidenceEntryId::new(format!(
             "ev-{}-{}-{}",
@@ -432,7 +444,8 @@ impl CanonicalEvidenceEmitter {
         };
 
         self.entries.push(canonical);
-        *self.category_counts.entry(request.category).or_insert(0) += 1;
+        let count = self.category_counts.entry(request.category).or_insert(0);
+        *count = count.saturating_add(1);
 
         // Update rolling hash.
         let mut hash_input = self.rolling_hash.as_bytes().to_vec();
@@ -943,6 +956,23 @@ mod tests {
         assert_eq!(counts[&ActionCategory::ContainmentAction], 1);
     }
 
+    #[test]
+    fn category_counts_saturate_for_restored_max_count() {
+        let mut em = emitter();
+        let mut cx = mock_cx();
+        em.category_counts
+            .insert(ActionCategory::DecisionContract, u64::MAX);
+        let req = make_request(ActionCategory::DecisionContract, "a");
+
+        em.emit(&mut cx, &req)
+            .expect("restored saturated count should not block emission");
+
+        assert_eq!(
+            em.category_counts()[&ActionCategory::DecisionContract],
+            u64::MAX
+        );
+    }
+
     // -----------------------------------------------------------------------
     // Trace/decision ID filtering
     // -----------------------------------------------------------------------
@@ -992,6 +1022,30 @@ mod tests {
         assert_eq!(em.entries()[0].sequence, 0);
         assert_eq!(em.entries()[1].sequence, 1);
         assert_eq!(em.entries()[2].sequence, 2);
+    }
+
+    #[test]
+    fn sequence_exhaustion_rejects_without_consuming_budget() {
+        let mut em = emitter();
+        em.next_sequence = u64::MAX;
+        let mut cx = mock_cx();
+        let req = make_request(ActionCategory::DecisionContract, "a");
+        let before_budget = cx.budget().remaining_ms();
+
+        let err = em.emit(&mut cx, &req).unwrap_err();
+
+        assert!(
+            matches!(err, EvidenceEmissionError::BuildError { ref detail } if detail == "evidence sequence exhausted")
+        );
+        assert_eq!(em.len(), 0);
+        assert_eq!(em.next_sequence, u64::MAX);
+        assert_eq!(cx.budget().remaining_ms(), before_budget);
+        assert_eq!(
+            em.events()
+                .last()
+                .and_then(|event| event.error_code.as_deref()),
+            Some("sequence_exhausted")
+        );
     }
 
     #[test]

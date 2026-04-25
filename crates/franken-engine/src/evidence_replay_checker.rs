@@ -33,6 +33,22 @@ use crate::security_epoch::SecurityEpoch;
 
 const COMPONENT_NAME: &str = "evidence-replay-checker";
 
+fn usize_to_u64_saturating(value: usize) -> u64 {
+    u64::try_from(value).unwrap_or(u64::MAX)
+}
+
+fn values_diverge(recorded: f64, replayed: f64, tolerance: f64) -> bool {
+    if !recorded.is_finite() || !replayed.is_finite() {
+        return true;
+    }
+    let tolerance = if tolerance.is_finite() && tolerance >= 0.0 {
+        tolerance
+    } else {
+        0.0
+    };
+    (replayed - recorded).abs() > tolerance
+}
+
 // ---------------------------------------------------------------------------
 // ReplayErrorCode — machine-readable error codes
 // ---------------------------------------------------------------------------
@@ -396,7 +412,8 @@ impl ReplayResult {
     pub fn violation_counts(&self) -> BTreeMap<ReplayViolationType, u64> {
         let mut counts = BTreeMap::new();
         for v in &self.violations {
-            *counts.entry(v.violation_type.clone()).or_insert(0) += 1;
+            let count = counts.entry(v.violation_type.clone()).or_insert(0u64);
+            *count = count.saturating_add(1);
         }
         counts
     }
@@ -427,12 +444,12 @@ impl ReplayResult {
     ) -> ReplayManifest {
         ReplayManifest {
             config: config.clone(),
-            source_entry_count: entries.len() as u64,
+            source_entry_count: usize_to_u64_saturating(entries.len()),
             first_entry_hash: entries.first().map(|e| e.artifact_hash),
             last_entry_hash: entries.last().map(|e| e.artifact_hash),
             final_rolling_hash: self.final_rolling_hash,
             passed: self.passed,
-            violation_count: self.violations.len() as u64,
+            violation_count: usize_to_u64_saturating(self.violations.len()),
         }
     }
 }
@@ -546,7 +563,7 @@ impl EvidenceReplayChecker {
                 );
                 if self.config.halt_on_first {
                     halted = true;
-                    processed += 1;
+                    processed = processed.saturating_add(1);
                     continue;
                 }
             }
@@ -564,24 +581,26 @@ impl EvidenceReplayChecker {
                 });
                 if self.config.halt_on_first {
                     halted = true;
-                    processed += 1;
+                    processed = processed.saturating_add(1);
                     continue;
                 }
             }
 
             // 3. Check sequence continuity.
             if let Some(prev) = prev_entry {
-                let expected_seq = prev.sequence + 1;
-                if entry.sequence != expected_seq {
-                    if self.config.allow_gaps {
-                        skipped += entry.sequence.saturating_sub(expected_seq);
+                match prev.sequence.checked_add(1) {
+                    Some(expected_seq) if entry.sequence == expected_seq => {}
+                    Some(expected_seq) if self.config.allow_gaps => {
+                        skipped =
+                            skipped.saturating_add(entry.sequence.saturating_sub(expected_seq));
                         self.push_event(
                             entry,
                             "sequence_gap_skipped",
                             "warn",
                             Some("SEQUENCE_GAP"),
                         );
-                    } else {
+                    }
+                    Some(expected_seq) => {
                         violations.push(ReplayViolation {
                             sequence: entry.sequence,
                             entry_id: entry.entry_id.to_string(),
@@ -596,7 +615,26 @@ impl EvidenceReplayChecker {
                         });
                         if self.config.halt_on_first {
                             halted = true;
-                            processed += 1;
+                            processed = processed.saturating_add(1);
+                            continue;
+                        }
+                    }
+                    None => {
+                        violations.push(ReplayViolation {
+                            sequence: entry.sequence,
+                            entry_id: entry.entry_id.to_string(),
+                            violation_type: ReplayViolationType::SequenceGap,
+                            error_code: ReplayErrorCode::SequenceGap,
+                            detail: format!(
+                                "previous sequence {} has no valid successor",
+                                prev.sequence
+                            ),
+                            expected: Some("sequence successor within u64 range".to_string()),
+                            actual: Some(entry.sequence.to_string()),
+                        });
+                        if self.config.halt_on_first {
+                            halted = true;
+                            processed = processed.saturating_add(1);
                             continue;
                         }
                     }
@@ -618,7 +656,7 @@ impl EvidenceReplayChecker {
                     });
                     if self.config.halt_on_first {
                         halted = true;
-                        processed += 1;
+                        processed = processed.saturating_add(1);
                         continue;
                     }
                 }
@@ -653,7 +691,7 @@ impl EvidenceReplayChecker {
                         );
                         if self.config.halt_on_first {
                             halted = true;
-                            processed += 1;
+                            processed = processed.saturating_add(1);
                             continue;
                         }
                     } else {
@@ -699,7 +737,7 @@ impl EvidenceReplayChecker {
                         );
                         if self.config.halt_on_first {
                             halted = true;
-                            processed += 1;
+                            processed = processed.saturating_add(1);
                             continue;
                         }
                     } else {
@@ -725,7 +763,7 @@ impl EvidenceReplayChecker {
                     });
                     if self.config.halt_on_first {
                         halted = true;
-                        processed += 1;
+                        processed = processed.saturating_add(1);
                         continue;
                     }
                 }
@@ -737,7 +775,7 @@ impl EvidenceReplayChecker {
                 self.check_outcome(entry, &replayed, &mut violations);
                 if self.config.halt_on_first && !violations.is_empty() {
                     halted = true;
-                    processed += 1;
+                    processed = processed.saturating_add(1);
                     continue;
                 }
             }
@@ -748,11 +786,11 @@ impl EvidenceReplayChecker {
             rolling_hash = ContentHash::compute(&hash_input);
 
             prev_entry = Some(entry);
-            processed += 1;
+            processed = processed.saturating_add(1);
         }
 
-        diagnostics.distinct_trace_ids = trace_ids.len() as u64;
-        diagnostics.distinct_decision_ids = decision_ids.len() as u64;
+        diagnostics.distinct_trace_ids = usize_to_u64_saturating(trace_ids.len());
+        diagnostics.distinct_decision_ids = usize_to_u64_saturating(decision_ids.len());
 
         let passed = violations.is_empty();
         let event_outcome = if passed { "pass" } else { "fail" };
@@ -805,7 +843,7 @@ impl EvidenceReplayChecker {
     }
 
     /// Verify cross-machine determinism by running the replay twice and
-    /// comparing rolling hashes.
+    /// comparing the complete replay result.
     ///
     /// Returns `true` if both runs produce identical results.
     pub fn verify_cross_machine_determinism(
@@ -819,10 +857,7 @@ impl EvidenceReplayChecker {
         let mut checker_b = Self::new(config.clone());
         let result_b = checker_b.replay(entries, replay_fn);
 
-        result_a.final_rolling_hash == result_b.final_rolling_hash
-            && result_a.passed == result_b.passed
-            && result_a.entries_processed == result_b.entries_processed
-            && result_a.violations.len() == result_b.violations.len()
+        result_a == result_b
     }
 
     // -----------------------------------------------------------------------
@@ -854,9 +889,11 @@ impl EvidenceReplayChecker {
         }
 
         // Calibration score.
-        if (replayed.calibration_score - recorded.calibration_score).abs()
-            > self.config.calibration_tolerance
-        {
+        if values_diverge(
+            recorded.calibration_score,
+            replayed.calibration_score,
+            self.config.calibration_tolerance,
+        ) {
             violations.push(ReplayViolation {
                 sequence: entry.sequence,
                 entry_id: entry.entry_id.to_string(),
@@ -872,9 +909,11 @@ impl EvidenceReplayChecker {
         }
 
         // Chosen expected loss.
-        if (replayed.chosen_expected_loss - recorded.chosen_expected_loss).abs()
-            > self.config.loss_tolerance
-        {
+        if values_diverge(
+            recorded.chosen_expected_loss,
+            replayed.chosen_expected_loss,
+            self.config.loss_tolerance,
+        ) {
             violations.push(ReplayViolation {
                 sequence: entry.sequence,
                 entry_id: entry.entry_id.to_string(),
@@ -1195,6 +1234,40 @@ mod tests {
             }
         });
         let mut checker = EvidenceReplayChecker::new(ReplayConfig::default());
+        let result = checker.replay(&ledger, Some(&replay));
+        assert!(result.has_violation(&ReplayViolationType::CalibrationDivergence));
+    }
+
+    #[test]
+    fn non_finite_calibration_divergence_detected() {
+        let ledger = build_ledger(1);
+        let replay: DecisionReplayFn = Box::new(|entry: &CanonicalEvidenceEntry| ReplayedOutcome {
+            action: entry.ledger_entry.action.clone(),
+            chosen_expected_loss: entry.ledger_entry.chosen_expected_loss,
+            calibration_score: f64::NAN,
+            fallback_active: entry.ledger_entry.fallback_active,
+            expected_losses: entry.ledger_entry.expected_loss_by_action.clone(),
+        });
+        let mut checker = EvidenceReplayChecker::new(ReplayConfig::default());
+        let result = checker.replay(&ledger, Some(&replay));
+        assert!(result.has_violation(&ReplayViolationType::CalibrationDivergence));
+    }
+
+    #[test]
+    fn invalid_float_tolerance_does_not_mask_divergence() {
+        let ledger = build_ledger(1);
+        let replay: DecisionReplayFn = Box::new(|entry: &CanonicalEvidenceEntry| ReplayedOutcome {
+            action: entry.ledger_entry.action.clone(),
+            chosen_expected_loss: entry.ledger_entry.chosen_expected_loss,
+            calibration_score: entry.ledger_entry.calibration_score + 0.5,
+            fallback_active: entry.ledger_entry.fallback_active,
+            expected_losses: entry.ledger_entry.expected_loss_by_action.clone(),
+        });
+        let config = ReplayConfig {
+            calibration_tolerance: f64::NAN,
+            ..ReplayConfig::default()
+        };
+        let mut checker = EvidenceReplayChecker::new(config);
         let result = checker.replay(&ledger, Some(&replay));
         assert!(result.has_violation(&ReplayViolationType::CalibrationDivergence));
     }
@@ -1642,6 +1715,33 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn verify_cross_machine_determinism_compares_violation_details() {
+        let ledger = build_ledger(1);
+        let flip = std::cell::Cell::new(false);
+        let replay: DecisionReplayFn = Box::new(move |entry: &CanonicalEvidenceEntry| {
+            let second_run = flip.get();
+            flip.set(!second_run);
+            ReplayedOutcome {
+                action: if second_run {
+                    "second-run-divergence".to_string()
+                } else {
+                    "first-run-divergence".to_string()
+                },
+                chosen_expected_loss: entry.ledger_entry.chosen_expected_loss,
+                calibration_score: entry.ledger_entry.calibration_score,
+                fallback_active: entry.ledger_entry.fallback_active,
+                expected_losses: entry.ledger_entry.expected_loss_by_action.clone(),
+            }
+        });
+        let config = ReplayConfig::default();
+        assert!(!EvidenceReplayChecker::verify_cross_machine_determinism(
+            &config,
+            &ledger,
+            Some(&replay)
+        ));
+    }
+
     // -----------------------------------------------------------------------
     // Diagnostics tracking
     // -----------------------------------------------------------------------
@@ -1900,6 +2000,25 @@ mod tests {
         let result = checker.replay(&ledger, None);
         // Should handle very large gap without panic.
         assert!(result.entries_skipped > 0);
+    }
+
+    #[test]
+    fn adversarial_sequence_overflow_detected() {
+        let mut ledger = build_ledger(2);
+        ledger[0].sequence = u64::MAX;
+        ledger[1].sequence = 0;
+        let mut checker = EvidenceReplayChecker::new(ReplayConfig::default());
+        let result = checker.replay(&ledger, None);
+        assert!(result.has_violation(&ReplayViolationType::SequenceGap));
+        let gap = result
+            .violations
+            .iter()
+            .find(|v| v.violation_type == ReplayViolationType::SequenceGap)
+            .expect("sequence overflow should be reported as a gap");
+        assert_eq!(
+            gap.expected.as_deref(),
+            Some("sequence successor within u64 range")
+        );
     }
 
     // -----------------------------------------------------------------------

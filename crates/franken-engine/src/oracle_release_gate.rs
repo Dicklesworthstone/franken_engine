@@ -179,6 +179,47 @@ impl BlockerThreshold {
     }
 }
 
+fn positive_margin(diff: u64) -> i64 {
+    i64::try_from(diff).unwrap_or(i64::MAX)
+}
+
+fn negative_margin(diff: u64) -> i64 {
+    i64::try_from(diff).map_or(i64::MIN, |value| -value)
+}
+
+fn threshold_margin(
+    direction: ThresholdDirection,
+    observed_value: u64,
+    threshold_value: u64,
+    passes: bool,
+) -> i64 {
+    match direction {
+        ThresholdDirection::AtLeast => {
+            if passes {
+                positive_margin(observed_value.saturating_sub(threshold_value))
+            } else {
+                negative_margin(threshold_value.saturating_sub(observed_value))
+            }
+        }
+        ThresholdDirection::AtMost => {
+            if passes {
+                positive_margin(threshold_value.saturating_sub(observed_value))
+            } else {
+                negative_margin(observed_value.saturating_sub(threshold_value))
+            }
+        }
+        ThresholdDirection::Exactly => {
+            if passes {
+                0
+            } else if observed_value > threshold_value {
+                negative_margin(observed_value.saturating_sub(threshold_value))
+            } else {
+                negative_margin(threshold_value.saturating_sub(observed_value))
+            }
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // OracleGateCondition
 // ---------------------------------------------------------------------------
@@ -280,18 +321,12 @@ pub fn evaluate_condition(
         GateVerdict::Advisory
     };
 
-    let margin = match condition.threshold.direction {
-        ThresholdDirection::AtLeast => {
-            observed_value as i64 - condition.threshold.threshold_value as i64
-        }
-        ThresholdDirection::AtMost => {
-            condition.threshold.threshold_value as i64 - observed_value as i64
-        }
-        ThresholdDirection::Exactly => {
-            let diff = (observed_value as i64 - condition.threshold.threshold_value as i64).abs();
-            if passes { 0 } else { -diff }
-        }
-    };
+    let margin = threshold_margin(
+        condition.threshold.direction,
+        observed_value,
+        condition.threshold.threshold_value,
+        passes,
+    );
 
     GateEvaluation {
         condition_id: condition.condition_id.clone(),
@@ -409,7 +444,10 @@ impl OracleReleaseGateReport {
 
     /// Total number of evaluations.
     pub fn total_evaluations(&self) -> u64 {
-        self.pass_count + self.fail_count + self.advisory_count + self.inconclusive_count
+        self.pass_count
+            .saturating_add(self.fail_count)
+            .saturating_add(self.advisory_count)
+            .saturating_add(self.inconclusive_count)
     }
 
     /// Verify content hash integrity.
@@ -677,7 +715,7 @@ pub fn build_gate_event(
         release_candidate_id: report.release_candidate_id.clone(),
         overall_verdict: report.overall_verdict.as_str().to_string(),
         conditions_evaluated: report.total_evaluations(),
-        blockers: report.fail_count + report.inconclusive_count,
+        blockers: report.fail_count.saturating_add(report.inconclusive_count),
         seed: format!("{BEAD_ID}-gate-v1"),
     }
 }
@@ -1427,6 +1465,58 @@ mod tests {
     }
 
     #[test]
+    fn evaluate_margin_saturates_large_values_without_wrap() {
+        let at_least = OracleGateCondition {
+            condition_id: "large-at-least".to_string(),
+            description: "large-at-least".to_string(),
+            oracle_kind: OracleKind::Metric,
+            threshold: BlockerThreshold {
+                name: "large".to_string(),
+                threshold_value: u64::MAX,
+                direction: ThresholdDirection::AtLeast,
+                is_hard_blocker: true,
+            },
+            policy_ref: POLICY_ID.to_string(),
+            bead_ref: None,
+        };
+        let eval = evaluate_condition(&at_least, 0, None, None);
+        assert_eq!(eval.verdict, GateVerdict::Fail);
+        assert_eq!(eval.margin_millionths, i64::MIN);
+
+        let at_most = OracleGateCondition {
+            threshold: BlockerThreshold {
+                threshold_value: 0,
+                direction: ThresholdDirection::AtMost,
+                ..at_least.threshold.clone()
+            },
+            ..at_least
+        };
+        let eval = evaluate_condition(&at_most, u64::MAX, None, None);
+        assert_eq!(eval.verdict, GateVerdict::Fail);
+        assert_eq!(eval.margin_millionths, i64::MIN);
+    }
+
+    #[test]
+    fn evaluate_margin_positive_large_values_saturate_without_wrap() {
+        let condition = OracleGateCondition {
+            condition_id: "large-pass".to_string(),
+            description: "large-pass".to_string(),
+            oracle_kind: OracleKind::Metric,
+            threshold: BlockerThreshold {
+                name: "large".to_string(),
+                threshold_value: 0,
+                direction: ThresholdDirection::AtLeast,
+                is_hard_blocker: true,
+            },
+            policy_ref: POLICY_ID.to_string(),
+            bead_ref: None,
+        };
+        let eval = evaluate_condition(&condition, u64::MAX, None, None);
+        assert_eq!(eval.verdict, GateVerdict::Pass);
+        assert_eq!(eval.margin_millionths, i64::MAX);
+    }
+
+    #[test]
     fn report_with_inconclusive_blocks() {
         let evals = vec![GateEvaluation {
             condition_id: "a".to_string(),
@@ -1626,6 +1716,19 @@ mod tests {
         let event = build_gate_event("t-1", "d-1", &report);
         assert_eq!(event.blockers, 2);
         assert_eq!(event.conditions_evaluated, 2);
+    }
+
+    #[test]
+    fn gate_event_counts_saturate_for_tampered_report_counts() {
+        let mut report = build_report(SecurityEpoch::from_raw(1), "rc-1", vec![]);
+        report.pass_count = u64::MAX;
+        report.fail_count = u64::MAX;
+        report.advisory_count = 1;
+        report.inconclusive_count = 1;
+
+        let event = build_gate_event("t-1", "d-1", &report);
+        assert_eq!(event.conditions_evaluated, u64::MAX);
+        assert_eq!(event.blockers, u64::MAX);
     }
 
     #[test]

@@ -1930,10 +1930,13 @@ mod tests {
             entries: vec![
                 // Deliberately exclude EvidenceChecker + EvidenceReplay diagonal
                 GapMatrixEntry {
-                    lab_surface: LabSurfaceKind::CancellationInjector,
+                    local_surface: LabSurfaceKind::CancellationInjector,
                     upstream_capability: UpstreamCapability::CancelInjection,
                     status: GapStatus::Covered,
-                    evidence: GapEvidence::default(),
+                    coverage_millionths: 1_000_000,
+                    migration_decision: MigrationDecision::NoMigration,
+                    rationale: "test fixture diagonal".to_string(),
+                    confidence_millionths: 1_000_000,
                 },
             ],
         };
@@ -1942,7 +1945,6 @@ mod tests {
         assert!(result.is_err());
         let error_msg = result.unwrap_err();
         assert!(error_msg.contains("missing diagonal entry for EvidenceCheckerxEvidenceReplay"));
-    }
     }
 
     #[test]

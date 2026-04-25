@@ -36,8 +36,12 @@ fn append_u64(buf: &mut Vec<u8>, value: u64) {
     buf.extend_from_slice(&value.to_be_bytes());
 }
 
+fn usize_to_u64_saturating(value: usize) -> u64 {
+    u64::try_from(value).unwrap_or(u64::MAX)
+}
+
 fn append_len_prefixed_bytes(buf: &mut Vec<u8>, bytes: &[u8]) {
-    append_u64(buf, bytes.len() as u64);
+    append_u64(buf, usize_to_u64_saturating(bytes.len()));
     buf.extend_from_slice(bytes);
 }
 
@@ -277,7 +281,10 @@ impl OptimizerHypothesis {
         let mut buf = Vec::new();
         append_len_prefixed_bytes(&mut buf, self.hypothesis_id.as_bytes());
         // source_proof_ids is BTreeSet — deterministic iteration.
-        append_u64(&mut buf, self.source_proof_ids.len() as u64);
+        append_u64(
+            &mut buf,
+            usize_to_u64_saturating(self.source_proof_ids.len()),
+        );
         for pid in &self.source_proof_ids {
             append_len_prefixed_bytes(&mut buf, pid.as_bytes());
         }
@@ -703,6 +710,13 @@ impl ProofIngestionEngine {
             };
         }
 
+        let computed_payload_hash = ContentHash::compute(&proof.payload);
+        if proof.canonical_hash != computed_payload_hash {
+            return ProofValidationStatus::SemanticCheckFailed {
+                reason: "canonical hash does not match proof payload".to_string(),
+            };
+        }
+
         // Signature verification (simplified: verify hash-based signature).
         let expected_sig = self.compute_signature(&proof.canonical_bytes());
         if proof.issuer_signature != expected_sig {
@@ -837,7 +851,7 @@ impl ProofIngestionEngine {
                             reason: format!("epoch transition: {} -> {}", old_epoch, new_epoch),
                         },
                     );
-                    invalidated_count += 1;
+                    invalidated_count = invalidated_count.saturating_add(1);
                 }
             }
 
@@ -880,7 +894,7 @@ impl ProofIngestionEngine {
                         reason: reason.to_string(),
                     },
                 );
-                count += 1;
+                count = count.saturating_add(1);
             }
         }
 
@@ -909,7 +923,7 @@ impl ProofIngestionEngine {
         self.recent_invalidations.retain(|&ts| ts >= cutoff);
 
         self.conservative_mode =
-            self.recent_invalidations.len() as u64 >= self.config.churn_threshold;
+            usize_to_u64_saturating(self.recent_invalidations.len()) >= self.config.churn_threshold;
     }
 
     // -----------------------------------------------------------------------
@@ -1023,7 +1037,7 @@ impl ProofIngestionEngine {
             event_type,
             epoch: self.current_epoch,
         };
-        self.event_seq += 1;
+        self.event_seq = self.event_seq.saturating_add(1);
         self.events.push(event);
     }
 
@@ -1417,6 +1431,26 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn rejects_payload_hash_mismatch_even_with_valid_signature() {
+        let mut engine = test_engine();
+        let mut proof = make_default_proof(ProofType::PlasCapabilityWitness);
+        proof.canonical_hash = ContentHash::compute(b"different-payload");
+        proof.issuer_signature =
+            AuthenticityHash::compute_keyed(&test_key(), &proof.canonical_bytes())
+                .as_bytes()
+                .to_vec();
+
+        let err = engine.ingest_proof(proof, 1000).unwrap_err();
+        assert!(matches!(
+            err,
+            IngestionError::ValidationFailed {
+                status: ProofValidationStatus::SemanticCheckFailed { ref reason },
+                ..
+            } if reason.contains("canonical hash")
+        ));
+    }
+
     // --- Epoch transition and invalidation ---
 
     #[test]
@@ -1634,8 +1668,22 @@ mod tests {
             .expect("serde deserialization should succeed");
 
         for (i, event) in engine.events().iter().enumerate() {
-            assert_eq!(event.seq, i as u64);
+            assert_eq!(event.seq, usize_to_u64_saturating(i));
         }
+    }
+
+    #[test]
+    fn event_sequence_saturates_for_restored_max_sequence() {
+        let mut engine = test_engine();
+        engine.event_seq = u64::MAX;
+        let proof = make_default_proof(ProofType::PlasCapabilityWitness);
+
+        engine
+            .ingest_proof(proof, 1000)
+            .expect("valid proof should still ingest at saturated audit sequence");
+
+        assert!(!engine.events().is_empty());
+        assert!(engine.events().iter().all(|event| event.seq == u64::MAX));
     }
 
     #[test]
@@ -2355,7 +2403,10 @@ mod tests {
 
         let mut expected = Vec::new();
         append_len_prefixed_bytes(&mut expected, hypothesis.hypothesis_id.as_bytes());
-        append_u64(&mut expected, hypothesis.source_proof_ids.len() as u64);
+        append_u64(
+            &mut expected,
+            usize_to_u64_saturating(hypothesis.source_proof_ids.len()),
+        );
         for proof_id in &hypothesis.source_proof_ids {
             append_len_prefixed_bytes(&mut expected, proof_id.as_bytes());
         }

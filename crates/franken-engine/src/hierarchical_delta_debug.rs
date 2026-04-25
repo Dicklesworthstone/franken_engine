@@ -119,7 +119,7 @@ impl fmt::Display for ReductionLevel {
             Self::Declaration => write!(f, "declaration"),
             Self::Statement => write!(f, "statement"),
             Self::Expression => write!(f, "expression"),
-            Self::Token => write!(f, "token"),
+            Self::Token /* lexical unit, not credential */ => write!(f, "token"),
         }
     }
 }
@@ -219,8 +219,8 @@ impl ReductionConfig {
         hasher.update(self.max_steps.to_le_bytes());
         hasher.update(self.min_program_size.to_le_bytes());
         hasher.update(self.max_time_ms.to_le_bytes());
-        hasher.update([self.preserve_syntax as u8]);
-        hasher.update([self.preserve_imports as u8]);
+        hasher.update([u8::from(self.preserve_syntax)]);
+        hasher.update([u8::from(self.preserve_imports)]);
         for s in &self.strategies {
             hasher.update(format!("{s}").as_bytes());
         }
@@ -240,6 +240,25 @@ impl fmt::Display for ReductionConfig {
             self.max_steps, self.preserve_syntax, self.preserve_imports,
         )
     }
+}
+
+fn usize_to_u32_saturating(value: usize) -> u32 {
+    u32::try_from(value).unwrap_or(u32::MAX)
+}
+
+fn usize_to_u128_saturating(value: usize) -> u128 {
+    u64::try_from(value).map(u128::from).unwrap_or(u128::MAX)
+}
+
+fn reduction_ratio_millionths(original_size: usize, reduced_size: usize) -> u64 {
+    if original_size == 0 {
+        return 0;
+    }
+
+    let removed = original_size.saturating_sub(reduced_size);
+    let ratio = usize_to_u128_saturating(removed).saturating_mul(1_000_000)
+        / usize_to_u128_saturating(original_size);
+    u64::try_from(ratio).unwrap_or(u64::MAX)
 }
 
 // ---------------------------------------------------------------------------
@@ -471,8 +490,8 @@ impl MinimalRepro {
         if self.original_size == 0 {
             return 0;
         }
-        let removed = self.original_size.saturating_sub(self.reduced_size) as u64;
-        removed.saturating_mul(100) / self.original_size as u64
+        let removed = u64::from(self.original_size.saturating_sub(self.reduced_size));
+        removed.saturating_mul(100) / u64::from(self.original_size)
     }
 }
 
@@ -553,13 +572,13 @@ impl DeltaDebugger {
         // Module-level: split on double newlines (top-level blocks)
         let mut offset: u32 = 0;
         for block in self.original_source.split("\n\n") {
-            let block_len = block.len() as u32;
+            let block_len = usize_to_u32_saturating(block.len());
             if block_len >= self.config.min_program_size {
                 self.fragments.push(ProgramFragment::new(
                     ReductionLevel::Declaration,
                     block,
                     offset,
-                    offset + block_len,
+                    offset.saturating_add(block_len),
                 ));
             }
             offset = offset.saturating_add(block_len).saturating_add(2); // +2 for "\n\n"
@@ -570,14 +589,14 @@ impl DeltaDebugger {
         for frag in &self.fragments {
             let mut local_offset = frag.start_offset;
             for line in frag.source.split('\n') {
-                let line_len = line.len() as u32;
+                let line_len = usize_to_u32_saturating(line.len());
                 let trimmed = line.trim();
                 if !trimmed.is_empty() && line_len >= 3 {
                     let mut stmt = ProgramFragment::new(
                         ReductionLevel::Statement,
                         line,
                         local_offset,
-                        local_offset + line_len,
+                        local_offset.saturating_add(line_len),
                     );
                     stmt.parent_id = Some(frag.fragment_id.clone());
                     stmt_frags.push(stmt);
@@ -625,7 +644,7 @@ impl DeltaDebugger {
             .collect::<Vec<_>>()
             .join("\n");
 
-        if (reduced_source.len() as u32) < self.config.min_program_size {
+        if usize_to_u32_saturating(reduced_source.len()) < self.config.min_program_size {
             return StepOutcome::Skipped;
         }
 
@@ -655,7 +674,7 @@ impl DeltaDebugger {
             strategy,
             removed_fragment_ids: fragment_ids.to_vec(),
             outcome: outcome.clone(),
-            program_size_after: reduced_source.len() as u32,
+            program_size_after: usize_to_u32_saturating(reduced_source.len()),
             progress,
         };
         self.steps.push(step);
@@ -716,14 +735,9 @@ impl DeltaDebugger {
             .collect::<Vec<_>>()
             .join("\n");
 
-        let original_size = self.original_source.len() as u32;
-        let reduced_size = source.len() as u32;
-        let reduction_ratio = if original_size == 0 {
-            0
-        } else {
-            let removed = original_size.saturating_sub(reduced_size) as u64;
-            removed.saturating_mul(1_000_000) / original_size as u64
-        };
+        let original_size = usize_to_u32_saturating(self.original_source.len());
+        let reduced_size = usize_to_u32_saturating(source.len());
+        let reduction_ratio = reduction_ratio_millionths(self.original_source.len(), source.len());
 
         let essential_ids: Vec<String> = self
             .fragments
@@ -732,7 +746,8 @@ impl DeltaDebugger {
             .map(|f| f.fragment_id.clone())
             .collect();
 
-        let progress_steps = self.steps.iter().filter(|s| s.progress).count() as u32;
+        let progress_steps =
+            usize_to_u32_saturating(self.steps.iter().filter(|s| s.progress).count());
 
         let repro_id = MinimalRepro::compute_id(&self.defect_class, &source);
 
@@ -746,8 +761,8 @@ impl DeltaDebugger {
             reduction_ratio_millionths: reduction_ratio,
             total_steps: self.step_counter,
             progress_steps,
-            original_fragment_count: self.fragments.len() as u32,
-            remaining_fragment_count: included_fragments.len() as u32,
+            original_fragment_count: usize_to_u32_saturating(self.fragments.len()),
+            remaining_fragment_count: usize_to_u32_saturating(included_fragments.len()),
             essential_fragment_ids: essential_ids,
             config: self.config.clone(),
             epoch: self.epoch,
@@ -774,11 +789,13 @@ impl DeltaDebugger {
         ReductionSummary {
             repro_id: repro.repro_id,
             defect_class: self.defect_class.clone(),
-            original_size: self.original_source.len() as u32,
+            original_size: usize_to_u32_saturating(self.original_source.len()),
             reduced_size,
             reduction_percentage: reduction_pct,
             total_steps: self.step_counter,
-            progress_steps: self.steps.iter().filter(|s| s.progress).count() as u32,
+            progress_steps: usize_to_u32_saturating(
+                self.steps.iter().filter(|s| s.progress).count(),
+            ),
             levels_attempted: levels_attempted.into_iter().collect(),
             strategies_used: strategies_used.into_iter().collect(),
             stable,
@@ -810,19 +827,27 @@ pub struct ReductionEvidenceInventory {
 impl ReductionEvidenceInventory {
     /// Create from a set of repros.
     pub fn from_repros(repros: &[MinimalRepro]) -> Self {
-        let total_steps: u32 = repros.iter().map(|r| r.total_steps).sum();
-        let total_progress: u32 = repros.iter().map(|r| r.progress_steps).sum();
+        let total_steps = repros
+            .iter()
+            .fold(0u32, |sum, repro| sum.saturating_add(repro.total_steps));
+        let total_progress = repros
+            .iter()
+            .fold(0u32, |sum, repro| sum.saturating_add(repro.progress_steps));
         let avg_reduction = if repros.is_empty() {
             0
         } else {
-            let sum: u64 = repros.iter().map(|r| r.reduction_ratio_millionths).sum();
-            sum / repros.len() as u64
+            let sum: u128 = repros
+                .iter()
+                .map(|r| u128::from(r.reduction_ratio_millionths))
+                .sum();
+            let average = sum / usize_to_u128_saturating(repros.len());
+            u64::try_from(average).unwrap_or(u64::MAX)
         };
 
         Self {
             component: COMPONENT.to_string(),
             schema_version: REDUCTION_SCHEMA_VERSION.to_string(),
-            session_count: repros.len() as u32,
+            session_count: usize_to_u32_saturating(repros.len()),
             total_steps,
             total_progress_steps: total_progress,
             avg_reduction_millionths: avg_reduction,
@@ -1056,6 +1081,16 @@ mod tests {
         let back: ReductionConfig =
             serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(c, back);
+    }
+
+    #[test]
+    fn size_accounting_saturates_instead_of_truncating() {
+        assert_eq!(usize_to_u32_saturating(42), 42);
+        assert_eq!(usize_to_u32_saturating(usize::MAX), u32::MAX);
+        assert_eq!(
+            reduction_ratio_millionths(usize::MAX, usize::MAX / 2),
+            500_000
+        );
     }
 
     // --- ProgramFragment ---
@@ -1344,7 +1379,10 @@ mod tests {
         debugger.fragment();
         let summary = debugger.summary();
         assert_eq!(summary.defect_class, DefectClass::Crash);
-        assert_eq!(summary.original_size, sample_program().len() as u32);
+        assert_eq!(
+            summary.original_size,
+            usize_to_u32_saturating(sample_program().len())
+        );
     }
 
     // --- MinimalRepro ---
@@ -1432,6 +1470,32 @@ mod tests {
         let inv = ReductionEvidenceInventory::from_repros(&[]);
         assert_eq!(inv.session_count, 0);
         assert_eq!(inv.avg_reduction_millionths, 0);
+    }
+
+    #[test]
+    fn evidence_inventory_totals_saturate() {
+        let repro = MinimalRepro {
+            repro_id: "mr-test".into(),
+            schema_version: REDUCTION_SCHEMA_VERSION.to_string(),
+            defect_class: DefectClass::Crash,
+            source: "x".into(),
+            original_size: 100,
+            reduced_size: 25,
+            reduction_ratio_millionths: 750_000,
+            total_steps: u32::MAX,
+            progress_steps: u32::MAX,
+            original_fragment_count: 20,
+            remaining_fragment_count: 5,
+            essential_fragment_ids: vec![],
+            config: ReductionConfig::default(),
+            epoch: test_epoch(),
+            stable: true,
+        };
+
+        let inv = ReductionEvidenceInventory::from_repros(&[repro.clone(), repro]);
+        assert_eq!(inv.total_steps, u32::MAX);
+        assert_eq!(inv.total_progress_steps, u32::MAX);
+        assert_eq!(inv.avg_reduction_millionths, 750_000);
     }
 
     #[test]

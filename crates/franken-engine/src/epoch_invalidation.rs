@@ -29,6 +29,10 @@ const INVALIDATION_RECEIPT_SCHEMA_DEF: &[u8] = b"InvalidationReceipt.v1";
 /// Zone for all epoch-invalidation objects.
 const EPOCH_INVALIDATION_ZONE: &str = "epoch-invalidation";
 
+fn usize_to_u64_saturating(value: usize) -> u64 {
+    u64::try_from(value).unwrap_or(u64::MAX)
+}
+
 // ---------------------------------------------------------------------------
 // InvalidationReason — why a specialization was invalidated
 // ---------------------------------------------------------------------------
@@ -733,7 +737,7 @@ impl EpochInvalidationEngine {
         let mut count = 0u64;
         for spec_id in ids {
             if self.do_invalidate(spec_id, reason, current_ns).is_ok() {
-                count += 1;
+                count = count.saturating_add(1);
                 self.track_invalidation(current_ns);
             }
         }
@@ -796,7 +800,7 @@ impl EpochInvalidationEngine {
         };
 
         self.receipts.push(receipt.clone());
-        self.total_invalidations += 1;
+        self.total_invalidations = self.total_invalidations.saturating_add(1);
 
         self.emit_event(
             current_ns,
@@ -833,14 +837,16 @@ impl EpochInvalidationEngine {
             .retain(|&ts| ts >= cutoff);
 
         let was_conservative = self.conservative_mode;
-        self.conservative_mode =
-            self.recent_invalidation_timestamps.len() as u64 >= self.config.churn.threshold;
+        self.conservative_mode = usize_to_u64_saturating(self.recent_invalidation_timestamps.len())
+            >= self.config.churn.threshold;
 
         if !was_conservative && self.conservative_mode {
             self.emit_event(
                 current_ns,
                 InvalidationEventType::ChurnDampeningActivated {
-                    invalidation_count: self.recent_invalidation_timestamps.len() as u64,
+                    invalidation_count: usize_to_u64_saturating(
+                        self.recent_invalidation_timestamps.len(),
+                    ),
                     window_ns: self.config.churn.window_ns,
                 },
             );
@@ -955,7 +961,10 @@ mod tests {
     fn test_key() -> [u8; 32] {
         let mut key = [0u8; 32];
         for (i, b) in key.iter_mut().enumerate() {
-            *b = (i as u8).wrapping_mul(11).wrapping_add(5);
+            *b = u8::try_from(i)
+                .unwrap_or(u8::MAX)
+                .wrapping_mul(11)
+                .wrapping_add(5);
         }
         key
     }
@@ -1579,7 +1588,7 @@ mod tests {
         engine.advance_epoch(SecurityEpoch::from_raw(111), 2000);
 
         for (i, event) in engine.events().iter().enumerate() {
-            assert_eq!(event.seq, i as u64);
+            assert_eq!(event.seq, usize_to_u64_saturating(i));
         }
     }
 
@@ -1846,6 +1855,35 @@ mod tests {
 
         engine.advance_epoch(SecurityEpoch::from_raw(101), 2000);
         assert_eq!(engine.total_invalidations(), 3);
+    }
+
+    #[test]
+    fn total_invalidations_saturates_for_restored_max_counter() {
+        let mut engine = test_engine();
+        let spec = make_spec(
+            OptimizationClass::TraceSpecialization,
+            90,
+            100,
+            "policy-001",
+            "saturated-counter",
+        );
+        let spec_id = spec.specialization_id.clone();
+        engine
+            .register_specialization(spec, 1000)
+            .expect("serde deserialization should succeed");
+
+        engine.total_invalidations = u64::MAX;
+        engine
+            .invalidate_specialization(
+                &spec_id,
+                InvalidationReason::OperatorInvalidation {
+                    reason: "restored-max-counter".to_string(),
+                },
+                2000,
+            )
+            .expect("valid invalidation should succeed");
+
+        assert_eq!(engine.total_invalidations(), u64::MAX);
     }
 
     // --- Persistent fallback on crash ---
@@ -3212,7 +3250,7 @@ mod tests {
                 InvalidationReason::OperatorInvalidation {
                     reason: format!("churn-{i}"),
                 },
-                2000 + i as u64,
+                2000 + usize_to_u64_saturating(i),
             );
         }
         assert!(engine.is_conservative_mode());
@@ -3285,13 +3323,10 @@ mod tests {
             .register_specialization(spec, 1000)
             .expect("serde deserialization should succeed");
         assert_eq!(engine.events().len(), 1);
-        if let InvalidationEventType::SpecializationRegistered { .. } =
-            &engine.events()[0].event_type
-        {
-            // ok
-        } else {
-            panic!("expected SpecializationRegistered event");
-        }
+        assert!(matches!(
+            &engine.events()[0].event_type,
+            InvalidationEventType::SpecializationRegistered { .. }
+        ));
     }
 
     #[test]
@@ -3309,14 +3344,16 @@ mod tests {
             .register_specialization(spec, 1000)
             .expect("serde deserialization should succeed");
         let err = engine.begin_respecialization(&spec_id, 2000).unwrap_err();
-        match err {
-            InvalidationError::InvalidState {
-                expected, actual, ..
-            } => {
-                assert!(expected.contains("baseline-fallback"));
-                assert!(actual.contains("active"));
-            }
-            other => panic!("expected InvalidState, got: {other}"),
+        assert!(
+            matches!(&err, InvalidationError::InvalidState { .. }),
+            "expected InvalidState, got: {err:?}"
+        );
+        if let InvalidationError::InvalidState {
+            expected, actual, ..
+        } = err
+        {
+            assert!(expected.contains("baseline-fallback"));
+            assert!(actual.contains("active"));
         }
     }
 
@@ -3665,14 +3702,16 @@ mod tests {
                 2000,
             )
             .unwrap_err();
-        match err {
-            InvalidationError::InvalidState {
-                expected, actual, ..
-            } => {
-                assert!(expected.contains("re-specializing"));
-                assert!(actual.contains("active"));
-            }
-            other => panic!("expected InvalidState, got: {other}"),
+        assert!(
+            matches!(&err, InvalidationError::InvalidState { .. }),
+            "expected InvalidState, got: {err:?}"
+        );
+        if let InvalidationError::InvalidState {
+            expected, actual, ..
+        } = err
+        {
+            assert!(expected.contains("re-specializing"));
+            assert!(actual.contains("active"));
         }
     }
 
@@ -3719,7 +3758,7 @@ mod tests {
                     InvalidationReason::OperatorInvalidation {
                         reason: format!("inv-{i}"),
                     },
-                    2000 + i as u64,
+                    2000 + usize_to_u64_saturating(i),
                 )
                 .expect("serde deserialization should succeed");
         }

@@ -1136,6 +1136,9 @@ pub struct WorkloadGovernanceScorecard {
     /// Exact latency accumulator used to compute the published average precisely.
     #[serde(default)]
     rollback_latency_total_ticks: u64,
+    /// Exact rollback-event counter used to compute rollback averages consistently.
+    #[serde(default)]
+    rollback_events: u64,
     /// Whether the exact internal counters were initialized from this schema.
     #[serde(default)]
     internal_counters_initialized: bool,
@@ -1152,6 +1155,7 @@ impl WorkloadGovernanceScorecard {
             risk_score_millionths: 0,                 // No risk by default
             successful_optimizations: 0,
             rollback_latency_total_ticks: 0,
+            rollback_events: 0,
             internal_counters_initialized: true,
         }
     }
@@ -1163,9 +1167,12 @@ impl WorkloadGovernanceScorecard {
 
         self.successful_optimizations =
             inferred_successes_from_rate(self.success_rate_millionths, self.optimization_attempts);
+        self.rollback_events = self
+            .optimization_attempts
+            .saturating_sub(self.successful_optimizations);
         self.rollback_latency_total_ticks = self
             .avg_rollback_latency_ticks
-            .saturating_mul(self.optimization_attempts);
+            .saturating_mul(self.rollback_events);
         self.internal_counters_initialized = true;
     }
 
@@ -1175,13 +1182,15 @@ impl WorkloadGovernanceScorecard {
         self.optimization_attempts = self.optimization_attempts.saturating_add(1);
         if success {
             self.successful_optimizations = self.successful_optimizations.saturating_add(1);
+        } else {
+            self.rollback_events = self.rollback_events.saturating_add(1);
+            self.rollback_latency_total_ticks = self
+                .rollback_latency_total_ticks
+                .saturating_add(rollback_latency_ticks);
         }
         self.successful_optimizations = self
             .successful_optimizations
             .min(self.optimization_attempts);
-        self.rollback_latency_total_ticks = self
-            .rollback_latency_total_ticks
-            .saturating_add(rollback_latency_ticks);
 
         self.success_rate_millionths =
             ratio_millionths(self.successful_optimizations, self.optimization_attempts, 0);
@@ -1192,7 +1201,7 @@ impl WorkloadGovernanceScorecard {
             ratio_millionths(failed_optimizations, self.optimization_attempts, 0);
         self.avg_rollback_latency_ticks = self
             .rollback_latency_total_ticks
-            .checked_div(self.optimization_attempts)
+            .checked_div(self.rollback_events)
             .unwrap_or(0);
     }
 }
@@ -1409,6 +1418,7 @@ impl GovernanceState {
                 .fold(0_u64, |total, rollback| {
                     total.saturating_add(rollback.elapsed_steps)
                 }),
+            rollback_events: function_rollbacks.len() as u64,
             internal_counters_initialized: true,
         };
 
@@ -2352,7 +2362,7 @@ mod tests {
         scorecard.record_optimization(true, 100);
         assert_eq!(scorecard.optimization_attempts, 1);
         assert_eq!(scorecard.success_rate_millionths, MILLIONTHS);
-        assert_eq!(scorecard.avg_rollback_latency_ticks, 100);
+        assert_eq!(scorecard.avg_rollback_latency_ticks, 0);
         assert_eq!(scorecard.risk_score_millionths, 0);
     }
 
@@ -2375,7 +2385,7 @@ mod tests {
 
         assert_eq!(scorecard.optimization_attempts, 3);
         assert_eq!(scorecard.success_rate_millionths, (2 * MILLIONTHS) / 3); // 66.67% success
-        assert_eq!(scorecard.avg_rollback_latency_ticks, 200); // (100 + 300 + 200) / 3
+        assert_eq!(scorecard.avg_rollback_latency_ticks, 300); // Only rollback events contribute
         assert_eq!(scorecard.risk_score_millionths, MILLIONTHS / 3); // 33.33% risk
     }
 
@@ -2388,7 +2398,7 @@ mod tests {
 
         assert_eq!(scorecard.optimization_attempts, 10);
         assert_eq!(scorecard.success_rate_millionths, MILLIONTHS / 2); // 50% success
-        assert_eq!(scorecard.avg_rollback_latency_ticks, 55); // Average of 10,20,...,100
+        assert_eq!(scorecard.avg_rollback_latency_ticks, 50); // Average of rollback latencies 10,30,...,90
         assert_eq!(scorecard.risk_score_millionths, MILLIONTHS / 2); // 50% risk
     }
 
@@ -2397,11 +2407,12 @@ mod tests {
         let mut scorecard = WorkloadGovernanceScorecard {
             optimization_attempts: u64::MAX,
             success_rate_millionths: MILLIONTHS,
-            avg_rollback_latency_ticks: u64::MAX,
+            avg_rollback_latency_ticks: 0,
             forensic_coverage_millionths: MILLIONTHS,
             risk_score_millionths: 0,
             successful_optimizations: u64::MAX,
-            rollback_latency_total_ticks: u64::MAX,
+            rollback_latency_total_ticks: 0,
+            rollback_events: 0,
             internal_counters_initialized: true,
         };
 
@@ -2423,6 +2434,7 @@ mod tests {
             risk_score_millionths: 0,
             successful_optimizations: 0,
             rollback_latency_total_ticks: 0,
+            rollback_events: 0,
             internal_counters_initialized: false,
         };
 
@@ -2743,5 +2755,30 @@ mod tests {
         let back: WorkloadGovernanceScorecard =
             serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(scorecard, back);
+    }
+
+    #[test]
+    fn workload_governance_scorecard_backfills_rollback_counters_from_failures() {
+        let legacy_json = format!(
+            r#"{{
+                "optimization_attempts": 4,
+                "success_rate_millionths": {},
+                "avg_rollback_latency_ticks": 120,
+                "forensic_coverage_millionths": {},
+                "risk_score_millionths": {}
+            }}"#,
+            MILLIONTHS / 2,
+            MILLIONTHS,
+            MILLIONTHS / 2
+        );
+        let mut scorecard: WorkloadGovernanceScorecard =
+            serde_json::from_str(&legacy_json).expect("legacy scorecard should deserialize");
+
+        scorecard.record_optimization(true, 999);
+
+        assert_eq!(scorecard.optimization_attempts, 5);
+        assert_eq!(scorecard.success_rate_millionths, (3 * MILLIONTHS) / 5);
+        assert_eq!(scorecard.avg_rollback_latency_ticks, 120);
+        assert_eq!(scorecard.risk_score_millionths, (2 * MILLIONTHS) / 5);
     }
 }

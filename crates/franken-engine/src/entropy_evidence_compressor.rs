@@ -124,10 +124,10 @@ impl EntropyEstimator {
     pub fn observe(&mut self, symbol: u32) {
         let entry = self.frequencies.entry(symbol).or_insert(0);
         if *entry == 0 {
-            self.alphabet_size += 1;
+            self.alphabet_size = self.alphabet_size.saturating_add(1);
         }
-        *entry += 1;
-        self.total_count += 1;
+        *entry = entry.saturating_add(1);
+        self.total_count = self.total_count.saturating_add(1);
     }
 
     /// Compute empirical entropy H(X) in millionths of bits.
@@ -139,7 +139,7 @@ impl EntropyEstimator {
             return 0;
         }
         // A single-symbol distribution has zero entropy by definition.
-        if self.alphabet_size <= 1 {
+        if self.observed_alphabet_size() <= 1 {
             return 0;
         }
 
@@ -150,26 +150,26 @@ impl EntropyEstimator {
         let mut sum_ci_log2_ci: i128 = 0;
         for &count in self.frequencies.values() {
             if count > 0 {
-                let log2_ci = integer_log2_millionths(count) as i128;
-                sum_ci_log2_ci += count as i128 * log2_ci;
+                let log2_ci = i128::from(integer_log2_millionths(count));
+                sum_ci_log2_ci += i128::from(count) * log2_ci;
             }
         }
 
         // H = log₂(n) - (1/n) · Σ cᵢ · log₂(cᵢ)
         // All values in millionths of bits.
-        let entropy = log2_n as i128 - sum_ci_log2_ci / n as i128;
-        (entropy.max(0) as i64).max(0)
+        let entropy = i128::from(log2_n) - sum_ci_log2_ci / i128::from(n);
+        i64_from_i128_saturating(entropy.max(0)).max(0)
     }
 
     /// Shannon lower bound on compressed size in raw bits.
     /// `L* ≥ n · H(X) - O(log n)`
     pub fn shannon_lower_bound_bits(&self) -> i64 {
         let h = self.entropy_millibits(); // millionths of bits per symbol
-        let n = self.total_count as i128;
+        let n = i128::from(self.total_count);
         // n · H(X) in millionths of total bits, minus log₂(n) in millionths.
-        let log2_n = integer_log2_millionths(self.total_count) as i128;
-        let bound_millionths = n * h as i128 - log2_n;
-        (bound_millionths.max(0) / MILLION as i128) as i64
+        let log2_n = i128::from(integer_log2_millionths(self.total_count));
+        let bound_millionths = n.saturating_mul(i128::from(h)).saturating_sub(log2_n);
+        i64_from_i128_saturating(bound_millionths.max(0) / i128::from(MILLION))
     }
 
     /// Probability of a symbol in millionths.
@@ -179,21 +179,31 @@ impl EntropyEstimator {
         }
         let count = self.frequencies.get(&symbol).copied().unwrap_or(0);
         // Use i128 to prevent overflow when count * MILLION exceeds i64::MAX.
-        (count as i128 * MILLION as i128 / self.total_count.max(1) as i128) as i64
+        let probability =
+            i128::from(count).saturating_mul(i128::from(MILLION)) / i128::from(self.total_count);
+        i64_from_i128_saturating(probability).min(MILLION)
     }
 
     /// Maximum entropy for this alphabet size: log₂(|Σ|) in millionths.
     pub fn max_entropy_millibits(&self) -> i64 {
-        if self.alphabet_size <= 1 {
+        let alphabet_size = self.observed_alphabet_size();
+        if alphabet_size <= 1 {
             return 0;
         }
-        integer_log2_millionths(self.alphabet_size as u64)
+        integer_log2_millionths(u64_from_usize_saturating(alphabet_size))
     }
 
     /// Redundancy: H_max - H(X) in millionths of bits.
     /// Measures how far the distribution is from uniform.
     pub fn redundancy_millibits(&self) -> i64 {
         (self.max_entropy_millibits() - self.entropy_millibits()).max(0)
+    }
+
+    fn observed_alphabet_size(&self) -> usize {
+        self.frequencies
+            .values()
+            .filter(|&&count| count > 0)
+            .count()
     }
 }
 
@@ -246,7 +256,7 @@ impl SufficientStatistic {
     ) -> Self {
         let total = estimator.total_count;
         let mean = if total > 0 {
-            cumulative_llr / total as i64
+            i64_from_i128_saturating(i128::from(cumulative_llr) / i128::from(total))
         } else {
             0
         };
@@ -287,18 +297,16 @@ impl SufficientStatistic {
         if self.total_count < 2 {
             return 0;
         }
-        let n = self.total_count as i64;
+        let n = i128::from(self.total_count);
         // Use i128 intermediary to avoid overflow in mean_sq computation:
         // mean_millionths can be large, so (mean * mean) can exceed i64 range.
-        let mean_wide = self.mean_millionths as i128;
-        let mean_sq = (mean_wide * mean_wide / MILLION as i128) as i64;
-        let variance = (self.sum_squared_millionths / n - mean_sq).max(1);
+        let mean_wide = i128::from(self.mean_millionths);
+        let mean_sq = mean_wide.saturating_mul(mean_wide) / i128::from(MILLION);
+        let variance = (i128::from(self.sum_squared_millionths) / n - mean_sq).max(1);
 
-        let n_wide = self.total_count as i128;
-        let variance_wide = variance as i128;
-        let fisher_wide = (n_wide * MILLION as i128) / variance_wide;
+        let fisher_wide = n.saturating_mul(i128::from(MILLION)) / variance;
 
-        fisher_wide.min(i64::MAX as i128) as i64
+        i64_from_i128_saturating(fisher_wide)
     }
 }
 
@@ -325,12 +333,13 @@ pub struct ArithmeticCoder {
 impl ArithmeticCoder {
     /// Build a coder from an entropy estimator.
     pub fn from_estimator(estimator: &EntropyEstimator) -> Result<Self, EntropyError> {
-        if estimator.alphabet_size == 0 {
+        let alphabet_size = estimator.frequencies.len();
+        if alphabet_size == 0 {
             return Err(EntropyError::EmptyInput);
         }
-        if estimator.alphabet_size > MAX_ALPHABET_SIZE {
+        if alphabet_size > MAX_ALPHABET_SIZE {
             return Err(EntropyError::AlphabetTooLarge {
-                size: estimator.alphabet_size,
+                size: alphabet_size,
                 max: MAX_ALPHABET_SIZE,
             });
         }
@@ -340,7 +349,12 @@ impl ArithmeticCoder {
         for (&symbol, &freq) in &estimator.frequencies {
             let adjusted_freq = freq.max(1); // Laplace smoothing: min freq = 1
             cum_freq_table.insert(symbol, (cumulative, adjusted_freq));
-            cumulative += adjusted_freq;
+            cumulative =
+                cumulative
+                    .checked_add(adjusted_freq)
+                    .ok_or_else(|| EntropyError::DecodeError {
+                        message: "frequency table overflow".to_string(),
+                    })?;
         }
 
         if cumulative == 0 {
@@ -350,7 +364,7 @@ impl ArithmeticCoder {
         Ok(Self {
             frequency_table: cum_freq_table,
             total_frequency: cumulative,
-            alphabet_size: estimator.alphabet_size,
+            alphabet_size,
         })
     }
 
@@ -380,16 +394,16 @@ impl ArithmeticCoder {
                 range = u64::MAX;
                 let step = range / self.total_frequency;
                 // Use u128 to avoid overflow in step * cum_freq.
-                low = low.wrapping_add((step as u128 * *cum_freq as u128) as u64);
-                range = (step as u128 * *freq as u128).min(u64::MAX as u128) as u64;
+                low = low.wrapping_add(scale_frequency(step, *cum_freq));
+                range = scale_frequency(step, *freq);
             } else {
-                low = low.wrapping_add((step as u128 * *cum_freq as u128) as u64);
-                range = (step as u128 * *freq as u128).min(u64::MAX as u128) as u64;
+                low = low.wrapping_add(scale_frequency(step, *cum_freq));
+                range = scale_frequency(step, *freq);
             }
 
             // Normalize: emit bytes when top byte is determined.
             while range < (1u64 << 56) {
-                output_bytes.push((low >> 56) as u8);
+                output_bytes.push(u8::try_from(low >> 56).unwrap_or(u8::MAX));
                 low <<= 8;
                 range <<= 8;
             }
@@ -398,10 +412,15 @@ impl ArithmeticCoder {
         // Flush remaining state.
         output_bytes.extend_from_slice(&low.to_be_bytes());
 
-        let original_bits =
-            symbols.len() as i64 * integer_log2_millionths(self.alphabet_size as u64) / MILLION;
+        let original_bits = i64_from_i128_saturating(
+            i128_from_usize_saturating(symbols.len()).saturating_mul(i128::from(
+                integer_log2_millionths(u64_from_usize_saturating(self.alphabet_size)),
+            )) / i128::from(MILLION),
+        );
         let compressed_bytes = output_bytes.len();
-        let compressed_bits = output_bytes.len() as i64 * 8;
+        let compressed_bits = i64_from_i128_saturating(
+            i128_from_usize_saturating(output_bytes.len()).saturating_mul(8),
+        );
 
         Ok(CompressedEvidence {
             schema: ENTROPY_SCHEMA_VERSION.to_string(),
@@ -411,7 +430,10 @@ impl ArithmeticCoder {
             original_bits_estimate: original_bits,
             compressed_bits,
             compression_ratio_millionths: if original_bits > 0 {
-                compressed_bits * MILLION / original_bits
+                i64_from_i128_saturating(
+                    i128::from(compressed_bits).saturating_mul(i128::from(MILLION))
+                        / i128::from(original_bits),
+                )
             } else {
                 MILLION
             },
@@ -438,10 +460,17 @@ impl ArithmeticCoder {
             return Err(EntropyError::EmptyInput);
         }
 
-        let sum: u64 = self.frequency_table.values().map(|(_, f)| *f).sum();
+        let mut sum: u64 = 0;
+        for &(_, freq) in self.frequency_table.values() {
+            sum = sum.checked_add(freq).ok_or(EntropyError::KraftViolation {
+                kraft_sum_millionths: i64::MAX,
+            })?;
+        }
         // Use i128 to prevent overflow when sum * MILLION exceeds i64::MAX.
-        let kraft_sum_millionths =
-            (sum as i128 * MILLION as i128 / self.total_frequency.max(1) as i128) as i64;
+        let kraft_sum_millionths = i64_from_i128_saturating(
+            i128::from(sum).saturating_mul(i128::from(MILLION))
+                / i128::from(self.total_frequency.max(1)),
+        );
 
         if kraft_sum_millionths > MILLION + 1000 {
             // Allow tiny rounding tolerance.
@@ -461,11 +490,12 @@ impl ArithmeticCoder {
         let mut sum_fi_log2_fi: i128 = 0;
         for &(_, freq) in self.frequency_table.values() {
             if freq > 0 {
-                sum_fi_log2_fi += freq as i128 * integer_log2_millionths(freq) as i128;
+                sum_fi_log2_fi += i128::from(freq) * i128::from(integer_log2_millionths(freq));
             }
         }
-        let expected = log2_total as i128 - sum_fi_log2_fi / self.total_frequency.max(1) as i128;
-        expected.max(0) as i64
+        let expected =
+            i128::from(log2_total) - sum_fi_log2_fi / i128::from(self.total_frequency.max(1));
+        i64_from_i128_saturating(expected.max(0))
     }
 }
 
@@ -533,12 +563,13 @@ impl CompressionCertificate {
         let entropy = estimator.entropy_millibits();
         let lower_bound = estimator.shannon_lower_bound_bits();
         let achieved = compressed.compressed_bits;
-        let achieved_bits_millionths = achieved as i128 * MILLION as i128;
-        let lower_bound_millionths = lower_bound as i128 * MILLION as i128;
+        let achieved_bits_millionths = i128::from(achieved).saturating_mul(i128::from(MILLION));
+        let lower_bound_millionths = i128::from(lower_bound).saturating_mul(i128::from(MILLION));
         let overhead = (achieved_bits_millionths - lower_bound_millionths).max(0);
         let overhead_ratio = if lower_bound_millionths > 0 {
-            let ratio = achieved_bits_millionths * MILLION as i128 / lower_bound_millionths;
-            ratio.min(i64::MAX as i128) as i64
+            let ratio = achieved_bits_millionths.saturating_mul(i128::from(MILLION))
+                / lower_bound_millionths;
+            i64_from_i128_saturating(ratio)
         } else if achieved <= 0 {
             // Degenerate zero/zero case: treat as exact.
             MILLION
@@ -558,7 +589,7 @@ impl CompressionCertificate {
             entropy_millibits_per_symbol: entropy,
             shannon_lower_bound_bits: lower_bound,
             achieved_bits: achieved,
-            overhead_bits_millionths: overhead.min(i64::MAX as i128) as i64,
+            overhead_bits_millionths: i64_from_i128_saturating(overhead),
             overhead_ratio_millionths: overhead_ratio,
             kraft_sum_millionths: kraft_sum,
             kraft_satisfied: kraft_sum <= MILLION + 1000,
@@ -588,7 +619,7 @@ fn integer_log2_millionths(n: u64) -> i64 {
         return 0;
     }
     let bits = 64 - n.leading_zeros();
-    let integer_part = (bits - 1) as i64 * MILLION;
+    let integer_part = i64::from(bits - 1) * MILLION;
 
     let power_of_two = 1u64 << (bits - 1);
     if n == power_of_two {
@@ -610,7 +641,9 @@ fn integer_log2_millionths(n: u64) -> i64 {
 
     for _ in 0..20 {
         // Square mantissa: (m * 2^32)^2 / 2^32 = m^2 * 2^32
-        mantissa = ((mantissa as u128 * mantissa as u128) >> 32) as u64;
+        mantissa = u64_from_u128_saturating(
+            (u128::from(mantissa).saturating_mul(u128::from(mantissa))) >> 32,
+        );
         if mantissa >= threshold {
             frac += bit_value;
             mantissa >>= 1; // divide by 2
@@ -622,6 +655,30 @@ fn integer_log2_millionths(n: u64) -> i64 {
     }
 
     integer_part + frac
+}
+
+fn i128_from_usize_saturating(value: usize) -> i128 {
+    u64::try_from(value).map(i128::from).unwrap_or(i128::MAX)
+}
+
+fn i64_from_i128_saturating(value: i128) -> i64 {
+    i64::try_from(value).unwrap_or(if value.is_negative() {
+        i64::MIN
+    } else {
+        i64::MAX
+    })
+}
+
+fn scale_frequency(step: u64, frequency: u64) -> u64 {
+    u64_from_u128_saturating(u128::from(step).saturating_mul(u128::from(frequency)))
+}
+
+fn u64_from_u128_saturating(value: u128) -> u64 {
+    u64::try_from(value).unwrap_or(u64::MAX)
+}
+
+fn u64_from_usize_saturating(value: usize) -> u64 {
+    u64::try_from(value).unwrap_or(u64::MAX)
 }
 
 // ---------------------------------------------------------------------------
@@ -711,6 +768,55 @@ mod tests {
     }
 
     #[test]
+    fn entropy_observe_saturates_instead_of_wrapping() {
+        let mut est = EntropyEstimator {
+            frequencies: [(7, u64::MAX)].into_iter().collect(),
+            total_count: u64::MAX,
+            alphabet_size: 1,
+        };
+
+        est.observe(7);
+        assert_eq!(est.frequencies.get(&7), Some(&u64::MAX));
+        assert_eq!(est.total_count, u64::MAX);
+        assert_eq!(est.alphabet_size, 1);
+    }
+
+    #[test]
+    fn entropy_shannon_lower_bound_saturates_for_huge_counts() {
+        let half = u64::MAX / 2;
+        let est = EntropyEstimator {
+            frequencies: [(0, half), (1, half)].into_iter().collect(),
+            total_count: half.saturating_mul(2),
+            alphabet_size: 2,
+        };
+
+        assert_eq!(est.shannon_lower_bound_bits(), i64::MAX);
+    }
+
+    #[test]
+    fn entropy_uses_frequency_map_when_alphabet_field_is_spoofed() {
+        let est = EntropyEstimator {
+            frequencies: [(0, 10), (1, 10)].into_iter().collect(),
+            total_count: 20,
+            alphabet_size: 1,
+        };
+
+        assert!(est.entropy_millibits() > 0);
+        assert!(est.max_entropy_millibits() > 0);
+    }
+
+    #[test]
+    fn entropy_probability_clamps_malformed_counts() {
+        let est = EntropyEstimator {
+            frequencies: [(0, u64::MAX)].into_iter().collect(),
+            total_count: 1,
+            alphabet_size: 1,
+        };
+
+        assert_eq!(est.probability_millionths(0), MILLION);
+    }
+
+    #[test]
     fn entropy_redundancy() {
         let mut est = EntropyEstimator::new();
         for _ in 0..1000 {
@@ -784,6 +890,35 @@ mod tests {
     }
 
     #[test]
+    fn sufficient_statistic_mean_handles_large_totals() {
+        let est = EntropyEstimator {
+            frequencies: [(0, u64::MAX)].into_iter().collect(),
+            total_count: u64::MAX,
+            alphabet_size: 1,
+        };
+        let ss =
+            SufficientStatistic::from_estimator(&est, 1_000, 0, ContentHash::compute(b"large"));
+
+        assert_eq!(ss.mean_millionths, 0);
+        assert!(ss.is_consistent());
+    }
+
+    #[test]
+    fn sufficient_statistic_fisher_information_saturates() {
+        let ss = SufficientStatistic {
+            symbol_counts: [(0, u64::MAX)].into_iter().collect(),
+            total_count: u64::MAX,
+            cumulative_llr_millionths: 0,
+            sum_squared_millionths: 0,
+            mean_millionths: 0,
+            original_hash: ContentHash::compute(b"fisher-saturates"),
+            is_fisher_sufficient: true,
+        };
+
+        assert_eq!(ss.fisher_information_millionths(), i64::MAX);
+    }
+
+    #[test]
     fn sufficient_statistic_serde_roundtrip() {
         let est = EntropyEstimator::new();
         let ss = SufficientStatistic::from_estimator(&est, 0, 0, ContentHash::compute(b"empty"));
@@ -816,6 +951,37 @@ mod tests {
         assert!(matches!(
             ArithmeticCoder::from_estimator(&est),
             Err(EntropyError::EmptyInput)
+        ));
+    }
+
+    #[test]
+    fn coder_rejects_actual_alphabet_over_max_even_if_field_is_spoofed() {
+        let est = EntropyEstimator {
+            frequencies: (0..=MAX_ALPHABET_SIZE as u32)
+                .map(|symbol| (symbol, 1))
+                .collect(),
+            total_count: (MAX_ALPHABET_SIZE as u64) + 1,
+            alphabet_size: 1,
+        };
+
+        assert!(matches!(
+            ArithmeticCoder::from_estimator(&est),
+            Err(EntropyError::AlphabetTooLarge { size, max })
+                if size == MAX_ALPHABET_SIZE + 1 && max == MAX_ALPHABET_SIZE
+        ));
+    }
+
+    #[test]
+    fn coder_rejects_frequency_table_overflow() {
+        let est = EntropyEstimator {
+            frequencies: [(0, u64::MAX), (1, u64::MAX)].into_iter().collect(),
+            total_count: u64::MAX,
+            alphabet_size: 2,
+        };
+
+        assert!(matches!(
+            ArithmeticCoder::from_estimator(&est),
+            Err(EntropyError::DecodeError { message }) if message.contains("overflow")
         ));
     }
 
@@ -878,6 +1044,24 @@ mod tests {
             .verify_kraft_inequality()
             .expect("serde deserialization should succeed");
         assert!(kraft <= MILLION + 1000);
+    }
+
+    #[test]
+    fn coder_kraft_rejects_frequency_sum_overflow() {
+        let coder = ArithmeticCoder {
+            frequency_table: [(0, (0, u64::MAX)), (1, (u64::MAX, u64::MAX))]
+                .into_iter()
+                .collect(),
+            total_frequency: 1,
+            alphabet_size: 2,
+        };
+
+        assert!(matches!(
+            coder.verify_kraft_inequality(),
+            Err(EntropyError::KraftViolation {
+                kraft_sum_millionths: i64::MAX
+            })
+        ));
     }
 
     #[test]

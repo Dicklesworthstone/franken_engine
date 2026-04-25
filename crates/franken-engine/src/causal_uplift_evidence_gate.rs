@@ -190,6 +190,11 @@ pub enum RejectionReason {
         lower_millionths: i64,
         upper_millionths: i64,
     },
+    /// Confidence interval bounds are inverted.
+    InvalidConfidenceInterval {
+        lower_millionths: i64,
+        upper_millionths: i64,
+    },
     /// Confidence interval too wide relative to effect.
     IntervalTooWide {
         width_millionths: u64,
@@ -220,6 +225,7 @@ impl RejectionReason {
             Self::IdentificationAbstained => "identification_abstained",
             Self::EffectBelowThreshold { .. } => "effect_below_threshold",
             Self::IntervalSpansZero { .. } => "interval_spans_zero",
+            Self::InvalidConfidenceInterval { .. } => "invalid_confidence_interval",
             Self::IntervalTooWide { .. } => "interval_too_wide",
             Self::LowConfidence { .. } => "low_confidence",
             Self::CategoryMismatch { .. } => "category_mismatch",
@@ -244,6 +250,13 @@ impl fmt::Display for RejectionReason {
                 lower_millionths,
                 upper_millionths,
             } => write!(f, "CI [{lower_millionths}, {upper_millionths}] spans zero"),
+            Self::InvalidConfidenceInterval {
+                lower_millionths,
+                upper_millionths,
+            } => write!(
+                f,
+                "invalid CI bounds: lower {lower_millionths} exceeds upper {upper_millionths}"
+            ),
             Self::IntervalTooWide {
                 width_millionths,
                 effect_millionths,
@@ -301,9 +314,15 @@ pub struct CausalBacking {
 }
 
 impl CausalBacking {
+    /// Whether confidence interval bounds are ordered.
+    pub fn ci_is_ordered(&self) -> bool {
+        self.ci_lower_millionths <= self.ci_upper_millionths
+    }
+
     /// Confidence interval width.
     pub fn ci_width(&self) -> u64 {
-        (self.ci_upper_millionths - self.ci_lower_millionths) as u64
+        let width = i128::from(self.ci_upper_millionths) - i128::from(self.ci_lower_millionths);
+        u64::try_from(width).unwrap_or(0)
     }
 
     /// Whether the CI spans zero.
@@ -508,9 +527,12 @@ impl EvidenceGate {
             reasons.push(RejectionReason::IdentificationAbstained);
         }
 
+        let positive_effect_millionths = u64::try_from(backing.effect_millionths)
+            .ok()
+            .filter(|effect| *effect > 0);
+
         // 2. Effect must be positive and above threshold.
-        if backing.effect_millionths <= 0
-            || (backing.effect_millionths as u64) < self.config.min_effect_threshold
+        if positive_effect_millionths.is_none_or(|effect| effect < self.config.min_effect_threshold)
         {
             reasons.push(RejectionReason::EffectBelowThreshold {
                 effect_millionths: backing.effect_millionths.unsigned_abs(),
@@ -518,8 +540,14 @@ impl EvidenceGate {
             });
         }
 
-        // 3. CI must not span zero.
-        if backing.ci_spans_zero() {
+        // 3. CI bounds must be well formed and must not span zero.
+        let ci_is_ordered = backing.ci_is_ordered();
+        if !ci_is_ordered {
+            reasons.push(RejectionReason::InvalidConfidenceInterval {
+                lower_millionths: backing.ci_lower_millionths,
+                upper_millionths: backing.ci_upper_millionths,
+            });
+        } else if backing.ci_spans_zero() {
             reasons.push(RejectionReason::IntervalSpansZero {
                 lower_millionths: backing.ci_lower_millionths,
                 upper_millionths: backing.ci_upper_millionths,
@@ -527,9 +555,8 @@ impl EvidenceGate {
         }
 
         // 4. CI width must be reasonable relative to effect.
-        if backing.effect_millionths > 0 {
+        if let Some(effect_abs) = positive_effect_millionths.filter(|_| ci_is_ordered) {
             let width = backing.ci_width();
-            let effect_abs = backing.effect_millionths as u64;
             let relative_width = width
                 .saturating_mul(1_000_000)
                 .checked_div(effect_abs)
@@ -644,12 +671,12 @@ impl GateReport {
         let mut h = Sha256::new();
         h.update(SCHEMA_VERSION.as_bytes());
         h.update(epoch.as_u64().to_le_bytes());
-        h.update((verdicts.len() as u64).to_le_bytes());
-        h.update((admitted_count as u64).to_le_bytes());
-        h.update((rejected_count as u64).to_le_bytes());
+        h.update(usize_to_u64_saturating(verdicts.len()).to_le_bytes());
+        h.update(usize_to_u64_saturating(admitted_count).to_le_bytes());
+        h.update(usize_to_u64_saturating(rejected_count).to_le_bytes());
+        h.update(usize_to_u64_saturating(no_backing_count).to_le_bytes());
         for v in &verdicts {
-            h.update(v.claim_id().as_bytes());
-            h.update(v.tag().as_bytes());
+            hash_gate_verdict(&mut h, v);
         }
         let content_hash = ContentHash::compute(&h.finalize());
 
@@ -671,9 +698,9 @@ impl GateReport {
 
     /// Admission rate (millionths).
     pub fn admission_rate(&self) -> u64 {
-        (self.admitted_count as u64)
+        usize_to_u64_saturating(self.admitted_count)
             .saturating_mul(1_000_000)
-            .checked_div(self.verdicts.len() as u64)
+            .checked_div(usize_to_u64_saturating(self.verdicts.len()))
             .unwrap_or(0)
     }
 
@@ -685,6 +712,105 @@ impl GateReport {
     /// Whether any claim was rejected.
     pub fn has_rejections(&self) -> bool {
         self.rejected_count > 0
+    }
+}
+
+fn usize_to_u64_saturating(value: usize) -> u64 {
+    u64::try_from(value).unwrap_or(u64::MAX)
+}
+
+fn hash_str(hasher: &mut Sha256, value: &str) {
+    hasher.update(usize_to_u64_saturating(value.len()).to_le_bytes());
+    hasher.update(value.as_bytes());
+}
+
+fn hash_u64(hasher: &mut Sha256, value: u64) {
+    hasher.update(value.to_le_bytes());
+}
+
+fn hash_i64(hasher: &mut Sha256, value: i64) {
+    hasher.update(value.to_le_bytes());
+}
+
+fn hash_claim_category(hasher: &mut Sha256, value: ClaimCategory) {
+    hash_str(hasher, value.as_str());
+}
+
+fn hash_identification_method(hasher: &mut Sha256, value: IdentificationMethod) {
+    hash_str(hasher, value.as_str());
+}
+
+fn hash_rejection_reason(hasher: &mut Sha256, reason: &RejectionReason) {
+    hash_str(hasher, reason.tag());
+    match reason {
+        RejectionReason::IdentificationAbstained | RejectionReason::NoAdjustmentPath => {}
+        RejectionReason::EffectBelowThreshold {
+            effect_millionths,
+            threshold_millionths,
+        } => {
+            hash_u64(hasher, *effect_millionths);
+            hash_u64(hasher, *threshold_millionths);
+        }
+        RejectionReason::IntervalSpansZero {
+            lower_millionths,
+            upper_millionths,
+        }
+        | RejectionReason::InvalidConfidenceInterval {
+            lower_millionths,
+            upper_millionths,
+        } => {
+            hash_i64(hasher, *lower_millionths);
+            hash_i64(hasher, *upper_millionths);
+        }
+        RejectionReason::IntervalTooWide {
+            width_millionths,
+            effect_millionths,
+        } => {
+            hash_u64(hasher, *width_millionths);
+            hash_u64(hasher, *effect_millionths);
+        }
+        RejectionReason::LowConfidence {
+            confidence_millionths,
+            threshold_millionths,
+        } => {
+            hash_u64(hasher, *confidence_millionths);
+            hash_u64(hasher, *threshold_millionths);
+        }
+        RejectionReason::CategoryMismatch { claim, evidence } => {
+            hash_claim_category(hasher, *claim);
+            hash_claim_category(hasher, *evidence);
+        }
+        RejectionReason::WeakEvidence {
+            method,
+            min_strength,
+        } => {
+            hash_identification_method(hasher, *method);
+            hash_u64(hasher, u64::from(*min_strength));
+        }
+    }
+}
+
+fn hash_gate_verdict(hasher: &mut Sha256, verdict: &GateVerdict) {
+    hash_str(hasher, verdict.tag());
+    hash_str(hasher, verdict.claim_id());
+    match verdict {
+        GateVerdict::Admitted {
+            method,
+            effect_millionths,
+            confidence_millionths,
+            ..
+        } => {
+            hash_identification_method(hasher, *method);
+            hash_i64(hasher, *effect_millionths);
+            hash_u64(hasher, *confidence_millionths);
+        }
+        GateVerdict::Rejected { reasons, .. } => {
+            hash_u64(hasher, usize_to_u64_saturating(reasons.len()));
+            for reason in reasons {
+                hash_rejection_reason(hasher, reason);
+            }
+        }
+        GateVerdict::NoBacking { .. } => {}
     }
 }
 
@@ -873,6 +999,10 @@ mod tests {
                 lower_millionths: 0,
                 upper_millionths: 0,
             },
+            RejectionReason::InvalidConfidenceInterval {
+                lower_millionths: 1,
+                upper_millionths: 0,
+            },
             RejectionReason::IntervalTooWide {
                 width_millionths: 0,
                 effect_millionths: 0,
@@ -892,7 +1022,7 @@ mod tests {
             },
         ];
         let tags: BTreeSet<&str> = reasons.iter().map(|r| r.tag()).collect();
-        assert_eq!(tags.len(), 8);
+        assert_eq!(tags.len(), 9);
     }
 
     #[test]
@@ -924,6 +1054,36 @@ mod tests {
     fn backing_ci_width() {
         let b = good_backing(ClaimCategory::Regression);
         assert_eq!(b.ci_width(), 60_000); // 80k - 20k
+    }
+
+    #[test]
+    fn backing_ci_width_saturates_extreme_bounds() {
+        let mut b = good_backing(ClaimCategory::Regression);
+        b.ci_lower_millionths = i64::MIN;
+        b.ci_upper_millionths = i64::MAX;
+        assert_eq!(b.ci_width(), u64::MAX);
+    }
+
+    #[test]
+    fn inverted_confidence_interval_rejects_without_width_overflow() {
+        let gate = EvidenceGate::with_defaults();
+        let claim = regression_claim();
+        let mut backing = good_backing(ClaimCategory::Regression);
+        backing.ci_lower_millionths = 80_000;
+        backing.ci_upper_millionths = 20_000;
+
+        let verdict = gate.evaluate(&claim, Some(&backing));
+        assert!(matches!(
+            verdict,
+            GateVerdict::Rejected { ref reasons, .. }
+                if reasons.iter().any(|reason| matches!(
+                    reason,
+                    RejectionReason::InvalidConfidenceInterval {
+                        lower_millionths: 80_000,
+                        upper_millionths: 20_000,
+                    }
+                ))
+        ));
     }
 
     #[test]
@@ -1255,6 +1415,54 @@ mod tests {
         let r1 = GateReport::new(epoch(), verdicts.clone());
         let r2 = GateReport::new(epoch(), verdicts);
         assert_eq!(r1.content_hash, r2.content_hash);
+    }
+
+    #[test]
+    fn report_hash_changes_when_admitted_payload_changes() {
+        let baseline = GateReport::new(
+            epoch(),
+            vec![GateVerdict::Admitted {
+                claim_id: "a".into(),
+                method: IdentificationMethod::Randomized,
+                effect_millionths: 50_000,
+                confidence_millionths: 900_000,
+            }],
+        );
+        let changed = GateReport::new(
+            epoch(),
+            vec![GateVerdict::Admitted {
+                claim_id: "a".into(),
+                method: IdentificationMethod::Randomized,
+                effect_millionths: 60_000,
+                confidence_millionths: 900_000,
+            }],
+        );
+        assert_ne!(baseline.content_hash, changed.content_hash);
+    }
+
+    #[test]
+    fn report_hash_changes_when_rejection_reason_changes() {
+        let baseline = GateReport::new(
+            epoch(),
+            vec![GateVerdict::Rejected {
+                claim_id: "a".into(),
+                reasons: vec![RejectionReason::LowConfidence {
+                    confidence_millionths: 700_000,
+                    threshold_millionths: 800_000,
+                }],
+            }],
+        );
+        let changed = GateReport::new(
+            epoch(),
+            vec![GateVerdict::Rejected {
+                claim_id: "a".into(),
+                reasons: vec![RejectionReason::LowConfidence {
+                    confidence_millionths: 600_000,
+                    threshold_millionths: 800_000,
+                }],
+            }],
+        );
+        assert_ne!(baseline.content_hash, changed.content_hash);
     }
 
     #[test]

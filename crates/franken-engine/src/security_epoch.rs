@@ -324,10 +324,11 @@ impl EpochTracker {
 
         self.current_epoch = next;
         self.transitions.push(record);
-        *self
+        let count = self
             .transition_counts
             .entry(reason.to_string())
-            .or_insert(0) += 1;
+            .or_insert(0);
+        *count = count.saturating_add(1);
 
         Ok(next)
     }
@@ -563,6 +564,21 @@ mod tests {
         let counts = tracker.transition_counts();
         assert_eq!(counts["policy_key_rotation"], 2);
         assert_eq!(counts["guardrail_config_change"], 1);
+    }
+
+    #[test]
+    fn advance_saturates_restored_transition_count() {
+        let mut tracker = EpochTracker::new();
+        tracker
+            .transition_counts
+            .insert("policy_key_rotation".to_string(), u64::MAX);
+
+        tracker
+            .advance(TransitionReason::PolicyKeyRotation, "restored-max")
+            .expect("advance should not panic on restored saturated counts");
+
+        assert_eq!(tracker.transition_counts()["policy_key_rotation"], u64::MAX);
+        assert_eq!(tracker.current(), SecurityEpoch::from_raw(1));
     }
 
     #[test]

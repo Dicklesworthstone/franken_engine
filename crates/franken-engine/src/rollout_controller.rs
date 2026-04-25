@@ -90,6 +90,8 @@ pub enum BreachReason {
     Latency,
     /// Determinism was required but not observed at 100%.
     Determinism,
+    /// Observed fixed-point metrics exceeded the millionths scale.
+    InvalidObservation,
     /// Rollout phase had no configured guardrails and must fail closed.
     MissingGuardrails,
 }
@@ -146,26 +148,34 @@ impl RolloutController {
         }
 
         let Some(guardrails) = self.guardrails_for_current_phase() else {
-            self.rollback();
-            return Err(BreachReason::MissingGuardrails);
+            return self.fail_closed(BreachReason::MissingGuardrails);
         };
-        let error_rate = observed.get(OBS_ERROR_RATE).copied().unwrap_or(u32::MAX);
+        let error_rate =
+            match observed_fixed_point_metric(observed, OBS_ERROR_RATE, BreachReason::ErrorRate) {
+                Ok(error_rate) => error_rate,
+                Err(reason) => return self.fail_closed(reason),
+            };
         if error_rate > guardrails.max_error_rate {
-            self.rollback();
-            return Err(BreachReason::ErrorRate);
+            return self.fail_closed(BreachReason::ErrorRate);
         }
 
         let latency_ms = observed.get(OBS_LATENCY_MS).copied().unwrap_or(u32::MAX);
         if latency_ms > guardrails.max_latency_ms {
-            self.rollback();
-            return Err(BreachReason::Latency);
+            return self.fail_closed(BreachReason::Latency);
+        }
+
+        if let Err(reason) =
+            observed_fixed_point_metric(observed, OBS_DETERMINISM, BreachReason::Determinism)
+        {
+            if !matches!(reason, BreachReason::Determinism) {
+                return self.fail_closed(reason);
+            }
         }
 
         if guardrails.determinism_required {
             let determinism = observed.get(OBS_DETERMINISM).copied().unwrap_or(0);
             if determinism != MILLIONTHS {
-                self.rollback();
-                return Err(BreachReason::Determinism);
+                return self.fail_closed(BreachReason::Determinism);
             }
         }
 
@@ -179,6 +189,11 @@ impl RolloutController {
 
     fn guardrails_for_current_phase(&self) -> Option<&PhaseGuardrails> {
         self.guardrails.get(self.phase.as_key())
+    }
+
+    fn fail_closed(&mut self, reason: BreachReason) -> Result<(), BreachReason> {
+        self.rollback();
+        Err(reason)
     }
 
     fn rollback(&mut self) {
@@ -222,6 +237,18 @@ pub fn observations(error_rate: u32, latency_ms: u32, determinism: u32) -> BTree
     observed
 }
 
+fn observed_fixed_point_metric(
+    observed: &BTreeMap<String, u32>,
+    key: &str,
+    missing_reason: BreachReason,
+) -> Result<u32, BreachReason> {
+    let value = observed.get(key).copied().ok_or(missing_reason)?;
+    if value > MILLIONTHS {
+        return Err(BreachReason::InvalidObservation);
+    }
+    Ok(value)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -245,6 +272,15 @@ mod tests {
 
     fn good_observations() -> BTreeMap<String, u32> {
         observations(100, 100, MILLIONTHS)
+    }
+
+    fn permissive_guardrails() -> BTreeMap<String, PhaseGuardrails> {
+        let mut guardrails = relaxed_guardrails();
+        guardrails.insert(
+            RolloutPhase::Shadow.as_key().to_string(),
+            PhaseGuardrails::new(MILLIONTHS + 10, 1_000, false),
+        );
+        guardrails
     }
 
     #[test]
@@ -296,6 +332,17 @@ mod tests {
     }
 
     #[test]
+    fn successful_phase_history_never_reverses() {
+        let mut controller = RolloutController::shadow(relaxed_guardrails());
+        for _ in 0..3 {
+            controller
+                .try_advance(&good_observations())
+                .expect("good observations should preserve monotonic progression");
+        }
+        assert!(controller.history.windows(2).all(|pair| pair[0] <= pair[1]));
+    }
+
+    #[test]
     fn error_rate_breach_rolls_back() {
         let mut controller = RolloutController::shadow(relaxed_guardrails());
         let observed = observations(20_000, 100, MILLIONTHS);
@@ -334,7 +381,18 @@ mod tests {
         let observed = observations(100, 100, MILLIONTHS + 1);
         assert_eq!(
             controller.try_advance(&observed),
-            Err(BreachReason::Determinism)
+            Err(BreachReason::InvalidObservation)
+        );
+        assert_eq!(controller.phase, RolloutPhase::RolledBack);
+    }
+
+    #[test]
+    fn error_rate_above_full_score_fails_before_guardrail_comparison() {
+        let mut controller = RolloutController::shadow(permissive_guardrails());
+        let observed = observations(MILLIONTHS + 1, 100, MILLIONTHS);
+        assert_eq!(
+            controller.try_advance(&observed),
+            Err(BreachReason::InvalidObservation)
         );
         assert_eq!(controller.phase, RolloutPhase::RolledBack);
     }
@@ -394,6 +452,17 @@ mod tests {
         observed.remove(OBS_DETERMINISM);
         assert_eq!(controller.try_advance(&observed), Ok(()));
         assert_eq!(controller.phase, RolloutPhase::Canary);
+    }
+
+    #[test]
+    fn optional_determinism_still_rejects_out_of_range_values() {
+        let mut controller = RolloutController::shadow(permissive_guardrails());
+        let observed = observations(100, 100, MILLIONTHS + 1);
+        assert_eq!(
+            controller.try_advance(&observed),
+            Err(BreachReason::InvalidObservation)
+        );
+        assert_eq!(controller.phase, RolloutPhase::RolledBack);
     }
 
     #[test]

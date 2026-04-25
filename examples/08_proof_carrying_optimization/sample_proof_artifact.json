@@ -1,0 +1,39 @@
+{
+  "schema_version": "franken-engine.certified-optimization.v1",
+  "optimization_id": "opt-cf-demo-001",
+  "optimization_tier": "aggressive",
+  "optimization_type": "constant_folding",
+  "source_function": "function compute(x) { return (2 * 3) + x; }",
+
+  "before_ir": {
+    "ir_hash": "d4e5f6a1b2c3789012345678901234567890abcdef1234567890abcdef123456",
+    "opcode_count": 8,
+    "fingerprint": "pre_const_fold_demo",
+    "opcodes": ["LoadConst 2", "LoadConst 3", "Multiply", "LoadParam x", "Add", "Return"]
+  },
+
+  "after_ir": {
+    "ir_hash": "f6g7h8d4e5a1b2c9012345678901234567890abcdef1234567890abcdef123456",
+    "opcode_count": 4,
+    "fingerprint": "post_const_fold_demo",
+    "opcodes": ["LoadConst 6", "LoadParam x", "Add", "Return"]
+  },
+
+  "translation_validation": {
+    "equivalence_witness": "sat_proof_constant_folding_2x3_equals_6",
+    "proof_method": "algebraic_equivalence",
+    "verification_status": "verified",
+    "proof_hash": "abc123def456789012345678901234567890abcdef1234567890abcdef123456",
+    "signature_hex": "7b8c9d0e1f234567890abcdef12345678901234567890123456789abcdef1234"
+  },
+
+  "governance_policy": {
+    "rollback_trigger_threshold": 1000,
+    "certificate_status": "valid",
+    "security_epoch": 42,
+    "expiry_epoch": 142,
+    "forensic_entry_id": "forensic_cf_demo_001"
+  },
+
+  "proof_status": "valid"
+}

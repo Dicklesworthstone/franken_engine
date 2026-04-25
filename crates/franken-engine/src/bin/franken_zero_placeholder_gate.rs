@@ -390,7 +390,7 @@ fn prepare_gate_inputs(
     ]
     .into_iter()
     .map(|subsystem| {
-        let entries = grouped_entries.remove(&subsystem).expect("serde deserialization should succeed");
+        let entries = grouped_entries.remove(&subsystem).unwrap_or_default();
         ScanResult::new(subsystem, entries, epoch)
     })
     .collect();
@@ -750,7 +750,14 @@ mod tests {
     fn bundle_manifest_counts_effective_active_waivers_at_selected_epoch() {
         let out_dir = unique_temp_dir("franken-zero-placeholder-gate-bundle");
         let epoch = SecurityEpoch::from_raw(100);
-        let inventory = zero_placeholder_scan_inventory();
+        let mut inventory = zero_placeholder_scan_inventory();
+        if inventory.open_placeholder_finding_count() == 0 {
+            inventory
+                .findings
+                .first_mut()
+                .expect("inventory should contain at least one finding")
+                .status = ZeroPlaceholderStatus::OpenPlaceholder;
+        }
         let (_, prepared) = prepare_gate_inputs(&inventory, epoch);
         let entry = prepared
             .iter()
@@ -767,8 +774,11 @@ mod tests {
             status: WaiverStatus::Active,
             created_epoch: 40,
         }];
-        fs::write(&waivers_path, serde_json::to_vec_pretty(&waivers).expect("serde deserialization should succeed"))
-            .expect("write waivers");
+        fs::write(
+            &waivers_path,
+            serde_json::to_vec_pretty(&waivers).expect("serde deserialization should succeed"),
+        )
+        .expect("write waivers");
 
         write_zero_placeholder_gate_bundle(
             &out_dir,
@@ -827,7 +837,8 @@ mod tests {
         });
         fs::write(
             &waivers_path,
-            serde_json::to_vec_pretty(&legacy_manifest).expect("serde deserialization should succeed"),
+            serde_json::to_vec_pretty(&legacy_manifest)
+                .expect("serde deserialization should succeed"),
         )
         .expect("write legacy manifest");
 

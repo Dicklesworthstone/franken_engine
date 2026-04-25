@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use frankenengine_engine::capability_token::PrincipalId;
-use frankenengine_engine::engine_object_id::{derive_id, ObjectDomain, SchemaId};
+use frankenengine_engine::engine_object_id::{ObjectDomain, SchemaId, derive_id};
 use frankenengine_engine::fleet_immune_protocol::{
     ContainmentAction, ContainmentIntent, EvidencePacket, FleetProtocolState, GossipConfig,
     HeartbeatLiveness, MessageSignature, NodeId, ProtocolVersion,
@@ -15,7 +15,7 @@ use frankenengine_engine::revocation_chain::{
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
 use frankenengine_engine::signature_preimage::{
-    sign_preimage, Signature, SignaturePreimage, SigningKey, SIGNATURE_SENTINEL,
+    SIGNATURE_SENTINEL, Signature, SignaturePreimage, SigningKey, sign_preimage,
 };
 use serde::Serialize;
 

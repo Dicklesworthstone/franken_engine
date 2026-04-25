@@ -183,8 +183,16 @@ fn main() {
         )
         .get_matches();
 
-    let baseline_path = PathBuf::from(matches.get_one::<String>("baseline").expect("serde deserialization should succeed"));
-    let run_path = PathBuf::from(matches.get_one::<String>("run").expect("serde deserialization should succeed"));
+    let baseline_path = PathBuf::from(
+        matches
+            .get_one::<String>("baseline")
+            .expect("serde deserialization should succeed"),
+    );
+    let run_path = PathBuf::from(
+        matches
+            .get_one::<String>("run")
+            .expect("serde deserialization should succeed"),
+    );
     let threshold: f64 = matches
         .get_one::<String>("threshold")
         .expect("serde deserialization should succeed")

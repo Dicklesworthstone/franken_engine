@@ -35,9 +35,9 @@ pub struct ReplicationClaim {
     /// Witness digests expected from a successful independent replication.
     pub expected_witnesses: BTreeSet<ContentDigest>,
     /// Number of replication observations recorded.
-    pub attempts: u32,
+    pub attempts: u64,
     /// Number of observations that exactly matched the expected witnesses.
-    pub successes: u32,
+    pub successes: u64,
 }
 
 impl ReplicationClaim {
@@ -68,8 +68,9 @@ impl ReplicationClaim {
         if self.attempts == 0 {
             return 0;
         }
-        let scaled = u64::from(self.successes) * 1_000_000_u64 / u64::from(self.attempts);
-        scaled.min(1_000_000) as u32
+        let bounded_successes = self.successes.min(self.attempts);
+        let scaled = u128::from(bounded_successes) * 1_000_000_u128 / u128::from(self.attempts);
+        scaled as u32
     }
 }
 
@@ -282,18 +283,37 @@ mod tests {
     #[test]
     fn saturated_attempt_counter_does_not_wrap() {
         let mut claim = claim();
-        claim.attempts = u32::MAX;
+        claim.attempts = u64::MAX;
         claim.record_observation(&set(&["node-baseline"]));
-        assert_eq!(claim.attempts, u32::MAX);
+        assert_eq!(claim.attempts, u64::MAX);
     }
 
     #[test]
     fn saturated_success_counter_does_not_wrap() {
         let mut claim = claim();
-        claim.attempts = u32::MAX;
-        claim.successes = u32::MAX;
+        claim.attempts = u64::MAX;
+        claim.successes = u64::MAX;
         claim.record_observation(&set(&["node-baseline", "franken-run"]));
-        assert_eq!(claim.successes, u32::MAX);
+        assert_eq!(claim.successes, u64::MAX);
+        assert_eq!(claim.confidence_millionths(), 1_000_000);
+    }
+
+    #[test]
+    fn failed_observation_still_lowers_confidence_above_u32_capacity() {
+        let mut claim = claim();
+        claim.attempts = u64::from(u32::MAX);
+        claim.successes = u64::from(u32::MAX);
+        claim.record_observation(&set(&["node-baseline"]));
+        assert_eq!(claim.attempts, u64::from(u32::MAX) + 1);
+        assert_eq!(claim.successes, u64::from(u32::MAX));
+        assert_eq!(claim.confidence_millionths(), 999_999);
+    }
+
+    #[test]
+    fn confidence_clamps_successes_above_attempts_to_full_confidence() {
+        let mut claim = claim();
+        claim.attempts = 3;
+        claim.successes = 5;
         assert_eq!(claim.confidence_millionths(), 1_000_000);
     }
 }

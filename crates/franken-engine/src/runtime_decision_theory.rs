@@ -680,7 +680,12 @@ impl DriftDetector {
     pub fn observe(&mut self, value_millionths: i64) {
         self.observations.push(value_millionths);
         // Keep bounded: retain only reference_window + test_window + margin.
-        let max_keep = (self.config.reference_window + self.config.test_window + 50) as usize;
+        let max_keep = u64_to_usize_saturating(
+            self.config
+                .reference_window
+                .saturating_add(self.config.test_window)
+                .saturating_add(50),
+        );
         if self.observations.len() > max_keep {
             let drain = self.observations.len() - max_keep;
             self.observations.drain(..drain);
@@ -692,7 +697,7 @@ impl DriftDetector {
         let n = self.observations.len() as u64;
         let ref_size = self.config.reference_window;
         let test_size = self.config.test_window;
-        let total_needed = ref_size + test_size;
+        let total_needed = ref_size.saturating_add(test_size);
 
         if n < total_needed || n < self.config.min_samples {
             return DriftCheckResult::InsufficientData {
@@ -702,8 +707,8 @@ impl DriftDetector {
         }
 
         let obs_len = self.observations.len();
-        let test_start = obs_len - test_size as usize;
-        let ref_start = test_start - ref_size as usize;
+        let test_start = obs_len.saturating_sub(u64_to_usize_saturating(test_size));
+        let ref_start = test_start.saturating_sub(u64_to_usize_saturating(ref_size));
         let reference = &self.observations[ref_start..test_start];
         let test = &self.observations[test_start..];
 
@@ -749,6 +754,10 @@ impl DriftDetector {
     pub fn observation_count(&self) -> u64 {
         self.observations.len() as u64
     }
+}
+
+fn u64_to_usize_saturating(value: u64) -> usize {
+    usize::try_from(value).unwrap_or(usize::MAX)
 }
 
 /// Result of a drift check.
@@ -2004,6 +2013,28 @@ mod tests {
         }
         // Should not grow unbounded.
         assert!(drift.observation_count() <= 60); // ref + test + margin
+    }
+
+    #[test]
+    fn drift_overflowing_window_config_fails_closed() {
+        let mut drift = DriftDetector::new(DriftConfig {
+            reference_window: u64::MAX,
+            test_window: 100,
+            min_samples: 1,
+            kl_threshold_millionths: 1,
+        });
+
+        drift.observe(42);
+
+        let result = drift.check(epoch(1));
+        assert_eq!(drift.observation_count(), 1);
+        assert!(matches!(
+            result,
+            DriftCheckResult::InsufficientData {
+                observations: 1,
+                required: u64::MAX,
+            }
+        ));
     }
 
     #[test]

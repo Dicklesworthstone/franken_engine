@@ -158,6 +158,11 @@ pub enum GcError {
         size: u64,
         reason: Option<String>,
     },
+    /// Collection failed due to budget constraints.
+    CollectionFailed {
+        extension_id: String,
+        reason: Option<String>,
+    },
     /// Allocation domain error propagated from budget system.
     DomainError(AllocDomainError),
 }
@@ -192,6 +197,17 @@ impl fmt::Display for GcError {
                     f,
                     "allocation of {} bytes failed for extension '{}': {}",
                     size,
+                    extension_id,
+                    reason.as_deref().unwrap_or("budget exceeded")
+                )
+            }
+            Self::CollectionFailed {
+                extension_id,
+                reason,
+            } => {
+                write!(
+                    f,
+                    "garbage collection failed for extension '{}': {}",
                     extension_id,
                     reason.as_deref().unwrap_or("budget exceeded")
                 )
@@ -462,6 +478,12 @@ impl GcCollector {
 
     /// Allocate an object in the specified extension's heap.
     pub fn allocate(&mut self, extension_id: &str, size_bytes: u64) -> Result<GcObjectId, GcError> {
+        if !self.heaps.contains_key(extension_id) {
+            return Err(GcError::HeapNotFound {
+                extension_id: extension_id.to_string(),
+            });
+        }
+
         // Check budget enforcement before allocation
         if let Some(ref mut enforcer) = self.budget_enforcer {
             let usage_deltas = [(EnforcedDimension::HeapMemory, size_bytes as i64)];
@@ -513,8 +535,15 @@ impl GcCollector {
             });
         }
         let seq = registry.allocate(AllocationDomain::ExtensionHeap, size_bytes)?;
-        let id = self.allocate(extension_id, size_bytes)?;
-        Ok((id, seq))
+        match self.allocate(extension_id, size_bytes) {
+            Ok(id) => Ok((id, seq)),
+            Err(error) => {
+                // Budget-enforced allocation can now fail after the domain charge lands.
+                // Roll back the reservation so registry accounting stays in sync with the heap.
+                registry.release(AllocationDomain::ExtensionHeap, size_bytes)?;
+                Err(error)
+            }
+        }
     }
 
     /// Add a reference between objects in the same extension heap.
@@ -546,6 +575,12 @@ impl GcCollector {
 
     /// Collect garbage from a single extension's heap.
     pub fn collect(&mut self, extension_id: &str) -> Result<GcEvent, GcError> {
+        if !self.heaps.contains_key(extension_id) {
+            return Err(GcError::HeapNotFound {
+                extension_id: extension_id.to_string(),
+            });
+        }
+
         // Check budget enforcement for GC pressure before collection
         if let Some(ref mut enforcer) = self.budget_enforcer {
             let usage_deltas = [(EnforcedDimension::GcPressure, 1)]; // One GC cycle
@@ -561,10 +596,9 @@ impl GcCollector {
                 crate::resource_certificate_consumer::EnforcementDecision::Reject {
                     ref reason,
                 } => {
-                    return Err(GcError::AllocationFailed {
+                    return Err(GcError::CollectionFailed {
                         extension_id: extension_id.to_string(),
-                        size: 0, // GC operation, not allocation
-                        reason: Some(format!("GC budget exceeded: {:?}", reason)),
+                        reason: Some(format!("GC budget exceeded: {}", reason)),
                     });
                 }
                 _ => {
@@ -690,9 +724,41 @@ impl Default for GcCollector {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::resource_certificate_consumer::{
+        BudgetEnforcementPolicy, BudgetEnforcer, CertificateDigest, CertificateVerdict,
+        ExtractedBound,
+    };
+    use crate::security_epoch::SecurityEpoch;
 
     fn deterministic_collector() -> GcCollector {
         GcCollector::new(GcConfig::deterministic())
+    }
+
+    fn heap_budget_enforcer(extension_id: &str, heap_bound: i64) -> BudgetEnforcer {
+        let mut enforcer = BudgetEnforcer::new(
+            BudgetEnforcementPolicy::default(),
+            SecurityEpoch::from_raw(1),
+        );
+        enforcer
+            .install_certificate(
+                extension_id,
+                CertificateDigest {
+                    certificate_id: format!("cert-{extension_id}"),
+                    region_id: format!("region-{extension_id}"),
+                    epoch: SecurityEpoch::from_raw(1),
+                    verdict: CertificateVerdict::Certified,
+                    bounds: vec![ExtractedBound {
+                        dimension: EnforcedDimension::HeapMemory,
+                        upper_bound_millionths: heap_bound,
+                        is_tight: true,
+                        confidence_millionths: 1_000_000,
+                    }],
+                    abstention_count: 0,
+                    min_confidence_millionths: 1_000_000,
+                },
+            )
+            .expect("test certificate should install");
+        enforcer
     }
 
     // -- Basic allocation and collection --
@@ -1185,6 +1251,58 @@ mod tests {
 
         let result = gc.allocate_tracked("ext-a", 200, &mut reg);
         assert!(matches!(result, Err(GcError::DomainError(_))));
+    }
+
+    #[test]
+    fn allocate_tracked_rolls_back_registry_when_budget_enforcer_rejects() {
+        let mut gc = deterministic_collector();
+        gc.register_heap("ext-a".into())
+            .expect("heap registration should succeed");
+        gc.set_budget_enforcer(heap_budget_enforcer("ext-a", 100));
+
+        let mut reg = DomainRegistry::new();
+        reg.register(
+            AllocationDomain::ExtensionHeap,
+            crate::alloc_domain::LifetimeClass::SessionScoped,
+            1_000,
+        )
+        .expect("domain registration should succeed");
+
+        let result = gc.allocate_tracked("ext-a", 200, &mut reg);
+        assert!(matches!(result, Err(GcError::AllocationFailed { .. })));
+        assert_eq!(
+            reg.get(&AllocationDomain::ExtensionHeap)
+                .expect("extension heap domain should exist")
+                .budget
+                .used_bytes,
+            0
+        );
+    }
+
+    #[test]
+    fn missing_heap_preempts_budget_enforcement_side_effects() {
+        let mut gc = deterministic_collector();
+        gc.set_budget_enforcer(heap_budget_enforcer("missing", 1_000));
+
+        let result = gc.allocate("missing", 200);
+        assert!(matches!(result, Err(GcError::HeapNotFound { .. })));
+
+        let state = gc
+            .budget_enforcer
+            .as_ref()
+            .and_then(|enforcer| enforcer.extension_state("missing"))
+            .expect("missing extension should still have test budget state");
+        assert_eq!(state.allow_count, 0);
+        assert_eq!(state.throttle_count, 0);
+        assert_eq!(state.reject_count, 0);
+        assert_eq!(
+            state
+                .budgets
+                .get(&EnforcedDimension::HeapMemory)
+                .expect("heap-memory budget should exist")
+                .current_usage_millionths,
+            0
+        );
     }
 
     // -- Heap management --

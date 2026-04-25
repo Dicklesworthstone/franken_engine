@@ -2,6 +2,10 @@
 
 //! Program acceptance ledger for release-readiness gates.
 //!
+//! This is the live home for the program-acceptance gate model. Earlier review
+//! notes may refer to this surface as `program_acceptance_gate`; that historical
+//! name now resolves to this ledger module rather than a separate source file.
+//!
 //! Scores use fixed-point millionths where `1_000_000` is 100%. Gate maps use
 //! `BTreeMap` so serialized ledgers and replay comparisons have deterministic
 //! ordering.
@@ -68,8 +72,12 @@ impl AcceptanceLedger {
     /// Record a current score for an existing gate.
     ///
     /// Returns `true` if the gate existed and was updated; returns `false`
-    /// without mutating the ledger when `gate_id` is unknown.
+    /// without mutating the ledger when `gate_id` is unknown or `score`
+    /// exceeds the fixed-point millionths ceiling.
     pub fn record_score(&mut self, gate_id: &str, score: u32) -> bool {
+        if score > MILLIONTHS {
+            return false;
+        }
         match self.gates.get_mut(gate_id) {
             Some(gate) => {
                 gate.current_score_millionths = score;
@@ -213,6 +221,17 @@ mod tests {
         assert!(ledger.ready_for_release());
         assert!(ledger.record_score("security", 949_999));
         assert!(!ledger.ready_for_release());
+    }
+
+    #[test]
+    fn record_score_rejects_scores_above_one_million() {
+        let mut ledger = sample_ledger();
+        let original = ledger.gates["conformance"].current_score_millionths;
+        assert!(!ledger.record_score("conformance", MILLIONTHS + 1));
+        assert_eq!(
+            ledger.gates["conformance"].current_score_millionths,
+            original
+        );
     }
 
     #[test]

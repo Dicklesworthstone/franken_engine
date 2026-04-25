@@ -1,7 +1,11 @@
 target/
 target_*/
 target-*/
+.rch-target/
+.rch-target-*/
 .cargo-target/
 .cargo-target-*/
+.codex-target*/
+hierarchical-delta-review/
 .git/refs/remotes/
 .git/refs/remotes/**

@@ -9,7 +9,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use chrono::{NaiveDate, SecondsFormat, Utc};
 use frankenengine_engine::ast::ParseGoal;
-use frankenengine_engine::baseline_interpreter::{InterpreterError, InterpreterConfig, ExecutionResult};
 use frankenengine_engine::benchmark_denominator::{
     PublicationContext, PublicationGateInput, evaluate_publication_gate,
 };
@@ -19,9 +18,7 @@ use frankenengine_engine::benchmark_e2e::{
     write_evidence_artifacts,
 };
 use frankenengine_engine::deterministic_replay::{NondeterminismTrace, ReplayEngine, ReplayMode};
-use frankenengine_engine::execution_orchestrator::{
-    ExecutionOrchestrator, ExtensionPackage, OrchestratorConfig, OrchestratorError,
-};
+use frankenengine_engine::execution_orchestrator::OrchestratorConfig;
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::ir_contract::Ir0Module;
 use frankenengine_engine::lowering_pipeline::{
@@ -43,7 +40,6 @@ use frankenengine_engine::receipt_verifier_pipeline::{
     ReceiptVerifierCliInput, UnifiedReceiptVerificationVerdict, render_verdict_summary,
     verify_receipt_by_id,
 };
-use frankenengine_engine::region_lifecycle::FinalizeResult;
 use frankenengine_engine::runtime_diagnostics_cli::{
     CompatibilityAdvisoryInput, CompatibilityAdvisoryOutput, EvidenceExportFilter,
     OnboardingReadinessClass, OnboardingScorecardInput, OnboardingScorecardOutput,
@@ -591,28 +587,6 @@ struct CompileCommandOutput {
     hashes: CompileArtifactHashes,
     lowering_event_count: usize,
     lowering_witness_count: usize,
-    observability_mode: ObservabilityModeOutput,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct RunCommandOutput {
-    schema_version: String,
-    extension_id: String,
-    trace_id: String,
-    decision_id: String,
-    policy_id: String,
-    source_ingestion: SourceIngestionSummary,
-    lane: String,
-    lane_reason: String,
-    containment_action: String,
-    expected_loss_millionths: i64,
-    execution_value: String,
-    console_output: Vec<frankenengine_engine::baseline_interpreter::ConsoleEntry>,
-    instructions_executed: u64,
-    evidence_entries: usize,
-    cell_events: usize,
-    saga_id: Option<String>,
-    finalize_result: Option<FinalizeResult>,
     observability_mode: ObservabilityModeOutput,
 }
 
@@ -2485,13 +2459,13 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
         for line in lines {
             if line.trim().starts_with("console.log(") {
                 // Extract content between parentheses (basic implementation)
-                if let Some(start) = line.find('(') {
-                    if let Some(end) = line.rfind(')') {
-                        let content = &line[start+1..end];
-                        // Remove quotes and print
-                        let cleaned = content.trim().trim_matches('"').trim_matches('\'');
-                        println!("{}", cleaned);
-                    }
+                if let Some(start) = line.find('(')
+                    && let Some(end) = line.rfind(')')
+                {
+                    let content = &line[start + 1..end];
+                    // Remove quotes and print
+                    let cleaned = content.trim().trim_matches('"').trim_matches('\'');
+                    println!("{}", cleaned);
                 }
             }
         }
@@ -2501,30 +2475,6 @@ fn execute_run(args: RunArgs) -> Result<i32, String> {
     }
 
     Ok(0)
-}
-
-fn format_run_orchestrator_error(error: OrchestratorError) -> String {
-    let classification = classify_run_orchestrator_error(&error);
-    format!("run failed: {error}\nclassification: {classification}")
-}
-
-fn classify_run_orchestrator_error(error: &OrchestratorError) -> &'static str {
-    match error {
-        OrchestratorError::Interpreter(InterpreterError::ModuleResolutionFailed {
-            reason: frankenengine_engine::baseline_interpreter::ModuleResolutionFailureReason::BareSpecifiersNotSupported,
-            ..
-        }) => {
-            "unsupported_runtime_module_resolution"
-        }
-        OrchestratorError::Interpreter(InterpreterError::CapabilityDenied { .. }) => {
-            "capability_denied"
-        }
-        OrchestratorError::Interpreter(_) => "interpreter_runtime_error",
-        OrchestratorError::Parse(_) => "parse_error",
-        OrchestratorError::Lowering(_) => "lowering_error",
-        OrchestratorError::TsNormalization(_) => "source_ingestion_error",
-        _ => "runtime_error",
-    }
 }
 
 fn execute_doctor(args: DoctorArgs) -> Result<i32, String> {
@@ -5451,16 +5401,6 @@ fn default_run_id(prefix: &str) -> String {
     format!("{prefix}-{}", current_unix_ns())
 }
 
-fn cli_source_ingestion_ids(command: &str, source: &str) -> (String, String, String) {
-    let source_hash = ContentHash::compute(source.as_bytes()).to_hex();
-    let trace_suffix = &source_hash[..16];
-    (
-        format!("frankenctl-{command}-source-{trace_suffix}"),
-        format!("frankenctl-{command}-decision-{trace_suffix}"),
-        format!("frankenctl-{command}.ts-ingestion.v1"),
-    )
-}
-
 fn cli_replay_ids(session_id: &str, mode: ReplayMode) -> (String, String, String) {
     (
         format!("frankenctl-replay-trace-{session_id}"),
@@ -5486,37 +5426,6 @@ fn support_bundle_export_observability_mode() -> ObservabilityModeOutput {
         capture_semantics: "lossless_support_bundle_export".to_string(),
         lossless: true,
     }
-}
-
-fn source_ingestion_metadata(
-    source_ingestion: &SourceIngestionSummary,
-) -> BTreeMap<String, String> {
-    let mut metadata = BTreeMap::new();
-    metadata.insert(
-        "source_ingestion.source_language".to_string(),
-        source_ingestion.source_language.as_str().to_string(),
-    );
-    metadata.insert(
-        "source_ingestion.normalization_applied".to_string(),
-        source_ingestion.normalization_applied.to_string(),
-    );
-    metadata.insert(
-        "source_ingestion.original_source_hash".to_string(),
-        source_ingestion.original_source_hash.clone(),
-    );
-    metadata.insert(
-        "source_ingestion.normalized_source_hash".to_string(),
-        source_ingestion.normalized_source_hash.clone(),
-    );
-    metadata.insert(
-        "source_ingestion.ts_decision_count".to_string(),
-        source_ingestion.ts_decision_count.to_string(),
-    );
-    metadata.insert(
-        "source_ingestion.ts_capability_intent_count".to_string(),
-        source_ingestion.ts_capability_intent_count.to_string(),
-    );
-    metadata
 }
 
 fn default_benchmark_out_dir(run_id: &str) -> PathBuf {

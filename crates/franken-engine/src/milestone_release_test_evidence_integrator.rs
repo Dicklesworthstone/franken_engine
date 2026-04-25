@@ -852,6 +852,17 @@ mod tests {
         }
     }
 
+    fn checklist_item<'a>(
+        checklist: &'a ReleaseChecklist,
+        item_id: &str,
+    ) -> Result<&'a ChecklistItem, String> {
+        checklist
+            .items
+            .iter()
+            .find(|item| item.item_id == item_id)
+            .ok_or_else(|| format!("missing checklist item {item_id}"))
+    }
+
     #[test]
     fn integrate_allows_with_complete_signed_inputs() {
         let input = baseline_input(10_000);
@@ -916,7 +927,7 @@ mod tests {
     }
 
     #[test]
-    fn apply_to_release_checklist_marks_bound_items() {
+    fn apply_to_release_checklist_marks_bound_items() -> Result<(), String> {
         let input = baseline_input(40_000);
         let decision =
             integrate_milestone_release_test_evidence(&input, &IntegratorPolicy::default());
@@ -940,15 +951,29 @@ mod tests {
             "security.adversarial_corpus",
             "reproducibility.manifest_json",
         ] {
-            let item = checklist
-                .items
-                .iter()
-                .find(|item| item.item_id == id)
-                // SAFETY: Test-only panic to validate release checklist contains expected bound items
-                .unwrap_or_else(|| panic!("missing checklist item {id}"));
+            let item = checklist_item(&checklist, id)?;
             assert_eq!(item.status, ChecklistItemStatus::Pass);
             assert!(!item.artifact_refs.is_empty());
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn checklist_item_reports_missing_item() {
+        let checklist = ReleaseChecklist {
+            schema_version: "franken-engine.release-checklist.v1".to_string(),
+            release_tag: "v0.9.0-rc1".to_string(),
+            generated_at_utc: "2026-02-27T00:00:00Z".to_string(),
+            trace_id: "trace-frx-20-6".to_string(),
+            decision_id: "decision-frx-20-6".to_string(),
+            policy_id: "policy-frx-20-6-v1".to_string(),
+            items: Vec::new(),
+        };
+
+        let err = checklist_item(&checklist, "security.conformance_suite")
+            .expect_err("missing checklist item should return an error");
+        assert_eq!(err, "missing checklist item security.conformance_suite");
     }
 
     // ── Enrichment tests ──────────────────────────────────────────────

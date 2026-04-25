@@ -802,9 +802,13 @@ impl ScopeChain {
         None
     }
 
-    fn current_mut(&mut self) -> &mut ScopeFrame {
-        // SAFETY: Scope chain is initialized with global frame and never emptied
-        self.frames.last_mut().expect("scope chain never empty")
+    fn current_mut(&mut self) -> Result<&mut ScopeFrame, InterpreterError> {
+        // Scope chain is initialized with global frame and should never be emptied
+        self.frames
+            .last_mut()
+            .ok_or(InterpreterError::InternalError {
+                details: "scope chain unexpectedly empty".to_string(),
+            })
     }
 
     /// Resolve a binding by walking outward from innermost scope.
@@ -1328,6 +1332,8 @@ pub enum InterpreterError {
         requested_depth: usize,
         max_depth: usize,
     },
+    /// Internal invariant violation detected in interpreter state.
+    InternalError { details: String },
     /// Guardplane containment hook requested a fail-closed action.
     ContainmentActionRequested {
         action: String,
@@ -1447,6 +1453,9 @@ impl fmt::Display for InterpreterError {
                 f,
                 "scope depth exceeded: requested depth {requested_depth}, limit {max_depth}"
             ),
+            Self::InternalError { details } => {
+                write!(f, "internal interpreter invariant violated: {details}")
+            }
             Self::ContainmentActionRequested { action, reason } => {
                 if let Some(reason) = reason {
                     write!(f, "containment action requested: {action} ({reason})")
@@ -2140,7 +2149,7 @@ impl InterpreterCore {
 
         let mut replaced = Vec::with_capacity(5);
         {
-            let frame = self.scope_chain.current_mut();
+            let frame = self.scope_chain.current_mut()?;
             for (name, value) in [
                 ("require", require_value),
                 ("exports", Value::Object(exports_object)),
@@ -2158,12 +2167,13 @@ impl InterpreterCore {
             }
         }
         if let Err(err) = self.sync_estimated_memory_bytes() {
-            let current = self.scope_chain.current_mut();
-            for (name, old) in replaced {
-                if let Some(old_binding) = old {
-                    current.bindings.insert(name, old_binding);
-                } else {
-                    current.bindings.remove(&name);
+            if let Ok(current) = self.scope_chain.current_mut() {
+                for (name, old) in replaced {
+                    if let Some(old_binding) = old {
+                        current.bindings.insert(name, old_binding);
+                    } else {
+                        current.bindings.remove(&name);
+                    }
                 }
             }
             self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
@@ -5000,14 +5010,15 @@ impl InterpreterCore {
                     let binding_kind = BindingKind::from_u8(kind)?;
                     let replaced = self
                         .scope_chain
-                        .current_mut()
+                        .current_mut()?
                         .declare(name.clone(), binding_kind);
                     if let Err(err) = self.sync_estimated_memory_bytes() {
-                        let current = self.scope_chain.current_mut();
-                        if let Some(old) = replaced {
-                            current.bindings.insert(name, old);
-                        } else {
-                            current.bindings.remove(&name);
+                        if let Ok(current) = self.scope_chain.current_mut() {
+                            if let Some(old) = replaced {
+                                current.bindings.insert(name, old);
+                            } else {
+                                current.bindings.remove(&name);
+                            }
                         }
                         self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
                         return Err(err);
@@ -19811,7 +19822,7 @@ mod tests {
         core.scope_chain
             .push(core.config.max_scope_depth)
             .expect("serde deserialization should succeed");
-        core.scope_chain.current_mut().bindings.insert(
+        core.scope_chain.current_mut().unwrap().bindings.insert(
             "payload".to_string(),
             ScopeBinding {
                 value: Value::Str("x".repeat(128)),
@@ -19834,7 +19845,7 @@ mod tests {
     fn temporary_scope_clone_budget_counts_existing_snapshot() {
         let config = InterpreterConfig::quickjs_defaults();
         let mut core = InterpreterCore::new(config, "temporary-scope-clone-budget");
-        core.scope_chain.current_mut().bindings.insert(
+        core.scope_chain.current_mut().unwrap().bindings.insert(
             "payload".to_string(),
             ScopeBinding {
                 value: Value::Str("x".repeat(128)),
@@ -20054,7 +20065,7 @@ mod tests {
             }
             let binding_name = format!("var{}", i);
             let binding_value = format!("value{}", i);
-            core.scope_chain.current_mut().bindings.insert(
+            core.scope_chain.current_mut().unwrap().bindings.insert(
                 binding_name.clone(),
                 ScopeBinding {
                     value: Value::Str(binding_value.clone()),

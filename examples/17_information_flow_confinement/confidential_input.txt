@@ -1,0 +1,3 @@
+Customer: Northwind Health
+Classification: Confidential
+Q2 anomaly summary: elevated claims denial rate in region-7 requires manual review before public disclosure.

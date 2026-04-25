@@ -1,0 +1,8 @@
+{
+  "data_hash": "79b452c58da1b4a85212b9cf01cb9bcf2db1ce9358b1cabbbab91a31069cf1c8",
+  "label_before": "Confidential",
+  "label_after": "Public",
+  "authorized_by": "security-review-board@example.franken",
+  "justification": "Aggregated trend is approved for public incident communication after manual review and PII scrubbing.",
+  "signature_hex": "36923a99e8b50fbd8f39ad3a7c8c27c9c13a88eab15f591e7df9332ba6b4f168"
+}

@@ -1,0 +1,6 @@
+<Form
+  name="signup"
+  onSubmit={handle}
+>
+  <Input id="email" />
+</Form>

@@ -164,12 +164,9 @@ impl RolloutController {
             return self.fail_closed(BreachReason::Latency);
         }
 
-        if let Err(reason) =
-            observed_fixed_point_metric(observed, OBS_DETERMINISM, BreachReason::Determinism)
-        {
-            if !matches!(reason, BreachReason::Determinism) {
-                return self.fail_closed(reason);
-            }
+        match observed_fixed_point_metric(observed, OBS_DETERMINISM, BreachReason::Determinism) {
+            Ok(_) | Err(BreachReason::Determinism) => {}
+            Err(reason) => return self.fail_closed(reason),
         }
 
         if guardrails.determinism_required {

@@ -250,7 +250,7 @@ mod tests {
 
     #[test]
     fn claim_ordering_is_deterministic() {
-        let mut claims = vec![
+        let mut claims = [
             ReplicationClaim::new("b-claim", set(&["witness"])),
             ReplicationClaim::new("a-claim", set(&["witness"])),
         ];

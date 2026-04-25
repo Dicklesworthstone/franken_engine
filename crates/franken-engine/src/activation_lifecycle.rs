@@ -897,10 +897,9 @@ impl ActivationLifecycleController {
 
     /// Get the current version of a component.
     pub fn component_version(&self, component_id: &str) -> String {
-        // SAFETY: Caller must ensure component_id exists in the registry
         self.find_component(component_id)
             .map(|c| c.descriptor.version.clone())
-            .expect("serde deserialization should succeed")
+            .unwrap_or_default()
     }
 
     // -- Internal helpers ---------------------------------------------------

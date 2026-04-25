@@ -4718,9 +4718,43 @@ pub fn lower_ir2_to_ir3(
                 Ir1Op::DeleteProperty { .. } => {
                     unreachable!("DeleteProperty not yet implemented in function body lowering");
                 }
-                // Template literals not yet supported
-                Ir1Op::TemplateLiteral { .. } => {
-                    unreachable!("TemplateLiteral not yet implemented in function body lowering");
+                Ir1Op::TemplateLiteral { quasi_count } => {
+                    let total = if *quasi_count == 0 {
+                        0
+                    } else {
+                        (*quasi_count as usize) + (*quasi_count as usize).saturating_sub(1)
+                    };
+                    if total > fn_value_stack.len() {
+                        return Err(LoweringPipelineError::ValueStackUnderflow);
+                    }
+
+                    let mut part_regs: Vec<u32> = Vec::with_capacity(total.min(1024));
+                    for _ in 0..total {
+                        part_regs.push(pop_lowering_value(&mut fn_value_stack)?);
+                    }
+                    part_regs.reverse();
+
+                    let dst = alloc_register(&mut fn_reg);
+                    if part_regs.is_empty() {
+                        ir3.instructions
+                            .push(Ir3Instruction::Move { dst, src: dst });
+                    } else {
+                        let start_reg = fn_reg;
+                        for &src in &part_regs {
+                            let contiguous_dst = alloc_register(&mut fn_reg);
+                            ir3.instructions.push(Ir3Instruction::Move {
+                                dst: contiguous_dst,
+                                src,
+                            });
+                        }
+                        let parts = RegRange {
+                            start: start_reg,
+                            count: part_regs.len() as u32,
+                        };
+                        ir3.instructions
+                            .push(Ir3Instruction::TemplateLiteral { parts, dst });
+                    }
+                    fn_value_stack.push(dst);
                 }
                 // Constructor calls not yet supported
                 Ir1Op::Construct { .. } => {
@@ -9868,6 +9902,46 @@ mod tests {
             .collect();
         let unique_label_count = label_ids.iter().copied().collect::<BTreeSet<_>>().len();
         assert_eq!(label_ids.len(), unique_label_count);
+    }
+
+    #[test]
+    fn lower_arrow_function_template_literal_body_to_ir3() {
+        let ir0 = expr_ir0(Expression::ArrowFunction {
+            params: vec![FunctionParam {
+                pattern: BindingPattern::Identifier("name".into()),
+                span: span(),
+            }],
+            body: ArrowBody::Expression(Box::new(Expression::TemplateLiteral {
+                quasis: vec!["Hello, ".into(), "!".into()],
+                expressions: vec![Expression::Identifier("name".into())],
+            })),
+            is_async: false,
+        });
+        let ctx = LoweringContext::new("trace-gap", "decision-gap", "policy-gap");
+        let output =
+            lower_ir0_to_ir3(&ir0, &ctx).expect("arrow template literal should lower to IR3");
+
+        let (function_index, function_desc) = output
+            .ir3
+            .instructions
+            .iter()
+            .find_map(|instruction| match instruction {
+                Ir3Instruction::CreateClosure { function_index, .. } => output
+                    .ir3
+                    .function_table
+                    .get(function_index.to_owned() as usize)
+                    .map(|desc| (*function_index, desc)),
+                _ => None,
+            })
+            .expect("arrow function should create a deferred closure body");
+
+        assert_eq!(function_index, 1);
+        assert!(
+            output.ir3.instructions[function_desc.entry as usize..]
+                .iter()
+                .any(|instruction| matches!(instruction, Ir3Instruction::TemplateLiteral { .. })),
+            "arrow function body should retain TemplateLiteral lowering"
+        );
     }
 
     #[test]

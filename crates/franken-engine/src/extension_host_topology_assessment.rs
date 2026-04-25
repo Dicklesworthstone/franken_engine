@@ -308,8 +308,10 @@ impl TopologyPromotionAssessment {
         };
 
         // Use canonical JSON serialization to avoid boundary collisions
-        let canonical_bytes =
-            serde_json::to_vec(&hashable).expect("Serialization of assessment should not fail");
+        let canonical_bytes = match serde_json::to_vec(&hashable) {
+            Ok(bytes) => bytes,
+            Err(_) => return "fallback_hash_serialization_failed".to_string(),
+        };
 
         ContentHash::compute(&canonical_bytes).to_hex()
     }

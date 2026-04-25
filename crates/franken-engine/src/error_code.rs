@@ -923,6 +923,7 @@ impl HasErrorCode for GcError {
             | GcError::DuplicateHeap { .. }
             | GcError::ObjectNotFound { .. }
             | GcError::AllocationFailed { .. }
+            | GcError::CollectionFailed { .. }
             | GcError::DomainError(_) => FrankenErrorCode::GarbageCollectionError,
         }
     }

@@ -1253,12 +1253,9 @@ mod tests {
     fn default_spec_all_telemetry_refs_valid() {
         let spec = SemanticTwinSpecification::frx_19_1_default().expect("spec");
         for variable in &spec.state_variables {
-            variable
-                .telemetry
-                .validate()
-                // SAFETY: Test-only panic to validate variable telemetry in twin state transition
-                // expects valid telemetry from test data construction
-                .unwrap_or_else(|e| panic!("variable {} telemetry invalid: {}", variable.id, e));
+            if let Err(error) = variable.telemetry.validate() {
+                panic!("variable {} telemetry invalid: {}", variable.id, error);
+            }
         }
     }
 

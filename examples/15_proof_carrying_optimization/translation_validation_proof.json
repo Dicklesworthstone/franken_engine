@@ -1,0 +1,8 @@
+{
+  "opt_id": "opt-cf-001",
+  "before_hash": "a1b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef123456",
+  "after_hash": "e5f6g7h8i9j01234567890abcdef123456789012345678abcdef1234567890ab",
+  "equivalence_witness": "sat_proof_hash_xyz",
+  "signature_hex": "7b8c9d0e1f234567890abcdef12345678901234567890123456789abcdef1234",
+  "rollback_trigger_threshold": 1000
+}

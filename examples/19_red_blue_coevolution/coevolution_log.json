@@ -1,0 +1,88 @@
+{
+  "coevolution_session": "franken_redblue_001",
+  "session_start": "2026-04-25T01:00:00Z",
+  "rounds": [
+    {
+      "round": 1,
+      "timestamp": "2026-04-25T01:15:23Z",
+      "red_adaptation": {
+        "evolved_attack": "prototype_pollution_v2",
+        "bypass_technique": "constructor_shadowing",
+        "success_rate": 0.73
+      },
+      "blue_countermeasure": {
+        "defense_upgrade": "immutable_prototype_enforcement",
+        "mitigation_effectiveness": 0.91,
+        "deployment_time_ms": 45
+      },
+      "signature_hex": "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2"
+    },
+    {
+      "round": 2,
+      "timestamp": "2026-04-25T01:32:47Z",
+      "red_adaptation": {
+        "evolved_attack": "timing_oracle_precision",
+        "bypass_technique": "high_resolution_timer_abuse",
+        "success_rate": 0.84
+      },
+      "blue_countermeasure": {
+        "defense_upgrade": "timer_resolution_fuzzing",
+        "mitigation_effectiveness": 0.87,
+        "deployment_time_ms": 23
+      },
+      "signature_hex": "b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4"
+    },
+    {
+      "round": 3,
+      "timestamp": "2026-04-25T01:48:12Z",
+      "red_adaptation": {
+        "evolved_attack": "memory_corruption_amplification",
+        "bypass_technique": "heap_spray_with_tag_confusion",
+        "success_rate": 0.67
+      },
+      "blue_countermeasure": {
+        "defense_upgrade": "adaptive_heap_randomization",
+        "mitigation_effectiveness": 0.94,
+        "deployment_time_ms": 67
+      },
+      "signature_hex": "c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6"
+    },
+    {
+      "round": 4,
+      "timestamp": "2026-04-25T02:05:38Z",
+      "red_adaptation": {
+        "evolved_attack": "capability_token_prediction",
+        "bypass_technique": "entropy_source_analysis",
+        "success_rate": 0.52
+      },
+      "blue_countermeasure": {
+        "defense_upgrade": "quantum_entropy_injection",
+        "mitigation_effectiveness": 0.99,
+        "deployment_time_ms": 12
+      },
+      "signature_hex": "d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8"
+    },
+    {
+      "round": 5,
+      "timestamp": "2026-04-25T02:21:54Z",
+      "red_adaptation": {
+        "evolved_attack": "multi_vector_coordination",
+        "bypass_technique": "synchronized_exploit_chaining",
+        "success_rate": 0.31
+      },
+      "blue_countermeasure": {
+        "defense_upgrade": "holistic_threat_correlation",
+        "mitigation_effectiveness": 0.97,
+        "deployment_time_ms": 89
+      },
+      "signature_hex": "e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0"
+    }
+  ],
+  "summary": {
+    "total_rounds": 5,
+    "red_team_avg_success": 0.614,
+    "blue_team_avg_effectiveness": 0.936,
+    "average_response_time_ms": 47.2,
+    "coevolution_trend": "blue_advantage_increasing"
+  }
+}

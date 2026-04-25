@@ -1,0 +1,29 @@
+[
+  {
+    "attack_id": "atk_001_code_injection",
+    "vector_type": "dynamic_eval",
+    "payload_hash": "a7b4c8e9f2d1a3b5c6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9",
+    "description": "Dynamic JavaScript evaluation bypass through prototype pollution",
+    "severity": "critical",
+    "target_surface": "runtime_eval_gates",
+    "evasion_technique": "prototype_chain_manipulation"
+  },
+  {
+    "attack_id": "atk_002_capability_leak",
+    "vector_type": "permission_escalation",
+    "payload_hash": "d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5",
+    "description": "Capability token extraction via timing side-channel",
+    "severity": "high",
+    "target_surface": "capability_handoff_protocol",
+    "evasion_technique": "timing_oracle_analysis"
+  },
+  {
+    "attack_id": "atk_003_quarantine_escape",
+    "vector_type": "isolation_bypass",
+    "payload_hash": "b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3",
+    "description": "Cross-boundary communication through shared memory corruption",
+    "severity": "critical",
+    "target_surface": "isolation_enforcement_boundary",
+    "evasion_technique": "memory_layout_exploitation"
+  }
+]

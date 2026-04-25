@@ -1,0 +1,46 @@
+[
+  {
+    "defense_id": "def_001_eval_hardening",
+    "counters_attack": "atk_001_code_injection",
+    "mitigation_type": "static_analysis_gate",
+    "evidence_hash": "e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9",
+    "description": "AST-level eval detection with prototype pollution resistance",
+    "implementation": "pre_execution_ast_scan",
+    "confidence_level": 0.96,
+    "mitigation_evidence": {
+      "test_vectors_passed": 247,
+      "false_positive_rate": 0.002,
+      "detection_coverage": ["eval", "Function", "setTimeout", "prototype_assign"]
+    }
+  },
+  {
+    "defense_id": "def_002_capability_rotation",
+    "counters_attack": "atk_002_capability_leak",
+    "mitigation_type": "temporal_token_rotation",
+    "evidence_hash": "f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2",
+    "description": "Time-bounded capability tokens with jittered rotation",
+    "implementation": "cryptographic_token_lifecycle",
+    "confidence_level": 0.92,
+    "mitigation_evidence": {
+      "rotation_frequency_ms": 150,
+      "timing_variance_injection": "±25ms",
+      "successful_leak_attempts": 0,
+      "token_entropy_bits": 256
+    }
+  },
+  {
+    "defense_id": "def_003_memory_tagging",
+    "counters_attack": "atk_003_quarantine_escape",
+    "mitigation_type": "hardware_memory_tagging",
+    "evidence_hash": "c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6",
+    "description": "Memory region tagging with cross-boundary violation detection",
+    "implementation": "arm_mte_isolation_enforcement",
+    "confidence_level": 0.98,
+    "mitigation_evidence": {
+      "isolation_violations_detected": 15342,
+      "false_escape_attempts": 0,
+      "memory_overhead_percent": 3.7,
+      "hardware_support_required": "ARMv8.5-A MTE"
+    }
+  }
+]

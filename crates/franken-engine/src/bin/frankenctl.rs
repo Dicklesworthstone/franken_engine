@@ -59,6 +59,7 @@ use frankenengine_engine::third_party_verifier::{
 use frankenengine_engine::ts_normalization::{
     SourceIngestionSummary, prepare_source_entry_for_public_entrypoints,
 };
+use frankenengine_engine::HybridRouter;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 
@@ -2423,56 +2424,14 @@ fn execute_compile(args: CompileArgs) -> Result<i32, String> {
 }
 
 fn execute_run(args: RunArgs) -> Result<i32, String> {
-    // Step 1: Read file content
     let source = fs::read_to_string(&args.input)
         .map_err(|error| format!("failed to read source `{}`: {error}", args.input.display()))?;
-    let source_label = args.input.display().to_string();
+    let mut router = HybridRouter::default();
+    let outcome = router
+        .eval(source.as_str())
+        .map_err(|error| format!("run failed for `{}`: {error}", args.input.display()))?;
 
-    // Step 2: Parse JS source into AST using CanonicalEs2020Parser
-    let parser_options = ParserOptions::default();
-    let parser = CanonicalEs2020Parser;
-    let (parse_result, _parse_event_ir) = parser.parse_with_event_ir(
-        source.clone(),
-        args.parse_goal,
-        &parser_options,
-    );
-    let syntax_tree = parse_result.map_err(|error| format!("parse failed: {error}"))?;
-
-    // Step 3: Create IR0Module and lower to IR3
-    let _ir0 = Ir0Module::from_syntax_tree(syntax_tree, &source_label);
-    let _lowering_output = lower_ir0_to_ir3(
-        &_ir0,
-        &LoweringContext::new(
-            format!("run-{}", source_label),
-            format!("decision-run-{}", source_label),
-            "run-policy".to_string(),
-        ),
-    ).map_err(|error| format!("lowering failed: {error}"))?;
-
-    // Step 4: For MVP, implement minimal console.log detection
-    // TODO: Add full interpreter execution once API is clarified
-
-    // Check if source contains console.log and extract the argument
-    if source.contains("console.log") {
-        // Simple regex-like extraction for MVP
-        let lines: Vec<&str> = source.lines().collect();
-        for line in lines {
-            if line.trim().starts_with("console.log(") {
-                // Extract content between parentheses (basic implementation)
-                if let Some(start) = line.find('(')
-                    && let Some(end) = line.rfind(')')
-                {
-                    let content = &line[start + 1..end];
-                    // Remove quotes and print
-                    let cleaned = content.trim().trim_matches('"').trim_matches('\'');
-                    println!("{}", cleaned);
-                }
-            }
-        }
-    } else {
-        // Successfully parsed and lowered, but no console.log found
-        println!("Code executed successfully (no console output)");
-    }
+    println!("{}", outcome.value);
 
     Ok(0)
 }
@@ -7398,7 +7357,7 @@ mod tests {
         ];
         let result = parse_command(&args);
         assert!(result.is_err());
-        let error = result.err().expect("serde deserialization should succeed");
+        let error = result.expect_err("serde deserialization should succeed");
         assert!(error.contains("unknown zero-placeholder flag `--unknown-flag`"));
     }
 
@@ -7412,7 +7371,7 @@ mod tests {
         ];
         let result = parse_command(&args);
         assert!(result.is_err());
-        let error = result.err().expect("serde deserialization should succeed");
+        let error = result.expect_err("serde deserialization should succeed");
         assert!(error.contains("runtime diagnostics requires --input <file>"));
     }
 }

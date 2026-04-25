@@ -2,10 +2,13 @@
 
 set -euo pipefail
 
+# Get the directory where this script is located
+SCRIPT_DIR="$(dirname "$0")"
+
 echo "Verifying Red/Blue Coevolution Signatures..."
 
 # Extract all signature_hex values from coevolution_log.json
-signatures=$(jq -r '.rounds[].signature_hex' coevolution_log.json)
+signatures=$(jq -r '.rounds[].signature_hex' "$SCRIPT_DIR/coevolution_log.json")
 
 # Count total signatures
 total_signatures=$(echo "$signatures" | wc -l)

@@ -1,0 +1,4 @@
+{
+  "latency_p99_micros": 1500,
+  "ops_per_sec": 100000
+}

@@ -1,0 +1,54 @@
+artifacts/frankenctl_cli_workflow/20260425T120000Z/
+├── commands.txt
+├── events.jsonl
+├── run_manifest.json
+├── step_logs/
+│   └── step_000.log
+├── support_bundle/
+│   ├── frankenctl_doctor_report.json
+│   ├── index.json
+│   ├── onboarding_scorecard.json
+│   ├── preflight_report.json
+│   └── rollout_decision_artifact.json
+└── trace_ids.json
+
+Example file contents:
+
+=== trace_ids.json ===
+[
+  "trace-frankenctl-cli-workflow-20260425T120000Z"
+]
+
+=== run_manifest.json (excerpt) ===
+{
+  "schema_version": "franken-engine.frankenctl.cli-workflow.v1",
+  "workflow_id": "frankenctl-cli-workflow-20260425T120000Z",
+  "started_at": "2026-04-25T12:00:00Z",
+  "completed_at": "2026-04-25T12:05:23Z",
+  "mode": "ci",
+  "artifacts": {
+    "events": "artifacts/frankenctl_cli_workflow/20260425T120000Z/events.jsonl",
+    "commands": "artifacts/frankenctl_cli_workflow/20260425T120000Z/commands.txt",
+    "support_bundle": "artifacts/frankenctl_cli_workflow/20260425T120000Z/support_bundle/"
+  },
+  "steps_completed": 7,
+  "success": true
+}
+
+=== events.jsonl (sample lines) ===
+{"timestamp":"2026-04-25T12:00:01Z","level":"info","component":"workflow","event":"step_started","step":0}
+{"timestamp":"2026-04-25T12:00:02Z","level":"info","component":"frankenctl","event":"compile_invoked","input":"sample.js"}
+{"timestamp":"2026-04-25T12:00:05Z","level":"info","component":"frankenctl","event":"compile_completed","artifact_path":"output.json"}
+
+=== support_bundle/index.json (excerpt) ===
+{
+  "bundle_id": "support-bundle-20260425T120000Z",
+  "generated_at": "2026-04-25T12:05:23Z",
+  "components": [
+    "preflight_report.json",
+    "onboarding_scorecard.json",
+    "rollout_decision_artifact.json",
+    "frankenctl_doctor_report.json"
+  ],
+  "status": "complete"
+}

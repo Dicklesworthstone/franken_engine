@@ -502,7 +502,7 @@ impl GcCollector {
                     return Err(GcError::AllocationFailed {
                         extension_id: extension_id.to_string(),
                         size: size_bytes,
-                        reason: Some(format!("Budget exceeded: {:?}", reason)),
+                        reason: Some(format!("Budget exceeded: {}", reason)),
                     });
                 }
                 _ => {

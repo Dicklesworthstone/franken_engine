@@ -1,0 +1,75 @@
+{
+  "scenario": "resource budget exhaustion conceptual contract",
+  "mode": "static_contract_demo",
+  "workload_id": "demo:budget-exhaustion",
+  "bounded_budget_dimensions": [
+    "cpu_time",
+    "heap_memory"
+  ],
+  "api_gap_follow_up_bead": "bd-g61cl",
+  "expected_sequence": [
+    "throttle",
+    "sandbox",
+    "suspend",
+    "terminate"
+  ],
+  "events": [
+    {
+      "timestamp_ns": 1000000000,
+      "action": "throttle",
+      "source_module": "queueing_admission_control",
+      "basis": {
+        "stage": "module_load",
+        "admission_decision": "queue",
+        "queue_position": 3,
+        "utilization_millionths": 880000,
+        "mapping_rationale": "Queueing under sustained overload is the deterministic throttle boundary."
+      }
+    },
+    {
+      "timestamp_ns": 1150000000,
+      "action": "sandbox",
+      "source_module": "resource_certificate_governance",
+      "basis": {
+        "governance_verdict": "multiple_violations",
+        "certificates": [
+          {
+            "dimension": "cpu_time",
+            "certified_budget": 100000,
+            "measured_usage": 112000,
+            "utilisation_millionths": 1120000
+          },
+          {
+            "dimension": "heap_memory",
+            "certified_budget": 67108864,
+            "measured_usage": 75497472,
+            "utilisation_millionths": 1125000
+          }
+        ],
+        "mapping_rationale": "Resource-governance failure is the point where the runtime should isolate the extension instead of only slowing it."
+      }
+    },
+    {
+      "timestamp_ns": 1300000000,
+      "action": "suspend",
+      "source_module": "runtime_decision_theory",
+      "basis": {
+        "lane_action": "suspend_adaptive",
+        "demotion_reason": "budget_exhausted",
+        "budget_remaining_millionths": 0,
+        "mapping_rationale": "Budget exhaustion already has a direct deterministic suspend surface in DecisionContext."
+      }
+    },
+    {
+      "timestamp_ns": 1450000000,
+      "action": "terminate",
+      "source_module": "conceptual_operator_contract",
+      "basis": {
+        "status": "api_gap",
+        "follow_up_bead": "bd-g61cl",
+        "missing_surface": "No first-class public API currently escalates the exhausted extension from suspend to deterministic terminate with a replay-stable artifact.",
+        "mapping_rationale": "Terminate is the intended terminal enforcement step once repeated exhaustion and governance failure persist."
+      }
+    }
+  ]
+}

@@ -7,8 +7,10 @@
 
 use std::collections::BTreeMap;
 
+use serde::{Deserialize, Serialize};
+
 /// A compatibility advisory with human-readable message and remediation guidance.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Advisory {
     /// Human-readable advisory message explaining the divergence
     pub message: String,

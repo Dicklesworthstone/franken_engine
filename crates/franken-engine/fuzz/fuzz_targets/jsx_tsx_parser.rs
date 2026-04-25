@@ -1,12 +1,81 @@
 #![no_main]
 
+use frankenengine_engine::ast::SourceSpan;
 use frankenengine_engine::jsx_tsx_parser::{
-    JsxParseError, JsxParseResult, JsxParserConfig, JsxRuntimeMode, parse_jsx,
+    JsxChild, JsxElement, JsxFragment, JsxNode, JsxParseError, JsxParseResult, JsxParserConfig,
+    JsxRuntimeMode, parse_jsx,
 };
 use libfuzzer_sys::fuzz_target;
 
+/// Span must satisfy: start_offset <= end_offset AND start_line <= end_line
+/// AND when start_line == end_line, start_column <= end_column.
+fn check_span(span: &SourceSpan, source_len: u64) {
+    assert!(
+        span.start_offset <= span.end_offset,
+        "Span start_offset > end_offset: {:?}",
+        span
+    );
+    assert!(
+        span.end_offset <= source_len,
+        "Span end_offset {} exceeds source length {}",
+        span.end_offset,
+        source_len
+    );
+    assert!(
+        span.start_line <= span.end_line,
+        "Span start_line > end_line: {:?}",
+        span
+    );
+    if span.start_line == span.end_line {
+        assert!(
+            span.start_column <= span.end_column,
+            "Single-line span has start_column > end_column: {:?}",
+            span
+        );
+    }
+    // Lines and columns are 1-based, never zero.
+    assert!(span.start_line >= 1, "Span start_line must be 1-based");
+    assert!(span.start_column >= 1, "Span start_column must be 1-based");
+}
+
+/// Recursively check every span on a JsxNode and all descendants.
+fn walk_node_spans(node: &JsxNode, source_len: u64) {
+    check_span(node.span(), source_len);
+    match node {
+        JsxNode::Element(el) => walk_element_spans(el, source_len),
+        JsxNode::Fragment(frag) => walk_fragment_spans(frag, source_len),
+    }
+}
+
+fn walk_element_spans(el: &JsxElement, source_len: u64) {
+    check_span(&el.span, source_len);
+    check_span(el.name.span(), source_len);
+    for attr in &el.attributes {
+        check_span(attr.span(), source_len);
+    }
+    for child in &el.children {
+        walk_child_spans(child, source_len);
+    }
+}
+
+fn walk_fragment_spans(frag: &JsxFragment, source_len: u64) {
+    check_span(&frag.span, source_len);
+    for child in &frag.children {
+        walk_child_spans(child, source_len);
+    }
+}
+
+fn walk_child_spans(child: &JsxChild, source_len: u64) {
+    check_span(child.span(), source_len);
+    match child {
+        JsxChild::Text { .. } | JsxChild::ExpressionContainer { .. } => {}
+        JsxChild::Element(el) => walk_element_spans(el, source_len),
+        JsxChild::Fragment(frag) => walk_fragment_spans(frag, source_len),
+    }
+}
+
 /// Assert structural invariants that hold for every Ok/Err the parser returns.
-fn check_result_invariants(result: &Result<JsxParseResult, JsxParseError>) {
+fn check_result_invariants(source_len: u64, result: &Result<JsxParseResult, JsxParseError>) {
     match result {
         Ok(parse_result) => {
             // Successful parse must round-trip through JSON without panicking.
@@ -14,6 +83,16 @@ fn check_result_invariants(result: &Result<JsxParseResult, JsxParseError>) {
                 .expect("JsxParseResult should always serialize");
             let _deserialized: serde_json::Value = serde_json::from_str(&serialized)
                 .expect("Serialized JsxParseResult should deserialize");
+
+            // Every span on every node must be well-formed and inside the source.
+            walk_node_spans(&parse_result.node, source_len);
+
+            // Diagnostics on a successful parse should still have well-formed spans.
+            for diag in &parse_result.diagnostics {
+                if let Some(span) = &diag.span {
+                    check_span(span, source_len);
+                }
+            }
         }
         Err(err) => {
             // Error must round-trip through JSON without panicking.
@@ -27,12 +106,18 @@ fn check_result_invariants(result: &Result<JsxParseResult, JsxParseError>) {
                 "JsxParseError Display should produce a non-empty message"
             );
 
-            // Structural invariant: FailClosed must carry at least one diagnostic.
+            // Structural invariant: FailClosed must carry at least one diagnostic
+            // and every diagnostic span must be well-formed.
             if let JsxParseError::FailClosed { diagnostics } = err {
                 assert!(
                     !diagnostics.is_empty(),
                     "FailClosed errors must carry at least one diagnostic"
                 );
+                for diag in diagnostics {
+                    if let Some(span) = &diag.span {
+                        check_span(span, source_len);
+                    }
+                }
             }
         }
     }
@@ -99,11 +184,14 @@ fuzz_target!(|data: &[u8]| {
         ("namespaced", &config_namespaced),
     ];
 
+    let source_len = source.len() as u64;
+
     // Invariant: parsing never panics; serde and Display contracts hold; FailClosed carries
-    // diagnostics; and the same input + same config produces byte-identical output across reparses.
+    // diagnostics; spans are well-formed and inside the source; and the same input + same
+    // config produces byte-identical output across reparses.
     for (_label, config) in &configs {
         let result = parse_jsx(&source, config);
-        check_result_invariants(&result);
+        check_result_invariants(source_len, &result);
         check_determinism(&source, config, &result);
     }
 
@@ -115,7 +203,7 @@ fuzz_target!(|data: &[u8]| {
             ..JsxParserConfig::default()
         };
         let result_shallow = parse_jsx(&source, &config_shallow);
-        check_result_invariants(&result_shallow);
+        check_result_invariants(source_len, &result_shallow);
         check_determinism(&source, &config_shallow, &result_shallow);
     }
 });

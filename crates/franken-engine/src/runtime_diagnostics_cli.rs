@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
+use crate::compatibility_advisory::Advisory;
 use crate::containment_executor::{ContainmentReceipt, ContainmentState};
 use crate::evidence_ledger::{DecisionType, EvidenceEntry};
 use crate::expected_loss_selector::ContainmentAction;
@@ -1700,6 +1701,75 @@ pub fn render_compatibility_advisory_summary(output: &CompatibilityAdvisoryOutpu
     }
 
     lines.join("\n")
+}
+
+// ---------------------------------------------------------------------------
+// Compatibility-advisory bridge (RGC-908): adapts standalone `Advisory` values
+// from `crate::compatibility_advisory` into onboarding-scorecard signals so the
+// rollout-decision artifact can fuse them alongside the rich
+// `CompatibilityAdvisoryRecord` path. Bead: bd-1lsy.10.8.
+// ---------------------------------------------------------------------------
+
+/// Deterministic input for adapting a free-form compatibility advisory into a
+/// rollout-grade onboarding scorecard signal.
+///
+/// Carries the metadata (severity, divergence tag, reproducible command,
+/// evidence links) that `Advisory` does not — so the produced signal matches
+/// the contract of [`OnboardingScorecardSignal`] and feeds cleanly into
+/// [`build_rollout_decision_artifact`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompatibilityAdvisoryAdaptInput {
+    /// Stable identifier for the divergence (e.g. `module_resolution`).
+    pub divergence_tag: String,
+    /// Free-form advisory message + remediation produced by `AdvisoryBuilder`.
+    pub advisory: Advisory,
+    /// Coarse severity used for ordering and gating.
+    pub severity: EvidenceSeverity,
+    /// Replay command operators can run to reproduce the divergence.
+    pub reproducible_command: String,
+    /// Stable evidence URIs (file paths, commit hashes, log links).
+    pub evidence_links: Vec<String>,
+}
+
+/// Bridge a [`compatibility_advisory::Advisory`] into a rollout-grade
+/// [`OnboardingScorecardSignal`].
+///
+/// Determinism: same `CompatibilityAdvisoryAdaptInput` always yields the same
+/// signal. The `signal_id` is `compat-advisory-<divergence_tag>` so multiple
+/// advisories sharing a tag merge in
+/// [`build_rollout_decision_artifact`]. Owner routing matches the existing
+/// `compatibility_advisory` source (`compatibility-lane`).
+pub fn signal_from_compatibility_advisory(
+    input: &CompatibilityAdvisoryAdaptInput,
+) -> OnboardingScorecardSignal {
+    let signal_id = format!("compat-advisory-{}", input.divergence_tag);
+    OnboardingScorecardSignal {
+        signal_id,
+        source: "compatibility_advisory".to_string(),
+        severity: input.severity,
+        summary: input.advisory.message.clone(),
+        remediation: input.advisory.remediation.clone(),
+        reproducible_command: input.reproducible_command.clone(),
+        evidence_links: input.evidence_links.clone(),
+        owner_hint: Some(default_owner_for_source(
+            "compatibility_advisory",
+            input.severity,
+        )),
+    }
+}
+
+/// Bridge a batch of [`compatibility_advisory::Advisory`] adapt inputs into
+/// onboarding scorecard signals, sorted deterministically by signal_id so the
+/// rollout-decision artifact merge order is stable across input shuffles.
+pub fn signals_from_compatibility_advisories(
+    inputs: &[CompatibilityAdvisoryAdaptInput],
+) -> Vec<OnboardingScorecardSignal> {
+    let mut signals: Vec<OnboardingScorecardSignal> = inputs
+        .iter()
+        .map(signal_from_compatibility_advisory)
+        .collect();
+    signals.sort_by(|left, right| left.signal_id.cmp(&right.signal_id));
+    signals
 }
 
 /// Build a deterministic onboarding scorecard from preflight + external signals.
@@ -5381,5 +5451,195 @@ mod tests {
         let summary = render_rollout_decision_artifact_summary(&artifact);
         assert!(summary.contains("missing_fields:"));
         assert!(summary.contains("mandatory_fields_valid: false"));
+    }
+
+    // ── Compatibility-advisory bridge (RGC-908 / bd-1lsy.10.8) ──────────────
+
+    fn sample_advisory_adapt_input(
+        tag: &str,
+        severity: EvidenceSeverity,
+    ) -> CompatibilityAdvisoryAdaptInput {
+        let advisory = crate::compatibility_advisory::AdvisoryBuilder::new()
+            .with_divergence(tag)
+            .with_context("severity", "high")
+            .build();
+        CompatibilityAdvisoryAdaptInput {
+            divergence_tag: tag.to_string(),
+            advisory,
+            severity,
+            reproducible_command: format!("scripts/replay_advisory.sh {tag}"),
+            evidence_links: vec![format!("artifacts/advisory/{tag}.json")],
+        }
+    }
+
+    #[test]
+    fn signal_from_compatibility_advisory_carries_message_and_remediation() {
+        let input = sample_advisory_adapt_input("module_resolution", EvidenceSeverity::Warning);
+        let signal = signal_from_compatibility_advisory(&input);
+
+        assert_eq!(signal.signal_id, "compat-advisory-module_resolution");
+        assert_eq!(signal.source, "compatibility_advisory");
+        assert_eq!(signal.severity, EvidenceSeverity::Warning);
+        assert_eq!(signal.summary, input.advisory.message);
+        assert_eq!(signal.remediation, input.advisory.remediation);
+        assert_eq!(
+            signal.reproducible_command,
+            "scripts/replay_advisory.sh module_resolution"
+        );
+        assert_eq!(
+            signal.evidence_links,
+            vec!["artifacts/advisory/module_resolution.json".to_string()]
+        );
+        assert_eq!(signal.owner_hint.as_deref(), Some("compatibility-lane"));
+    }
+
+    #[test]
+    fn signal_from_compatibility_advisory_is_deterministic() {
+        let input = sample_advisory_adapt_input("buffer_encoding", EvidenceSeverity::Critical);
+        let a = signal_from_compatibility_advisory(&input);
+        let b = signal_from_compatibility_advisory(&input);
+        assert_eq!(a, b, "bridge must be byte-identical for the same input");
+    }
+
+    #[test]
+    fn signals_from_compatibility_advisories_sorts_by_signal_id() {
+        let inputs = vec![
+            sample_advisory_adapt_input("stream_behavior", EvidenceSeverity::Info),
+            sample_advisory_adapt_input("async_hooks", EvidenceSeverity::Warning),
+            sample_advisory_adapt_input("module_resolution", EvidenceSeverity::Critical),
+        ];
+        let signals = signals_from_compatibility_advisories(&inputs);
+        let ids: Vec<&str> = signals.iter().map(|s| s.signal_id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec![
+                "compat-advisory-async_hooks",
+                "compat-advisory-module_resolution",
+                "compat-advisory-stream_behavior",
+            ],
+            "batch bridge must order by signal_id for stable downstream merge"
+        );
+    }
+
+    #[test]
+    fn rollout_decision_artifact_consumes_bridged_compatibility_advisories() {
+        let mut input = sample_input();
+        input.evidence_entries.clear();
+        input.containment_receipts.clear();
+        input
+            .hostcall_records
+            .retain(|record| matches!(record.record.result_status, HostcallResult::Success));
+        for sample in &mut input.runtime_state.gc_pressure {
+            sample.used_bytes = sample.used_bytes.min(sample.budget_bytes);
+        }
+        for lane in &mut input.runtime_state.scheduler_lanes {
+            lane.tasks_timed_out = 0;
+            lane.queue_depth = 0;
+        }
+
+        let preflight = run_preflight_doctor(
+            &input,
+            EvidenceExportFilter::default(),
+            SupportBundleRedactionPolicy::default(),
+        );
+        let onboarding = build_onboarding_scorecard(&OnboardingScorecardInput {
+            workload_id: "pkg/bridged-ext".to_string(),
+            package_name: "bridged-ext".to_string(),
+            target_platforms: vec!["linux-x64".to_string()],
+            preflight,
+            external_signals: Vec::new(),
+        });
+
+        let bridged = signals_from_compatibility_advisories(&[
+            sample_advisory_adapt_input("module_resolution", EvidenceSeverity::Critical),
+            sample_advisory_adapt_input("buffer_encoding", EvidenceSeverity::Warning),
+        ]);
+
+        let artifact = build_rollout_decision_artifact(&RolloutDecisionArtifactInput {
+            onboarding_scorecard: onboarding,
+            compatibility_advisories: bridged.clone(),
+            platform_matrix_signals: Vec::new(),
+        });
+
+        // The critical compatibility-advisory signal must drive a non-promote
+        // recommendation: the build pre-cleanup forces all other dimensions
+        // clean, so the only critical evidence is the bridged advisory.
+        assert_ne!(
+            artifact.recommendation,
+            RolloutRecommendation::Promote,
+            "critical bridged advisory must block straight promotion"
+        );
+        // Both bridged signals must surface in the merged set.
+        let bridged_ids: BTreeSet<&str> = artifact
+            .merged_signals
+            .iter()
+            .filter(|s| s.source == "compatibility_advisory")
+            .map(|s| s.signal_id.as_str())
+            .collect();
+        assert!(bridged_ids.contains("compat-advisory-module_resolution"));
+        assert!(bridged_ids.contains("compat-advisory-buffer_encoding"));
+        // Bridged evidence links must be reachable from the artifact.
+        assert!(
+            artifact
+                .evidence_links
+                .iter()
+                .any(|link| link == "artifacts/advisory/module_resolution.json")
+        );
+    }
+
+    #[test]
+    fn rollout_decision_artifact_is_byte_identical_for_shuffled_bridged_inputs() {
+        let mut input = sample_input();
+        input.evidence_entries.clear();
+        input.containment_receipts.clear();
+        input
+            .hostcall_records
+            .retain(|record| matches!(record.record.result_status, HostcallResult::Success));
+        for sample in &mut input.runtime_state.gc_pressure {
+            sample.used_bytes = sample.used_bytes.min(sample.budget_bytes);
+        }
+        for lane in &mut input.runtime_state.scheduler_lanes {
+            lane.tasks_timed_out = 0;
+            lane.queue_depth = 0;
+        }
+
+        let preflight = run_preflight_doctor(
+            &input,
+            EvidenceExportFilter::default(),
+            SupportBundleRedactionPolicy::default(),
+        );
+        let onboarding = build_onboarding_scorecard(&OnboardingScorecardInput {
+            workload_id: "pkg/bridged-ext".to_string(),
+            package_name: "bridged-ext".to_string(),
+            target_platforms: vec!["linux-x64".to_string()],
+            preflight,
+            external_signals: Vec::new(),
+        });
+
+        let ordered = signals_from_compatibility_advisories(&[
+            sample_advisory_adapt_input("async_hooks", EvidenceSeverity::Warning),
+            sample_advisory_adapt_input("module_resolution", EvidenceSeverity::Critical),
+            sample_advisory_adapt_input("stream_behavior", EvidenceSeverity::Info),
+        ]);
+        let mut shuffled = ordered.clone();
+        shuffled.reverse();
+
+        let a = build_rollout_decision_artifact(&RolloutDecisionArtifactInput {
+            onboarding_scorecard: onboarding.clone(),
+            compatibility_advisories: ordered,
+            platform_matrix_signals: Vec::new(),
+        });
+        let b = build_rollout_decision_artifact(&RolloutDecisionArtifactInput {
+            onboarding_scorecard: onboarding,
+            compatibility_advisories: shuffled,
+            platform_matrix_signals: Vec::new(),
+        });
+
+        // Determinism contract: input order must not affect the artifact.
+        assert_eq!(a.recommendation, b.recommendation);
+        assert_eq!(a.merged_signals, b.merged_signals);
+        assert_eq!(a.evidence_links, b.evidence_links);
+        assert_eq!(a.reproducible_commands, b.reproducible_commands);
+        assert_eq!(a.rationale, b.rationale);
     }
 }

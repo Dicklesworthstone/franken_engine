@@ -13,10 +13,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use crate::alloc_domain::{AllocDomainError, AllocationDomain, DomainRegistry};
-use crate::resource_certificate_consumer::{
-    BudgetEnforcementPolicy, BudgetEnforcer, EnforcedDimension, EnforcementScope,
-};
-use crate::security_epoch::SecurityEpoch;
+use crate::resource_certificate_consumer::{BudgetEnforcer, EnforcedDimension, EnforcementScope};
 
 // ---------------------------------------------------------------------------
 // GcObjectId — unique identity for managed objects
@@ -468,8 +465,13 @@ impl GcCollector {
         // Check budget enforcement before allocation
         if let Some(ref mut enforcer) = self.budget_enforcer {
             let usage_deltas = [(EnforcedDimension::HeapMemory, size_bytes as i64)];
-            let receipt =
-                enforcer.enforce(extension_id, EnforcementScope::GcAllocation, &usage_deltas);
+            let receipt = enforcer.enforce(
+                extension_id,
+                EnforcementScope::GcPacing {
+                    extension_id: extension_id.to_string(),
+                },
+                &usage_deltas,
+            );
 
             match receipt.decision {
                 crate::resource_certificate_consumer::EnforcementDecision::Reject {
@@ -547,8 +549,13 @@ impl GcCollector {
         // Check budget enforcement for GC pressure before collection
         if let Some(ref mut enforcer) = self.budget_enforcer {
             let usage_deltas = [(EnforcedDimension::GcPressure, 1)]; // One GC cycle
-            let receipt =
-                enforcer.enforce(extension_id, EnforcementScope::GcCollection, &usage_deltas);
+            let receipt = enforcer.enforce(
+                extension_id,
+                EnforcementScope::GcPacing {
+                    extension_id: extension_id.to_string(),
+                },
+                &usage_deltas,
+            );
 
             match receipt.decision {
                 crate::resource_certificate_consumer::EnforcementDecision::Reject {

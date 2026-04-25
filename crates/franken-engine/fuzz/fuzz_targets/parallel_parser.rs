@@ -1,6 +1,6 @@
 #![no_main]
 
-use frankenengine_engine::parallel_parser::{parse, ParseInput, ParallelConfig};
+use frankenengine_engine::parallel_parser::{ParallelConfig, ParseInput, parse};
 use frankenengine_engine::security_epoch::SecurityEpoch;
 use libfuzzer_sys::fuzz_target;
 
@@ -38,7 +38,7 @@ fuzz_target!(|data: &[u8]| {
 
     // Test with forced parallel mode (lower threshold)
     let config_force_parallel = ParallelConfig {
-        min_parallel_bytes: 1,  // Force parallel on any non-empty input
+        min_parallel_bytes: 1, // Force parallel on any non-empty input
         max_workers: 4,
         ..config
     };
@@ -65,15 +65,23 @@ fuzz_target!(|data: &[u8]| {
 
     // Invariant: Same input should produce same result (deterministic parsing)
     let result2 = parse(&input);
-    assert_eq!(result1.is_ok(), result2.is_ok(),
-               "Parallel parser should be deterministic for same input");
+    assert_eq!(
+        result1.is_ok(),
+        result2.is_ok(),
+        "Parallel parser should be deterministic for same input"
+    );
 
     // If both succeeded, compare critical properties
     if let (Ok(r1), Ok(r2)) = (&result1, &result2) {
-        assert_eq!(r1.tokens.len(), r2.tokens.len(),
-                   "Token count should be deterministic");
-        assert_eq!(r1.mode_used, r2.mode_used,
-                   "Parse mode should be deterministic");
+        assert_eq!(
+            r1.tokens.len(),
+            r2.tokens.len(),
+            "Token count should be deterministic"
+        );
+        assert_eq!(
+            r1.mode_used, r2.mode_used,
+            "Parse mode should be deterministic"
+        );
     }
 
     // Invariant: Single-worker mode should always work if any mode works
@@ -81,16 +89,15 @@ fuzz_target!(|data: &[u8]| {
 
     // If parsing succeeds, verify serialization doesn't panic
     if let Ok(parse_result) = &result1 {
-        let serialized = serde_json::to_string(parse_result)
-            .expect("ParseOutput should serialize");
-        let _deserialized: serde_json::Value = serde_json::from_str(&serialized)
-            .expect("Serialized ParseOutput should deserialize");
+        let serialized = serde_json::to_string(parse_result).expect("ParseOutput should serialize");
+        let _deserialized: serde_json::Value =
+            serde_json::from_str(&serialized).expect("Serialized ParseOutput should deserialize");
     }
 
     // Test edge case configs (but only for small inputs to avoid timeout)
     if source.len() < 100 {
         let config_tiny_budget = ParallelConfig {
-            chunk_budget_us: 1,  // Minimal budget
+            chunk_budget_us: 1, // Minimal budget
             max_workers: 2,
             ..config
         };
@@ -98,6 +105,6 @@ fuzz_target!(|data: &[u8]| {
             config: &config_tiny_budget,
             ..input
         };
-        let _result_tiny = parse(&input_tiny);  // Should not panic
+        let _result_tiny = parse(&input_tiny); // Should not panic
     }
 });

@@ -19,7 +19,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::resource_certificate_consumer::{BudgetEnforcer, EnforcedDimension, EnforcementScope};
+use crate::resource_certificate_consumer::BudgetEnforcer;
 
 // ---------------------------------------------------------------------------
 // SchedulerLane — the three priority lanes

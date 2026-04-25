@@ -1,0 +1,339 @@
+{
+  "schema_version": "franken-engine.frankenctl.v1",
+  "trace_id": "trace-frankenctl-doctor",
+  "decision_id": "decision-frankenctl-doctor",
+  "policy_id": "policy-frankenctl-doctor",
+  "input_path": "examples/03_doctor_input/sample.json",
+  "workload_id": "trace-frankenctl-doctor",
+  "package_name": "trace-frankenctl-doctor",
+  "target_platforms": [],
+  "preflight_verdict": "green",
+  "readiness": "ready",
+  "remediation_effort": "low",
+  "rollout_recommendation": "promote",
+  "blocked": false,
+  "signal_counts": {
+    "external_signals": 0,
+    "compatibility_signals": 0,
+    "platform_signals": 0
+  },
+  "output_dir": null,
+  "preflight": {
+    "trace_id": "trace-frankenctl-doctor",
+    "decision_id": "decision-frankenctl-doctor",
+    "policy_id": "policy-frankenctl-doctor",
+    "verdict": "green",
+    "rationale": "critical_blockers=0 warning_blockers=0 evidence_records=0",
+    "blockers": [],
+    "mandatory_field_status": {
+      "valid": true,
+      "missing_fields": [],
+      "inconsistent_fields": []
+    },
+    "diagnostics": {
+      "snapshot_timestamp_ns": 42000,
+      "loaded_extensions": [
+        {
+          "extension_id": "ext-doctor",
+          "containment_state": "Running"
+        }
+      ],
+      "active_policies": [
+        "policy-main"
+      ],
+      "security_epoch": 7,
+      "gc_pressure": [
+        {
+          "extension_id": "ext-doctor",
+          "used_bytes": 128,
+          "budget_bytes": 1024,
+          "pressure_millionths": 125000,
+          "over_budget": false
+        }
+      ],
+      "scheduler_lanes": [
+        {
+          "lane": "ready",
+          "queue_depth": 1,
+          "max_depth": 8,
+          "utilization_millionths": 125000,
+          "tasks_submitted": 3,
+          "tasks_scheduled": 3,
+          "tasks_completed": 3,
+          "tasks_timed_out": 0
+        }
+      ],
+      "logs": [
+        {
+          "trace_id": "trace-frankenctl-doctor",
+          "decision_id": "decision-frankenctl-doctor",
+          "policy_id": "policy-frankenctl-doctor",
+          "component": "runtime_diagnostics_cli",
+          "event": "runtime_diagnostics_snapshot",
+          "outcome": "pass",
+          "error_code": null
+        }
+      ]
+    },
+    "evidence_summary": {
+      "total_records": 0,
+      "counts_by_kind": {},
+      "counts_by_severity": {}
+    },
+    "support_bundle": {
+      "filter": {
+        "extension_id": null,
+        "trace_id": null,
+        "start_timestamp_ns": null,
+        "end_timestamp_ns": null,
+        "severity": null,
+        "decision_type": null
+      },
+      "redaction_policy": {
+        "key_fragments": [
+          "credential",
+          "password",
+          "private_key",
+          "secret",
+          "signature",
+          "token"
+        ],
+        "replacement": "sha256:REDACTED"
+      },
+      "index": {
+        "schema_version": "franken-engine.runtime-diagnostics.support-bundle.v1",
+        "bundle_id": "bundle-bb747e9ab55cbb93",
+        "trace_id": "trace-frankenctl-doctor",
+        "decision_id": "decision-frankenctl-doctor",
+        "policy_id": "policy-frankenctl-doctor",
+        "total_records": 0,
+        "total_redacted_fields": 0,
+        "files": [
+          {
+            "path": "support_bundle/commands.txt",
+            "sha256": "81af7108922db405b88926daf056f4821f7406d9f17062f65a39d7d904abf7b4",
+            "bytes": 229
+          },
+          {
+            "path": "support_bundle/events.jsonl",
+            "sha256": "d7d733b8729069400c9c0ec46c980a721287b52d7b8d3fd7127583860e9ba661",
+            "bytes": 445
+          },
+          {
+            "path": "support_bundle/evidence_records.jsonl",
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "bytes": 0
+          },
+          {
+            "path": "support_bundle/run_manifest.json",
+            "sha256": "56c7e10d9c3967105d896bacf40066ccad4a4c47c36e26ebd44b4d669214fc4b",
+            "bytes": 438
+          },
+          {
+            "path": "support_bundle/runtime_diagnostics.json",
+            "sha256": "25e13eddbe868358f85c4d585a96f37e9e41e94a5b2cc0632182ab1b38a86e04",
+            "bytes": 984
+          },
+          {
+            "path": "support_bundle/summary.md",
+            "sha256": "e9554fea301fec7fc54c6b18e8765933395f844bd397373100f62f9e7f9f89de",
+            "bytes": 471
+          }
+        ],
+        "reproducible_commands": [
+          "runtime_diagnostics diagnostics --input <path> --summary",
+          "runtime_diagnostics export-evidence --input <path> --summary",
+          "runtime_diagnostics support-bundle --input <path> --summary",
+          "runtime_diagnostics doctor --input <path> --summary"
+        ]
+      },
+      "files": [
+        {
+          "path": "support_bundle/commands.txt",
+          "content": "runtime_diagnostics diagnostics --input <path> --summary\nruntime_diagnostics export-evidence --input <path> --summary\nruntime_diagnostics support-bundle --input <path> --summary\nruntime_diagnostics doctor --input <path> --summary",
+          "sha256": "81af7108922db405b88926daf056f4821f7406d9f17062f65a39d7d904abf7b4",
+          "bytes": 229
+        },
+        {
+          "path": "support_bundle/events.jsonl",
+          "content": "{\"trace_id\":\"trace-frankenctl-doctor\",\"decision_id\":\"decision-frankenctl-doctor\",\"policy_id\":\"policy-frankenctl-doctor\",\"component\":\"runtime_diagnostics_cli\",\"event\":\"evidence_export\",\"outcome\":\"pass\",\"error_code\":null}\n{\"trace_id\":\"trace-frankenctl-doctor\",\"decision_id\":\"decision-frankenctl-doctor\",\"policy_id\":\"policy-frankenctl-doctor\",\"component\":\"runtime_diagnostics_cli\",\"event\":\"support_bundle_export\",\"outcome\":\"pass\",\"error_code\":null}",
+          "sha256": "d7d733b8729069400c9c0ec46c980a721287b52d7b8d3fd7127583860e9ba661",
+          "bytes": 445
+        },
+        {
+          "path": "support_bundle/evidence_records.jsonl",
+          "content": "",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        },
+        {
+          "path": "support_bundle/index.json",
+          "content": "{\n  \"schema_version\": \"franken-engine.runtime-diagnostics.support-bundle.v1\",\n  \"bundle_id\": \"bundle-bb747e9ab55cbb93\",\n  \"trace_id\": \"trace-frankenctl-doctor\",\n  \"decision_id\": \"decision-frankenctl-doctor\",\n  \"policy_id\": \"policy-frankenctl-doctor\",\n  \"total_records\": 0,\n  \"total_redacted_fields\": 0,\n  \"files\": [\n    {\n      \"path\": \"support_bundle/commands.txt\",\n      \"sha256\": \"81af7108922db405b88926daf056f4821f7406d9f17062f65a39d7d904abf7b4\",\n      \"bytes\": 229\n    },\n    {\n      \"path\": \"support_bundle/events.jsonl\",\n      \"sha256\": \"d7d733b8729069400c9c0ec46c980a721287b52d7b8d3fd7127583860e9ba661\",\n      \"bytes\": 445\n    },\n    {\n      \"path\": \"support_bundle/evidence_records.jsonl\",\n      \"sha256\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\n      \"bytes\": 0\n    },\n    {\n      \"path\": \"support_bundle/run_manifest.json\",\n      \"sha256\": \"56c7e10d9c3967105d896bacf40066ccad4a4c47c36e26ebd44b4d669214fc4b\",\n      \"bytes\": 438\n    },\n    {\n      \"path\": \"support_bundle/runtime_diagnostics.json\",\n      \"sha256\": \"25e13eddbe868358f85c4d585a96f37e9e41e94a5b2cc0632182ab1b38a86e04\",\n      \"bytes\": 984\n    },\n    {\n      \"path\": \"support_bundle/summary.md\",\n      \"sha256\": \"e9554fea301fec7fc54c6b18e8765933395f844bd397373100f62f9e7f9f89de\",\n      \"bytes\": 471\n    }\n  ],\n  \"reproducible_commands\": [\n    \"runtime_diagnostics diagnostics --input <path> --summary\",\n    \"runtime_diagnostics export-evidence --input <path> --summary\",\n    \"runtime_diagnostics support-bundle --input <path> --summary\",\n    \"runtime_diagnostics doctor --input <path> --summary\"\n  ]\n}",
+          "sha256": "61d5c9cabe6397948113b178c4924c018bbffd7dcd4eaacab3cf40354649b478",
+          "bytes": 1600
+        },
+        {
+          "path": "support_bundle/run_manifest.json",
+          "content": "{\n  \"decision_id\": \"decision-frankenctl-doctor\",\n  \"filter\": {\n    \"decision_type\": null,\n    \"end_timestamp_ns\": null,\n    \"extension_id\": null,\n    \"severity\": null,\n    \"start_timestamp_ns\": null,\n    \"trace_id\": null\n  },\n  \"policy_id\": \"policy-frankenctl-doctor\",\n  \"schema_version\": \"franken-engine.runtime-diagnostics.support-bundle.v1\",\n  \"total_records\": 0,\n  \"total_redacted_fields\": 0,\n  \"trace_id\": \"trace-frankenctl-doctor\"\n}",
+          "sha256": "56c7e10d9c3967105d896bacf40066ccad4a4c47c36e26ebd44b4d669214fc4b",
+          "bytes": 438
+        },
+        {
+          "path": "support_bundle/runtime_diagnostics.json",
+          "content": "{\n  \"snapshot_timestamp_ns\": 42000,\n  \"loaded_extensions\": [\n    {\n      \"extension_id\": \"ext-doctor\",\n      \"containment_state\": \"Running\"\n    }\n  ],\n  \"active_policies\": [\n    \"policy-main\"\n  ],\n  \"security_epoch\": 7,\n  \"gc_pressure\": [\n    {\n      \"extension_id\": \"ext-doctor\",\n      \"used_bytes\": 128,\n      \"budget_bytes\": 1024,\n      \"pressure_millionths\": 125000,\n      \"over_budget\": false\n    }\n  ],\n  \"scheduler_lanes\": [\n    {\n      \"lane\": \"ready\",\n      \"queue_depth\": 1,\n      \"max_depth\": 8,\n      \"utilization_millionths\": 125000,\n      \"tasks_submitted\": 3,\n      \"tasks_scheduled\": 3,\n      \"tasks_completed\": 3,\n      \"tasks_timed_out\": 0\n    }\n  ],\n  \"logs\": [\n    {\n      \"trace_id\": \"trace-frankenctl-doctor\",\n      \"decision_id\": \"decision-frankenctl-doctor\",\n      \"policy_id\": \"policy-frankenctl-doctor\",\n      \"component\": \"runtime_diagnostics_cli\",\n      \"event\": \"runtime_diagnostics_snapshot\",\n      \"outcome\": \"pass\",\n      \"error_code\": null\n    }\n  ]\n}",
+          "sha256": "25e13eddbe868358f85c4d585a96f37e9e41e94a5b2cc0632182ab1b38a86e04",
+          "bytes": 984
+        },
+        {
+          "path": "support_bundle/summary.md",
+          "content": "# Runtime Support Bundle Summary\n\n- trace_id: `trace-frankenctl-doctor`\n- decision_id: `decision-frankenctl-doctor`\n- policy_id: `policy-frankenctl-doctor`\n- total_records: `0`\n- total_redacted_fields: `0`\n\n## Repro Commands\n\n- `runtime_diagnostics diagnostics --input <path> --summary`\n- `runtime_diagnostics export-evidence --input <path> --summary`\n- `runtime_diagnostics support-bundle --input <path> --summary`\n- `runtime_diagnostics doctor --input <path> --summary`",
+          "sha256": "e9554fea301fec7fc54c6b18e8765933395f844bd397373100f62f9e7f9f89de",
+          "bytes": 471
+        }
+      ],
+      "logs": [
+        {
+          "trace_id": "trace-frankenctl-doctor",
+          "decision_id": "decision-frankenctl-doctor",
+          "policy_id": "policy-frankenctl-doctor",
+          "component": "runtime_diagnostics_cli",
+          "event": "evidence_export",
+          "outcome": "pass",
+          "error_code": null
+        },
+        {
+          "trace_id": "trace-frankenctl-doctor",
+          "decision_id": "decision-frankenctl-doctor",
+          "policy_id": "policy-frankenctl-doctor",
+          "component": "runtime_diagnostics_cli",
+          "event": "support_bundle_export",
+          "outcome": "pass",
+          "error_code": null
+        }
+      ]
+    },
+    "logs": [
+      {
+        "trace_id": "trace-frankenctl-doctor",
+        "decision_id": "decision-frankenctl-doctor",
+        "policy_id": "policy-frankenctl-doctor",
+        "component": "runtime_diagnostics_cli",
+        "event": "evidence_export",
+        "outcome": "pass",
+        "error_code": null
+      },
+      {
+        "trace_id": "trace-frankenctl-doctor",
+        "decision_id": "decision-frankenctl-doctor",
+        "policy_id": "policy-frankenctl-doctor",
+        "component": "runtime_diagnostics_cli",
+        "event": "preflight_doctor",
+        "outcome": "pass",
+        "error_code": null
+      },
+      {
+        "trace_id": "trace-frankenctl-doctor",
+        "decision_id": "decision-frankenctl-doctor",
+        "policy_id": "policy-frankenctl-doctor",
+        "component": "runtime_diagnostics_cli",
+        "event": "runtime_diagnostics_snapshot",
+        "outcome": "pass",
+        "error_code": null
+      },
+      {
+        "trace_id": "trace-frankenctl-doctor",
+        "decision_id": "decision-frankenctl-doctor",
+        "policy_id": "policy-frankenctl-doctor",
+        "component": "runtime_diagnostics_cli",
+        "event": "support_bundle_export",
+        "outcome": "pass",
+        "error_code": null
+      }
+    ]
+  },
+  "onboarding_scorecard": {
+    "schema_version": "franken-engine.runtime-diagnostics.onboarding-scorecard.v1",
+    "workload_id": "trace-frankenctl-doctor",
+    "package_name": "trace-frankenctl-doctor",
+    "target_platforms": [],
+    "readiness": "ready",
+    "remediation_effort": "low",
+    "score": {
+      "baseline_risk_millionths": 100000,
+      "signal_risk_millionths": 0,
+      "total_risk_millionths": 100000,
+      "critical_signals": 0,
+      "warning_signals": 0,
+      "info_signals": 0
+    },
+    "unresolved_signals": [],
+    "next_steps": [],
+    "reproducible_commands": [
+      "runtime_diagnostics diagnostics --input <path> --summary",
+      "runtime_diagnostics doctor --input <path> --summary",
+      "runtime_diagnostics export-evidence --input <path> --summary",
+      "runtime_diagnostics support-bundle --input <path> --summary"
+    ],
+    "logs": [
+      {
+        "trace_id": "trace-frankenctl-doctor",
+        "decision_id": "decision-frankenctl-doctor",
+        "policy_id": "policy-frankenctl-doctor",
+        "component": "runtime_diagnostics_cli",
+        "event": "onboarding_scorecard",
+        "outcome": "pass",
+        "error_code": null
+      }
+    ]
+  },
+  "rollout_decision": {
+    "schema_version": "franken-engine.runtime-diagnostics.rollout-decision-artifact.v1",
+    "workload_id": "trace-frankenctl-doctor",
+    "package_name": "trace-frankenctl-doctor",
+    "recommendation": "promote",
+    "readiness": "ready",
+    "remediation_effort": "low",
+    "score": {
+      "baseline_risk_millionths": 100000,
+      "signal_risk_millionths": 0,
+      "total_risk_millionths": 100000,
+      "critical_signals": 0,
+      "warning_signals": 0,
+      "info_signals": 0
+    },
+    "mandatory_field_status": {
+      "valid": true,
+      "missing_fields": [],
+      "inconsistent_fields": []
+    },
+    "ga_gate_consumable": true,
+    "pilot_gate_consumable": true,
+    "rationale": "recommendation=promote readiness=ready critical_signals=0 warning_signals=0 mandatory_fields_valid=true",
+    "merged_signals": [],
+    "evidence_links": [
+      "support_bundle/preflight_report.json"
+    ],
+    "reproducible_commands": [
+      "runtime_diagnostics diagnostics --input <path> --summary",
+      "runtime_diagnostics doctor --input <path> --summary",
+      "runtime_diagnostics export-evidence --input <path> --summary",
+      "runtime_diagnostics support-bundle --input <path> --summary"
+    ],
+    "logs": [
+      {
+        "trace_id": "trace-frankenctl-doctor",
+        "decision_id": "decision-frankenctl-doctor",
+        "policy_id": "policy-frankenctl-doctor",
+        "component": "runtime_diagnostics_cli",
+        "event": "rollout_decision_artifact",
+        "outcome": "pass",
+        "error_code": null
+      }
+    ]
+  },
+  "observability_mode": {
+    "mode_id": "default_capture",
+    "capture_semantics": "default_mixed_capture",
+    "lossless": false
+  }
+}

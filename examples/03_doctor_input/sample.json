@@ -1,0 +1,40 @@
+{
+  "trace_id": "trace-frankenctl-doctor",
+  "decision_id": "decision-frankenctl-doctor",
+  "policy_id": "policy-frankenctl-doctor",
+  "runtime_state": {
+    "snapshot_timestamp_ns": 42000,
+    "loaded_extensions": [
+      {
+        "extension_id": "ext-doctor",
+        "containment_state": "Running"
+      }
+    ],
+    "active_policies": [
+      "policy-main"
+    ],
+    "security_epoch": 7,
+    "gc_pressure": [
+      {
+        "extension_id": "ext-doctor",
+        "used_bytes": 128,
+        "budget_bytes": 1024
+      }
+    ],
+    "scheduler_lanes": [
+      {
+        "lane": "ready",
+        "queue_depth": 1,
+        "max_depth": 8,
+        "tasks_submitted": 3,
+        "tasks_scheduled": 3,
+        "tasks_completed": 3,
+        "tasks_timed_out": 0
+      }
+    ]
+  },
+  "evidence_entries": [],
+  "hostcall_records": [],
+  "containment_receipts": [],
+  "replay_artifacts": []
+}

@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 mod _support;
-use _support::test262_common::{ExpectedResult, RequirementLevel, execute_test262_case};
+use _support::test262_common::{ExpectedResult, RequirementLevel};
 
 // ---------------------------------------------------------------------------
 // Optional Chaining Test262 Conformance Suite

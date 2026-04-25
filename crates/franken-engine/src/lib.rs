@@ -2368,7 +2368,10 @@ mod tests {
     fn propagate_result_ok_passes_through() {
         let result: EvalResult<i32> = Ok(42);
         let propagated = propagate_result_across_boundary(result, ExceptionBoundary::AsyncJob);
-        assert_eq!(propagated.expect("serde deserialization should succeed"), 42);
+        assert_eq!(
+            propagated.expect("serde deserialization should succeed"),
+            42
+        );
     }
 
     #[test]
@@ -2477,7 +2480,9 @@ mod tests {
     #[test]
     fn quickjs_engine_executes_expression_instead_of_echoing_source() {
         let mut engine = QuickJsInspiredNativeEngine;
-        let out = engine.eval("'hello'").expect("serde deserialization should succeed");
+        let out = engine
+            .eval("'hello'")
+            .expect("serde deserialization should succeed");
         assert_eq!(out.value, "hello");
         assert_eq!(out.engine, EngineKind::QuickJsInspiredNative);
     }
@@ -2485,7 +2490,9 @@ mod tests {
     #[test]
     fn v8_engine_executes_expression_instead_of_echoing_source() {
         let mut engine = V8InspiredNativeEngine;
-        let out = engine.eval("\"world\"").expect("serde deserialization should succeed");
+        let out = engine
+            .eval("\"world\"")
+            .expect("serde deserialization should succeed");
         assert_eq!(out.value, "world");
         assert_eq!(out.engine, EngineKind::V8InspiredNative);
     }

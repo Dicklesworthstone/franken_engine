@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 mod _support;
-use _support::test262_common::{ExpectedResult, RequirementLevel, execute_test262_case};
+use _support::test262_common::{ExpectedResult, RequirementLevel};
 
 // ---------------------------------------------------------------------------
 // Test262 Arrow Function Conformance Suite
@@ -354,11 +354,9 @@ impl ArrowFunctionHarness {
         }
 
         // Calculate pass rate
-        statistics.pass_rate_millionths = if statistics.total_tests > 0 {
-            (statistics.passed * 1_000_000) / statistics.total_tests
-        } else {
-            0
-        };
+        statistics.pass_rate_millionths = (statistics.passed * 1_000_000)
+            .checked_div(statistics.total_tests)
+            .unwrap_or(0);
 
         ArrowFunctionReport {
             schema_version: ARROW_FUNCTION_CONFORMANCE_SCHEMA.to_string(),
@@ -431,10 +429,10 @@ impl ArrowFunctionHarness {
                 .or_insert_with(CategoryCoverage::default);
             category_coverage.total += 1;
 
-            if let Some(result) = results.get(&test.id) {
-                if matches!(result, ArrowFunctionResult::Pass) {
-                    category_coverage.passed += 1;
-                }
+            if let Some(result) = results.get(&test.id)
+                && matches!(result, ArrowFunctionResult::Pass)
+            {
+                category_coverage.passed += 1;
             }
         }
 

@@ -416,11 +416,9 @@ fn template_literal_test262_conformance_integration() {
 
     println!("\nCoverage by Category:");
     for (category, coverage) in &report.coverage_by_category {
-        let rate = if coverage.total > 0 {
-            (coverage.passed * 100) / coverage.total
-        } else {
-            0
-        };
+        let rate = (coverage.passed * 100)
+            .checked_div(coverage.total)
+            .unwrap_or(0);
         println!(
             "  {:?}: {}/{} ({}%)",
             category, coverage.passed, coverage.total, rate

@@ -1473,9 +1473,9 @@ mod tests {
             ),
         ];
         for (surface, cap) in diagonals {
-            let entry = m.lookup(surface, cap).ok_or_else(|| {
-                format!("missing diagonal entry for {surface}x{cap}")
-            })?;
+            let entry = m
+                .lookup(surface, cap)
+                .ok_or_else(|| format!("missing diagonal entry for {surface}x{cap}"))?;
             if entry.status != GapStatus::Covered {
                 return Err(format!(
                     "diagonal {surface}x{cap} should be Covered, got {:?}",
@@ -1939,12 +1939,15 @@ mod tests {
                     confidence_millionths: 1_000_000,
                 },
             ],
+            schema_version: GAP_MATRIX_SCHEMA_VERSION.to_string(),
+            assessed_epoch: SecurityEpoch::from_raw(1),
         };
 
         let result = validate_diagonal_coverage(incomplete_matrix);
         assert!(result.is_err());
         let error_msg = result.unwrap_err();
-        assert!(error_msg.contains("missing diagonal entry for EvidenceCheckerxEvidenceReplay"));
+        assert!(error_msg.contains("missing diagonal entry"));
+        assert!(error_msg.contains("evidence_checkerxevidence_replay"));
     }
 
     #[test]

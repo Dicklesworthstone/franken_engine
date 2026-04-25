@@ -92,6 +92,12 @@ pub struct TaskSet {
     pub tasks: BTreeMap<TaskId, Task>,
 }
 
+impl Default for TaskSet {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TaskSet {
     pub fn new() -> Self {
         Self {
@@ -178,17 +184,12 @@ impl TaskSet {
 // ---------------------------------------------------------------------------
 
 /// Simulated scheduler that produces task execution order.
-#[derive(Debug, Clone)]
-pub struct TaskScheduler {
-    /// Current execution order (for deterministic testing).
-    execution_order: Vec<TaskId>,
-}
+#[derive(Debug, Clone, Default)]
+pub struct TaskScheduler;
 
 impl TaskScheduler {
     pub fn new() -> Self {
-        Self {
-            execution_order: Vec::new(),
-        }
+        Self
     }
 
     /// Schedule a task set and return execution order.
@@ -497,10 +498,10 @@ fn is_valid_schedule(task_set: &TaskSet, execution_order: &[TaskId]) -> bool {
     for (i, task_id) in execution_order.iter().enumerate() {
         if let Some(task) = task_set.tasks.get(task_id) {
             for dependency in &task.dependencies {
-                if let Some(dep_pos) = execution_order.iter().position(|id| id == dependency) {
-                    if dep_pos >= i {
-                        return false; // Dependency executed after dependent task
-                    }
+                if let Some(dep_pos) = execution_order.iter().position(|id| id == dependency)
+                    && dep_pos >= i
+                {
+                    return false; // Dependency executed after dependent task
                 }
             }
         }

@@ -1,4 +1,5 @@
 #![forbid(unsafe_code)]
+#![allow(dead_code)]
 
 //! Shared Test262 conformance test scaffolding
 //!

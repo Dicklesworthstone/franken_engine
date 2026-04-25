@@ -54,14 +54,37 @@ pub enum RollbackUnverified {
 impl RollbackUnverified {
     fn should_trigger(violation_kind: ViolationKind, context: &str) -> bool {
         match violation_kind {
-            ViolationKind::DirectUpstreamImport => context.contains("franken_"),
-            ViolationKind::ForbiddenPattern => {
-                context.contains("std::env") || context.contains("std::fs")
+            ViolationKind::DirectUpstreamImport => {
+                context.contains("use franken_") || context.contains("extern crate franken_")
             }
+            ViolationKind::ForbiddenPattern => contains_forbidden_boundary_pattern(context),
             ViolationKind::CanonicalTypeShadow => true,
             ViolationKind::MissingCxParameter => false, // Not a security boundary
         }
     }
+}
+
+fn contains_forbidden_boundary_pattern(context: &str) -> bool {
+    const FORBIDDEN_BOUNDARY_PATTERNS: &[&str] = &[
+        "std::fs::",
+        "fs::read",
+        "fs::write",
+        "File::",
+        "OpenOptions::",
+        "std::net::",
+        "TcpStream::",
+        "UdpSocket::",
+        "std::process::",
+        "Command::new",
+        "std::env::",
+        "env::var",
+        "static mut ",
+        "SystemTime::now",
+    ];
+
+    FORBIDDEN_BOUNDARY_PATTERNS
+        .iter()
+        .any(|pattern| context.contains(pattern))
 }
 
 // ---------------------------------------------------------------------------

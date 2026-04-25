@@ -26,6 +26,10 @@ path = "src/bin/frankenctl.rs"
 name = "franken-decision-demo"
 path = "src/bin/franken_decision_demo.rs"
 
+[[bin]]
+name = "franken-quarantine-mesh-demo"
+path = "src/bin/franken_quarantine_mesh_demo.rs"
+
 [features]
 default = ["asupersync-integration"]
 asupersync-integration = [

@@ -30,6 +30,7 @@ diff -u "$bench_dir/frankenengine.txt" "$bench_dir/node.txt"
 
 Successful runs print `499500` into `frankenengine.txt`. If Node is installed,
 `node.txt` should print the same value and `diff -u` should produce no output.
+If Node is not installed, `node.txt` will contain a skip marker instead.
 
 `frankenengine.time` and `node.time` capture the wall-clock timings for this
 single run. They are useful as a quick sanity check, not as publishable

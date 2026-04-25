@@ -1,0 +1,153 @@
+{
+  "scenario": "three-instance signed quarantine mesh",
+  "zone": "fleet-quarantine-mesh",
+  "extension_id": "demo:compromised-module",
+  "protocol_version": "1.0",
+  "bounded_convergence_slo_ns": 1000000000,
+  "quarantine_goal": "fleet-wide revocation and quarantine checkpoint convergence",
+  "revocation": {
+    "authority_node": "mesh-a",
+    "reason": "compromised",
+    "issued_at_tick": 42
+  },
+  "instances": [
+    {
+      "instance_id": "mesh-a",
+      "local_revocation_applied_ns": 1000000000,
+      "chain_head_seq": 0,
+      "target_revoked": true,
+      "evidence_packets_observed": 3,
+      "resolved_action": "quarantine",
+      "checkpoint_timestamp_ns": 1805000000,
+      "checkpoint_seq": 1,
+      "healthy_nodes_at_checkpoint": [
+        "mesh-a",
+        "mesh-b",
+        "mesh-c"
+      ],
+      "contributing_intent_ids": [
+        "intent-mesh-a-quarantine",
+        "intent-mesh-b-quarantine",
+        "intent-mesh-c-quarantine"
+      ],
+      "receipts": [
+        {
+          "from_instance": "mesh-a",
+          "heartbeat_received_ns": 900000000,
+          "evidence_received_ns": 1025000000,
+          "intent_received_ns": 1050000000
+        },
+        {
+          "from_instance": "mesh-b",
+          "heartbeat_received_ns": 960000000,
+          "evidence_received_ns": 1405000000,
+          "intent_received_ns": 1430000000
+        },
+        {
+          "from_instance": "mesh-c",
+          "heartbeat_received_ns": 990000000,
+          "evidence_received_ns": 1755000000,
+          "intent_received_ns": 1780000000
+        }
+      ],
+      "convergence_from_first_revocation_ns": 805000000,
+      "convergence_from_last_revocation_ns": 165000000,
+      "within_bounded_slo": true
+    },
+    {
+      "instance_id": "mesh-b",
+      "local_revocation_applied_ns": 1320000000,
+      "chain_head_seq": 0,
+      "target_revoked": true,
+      "evidence_packets_observed": 3,
+      "resolved_action": "quarantine",
+      "checkpoint_timestamp_ns": 1765000000,
+      "checkpoint_seq": 1,
+      "healthy_nodes_at_checkpoint": [
+        "mesh-a",
+        "mesh-b",
+        "mesh-c"
+      ],
+      "contributing_intent_ids": [
+        "intent-mesh-a-quarantine",
+        "intent-mesh-b-quarantine",
+        "intent-mesh-c-quarantine"
+      ],
+      "receipts": [
+        {
+          "from_instance": "mesh-a",
+          "heartbeat_received_ns": 980000000,
+          "evidence_received_ns": 1105000000,
+          "intent_received_ns": 1130000000
+        },
+        {
+          "from_instance": "mesh-b",
+          "heartbeat_received_ns": 900000000,
+          "evidence_received_ns": 1345000000,
+          "intent_received_ns": 1370000000
+        },
+        {
+          "from_instance": "mesh-c",
+          "heartbeat_received_ns": 950000000,
+          "evidence_received_ns": 1715000000,
+          "intent_received_ns": 1740000000
+        }
+      ],
+      "convergence_from_first_revocation_ns": 765000000,
+      "convergence_from_last_revocation_ns": 125000000,
+      "within_bounded_slo": true
+    },
+    {
+      "instance_id": "mesh-c",
+      "local_revocation_applied_ns": 1640000000,
+      "chain_head_seq": 0,
+      "target_revoked": true,
+      "evidence_packets_observed": 3,
+      "resolved_action": "quarantine",
+      "checkpoint_timestamp_ns": 1715000000,
+      "checkpoint_seq": 1,
+      "healthy_nodes_at_checkpoint": [
+        "mesh-a",
+        "mesh-b",
+        "mesh-c"
+      ],
+      "contributing_intent_ids": [
+        "intent-mesh-a-quarantine",
+        "intent-mesh-b-quarantine",
+        "intent-mesh-c-quarantine"
+      ],
+      "receipts": [
+        {
+          "from_instance": "mesh-a",
+          "heartbeat_received_ns": 1020000000,
+          "evidence_received_ns": 1145000000,
+          "intent_received_ns": 1170000000
+        },
+        {
+          "from_instance": "mesh-b",
+          "heartbeat_received_ns": 970000000,
+          "evidence_received_ns": 1415000000,
+          "intent_received_ns": 1440000000
+        },
+        {
+          "from_instance": "mesh-c",
+          "heartbeat_received_ns": 900000000,
+          "evidence_received_ns": 1665000000,
+          "intent_received_ns": 1690000000
+        }
+      ],
+      "convergence_from_first_revocation_ns": 715000000,
+      "convergence_from_last_revocation_ns": 75000000,
+      "within_bounded_slo": true
+    }
+  ],
+  "fleet_convergence": {
+    "first_revocation_applied_ns": 1000000000,
+    "last_revocation_applied_ns": 1640000000,
+    "revocation_spread_ns": 640000000,
+    "first_checkpoint_ns": 1715000000,
+    "last_checkpoint_ns": 1805000000,
+    "checkpoint_spread_ns": 90000000,
+    "within_bounded_slo": true
+  }
+}

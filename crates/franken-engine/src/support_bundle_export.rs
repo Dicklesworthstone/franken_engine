@@ -178,11 +178,15 @@ pub fn export_support_bundle(
 #[must_use]
 pub fn is_sensitive(input: &str) -> bool {
     let lowered = input.to_ascii_lowercase();
+    let normalized = stable_label(&lowered);
+    let compact = lowered
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .collect::<String>();
+
     [
-        "access-key",
         "access_key",
         "accesskey",
-        "api-key",
         "api_key",
         "apikey",
         "auth",
@@ -190,7 +194,8 @@ pub fn is_sensitive(input: &str) -> bool {
         "cookie",
         "credential",
         "jwt",
-        "private-key",
+        "passphrase",
+        "passwd",
         "private_key",
         "privatekey",
         "secret",
@@ -199,7 +204,9 @@ pub fn is_sensitive(input: &str) -> bool {
         "password",
     ]
     .iter()
-    .any(|needle| lowered.contains(needle))
+    .any(|needle| {
+        lowered.contains(needle) || normalized.contains(needle) || compact.contains(needle)
+    })
 }
 
 /// Redact a diagnostic value when either the key or value looks sensitive.
@@ -532,6 +539,50 @@ mod tests {
     }
 
     #[test]
+    fn space_separated_api_key_config_key_is_redacted() {
+        let mut input = sample_input();
+        input.config.insert(
+            "service api key".to_string(),
+            "api-key-material".to_string(),
+        );
+        let bundle = export_support_bundle(&input).expect("bundle");
+        let json = bundle.to_json_string().expect("json");
+        assert!(!json.contains("service api key"));
+        assert!(!json.contains("service_api_key"));
+        assert!(!json.contains("api-key-material"));
+        assert!(json.contains("config_hash.redacted_key."));
+    }
+
+    #[test]
+    fn space_separated_private_key_diagnostic_key_is_redacted() {
+        let mut input = sample_input();
+        input
+            .diagnostics
+            .insert("private key".to_string(), "opaque-key-material".to_string());
+        let bundle = export_support_bundle(&input).expect("bundle");
+        let json = bundle.to_json_string().expect("json");
+        assert!(!json.contains("private key"));
+        assert!(!json.contains("private_key"));
+        assert!(!json.contains("opaque-key-material"));
+        assert!(json.contains("diagnostic.redacted_key."));
+        assert!(json.contains(REDACTION_MARKER));
+    }
+
+    #[test]
+    fn space_separated_secret_value_is_redacted() {
+        let mut input = sample_input();
+        input.diagnostics.insert(
+            "operator_note".to_string(),
+            "aws access key AKIAEXAMPLE".to_string(),
+        );
+        let bundle = export_support_bundle(&input).expect("bundle");
+        let json = bundle.to_json_string().expect("json");
+        assert!(!json.contains("aws access key"));
+        assert!(!json.contains("AKIAEXAMPLE"));
+        assert!(json.contains(REDACTION_MARKER));
+    }
+
+    #[test]
     fn cookie_diagnostic_key_is_redacted() {
         let mut input = sample_input();
         input
@@ -691,9 +742,14 @@ mod tests {
         assert!(is_sensitive("aws.access_key_id"));
         assert!(is_sensitive("http.cookie"));
         assert!(is_sensitive("jwt"));
+        assert!(is_sensitive("service api key"));
+        assert!(is_sensitive("aws access key"));
         assert!(is_sensitive("x-private-key"));
+        assert!(is_sensitive("private key"));
         assert!(is_sensitive("PRIVATE_KEY"));
         assert!(is_sensitive("privatekey"));
+        assert!(is_sensitive("passphrase"));
+        assert!(is_sensitive("passwd"));
         assert!(is_sensitive("password"));
         assert!(!is_sensitive("panic_count"));
     }

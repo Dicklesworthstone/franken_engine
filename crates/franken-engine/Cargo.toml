@@ -18,6 +18,10 @@ path = "src/bin/franken_benchmark_evidence_export.rs"
 name = "franken-architecture-inventory"
 path = "src/bin/franken_architecture_inventory.rs"
 
+[[bin]]
+name = "frankenctl"
+path = "src/bin/frankenctl.rs"
+
 [features]
 default = ["asupersync-integration"]
 asupersync-integration = [

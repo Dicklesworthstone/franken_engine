@@ -1,0 +1,7 @@
+{
+  "decision": "quarantine",
+  "posterior_after_millionths": 605718,
+  "rationale": "fishy() started with 3 normal file_read observations, then network_egress and crypto_op shifted the posterior to malicious and triggered quarantine.",
+  "replay_seed": 3737211141,
+  "signature_hex": "a84d3090ee1be4e30eb65faf0a03c4e9228442cff1a45b5639ccd5934c222d60"
+}

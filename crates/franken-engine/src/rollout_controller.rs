@@ -343,6 +343,31 @@ mod tests {
     }
 
     #[test]
+    fn fixed_point_upper_bound_is_accepted_when_guardrail_allows_it() {
+        let mut guardrails = BTreeMap::new();
+        guardrails.insert(
+            RolloutPhase::Shadow.as_key().to_string(),
+            PhaseGuardrails::new(MILLIONTHS, 1_000, true),
+        );
+        let mut controller = RolloutController::shadow(guardrails);
+        let observed = observations(MILLIONTHS, 100, MILLIONTHS);
+        assert_eq!(controller.try_advance(&observed), Ok(()));
+        assert_eq!(controller.phase, RolloutPhase::Canary);
+    }
+
+    #[test]
+    fn active_phase_never_returns_to_shadow() {
+        let mut controller = RolloutController::new(RolloutPhase::Active, relaxed_guardrails());
+        for _ in 0..3 {
+            controller
+                .try_advance(&good_observations())
+                .expect("active phase should remain terminal on success");
+        }
+        assert_eq!(controller.phase, RolloutPhase::Active);
+        assert_eq!(controller.history, vec![RolloutPhase::Active]);
+    }
+
+    #[test]
     fn error_rate_breach_rolls_back() {
         let mut controller = RolloutController::shadow(relaxed_guardrails());
         let observed = observations(20_000, 100, MILLIONTHS);

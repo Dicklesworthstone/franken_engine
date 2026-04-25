@@ -1,0 +1,10 @@
+{
+  "delegate_hash": "aaaa1111",
+  "native_hash": "bbbb2222",
+  "promoted_at": "2026-04-25T00:00:00Z",
+  "signature_hex": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+  "evidence_chain": [
+    "claim:perf_improved",
+    "evidence:bench_artifact"
+  ]
+}

@@ -34,10 +34,16 @@ fn main() {
     let bounded_dimensions = vec![ResourceDimension::CpuTime, ResourceDimension::HeapMemory];
 
     // Execute the full escalation sequence
-    let current_timestamp = std::time::SystemTime::now()
+    // Safe conversion from u128 to u64, capping at u64::MAX to prevent overflow
+    let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .expect("Time went backwards")
-        .as_nanos() as u64;
+        .as_nanos();
+    let current_timestamp = if nanos > u64::MAX as u128 {
+        u64::MAX
+    } else {
+        nanos as u64
+    };
 
     let log = controller.execute_escalation(workload_id, bounded_dimensions, current_timestamp);
 

@@ -184,6 +184,7 @@ fuzz_target!(|data: &[u8]| {
         ("namespaced", &config_namespaced),
     ];
 
+    // Safe conversion: usize -> u64 never overflows (usize <= u64 on all platforms)
     let source_len = source.len() as u64;
 
     // Invariant: parsing never panics; serde and Display contracts hold; FailClosed carries

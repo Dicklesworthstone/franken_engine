@@ -1,0 +1,13 @@
+{
+  "checkpoint_id": "8e4bf2cb0c65f9c7dc3027e4ef8750f5f2e7999a3d1d6f9269d7987c1423f5aa",
+  "policy_version": 42,
+  "parent_checkpoint_id": "14f4fce99194289fc6c7328f3fb04bb7ebaa2edfb03d538b6f1f04fbe8c001b9",
+  "freshness_proof_hash": "c8541ae934b0c762ed2c3ea26f6ca5f0b5a6d4c90d7cf4f4ab977d8d9f44155c",
+  "signature_hex": "5d4fcb53dddbb2d2d82a6f1cad7184b61ea5b6d67ce0dd43259c59e86cdc84c1",
+  "rollback_resistance_witness": {
+    "frontier_sequence": 42,
+    "frontier_epoch": 7,
+    "witness_kind": "monotonic_parent_link",
+    "fork_guard": "parent_pointer_and_freshness_proof"
+  }
+}

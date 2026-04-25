@@ -1,10 +1,10 @@
 # Resource Budget Demo
 
-This example documents the intended deterministic resource-exhaustion escalation contract for one extension workload: `throttle -> sandbox -> suspend -> terminate`.
+This example demonstrates the deterministic resource-exhaustion escalation contract for one extension workload: `throttle -> sandbox -> suspend -> terminate`.
 
 ## Status
 
-This is a conceptual static demo, not a live runtime invocation. The three named modules expose enough semantics to justify the first three steps, but they do not yet expose one first-class public API that drives the full four-step escalation and emits a replay-stable artifact. That API gap is tracked in `bd-g61cl`.
+**IMPLEMENTED**: This demo now uses a real runtime implementation via the `resource_escalation_control` module. The `ResourceEscalationController` provides a first-class public API that drives the full four-step escalation sequence and emits replay-stable artifacts. The API gap tracked in `bd-g61cl` has been resolved.
 
 ## Run
 
@@ -15,12 +15,12 @@ From the repository root:
 ./examples/13_resource_budget_demo/verify.sh
 ```
 
-## How The Sequence Maps To Existing Modules
+## How The Sequence Maps To Modules
 
 - `throttle` maps to `queueing_admission_control`: overload moves work from immediate admission to a queued receipt, which is the deterministic throttle boundary.
 - `sandbox` maps to `resource_certificate_governance`: repeated CPU and heap over-budget evidence blocks normal publication/governance and is the right isolation boundary.
 - `suspend` maps to `runtime_decision_theory`: once the budget controller exhausts, `DecisionContext` already returns `suspend_adaptive`.
-- `terminate` is the missing piece: the current modules do not expose a first-class deterministic termination API for the exhausted extension, so the sample log marks it as a conceptual operator contract and links the follow-up bead.
+- `terminate` maps to `resource_escalation_control`: **NEW** - provides deterministic termination with audit trails for exhausted extensions after escalation attempts fail.
 
 ## Why This Is Impossible By Default In Node Or Bun
 

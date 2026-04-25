@@ -364,6 +364,7 @@ pub mod resolver_package_index;
 pub mod resource_certificate_consumer;
 pub mod resource_certificate_governance;
 pub mod resource_certificate_governance_gate;
+pub mod resource_escalation_control;
 pub mod revocation_chain;
 pub mod revocation_enforcement;
 pub mod revocation_freshness;

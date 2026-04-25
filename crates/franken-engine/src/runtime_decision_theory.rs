@@ -334,7 +334,7 @@ impl CvarGuardrail {
     /// Returns `None` if insufficient observations.
     pub fn cvar(&self) -> Option<i64> {
         let n = self.observations.len() as u64;
-        if n < self.config.min_observations {
+        if self.observations.is_empty() || n < self.config.min_observations {
             return None;
         }
         // VaR index: the (1-alpha) quantile position.
@@ -403,7 +403,7 @@ impl CvarGuardrail {
     /// Return the VaR (Value at Risk) at the configured alpha level.
     pub fn var(&self) -> Option<i64> {
         let n = self.observations.len() as u64;
-        if n < self.config.min_observations {
+        if self.observations.is_empty() || n < self.config.min_observations {
             return None;
         }
         let var_index = {
@@ -2866,6 +2866,17 @@ mod tests {
             cvar.observe(i * MILLION);
         }
         assert!(cvar.cvar().is_none(), "still below min_observations");
+    }
+
+    #[test]
+    fn cvar_zero_min_observations_empty_buffer_returns_none() {
+        let config = CvarConfig {
+            min_observations: 0,
+            ..Default::default()
+        };
+        let cvar = CvarGuardrail::new(config);
+        assert!(cvar.cvar().is_none());
+        assert!(cvar.var().is_none());
     }
 
     #[test]

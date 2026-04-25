@@ -13,6 +13,10 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use crate::alloc_domain::{AllocDomainError, AllocationDomain, DomainRegistry};
+use crate::resource_certificate_consumer::{
+    BudgetEnforcementPolicy, BudgetEnforcer, EnforcedDimension, EnforcementScope,
+};
+use crate::security_epoch::SecurityEpoch;
 
 // ---------------------------------------------------------------------------
 // GcObjectId — unique identity for managed objects
@@ -151,6 +155,12 @@ pub enum GcError {
         extension_id: String,
         object_id: GcObjectId,
     },
+    /// Allocation failed due to budget constraints.
+    AllocationFailed {
+        extension_id: String,
+        size: u64,
+        reason: Option<String>,
+    },
     /// Allocation domain error propagated from budget system.
     DomainError(AllocDomainError),
 }
@@ -176,6 +186,19 @@ impl fmt::Display for GcError {
                 "object {} not found in extension '{}' heap",
                 object_id, extension_id
             ),
+            Self::AllocationFailed {
+                extension_id,
+                size,
+                reason,
+            } => {
+                write!(
+                    f,
+                    "allocation of {} bytes failed for extension '{}': {}",
+                    size,
+                    extension_id,
+                    reason.as_deref().unwrap_or("budget exceeded")
+                )
+            }
             Self::DomainError(e) => write!(f, "domain error: {}", e),
         }
     }
@@ -390,6 +413,9 @@ pub struct GcCollector {
     event_sequence: u64,
     /// Recorded GC events for replay/evidence.
     events: Vec<GcEvent>,
+    /// Resource budget enforcer for GC operations.
+    #[serde(skip)]
+    budget_enforcer: Option<BudgetEnforcer>,
 }
 
 impl GcCollector {
@@ -399,7 +425,13 @@ impl GcCollector {
             config,
             event_sequence: 0,
             events: Vec::new(),
+            budget_enforcer: None,
         }
+    }
+
+    /// Set the budget enforcer for resource consumption monitoring.
+    pub fn set_budget_enforcer(&mut self, enforcer: BudgetEnforcer) {
+        self.budget_enforcer = Some(enforcer);
     }
 
     /// Register a new extension heap.
@@ -433,6 +465,28 @@ impl GcCollector {
 
     /// Allocate an object in the specified extension's heap.
     pub fn allocate(&mut self, extension_id: &str, size_bytes: u64) -> Result<GcObjectId, GcError> {
+        // Check budget enforcement before allocation
+        if let Some(ref mut enforcer) = self.budget_enforcer {
+            let usage_deltas = [(EnforcedDimension::HeapMemory, size_bytes as i64)];
+            let receipt =
+                enforcer.enforce(extension_id, EnforcementScope::GcAllocation, &usage_deltas);
+
+            match receipt.decision {
+                crate::resource_certificate_consumer::EnforcementDecision::Reject {
+                    ref reason,
+                } => {
+                    return Err(GcError::AllocationFailed {
+                        extension_id: extension_id.to_string(),
+                        size: size_bytes,
+                        reason: Some(format!("Budget exceeded: {:?}", reason)),
+                    });
+                }
+                _ => {
+                    // Allow or throttle - continue with allocation
+                }
+            }
+        }
+
         let heap = self
             .heaps
             .get_mut(extension_id)
@@ -490,6 +544,28 @@ impl GcCollector {
 
     /// Collect garbage from a single extension's heap.
     pub fn collect(&mut self, extension_id: &str) -> Result<GcEvent, GcError> {
+        // Check budget enforcement for GC pressure before collection
+        if let Some(ref mut enforcer) = self.budget_enforcer {
+            let usage_deltas = [(EnforcedDimension::GcPressure, 1)]; // One GC cycle
+            let receipt =
+                enforcer.enforce(extension_id, EnforcementScope::GcCollection, &usage_deltas);
+
+            match receipt.decision {
+                crate::resource_certificate_consumer::EnforcementDecision::Reject {
+                    ref reason,
+                } => {
+                    return Err(GcError::AllocationFailed {
+                        extension_id: extension_id.to_string(),
+                        size: 0, // GC operation, not allocation
+                        reason: Some(format!("GC budget exceeded: {:?}", reason)),
+                    });
+                }
+                _ => {
+                    // Allow or throttle - continue with collection
+                }
+            }
+        }
+
         let heap = self
             .heaps
             .get_mut(extension_id)

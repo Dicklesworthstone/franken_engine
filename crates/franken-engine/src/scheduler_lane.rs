@@ -19,6 +19,8 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+use crate::resource_certificate_consumer::{BudgetEnforcer, EnforcedDimension, EnforcementScope};
+
 // ---------------------------------------------------------------------------
 // SchedulerLane — the three priority lanes
 // ---------------------------------------------------------------------------
@@ -304,6 +306,8 @@ pub struct LaneScheduler {
     events: Vec<SchedulerEvent>,
     /// Event counters.
     event_counts: BTreeMap<String, u64>,
+    /// Resource budget enforcer for task scheduling.
+    budget_enforcer: Option<BudgetEnforcer>,
 }
 
 impl LaneScheduler {
@@ -329,7 +333,13 @@ impl LaneScheduler {
             metrics,
             events: Vec::new(),
             event_counts: BTreeMap::new(),
+            budget_enforcer: None,
         }
+    }
+
+    /// Set the budget enforcer for task scheduling.
+    pub fn set_budget_enforcer(&mut self, enforcer: BudgetEnforcer) {
+        self.budget_enforcer = Some(enforcer);
     }
 
     /// Submit a task to the scheduler.

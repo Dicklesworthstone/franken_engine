@@ -17,6 +17,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use frankenengine_engine::compatibility_advisory::AdvisoryBuilder;
 use frankenengine_engine::containment_executor::{ContainmentReceipt, ContainmentState};
 use frankenengine_engine::evidence_ledger::{
     CandidateAction, ChosenAction, DecisionType, EvidenceEntry, EvidenceEntryBuilder, Witness,
@@ -28,19 +29,20 @@ use frankenengine_engine::hostcall_telemetry::{
     ResourceDelta, TelemetryRecorder,
 };
 use frankenengine_engine::runtime_diagnostics_cli::{
-    ContainmentReceiptEnvelope, EvidenceExportFilter, EvidenceSeverity, GaEvidenceArtifactCategory,
-    GaEvidenceArtifactLink, GaEvidencePackageInput, GcPressureSample, HostcallTelemetryEnvelope,
-    OnboardingReadinessClass, OnboardingRemediationEffort, OnboardingScorecardInput,
-    OnboardingScorecardSignal, PreflightVerdict, ReplayArtifactRecord,
-    RolloutDecisionArtifactInput, RolloutRecommendation, RuntimeDiagnosticsCliInput,
-    RuntimeExtensionState, RuntimeStateInput, SchedulerLaneSample, SupportBundleRedactionPolicy,
-    build_ga_evidence_package, build_onboarding_owner_routing, build_onboarding_scorecard,
-    build_rollout_decision_artifact, collect_runtime_diagnostics, export_evidence_bundle,
-    export_support_bundle, parse_decision_type, parse_evidence_severity,
+    CompatibilityAdvisoryAdaptInput, ContainmentReceiptEnvelope, EvidenceExportFilter,
+    EvidenceSeverity, GaEvidenceArtifactCategory, GaEvidenceArtifactLink, GaEvidencePackageInput,
+    GcPressureSample, HostcallTelemetryEnvelope, OnboardingReadinessClass,
+    OnboardingRemediationEffort, OnboardingScorecardInput, OnboardingScorecardSignal,
+    PreflightVerdict, ReplayArtifactRecord, RolloutDecisionArtifactInput, RolloutRecommendation,
+    RuntimeDiagnosticsCliInput, RuntimeExtensionState, RuntimeStateInput, SchedulerLaneSample,
+    SupportBundleRedactionPolicy, build_ga_evidence_package, build_onboarding_owner_routing,
+    build_onboarding_scorecard, build_rollout_decision_artifact, collect_runtime_diagnostics,
+    export_evidence_bundle, export_support_bundle, parse_decision_type, parse_evidence_severity,
     render_diagnostics_summary, render_evidence_summary, render_ga_evidence_package_summary,
     render_onboarding_scorecard_markdown, render_onboarding_scorecard_summary,
     render_preflight_summary, render_rollout_decision_artifact_summary,
-    render_support_bundle_summary, run_preflight_doctor,
+    render_support_bundle_summary, run_preflight_doctor, signal_from_compatibility_advisory,
+    signals_from_compatibility_advisories,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
 
@@ -1391,6 +1393,157 @@ fn lib_render_rollout_decision_artifact_summary_contains_key_fields() {
     assert!(rendered.contains("recommendation: promote"));
     assert!(rendered.contains("ga_gate_consumable: true"));
     assert!(rendered.contains("reproducible_commands:"));
+}
+
+// ── compatibility_advisory bridge (RGC-908 / bd-1lsy.10.8) ──────────────
+
+fn bridge_input(tag: &str, severity: EvidenceSeverity) -> CompatibilityAdvisoryAdaptInput {
+    let advisory = AdvisoryBuilder::new()
+        .with_divergence(tag)
+        .with_context("severity", "high")
+        .build();
+    CompatibilityAdvisoryAdaptInput {
+        divergence_tag: tag.to_string(),
+        advisory,
+        severity,
+        reproducible_command: format!("scripts/replay_advisory.sh {tag}"),
+        evidence_links: vec![format!("artifacts/advisory/{tag}.json")],
+    }
+}
+
+#[test]
+fn lib_advisory_builder_bridges_into_rollout_decision_artifact() {
+    // End-to-end fusion: AdvisoryBuilder -> Advisory -> bridge ->
+    // OnboardingScorecardSignal -> build_rollout_decision_artifact.
+    let input = clean_input();
+    let preflight = run_preflight_doctor(
+        &input,
+        EvidenceExportFilter::default(),
+        SupportBundleRedactionPolicy::default(),
+    );
+    let onboarding = build_onboarding_scorecard(&OnboardingScorecardInput {
+        workload_id: "pkg/bridge-end-to-end".to_string(),
+        package_name: "bridge-end-to-end".to_string(),
+        target_platforms: vec!["linux-x64".to_string()],
+        preflight,
+        external_signals: Vec::new(),
+    });
+
+    let bridged = signals_from_compatibility_advisories(&[
+        bridge_input("module_resolution", EvidenceSeverity::Critical),
+        bridge_input("buffer_encoding", EvidenceSeverity::Warning),
+    ]);
+
+    // Sanity: the bridge preserved AdvisoryBuilder's generated message + remediation.
+    let critical = bridged
+        .iter()
+        .find(|s| s.signal_id == "compat-advisory-module_resolution")
+        .expect("module_resolution signal present");
+    assert!(critical.summary.contains("Module resolution"));
+    assert!(critical.remediation.contains("explicit file extensions"));
+    assert_eq!(critical.severity, EvidenceSeverity::Critical);
+
+    let artifact = build_rollout_decision_artifact(&RolloutDecisionArtifactInput {
+        onboarding_scorecard: onboarding,
+        compatibility_advisories: bridged,
+        platform_matrix_signals: Vec::new(),
+    });
+
+    // A critical compatibility advisory must surface in the recommendation path.
+    assert_ne!(
+        artifact.recommendation,
+        RolloutRecommendation::Promote,
+        "critical bridged advisory must block straight promotion"
+    );
+    let bridged_ids: Vec<&str> = artifact
+        .merged_signals
+        .iter()
+        .filter(|s| s.source == "compatibility_advisory")
+        .map(|s| s.signal_id.as_str())
+        .collect();
+    assert!(bridged_ids.contains(&"compat-advisory-module_resolution"));
+    assert!(bridged_ids.contains(&"compat-advisory-buffer_encoding"));
+    assert!(
+        artifact
+            .evidence_links
+            .iter()
+            .any(|link| link == "artifacts/advisory/module_resolution.json")
+    );
+    let summary = render_rollout_decision_artifact_summary(&artifact);
+    assert!(summary.contains("compatibility_advisory"));
+}
+
+#[test]
+fn lib_compatibility_advisory_bridge_is_input_order_invariant() {
+    let input = clean_input();
+    let preflight = run_preflight_doctor(
+        &input,
+        EvidenceExportFilter::default(),
+        SupportBundleRedactionPolicy::default(),
+    );
+    let onboarding = build_onboarding_scorecard(&OnboardingScorecardInput {
+        workload_id: "pkg/bridge-determinism".to_string(),
+        package_name: "bridge-determinism".to_string(),
+        target_platforms: vec!["linux-x64".to_string()],
+        preflight,
+        external_signals: Vec::new(),
+    });
+
+    let ordered = signals_from_compatibility_advisories(&[
+        bridge_input("async_hooks", EvidenceSeverity::Warning),
+        bridge_input("module_resolution", EvidenceSeverity::Critical),
+        bridge_input("stream_behavior", EvidenceSeverity::Info),
+    ]);
+    let mut shuffled = ordered.clone();
+    shuffled.reverse();
+
+    let a = build_rollout_decision_artifact(&RolloutDecisionArtifactInput {
+        onboarding_scorecard: onboarding.clone(),
+        compatibility_advisories: ordered,
+        platform_matrix_signals: Vec::new(),
+    });
+    let b = build_rollout_decision_artifact(&RolloutDecisionArtifactInput {
+        onboarding_scorecard: onboarding,
+        compatibility_advisories: shuffled,
+        platform_matrix_signals: Vec::new(),
+    });
+
+    // The decision artifact must be byte-identical regardless of advisory input order.
+    assert_eq!(a.recommendation, b.recommendation);
+    assert_eq!(a.merged_signals, b.merged_signals);
+    assert_eq!(a.evidence_links, b.evidence_links);
+    assert_eq!(a.reproducible_commands, b.reproducible_commands);
+    assert_eq!(a.rationale, b.rationale);
+    // Serde round-trip is also stable, so the artifact can be archived as evidence.
+    let json_a = serde_json::to_string(&a).expect("artifact a serializes");
+    let json_b = serde_json::to_string(&b).expect("artifact b serializes");
+    assert_eq!(json_a, json_b);
+}
+
+#[test]
+fn lib_signal_from_compatibility_advisory_handles_unknown_divergence_tag() {
+    // Unknown tags must still produce a usable, deterministic signal so
+    // operators can route otherwise-uncategorized drift through the rollout
+    // path without losing the underlying advisory's remediation guidance.
+    let advisory = AdvisoryBuilder::new()
+        .with_divergence("totally_new_divergence_kind")
+        .build();
+    let input = CompatibilityAdvisoryAdaptInput {
+        divergence_tag: "totally_new_divergence_kind".to_string(),
+        advisory: advisory.clone(),
+        severity: EvidenceSeverity::Info,
+        reproducible_command: "scripts/replay_advisory.sh totally_new".to_string(),
+        evidence_links: Vec::new(),
+    };
+    let signal = signal_from_compatibility_advisory(&input);
+
+    assert_eq!(
+        signal.signal_id,
+        "compat-advisory-totally_new_divergence_kind"
+    );
+    assert_eq!(signal.summary, advisory.message);
+    assert_eq!(signal.remediation, advisory.remediation);
+    assert_eq!(signal.owner_hint.as_deref(), Some("compatibility-lane"));
 }
 
 // ── build_ga_evidence_package ───────────────────────────────────────────

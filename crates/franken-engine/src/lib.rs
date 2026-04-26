@@ -182,6 +182,7 @@ pub mod gc;
 pub mod gc_pause;
 pub mod global_coherence_checker;
 pub mod golden_vectors;
+pub mod governance_context;
 pub mod governance_hooks;
 pub mod governance_mechanism;
 pub mod governance_scorecard;

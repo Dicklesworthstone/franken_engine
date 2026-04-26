@@ -831,11 +831,15 @@ fn enrichment_install_exact_epoch_accepted() {
 }
 
 #[test]
-fn enrichment_install_epoch_zero_accepted() {
+fn enrichment_install_epoch_zero_rejected() {
     let mut enforcer = make_enforcer();
     let mut digest = certified_digest("cert-e0");
     digest.epoch = SecurityEpoch::from_raw(0);
-    assert!(enforcer.install_certificate("ext-e0", digest).is_ok());
+    let result = enforcer.install_certificate("ext-e0", digest);
+    assert!(matches!(
+        result,
+        Err(BudgetViolationReason::EpochMismatch { .. })
+    ));
 }
 
 #[test]

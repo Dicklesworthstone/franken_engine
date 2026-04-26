@@ -36,6 +36,7 @@ pub const ESCALATION_SCHEMA_VERSION: &str = "franken-engine.resource-escalation-
 pub const ESCALATION_BEAD_ID: &str = "bd-g61cl";
 
 /// Fixed-point millionths unit.
+#[allow(dead_code)]
 const MILLIONTHS: u64 = 1_000_000;
 
 // ---------------------------------------------------------------------------
@@ -185,7 +186,12 @@ impl EscalationLog {
         ];
 
         let events = vec![];
-        let content_hash = Self::compute_content_hash(&workload_id, &events);
+        let content_hash = Self::compute_content_hash(
+            &workload_id,
+            &bounded_budget_dimensions,
+            &expected_sequence,
+            &events,
+        );
 
         Self {
             workload_id,
@@ -199,7 +205,12 @@ impl EscalationLog {
     /// Add an escalation event.
     pub fn add_event(&mut self, event: EscalationEvent) {
         self.events.push(event);
-        self.content_hash = Self::compute_content_hash(&self.workload_id, &self.events);
+        self.content_hash = Self::compute_content_hash(
+            &self.workload_id,
+            &self.bounded_budget_dimensions,
+            &self.expected_sequence,
+            &self.events,
+        );
     }
 
     /// Check if the escalation sequence is complete.
@@ -222,23 +233,51 @@ impl EscalationLog {
     }
 
     /// Compute content hash for replay stability.
-    fn compute_content_hash(workload_id: &str, events: &[EscalationEvent]) -> ContentHash {
+    ///
+    /// Hashes every field that participates in the log's identity:
+    /// `workload_id`, `bounded_budget_dimensions`, `expected_sequence`, and
+    /// every event's full action + basis payload. Omitting any of these would
+    /// let two logs with materially different contract surfaces collide on
+    /// the same `content_hash`, defeating the replay-stability guarantee.
+    /// Length-prefixed encoding prevents canonicalization ambiguity (e.g.
+    /// concatenating two short strings vs. one long string).
+    fn compute_content_hash(
+        workload_id: &str,
+        bounded_budget_dimensions: &[ResourceDimension],
+        expected_sequence: &[String],
+        events: &[EscalationEvent],
+    ) -> ContentHash {
         let mut hasher = Sha256::new();
+        hasher.update((workload_id.len() as u64).to_le_bytes());
         hasher.update(workload_id.as_bytes());
 
+        let bounded_dim_bytes = serde_json::to_vec(bounded_budget_dimensions)
+            .expect("ResourceDimension list should always serialize");
+        hasher.update((bounded_dim_bytes.len() as u64).to_le_bytes());
+        hasher.update(&bounded_dim_bytes);
+
+        let expected_seq_bytes = serde_json::to_vec(expected_sequence)
+            .expect("expected_sequence should always serialize");
+        hasher.update((expected_seq_bytes.len() as u64).to_le_bytes());
+        hasher.update(&expected_seq_bytes);
+
+        hasher.update((events.len() as u64).to_le_bytes());
         for event in events {
             hasher.update(event.timestamp_ns.to_le_bytes());
 
             // Include full action payload, not just the variant name
             let action_json = serde_json::to_string(&event.action)
                 .expect("EscalationAction should always serialize");
+            hasher.update((action_json.len() as u64).to_le_bytes());
             hasher.update(action_json.as_bytes());
 
+            hasher.update((event.source_module.len() as u64).to_le_bytes());
             hasher.update(event.source_module.as_bytes());
 
             // Include basis JSON for complete event context
             let basis_json = serde_json::to_string(&event.basis)
                 .expect("serde_json::Value should always serialize");
+            hasher.update((basis_json.len() as u64).to_le_bytes());
             hasher.update(basis_json.as_bytes());
         }
 
@@ -257,18 +296,67 @@ impl EscalationLog {
 #[derive(Debug, Clone)]
 pub struct ResourceEscalationController {
     /// Security epoch.
+    #[allow(dead_code)]
     epoch: SecurityEpoch,
     /// Decision context for runtime decisions.
+    #[allow(dead_code)]
     decision_context: DecisionContext,
 }
 
+/// Error returned when constructing a [`ResourceEscalationController`] with
+/// an `epoch` that does not match the policy bundle carried by the supplied
+/// [`DecisionContext`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EscalationEpochMismatch {
+    /// Epoch supplied to the constructor.
+    pub controller_epoch: SecurityEpoch,
+    /// Epoch carried by the decision context's policy bundle.
+    pub decision_context_epoch: SecurityEpoch,
+}
+
+impl fmt::Display for EscalationEpochMismatch {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "resource escalation controller epoch mismatch: controller_epoch={} decision_context_epoch={}",
+            self.controller_epoch.as_u64(),
+            self.decision_context_epoch.as_u64()
+        )
+    }
+}
+
+impl std::error::Error for EscalationEpochMismatch {}
+
 impl ResourceEscalationController {
-    /// Create a new escalation controller.
-    pub fn new(epoch: SecurityEpoch, decision_context: DecisionContext) -> Self {
-        Self {
+    /// Create a new escalation controller, validating that the controller's
+    /// epoch matches the decision context's policy bundle epoch.
+    ///
+    /// Fails closed on mismatch: artifacts emitted by an escalation controller
+    /// claim the controller's epoch in their `basis`, so a mismatch with the
+    /// underlying decision context would produce evidence that misattributes
+    /// which policy snapshot drove the escalation.
+    pub fn try_new(
+        epoch: SecurityEpoch,
+        decision_context: DecisionContext,
+    ) -> Result<Self, EscalationEpochMismatch> {
+        let bundle_epoch = decision_context.policy_bundle().epoch;
+        if bundle_epoch != epoch {
+            return Err(EscalationEpochMismatch {
+                controller_epoch: epoch,
+                decision_context_epoch: bundle_epoch,
+            });
+        }
+        Ok(Self {
             epoch,
             decision_context,
-        }
+        })
+    }
+
+    /// Create a new escalation controller. Panics on epoch mismatch — see
+    /// [`Self::try_new`] for the fallible variant.
+    pub fn new(epoch: SecurityEpoch, decision_context: DecisionContext) -> Self {
+        Self::try_new(epoch, decision_context)
+            .expect("ResourceEscalationController epoch must match decision context epoch")
     }
 
     /// Execute the full escalation sequence for a workload.
@@ -582,5 +670,91 @@ mod tests {
             log2.content_hash, log3.content_hash,
             "All events with different details should have unique content hashes"
         );
+    }
+
+    // bd-2kj2j: hash must cover bounded_budget_dimensions and the constructor
+    // must validate epoch consistency.
+
+    #[test]
+    fn test_content_hash_distinguishes_bounded_dimensions() {
+        let log_cpu = EscalationLog::new("wl".to_string(), vec![ResourceDimension::CpuTime]);
+        let log_heap = EscalationLog::new("wl".to_string(), vec![ResourceDimension::HeapMemory]);
+        let log_both = EscalationLog::new(
+            "wl".to_string(),
+            vec![ResourceDimension::CpuTime, ResourceDimension::HeapMemory],
+        );
+
+        assert_ne!(
+            log_cpu.content_hash, log_heap.content_hash,
+            "Different bounded dimensions must produce different content hashes"
+        );
+        assert_ne!(
+            log_cpu.content_hash, log_both.content_hash,
+            "Subset and superset bounded dimensions must produce different content hashes"
+        );
+        assert_ne!(log_heap.content_hash, log_both.content_hash);
+    }
+
+    #[test]
+    fn test_content_hash_covers_expected_sequence() {
+        // Build two logs with the same workload + dimensions but different
+        // expected_sequence vectors. The constructor always emits the same
+        // expected_sequence, so we mutate after construction.
+        let dims = vec![ResourceDimension::CpuTime];
+        let mut log_default = EscalationLog::new("wl".to_string(), dims.clone());
+        let mut log_alt = EscalationLog::new("wl".to_string(), dims);
+        log_alt.expected_sequence = vec!["throttle".to_string(), "terminate".to_string()];
+        // Force re-hash via the public API (push then pop a sentinel event).
+        let sentinel = EscalationEvent {
+            timestamp_ns: 0,
+            action: EscalationAction::Throttle {
+                decision: AdmissionDecision::Queue {
+                    estimated_wait_ns: 0,
+                    position: 0,
+                },
+                rationale: String::new(),
+            },
+            source_module: "rehash".to_string(),
+            basis: serde_json::Value::Null,
+        };
+        log_default.add_event(sentinel.clone());
+        log_alt.add_event(sentinel);
+        assert_ne!(
+            log_default.content_hash, log_alt.content_hash,
+            "Different expected_sequence must produce different content hashes"
+        );
+    }
+
+    #[test]
+    fn test_controller_try_new_rejects_epoch_mismatch() {
+        let bundle_epoch = SecurityEpoch::from_raw(7);
+        let controller_epoch = SecurityEpoch::from_raw(8);
+        let config = DecisionContextConfig::default();
+        let decision_context = DecisionContext::new(config, bundle_epoch);
+
+        let err = ResourceEscalationController::try_new(controller_epoch, decision_context)
+            .expect_err("mismatched epochs must fail closed");
+        assert_eq!(err.controller_epoch, controller_epoch);
+        assert_eq!(err.decision_context_epoch, bundle_epoch);
+        assert!(err.to_string().contains("epoch mismatch"));
+    }
+
+    #[test]
+    fn test_controller_try_new_accepts_matching_epoch() {
+        let epoch = SecurityEpoch::from_raw(11);
+        let config = DecisionContextConfig::default();
+        let decision_context = DecisionContext::new(config, epoch);
+
+        assert!(ResourceEscalationController::try_new(epoch, decision_context).is_ok());
+    }
+
+    #[test]
+    #[should_panic(expected = "epoch must match decision context epoch")]
+    fn test_controller_new_panics_on_epoch_mismatch() {
+        let bundle_epoch = SecurityEpoch::from_raw(1);
+        let controller_epoch = SecurityEpoch::from_raw(2);
+        let config = DecisionContextConfig::default();
+        let decision_context = DecisionContext::new(config, bundle_epoch);
+        let _ = ResourceEscalationController::new(controller_epoch, decision_context);
     }
 }

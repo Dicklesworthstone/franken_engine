@@ -10,6 +10,7 @@
 //! literals, and escape sequence handling.
 
 use frankenengine_engine::HybridRouter;
+use frankenengine_engine::{EvalOutcome, EvalResult};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 

@@ -8,8 +8,8 @@ use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use chrono::{NaiveDate, SecondsFormat, Utc};
-use frankenengine_engine::HybridRouter;
 use frankenengine_engine::ast::ParseGoal;
+use frankenengine_engine::baseline_interpreter::{ConsoleEntry, InterpreterError};
 use frankenengine_engine::benchmark_denominator::{
     PublicationContext, PublicationGateInput, evaluate_publication_gate,
 };
@@ -18,8 +18,11 @@ use frankenengine_engine::benchmark_e2e::{
     run_benchmark_comparison_suite, run_benchmark_suite, write_benchmark_comparison_artifacts,
     write_evidence_artifacts,
 };
+use frankenengine_engine::capability::{CapabilityProfile, RuntimeCapability};
 use frankenengine_engine::deterministic_replay::{NondeterminismTrace, ReplayEngine, ReplayMode};
-use frankenengine_engine::execution_orchestrator::OrchestratorConfig;
+use frankenengine_engine::execution_orchestrator::{
+    ExecutionOrchestrator, ExtensionPackage, OrchestratorConfig, OrchestratorError,
+};
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::ir_contract::Ir0Module;
 use frankenengine_engine::lowering_pipeline::{
@@ -588,6 +591,28 @@ struct CompileCommandOutput {
     hashes: CompileArtifactHashes,
     lowering_event_count: usize,
     lowering_witness_count: usize,
+    observability_mode: ObservabilityModeOutput,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct RunCommandOutput {
+    schema_version: String,
+    extension_id: String,
+    trace_id: String,
+    decision_id: String,
+    policy_id: String,
+    parse_goal: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    report_path: Option<String>,
+    source_ingestion: SourceIngestionSummary,
+    lane: String,
+    lane_reason: String,
+    containment_action: String,
+    execution_value: String,
+    expected_loss_millionths: i64,
+    instructions_executed: u64,
+    evidence_entries: usize,
+    console_output: Vec<ConsoleEntry>,
     observability_mode: ObservabilityModeOutput,
 }
 
@@ -1396,18 +1421,32 @@ fn parse_run_command(args: &[String]) -> Result<CommandSpec, String> {
         return Ok(CommandSpec::HelpTopic(HelpTopic::Run));
     }
 
-    if args.is_empty() {
-        return Err("run requires a JavaScript file argument".to_string());
+    let mut input: Option<PathBuf> = None;
+    let mut extension_id: Option<String> = None;
+    let mut goal = ParseGoal::Script;
+    let mut out: Option<PathBuf> = None;
+
+    let mut index = 0usize;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--input" => input = Some(PathBuf::from(next_arg(args, &mut index, "--input")?)),
+            "--extension-id" => extension_id = Some(next_arg(args, &mut index, "--extension-id")?),
+            "--goal" => goal = parse_goal(&next_arg(args, &mut index, "--goal")?)?,
+            "--out" => out = Some(PathBuf::from(next_arg(args, &mut index, "--out")?)),
+            flag => return Err(format!("unknown run flag `{flag}`")),
+        }
+        index += 1;
     }
 
-    // Take first argument as the file to run
-    let input = PathBuf::from(&args[0]);
+    let input = input.ok_or_else(|| "run requires --input <path>".to_string())?;
+    let extension_id =
+        extension_id.ok_or_else(|| "run requires --extension-id <id>".to_string())?;
 
     Ok(CommandSpec::Run(RunArgs {
         input,
-        extension_id: "frankenctl-runner".to_string(), // Default extension ID for simple runner
-        parse_goal: ParseGoal::Script,
-        out: None,
+        extension_id,
+        parse_goal: goal,
+        out,
     }))
 }
 
@@ -2426,14 +2465,85 @@ fn execute_compile(args: CompileArgs) -> Result<i32, String> {
 fn execute_run(args: RunArgs) -> Result<i32, String> {
     let source = fs::read_to_string(&args.input)
         .map_err(|error| format!("failed to read source `{}`: {error}", args.input.display()))?;
-    let mut router = HybridRouter::default();
-    let outcome = router
-        .eval(source.as_str())
-        .map_err(|error| format!("run failed for `{}`: {error}", args.input.display()))?;
 
-    println!("{}", outcome.value);
+    let source_label = args.input.display().to_string();
+    let capabilities = run_cli_capabilities(args.parse_goal);
+    let package = ExtensionPackage {
+        extension_id: args.extension_id.clone(),
+        source,
+        source_file: Some(source_label.clone()),
+        capabilities,
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        metadata: BTreeMap::new(),
+    };
+    let policy_id = OrchestratorConfig::default().policy_id;
+    let mut orchestrator = ExecutionOrchestrator::new(OrchestratorConfig {
+        parse_goal: args.parse_goal,
+        trace_id_prefix: "frankenctl-run".to_string(),
+        ..OrchestratorConfig::default()
+    });
+    let result = orchestrator
+        .execute(&package)
+        .map_err(|error| format_run_error(&args.input, &error))?;
+
+    let output = RunCommandOutput {
+        schema_version: FRANKENCTL_SCHEMA_VERSION.to_string(),
+        extension_id: result.extension_id,
+        trace_id: result.trace_id,
+        decision_id: result.decision_id,
+        policy_id,
+        parse_goal: args.parse_goal.as_str().to_string(),
+        report_path: args.out.as_ref().map(|path| path.display().to_string()),
+        source_ingestion: result.source_ingestion,
+        lane: result.lane.to_string(),
+        lane_reason: result.lane_reason.to_string(),
+        containment_action: result.containment_action.to_string(),
+        execution_value: result.execution_value,
+        expected_loss_millionths: result.expected_loss_millionths,
+        instructions_executed: result.instructions_executed,
+        evidence_entries: result.evidence_entries.len(),
+        console_output: result.console_output,
+        observability_mode: default_capture_observability_mode(),
+    };
+
+    if let Some(path) = args.out.as_ref() {
+        write_json_file(path, &output)?;
+    }
+    print_json(&output)?;
 
     Ok(0)
+}
+
+fn format_run_error(input: &Path, error: &OrchestratorError) -> String {
+    let mut detail = format!("run failed for `{}`: {error}", input.display());
+    if let Some(classification) = classify_run_error(error) {
+        detail.push_str(format!("\nclassification: {classification}").as_str());
+    }
+    detail
+}
+
+fn classify_run_error(error: &OrchestratorError) -> Option<&'static str> {
+    match error {
+        OrchestratorError::Interpreter(
+            InterpreterError::ModuleResolutionFailed { .. }
+            | InterpreterError::ModuleReadFailed { .. }
+            | InterpreterError::ModuleParseFailed { .. }
+            | InterpreterError::ModuleLoweringFailed { .. }
+            | InterpreterError::ModuleEvaluationFailed { .. },
+        ) => Some("unsupported_runtime_module_resolution"),
+        _ => None,
+    }
+}
+
+fn run_cli_capabilities(parse_goal: ParseGoal) -> Vec<String> {
+    let mut capabilities = CapabilityProfile::engine_core().capabilities;
+    if parse_goal == ParseGoal::Module {
+        capabilities.insert(RuntimeCapability::ModuleLoad);
+    }
+    capabilities
+        .into_iter()
+        .map(|capability| capability.to_string())
+        .collect()
 }
 
 fn execute_doctor(args: DoctorArgs) -> Result<i32, String> {
@@ -6084,6 +6194,40 @@ mod tests {
         let args = vec!["run".to_string(), "--help".to_string()];
         let parsed = parse_command(&args).expect("run --help should parse");
         assert_eq!(parsed, CommandSpec::HelpTopic(HelpTopic::Run));
+    }
+
+    #[test]
+    fn parse_run_command_requires_flags_and_preserves_goal() {
+        let args = vec![
+            "run".to_string(),
+            "--input".to_string(),
+            "demo.js".to_string(),
+            "--extension-id".to_string(),
+            "ext-demo".to_string(),
+            "--goal".to_string(),
+            "module".to_string(),
+            "--out".to_string(),
+            "run.json".to_string(),
+        ];
+        let parsed = parse_command(&args).expect("run command should parse");
+        match parsed {
+            CommandSpec::Run(spec) => {
+                assert_eq!(spec.input, PathBuf::from("demo.js"));
+                assert_eq!(spec.extension_id, "ext-demo");
+                assert_eq!(spec.parse_goal, ParseGoal::Module);
+                assert_eq!(spec.out, Some(PathBuf::from("run.json")));
+            }
+            other => panic!("expected run command, got {other:?}"),
+        }
+
+        let missing_extension_id = vec![
+            "run".to_string(),
+            "--input".to_string(),
+            "demo.js".to_string(),
+        ];
+        let error = parse_command(&missing_extension_id)
+            .expect_err("run without extension-id should fail closed");
+        assert_eq!(error, "run requires --extension-id <id>");
     }
 
     #[test]

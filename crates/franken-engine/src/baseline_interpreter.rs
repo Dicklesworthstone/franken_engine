@@ -17633,6 +17633,7 @@ mod function_prototype_call_apply_tests_current {
         config.granted_capabilities = std::collections::BTreeSet::from([
             RuntimeCapability::VmDispatch,
             RuntimeCapability::HeapAllocate,
+            RuntimeCapability::Builtin,
         ]);
         InterpreterCore::new(config, "function-prototype-call-apply-test")
     }

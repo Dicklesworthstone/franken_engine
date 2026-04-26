@@ -41,6 +41,16 @@ fn check_determinism(label: &str, input: &ParseInput<'_>) -> Result<ParseOutput,
     first
 }
 
+fn make_input<'a>(source: &'a str, config: &'a ParallelConfig) -> ParseInput<'a> {
+    ParseInput {
+        source,
+        trace_id: "fuzz_trace",
+        run_id: "fuzz_run",
+        epoch: SecurityEpoch::GENESIS,
+        config,
+    }
+}
+
 fuzz_target!(|data: &[u8]| {
     // Guard against extremely large inputs for fuzzing efficiency
     if data.is_empty() || data.len() > 8192 {
@@ -50,14 +60,7 @@ fuzz_target!(|data: &[u8]| {
     let source = String::from_utf8_lossy(data);
     let config = ParallelConfig::default();
 
-    // Create ParseInput with default values
-    let input = ParseInput {
-        source: &source,
-        trace_id: "fuzz_trace",
-        run_id: "fuzz_run",
-        epoch: SecurityEpoch::GENESIS,
-        config: &config,
-    };
+    let input = make_input(&source, &config);
 
     // Test with default config
     let _result_default = check_determinism("default", &input);
@@ -65,36 +68,27 @@ fuzz_target!(|data: &[u8]| {
     // Test with different config variants to explore code paths
     let config_single_worker = ParallelConfig {
         max_workers: 1,
-        ..config
+        ..config.clone()
     };
-    let input_single = ParseInput {
-        config: &config_single_worker,
-        ..input
-    };
+    let input_single = make_input(&source, &config_single_worker);
     let _result_single = check_determinism("single-worker", &input_single);
 
     // Test with forced parallel mode (lower threshold)
     let config_force_parallel = ParallelConfig {
         min_parallel_bytes: 1, // Force parallel on any non-empty input
         max_workers: 4,
-        ..config
+        ..config.clone()
     };
-    let input_parallel = ParseInput {
-        config: &config_force_parallel,
-        ..input
-    };
+    let input_parallel = make_input(&source, &config_force_parallel);
     let _result_parallel = check_determinism("force-parallel", &input_parallel);
 
     // Test with parity checking always enabled
     let config_parity = ParallelConfig {
         always_check_parity: true,
         min_parallel_bytes: 1,
-        ..config
+        ..config.clone()
     };
-    let input_parity = ParseInput {
-        config: &config_parity,
-        ..input
-    };
+    let input_parity = make_input(&source, &config_parity);
     let _result_parity = check_determinism("parity-always-on", &input_parity);
 
     // Test edge case configs (but only for small inputs to avoid timeout)
@@ -102,12 +96,9 @@ fuzz_target!(|data: &[u8]| {
         let config_tiny_budget = ParallelConfig {
             chunk_budget_us: 1, // Minimal budget
             max_workers: 2,
-            ..config
+            ..config.clone()
         };
-        let input_tiny = ParseInput {
-            config: &config_tiny_budget,
-            ..input
-        };
+        let input_tiny = make_input(&source, &config_tiny_budget);
         let _result_tiny = check_determinism("tiny-budget", &input_tiny);
     }
 });

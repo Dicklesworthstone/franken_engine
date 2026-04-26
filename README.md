@@ -1,7 +1,7 @@
 # FrankenEngine
 
 <div align="center">
-  <img src="franken_engine_illustration.webp" alt="FrankenEngine - Native Rust runtime for high-trust extension workloads">
+  <img src="docs/assets/franken_engine_illustration.webp" alt="FrankenEngine - Native Rust runtime for high-trust extension workloads">
 </div>
 
 <div align="center">

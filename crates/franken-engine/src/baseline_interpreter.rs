@@ -15584,15 +15584,30 @@ impl InterpreterCore {
         }
         let actual_reg = self.register_base + reg as usize;
         if actual_reg >= self.registers.len() {
+            // The new slots are `Value::Undefined`. `estimate_value_bytes`
+            // returns 0 for non-string values, so the resize itself does
+            // not change the running memory total.
             self.registers.resize(actual_reg + 1, Value::Undefined);
         }
-        let previous = self.registers[actual_reg].clone();
-        self.registers[actual_reg] = value;
-        if let Err(err) = self.sync_estimated_memory_bytes() {
-            self.registers[actual_reg] = previous;
-            self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
-            return Err(err);
+        // bd-31ijt: the previous implementation called sync_estimated_memory_bytes()
+        // after every register write, walking the full heap, registers, scope chain,
+        // closures, call stack, iterators, and generators each time — turning every
+        // hot-path register write into O(live_state) work. Use an incremental delta
+        // against the running `estimated_memory_bytes` total instead. The total is
+        // still rebuilt by full recompute on the slower paths (heap operations,
+        // call setup/teardown, scope mutations) so any drift is bounded by the
+        // distance between two non-register mutations.
+        let previous_bytes = Self::estimate_value_bytes(&self.registers[actual_reg]);
+        let new_bytes = Self::estimate_value_bytes(&value);
+        let projected = self
+            .estimated_memory_bytes
+            .saturating_sub(previous_bytes)
+            .saturating_add(new_bytes);
+        if projected > self.config.max_total_memory_bytes {
+            return Err(self.memory_budget_error(projected, self.heap_object_count_u32()));
         }
+        self.registers[actual_reg] = value;
+        self.estimated_memory_bytes = projected;
         Ok(())
     }
 
@@ -24981,5 +24996,101 @@ mod tests {
                 Some(&Value::Str("x".to_string()))
             );
         }
+    }
+
+    // -- bd-31ijt: incremental memory accounting on write_reg ---------------
+
+    #[test]
+    fn write_reg_string_value_updates_running_total_incrementally() {
+        // Exercise the bd-31ijt fast path: a single write_reg with a sized
+        // value must move estimated_memory_bytes by exactly the delta
+        // between the previous slot's bytes and the new slot's bytes — no
+        // full recompute, no drift relative to the source-of-truth.
+        let mut interp = InterpreterCore::new(test_quickjs_config(), "test-trace");
+        assert_eq!(interp.estimated_memory_bytes, 0);
+
+        let payload = "hello-world".to_string();
+        let payload_bytes = InterpreterCore::estimate_value_bytes(&Value::Str(payload.clone()));
+        assert!(payload_bytes > 0, "string value must contribute bytes");
+
+        interp.write_reg(0, Value::Str(payload)).expect("write_reg");
+        assert_eq!(interp.estimated_memory_bytes, payload_bytes);
+        // Source-of-truth recompute must agree — no drift introduced by
+        // the incremental update.
+        assert_eq!(
+            interp.recompute_estimated_memory_bytes(),
+            interp.estimated_memory_bytes
+        );
+    }
+
+    #[test]
+    fn write_reg_replacing_string_with_undefined_subtracts_bytes() {
+        let mut interp = InterpreterCore::new(test_quickjs_config(), "test-trace");
+        let payload = Value::Str("x".repeat(64));
+        let initial_bytes = InterpreterCore::estimate_value_bytes(&payload);
+        interp.write_reg(0, payload).expect("write_reg string");
+        assert_eq!(interp.estimated_memory_bytes, initial_bytes);
+
+        interp
+            .write_reg(0, Value::Undefined)
+            .expect("write_reg undefined");
+        assert_eq!(interp.estimated_memory_bytes, 0);
+        assert_eq!(
+            interp.recompute_estimated_memory_bytes(),
+            interp.estimated_memory_bytes,
+            "incremental subtract must match full recompute"
+        );
+    }
+
+    #[test]
+    fn write_reg_rejects_value_that_pushes_total_over_budget() {
+        // Tight memory budget: a single write of a large string should
+        // exceed it. The fast path must still return MemoryBudgetExceeded
+        // and must NOT install the rejected value (state unchanged).
+        let mut config = test_quickjs_config();
+        config.max_total_memory_bytes = 64;
+        let mut interp = InterpreterCore::new(config, "test-trace");
+
+        let huge = Value::Str("x".repeat(1024));
+        let result = interp.write_reg(0, huge);
+        assert!(
+            matches!(result, Err(InterpreterError::MemoryBudgetExceeded { .. })),
+            "expected MemoryBudgetExceeded, got {result:?}"
+        );
+        assert_eq!(
+            interp.read_reg(0).expect("read undefined"),
+            Value::Undefined,
+            "rejected write must not mutate the register"
+        );
+        assert_eq!(
+            interp.estimated_memory_bytes, 0,
+            "rejected write must not move the running total"
+        );
+    }
+
+    #[test]
+    fn write_reg_burst_does_not_drift_against_full_recompute() {
+        // Hot loop: many register writes with mixed value sizes. After the
+        // burst, the incrementally-maintained `estimated_memory_bytes` must
+        // exactly equal a fresh full recompute. Catches any sign error or
+        // missed-delta bug in the bd-31ijt fast path.
+        let mut interp = InterpreterCore::new(test_quickjs_config(), "test-trace");
+        for i in 0..256u32 {
+            let value = if i.is_multiple_of(3) {
+                Value::Str(format!("payload-{i}-{}", "x".repeat((i % 32) as usize)))
+            } else if i.is_multiple_of(2) {
+                Value::Int(i as i64)
+            } else {
+                Value::Undefined
+            };
+            interp
+                .write_reg(i % 8, value)
+                .expect("burst write must stay within budget");
+        }
+        assert_eq!(
+            interp.recompute_estimated_memory_bytes(),
+            interp.estimated_memory_bytes,
+            "burst writes must not introduce drift"
+        );
     }
 }

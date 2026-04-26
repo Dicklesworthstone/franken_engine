@@ -87,7 +87,7 @@ pub struct ProbeState {
     pub config: ProbeConfig,
     /// Intervals since last execution (increases staleness).
     pub staleness: u64,
-    /// Number of times this probe has been scheduled.
+    /// Number of times this probe has actually completed execution.
     pub execution_count: u64,
     /// Whether the last execution was successful.
     pub last_success: bool,
@@ -329,8 +329,12 @@ impl MonitorScheduler {
     /// 1. Increments staleness for all probes.
     /// 2. Computes VOI scores.
     /// 3. Sorts by descending VOI.
-    /// 4. Greedily schedules probes until budget exhausted.
-    /// 5. Returns the schedule.
+    /// 4. Greedily selects probes until budget exhausted.
+    /// 5. Returns the schedule without mutating execution state.
+    ///
+    /// Call [`Self::record_execution`] once a worker actually finishes a
+    /// scheduled probe so staleness and execution counts reflect completion
+    /// rather than selection time.
     pub fn schedule(&mut self, regime: Regime) -> ScheduleResult {
         self.interval = self.interval.saturating_add(1);
 
@@ -391,13 +395,6 @@ impl MonitorScheduler {
 
         let probes_scheduled = scheduled_ids.len();
         let probes_deferred = decisions.len() - probes_scheduled;
-
-        // Mark scheduled probes as executed.
-        for id in &scheduled_ids {
-            if let Some(probe) = self.probes.get_mut(id) {
-                probe.mark_executed(true);
-            }
-        }
 
         let result = ScheduleResult {
             scheduler_id: self.config.scheduler_id.clone(),
@@ -711,19 +708,26 @@ mod tests {
     }
 
     #[test]
-    fn scheduled_probes_reset_staleness() {
+    fn scheduled_probes_do_not_reset_staleness_without_execution() {
         let mut sched = MonitorScheduler::new(test_config());
         sched
             .register_probe(health_probe("h1"))
             .expect("serde deserialization should succeed"); // cheap
 
         sched.schedule(Regime::Normal); // h1 should be scheduled
-        // SAFETY: Test-only unwrap, probe "h1" was just registered
+        // Scheduling alone must not pretend the probe executed.
         assert_eq!(
             sched
                 .probe("h1")
                 .expect("serde deserialization should succeed")
                 .staleness,
+            1
+        );
+        assert_eq!(
+            sched
+                .probe("h1")
+                .expect("serde deserialization should succeed")
+                .execution_count,
             0
         );
     }
@@ -1592,13 +1596,13 @@ mod tests {
             .expect("serde deserialization should succeed");
 
         sched.schedule(Regime::Normal);
-        // cheap scheduled => staleness reset to 0
+        // cheap probe was selected, but only a completion record resets staleness.
         assert_eq!(
             sched
                 .probe("cheap")
                 .expect("serde deserialization should succeed")
                 .staleness,
-            0
+            1
         );
         // expensive deferred => staleness = 1 (ticked but not reset)
         assert_eq!(
@@ -1615,7 +1619,7 @@ mod tests {
                 .probe("cheap")
                 .expect("serde deserialization should succeed")
                 .staleness,
-            0
+            2
         );
         assert_eq!(
             sched
@@ -1863,13 +1867,35 @@ mod tests {
     // -- Enrichment: execution count accumulates across record_execution calls --
 
     #[test]
-    fn execution_count_accumulates_across_mixed_sources() {
+    fn execution_count_only_advances_on_recorded_completion() {
         let mut sched = MonitorScheduler::new(test_config());
         sched
             .register_probe(health_probe("h1"))
             .expect("serde deserialization should succeed");
 
-        // Schedule (auto-executes)
+        // Selection does not count as execution.
+        sched.schedule(Regime::Normal);
+        assert_eq!(
+            sched
+                .probe("h1")
+                .expect("serde deserialization should succeed")
+                .execution_count,
+            0
+        );
+
+        // Completion count advances once when the worker reports completion.
+        sched
+            .record_execution("h1", true)
+            .expect("serde deserialization should succeed");
+        assert_eq!(
+            sched
+                .probe("h1")
+                .expect("serde deserialization should succeed")
+                .execution_count,
+            1
+        );
+
+        // Another selection still does not double count.
         sched.schedule(Regime::Normal);
         assert_eq!(
             sched
@@ -1879,7 +1905,6 @@ mod tests {
             1
         );
 
-        // External record
         sched
             .record_execution("h1", true)
             .expect("serde deserialization should succeed");
@@ -1890,15 +1915,48 @@ mod tests {
                 .execution_count,
             2
         );
+    }
 
-        // Schedule again
-        sched.schedule(Regime::Normal);
+    #[test]
+    fn scheduled_probe_stays_stale_until_completion_is_recorded() {
+        let mut sched = MonitorScheduler::new(test_config());
+        sched
+            .register_probe(health_probe("h1"))
+            .expect("serde deserialization should succeed");
+
+        let result = sched.schedule(Regime::Normal);
+        assert_eq!(result.probes_scheduled, 1);
+        assert_eq!(
+            sched
+                .probe("h1")
+                .expect("serde deserialization should succeed")
+                .staleness,
+            1
+        );
         assert_eq!(
             sched
                 .probe("h1")
                 .expect("serde deserialization should succeed")
                 .execution_count,
-            3
+            0
+        );
+
+        sched
+            .record_execution("h1", true)
+            .expect("serde deserialization should succeed");
+        assert_eq!(
+            sched
+                .probe("h1")
+                .expect("serde deserialization should succeed")
+                .staleness,
+            0
+        );
+        assert_eq!(
+            sched
+                .probe("h1")
+                .expect("serde deserialization should succeed")
+                .execution_count,
+            1
         );
     }
 

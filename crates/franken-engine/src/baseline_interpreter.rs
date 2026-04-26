@@ -16388,18 +16388,6 @@ impl InterpreterCore {
         self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
     }
 
-    /// Compat shim. Several recently-landed Date/Error/Map/Set/Promise
-    /// builtin blocks compute an ObjectId by calling `self.next_object_id()`
-    /// and then `self.heap.push(obj)` directly, which bypasses heap-budget
-    /// and HeapAllocate capability checks. This shim returns the u32 ID that
-    /// the next `self.heap.push` would produce so those blocks keep
-    /// compiling; the proper fix is to migrate them to
-    /// `alloc_object_with_prototype` + `set_object_property`, which
-    /// several blocks in this file have already adopted.
-    pub(crate) fn next_object_id(&self) -> u32 {
-        u32::try_from(self.heap.len()).unwrap_or(u32::MAX)
-    }
-
     /// Allocate a new object with an explicit prototype link.
     ///
     /// Returns an error if the heap exceeds `u32::MAX` objects, preventing

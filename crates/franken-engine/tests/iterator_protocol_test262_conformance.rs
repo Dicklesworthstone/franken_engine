@@ -12,6 +12,7 @@
 
 use frankenengine_engine::HybridRouter;
 use frankenengine_engine::security_epoch::SecurityEpoch;
+use frankenengine_engine::{EvalOutcome, EvalResult};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -451,45 +452,78 @@ impl IteratorConformanceHarness {
     ) -> IteratorConformanceResult {
         let mut engine = HybridRouter::default();
 
-        let execution = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            engine
-                .eval(&test.source)
-                .map(|_| ())
-                .map_err(|error| error.to_string())
-        }));
+        let execution =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| engine.eval(&test.source)));
 
         match execution {
             Err(panic) => IteratorConformanceResult::Error {
                 error: Self::panic_message(panic),
             },
-            Ok(Ok(())) => {
-                // For now, we'll mark tests as passed if they execute without error
-                // In a full implementation, this would capture and compare actual output
-                match &test.expected_result {
-                    ExpectedResult::Success { expected_output: _ } => {
-                        IteratorConformanceResult::Pass
-                    }
-                    ExpectedResult::ThrowError { error_type: _ } => {
-                        IteratorConformanceResult::Fail {
-                            reason: "Expected error but execution succeeded".to_string(),
-                        }
-                    }
-                    ExpectedResult::IteratorSequence { values: _ } => {
-                        IteratorConformanceResult::Pass
-                    }
-                }
+            Ok(eval_result) => {
+                Self::evaluate_iterator_test_result(eval_result, &test.expected_result, &test.id)
             }
-            Ok(Err(error)) => match &test.expected_result {
-                ExpectedResult::ThrowError { error_type } => {
-                    if error.contains(error_type) {
+        }
+    }
+
+    /// Evaluate test result against expected outcome with proper output comparison.
+    fn evaluate_iterator_test_result(
+        eval_result: EvalResult<EvalOutcome>,
+        expected: &ExpectedResult,
+        test_id: &str,
+    ) -> IteratorConformanceResult {
+        match eval_result {
+            Ok(outcome) => match expected {
+                ExpectedResult::Success { expected_output } => {
+                    // FIX: Actually compare output instead of ignoring it
+                    if outcome.value.trim() == expected_output.trim() {
                         IteratorConformanceResult::Pass
                     } else {
                         IteratorConformanceResult::Fail {
-                            reason: format!("Expected {} but got {}", error_type, error),
+                            reason: format!(
+                                "Output mismatch in {}: expected '{}', got '{}'",
+                                test_id, expected_output, outcome.value
+                            ),
                         }
                     }
                 }
-                _ => IteratorConformanceResult::Error { error },
+                ExpectedResult::ThrowError { error_type } => IteratorConformanceResult::Fail {
+                    reason: format!(
+                        "Expected error '{}' but execution succeeded in {}",
+                        error_type, test_id
+                    ),
+                },
+                ExpectedResult::IteratorSequence { values } => IteratorConformanceResult::Fail {
+                    reason: format!(
+                        "Expected iterator sequence {:?} but got success in {}",
+                        values, test_id
+                    ),
+                },
+            },
+            Err(error) => match expected {
+                ExpectedResult::ThrowError { error_type } => {
+                    if error.to_string().contains(error_type) {
+                        IteratorConformanceResult::Pass
+                    } else {
+                        IteratorConformanceResult::Fail {
+                            reason: format!(
+                                "Expected error '{}' but got '{}' in {}",
+                                error_type, error, test_id
+                            ),
+                        }
+                    }
+                }
+                ExpectedResult::Success { expected_output } => IteratorConformanceResult::Error {
+                    error: format!(
+                        "Expected success with output '{}' but got error '{}' in {}",
+                        expected_output, error, test_id
+                    ),
+                },
+                ExpectedResult::IteratorSequence { values } => IteratorConformanceResult::Error {
+                    error: format!(
+                        "Expected iterator sequence {:?} but got error '{}' in {}",
+                        values, error, test_id
+                    ),
+                },
             },
         }
     }

@@ -389,6 +389,8 @@ pub struct SimScheduler {
     pub next_event_id: u64,
     /// Outcomes from every dispatched tick.
     pub dispatch_log: Vec<TickOutcome>,
+    /// Ordered metadata for every dispatched event.
+    pub replay_log: SimReplayLog,
     /// Security epoch for provenance.
     pub epoch: SecurityEpoch,
 }
@@ -402,6 +404,7 @@ impl SimScheduler {
             event_queue: BTreeMap::new(),
             next_event_id: 0,
             dispatch_log: Vec::new(),
+            replay_log: SimReplayLog::default(),
             epoch,
         }
     }
@@ -484,6 +487,7 @@ impl SimScheduler {
         // counter).
         let mut microtasks_drained: u64 = 0;
         let mut dispatched_ids: Vec<u64> = Vec::new();
+        let mut replay_entries: Vec<SimReplayEntry> = Vec::new();
 
         let limit = self.policy.max_events_per_tick as usize;
 
@@ -496,6 +500,12 @@ impl SimScheduler {
                 if ev.priority == SimPriority::Microtask {
                     dispatched_ids.push(ev.id);
                     microtasks_drained += 1;
+                    replay_entries.push(SimReplayEntry {
+                        tick,
+                        event_id: ev.id,
+                        kind: ev.kind,
+                        priority: ev.priority,
+                    });
                 }
             }
             // Phase 2: remaining non-microtask events.
@@ -505,6 +515,12 @@ impl SimScheduler {
                 }
                 if ev.priority != SimPriority::Microtask {
                     dispatched_ids.push(ev.id);
+                    replay_entries.push(SimReplayEntry {
+                        tick,
+                        event_id: ev.id,
+                        kind: ev.kind,
+                        priority: ev.priority,
+                    });
                 }
             }
         } else {
@@ -516,6 +532,12 @@ impl SimScheduler {
                 if ev.priority == SimPriority::Microtask {
                     microtasks_drained += 1;
                 }
+                replay_entries.push(SimReplayEntry {
+                    tick,
+                    event_id: ev.id,
+                    kind: ev.kind,
+                    priority: ev.priority,
+                });
             }
         }
 
@@ -548,6 +570,9 @@ impl SimScheduler {
         };
 
         self.dispatch_log.push(outcome.clone());
+        for entry in replay_entries {
+            self.replay_log.push(entry);
+        }
         self.current_tick += 1;
 
         Some(outcome)
@@ -617,26 +642,19 @@ impl SimScheduler {
         let mut events_by_priority: BTreeMap<String, u64> = BTreeMap::new();
         let mut total_events: u64 = 0;
 
-        // Rebuild from dispatch log — we need the event metadata, so we
-        // iterate the log and count by ID. Since events have been consumed
-        // from the queue, we look at the log length and the outcome
-        // vectors.
-        //
-        // NOTE: The dispatch log only stores IDs, not full event data.
-        // For the summary we count totals; kind/priority breakdowns
-        // are derived from a separate replay-style pass if we kept a
-        // side log. For now, we produce totals only and leave per-kind
-        // breakdowns empty (the caller can build a `SimReplayLog`
-        // separately for full fidelity).
-        for outcome in &self.dispatch_log {
-            total_events += outcome.events_dispatched.len() as u64;
+        for entry in &self.replay_log.entries {
+            total_events = total_events.saturating_add(1);
+            let kind = entry.kind.as_str().to_string();
+            let priority = entry.priority.as_str().to_string();
+            events_by_kind
+                .entry(kind)
+                .and_modify(|count| *count = count.saturating_add(1))
+                .or_insert(1);
+            events_by_priority
+                .entry(priority)
+                .and_modify(|count| *count = count.saturating_add(1))
+                .or_insert(1);
         }
-
-        // We cannot recover kind/priority from IDs alone without a side
-        // table. Provide empty maps (the replay log is the authoritative
-        // source for breakdowns).
-        let _ = &mut events_by_kind;
-        let _ = &mut events_by_priority;
 
         SimRunSummary {
             total_ticks: self.current_tick,

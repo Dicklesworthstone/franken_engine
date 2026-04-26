@@ -240,34 +240,37 @@ fn run_to_completion_empty_scheduler() {
     assert_eq!(summary.total_ticks, 0);
     assert_eq!(summary.total_events, 0);
     assert!(summary.events_by_kind.is_empty());
+    assert!(summary.events_by_priority.is_empty());
 }
 
 #[test]
-fn run_to_completion_summary_events_by_kind_empty() {
+fn run_to_completion_summary_events_by_kind_counts_dispatched_events() {
     let mut s = small_scheduler(10, 100);
     s.schedule(SimEventKind::CacheHit, SimPriority::Normal, 0, "ch", 0);
     s.schedule(SimEventKind::CacheHit, SimPriority::Normal, 0, "ch", 0);
     s.schedule(SimEventKind::CacheMiss, SimPriority::Normal, 0, "cm", 0);
 
     let summary = s.run_to_completion();
-    // build_summary cannot recover kind/priority from dispatch-log IDs;
-    // these maps are intentionally empty (use SimReplayLog for breakdowns).
-    assert!(summary.events_by_kind.is_empty());
     assert_eq!(summary.total_events, 3);
+    assert_eq!(summary.events_by_kind.get("cache_hit"), Some(&2));
+    assert_eq!(summary.events_by_kind.get("cache_miss"), Some(&1));
+    assert_eq!(summary.events_by_priority.get("normal"), Some(&3));
 }
 
 #[test]
-fn run_to_completion_summary_events_by_priority_empty() {
+fn run_to_completion_summary_events_by_priority_counts_dispatched_events() {
     let mut s = small_scheduler(10, 100);
     s.schedule(SimEventKind::CacheHit, SimPriority::Microtask, 0, "mt", 0);
     s.schedule(SimEventKind::CacheMiss, SimPriority::Normal, 0, "n", 0);
     s.schedule(SimEventKind::CacheEvict, SimPriority::Normal, 0, "n", 0);
 
     let summary = s.run_to_completion();
-    // build_summary cannot recover kind/priority from dispatch-log IDs;
-    // these maps are intentionally empty (use SimReplayLog for breakdowns).
-    assert!(summary.events_by_priority.is_empty());
     assert_eq!(summary.total_events, 3);
+    assert_eq!(summary.events_by_priority.get("microtask"), Some(&1));
+    assert_eq!(summary.events_by_priority.get("normal"), Some(&2));
+    assert_eq!(summary.events_by_kind.get("cache_hit"), Some(&1));
+    assert_eq!(summary.events_by_kind.get("cache_miss"), Some(&1));
+    assert_eq!(summary.events_by_kind.get("cache_evict"), Some(&1));
 }
 
 // ---------------------------------------------------------------------------
@@ -395,6 +398,7 @@ fn sim_run_summary_serde_roundtrip() {
     assert_eq!(summary.total_ticks, deser.total_ticks);
     assert_eq!(summary.total_events, deser.total_events);
     assert_eq!(summary.events_by_kind, deser.events_by_kind);
+    assert_eq!(summary.events_by_priority, deser.events_by_priority);
 }
 
 // ---------------------------------------------------------------------------
@@ -455,6 +459,7 @@ fn scheduler_serde_roundtrip_preserves_state() {
     assert_eq!(s.current_tick, deser.current_tick);
     assert_eq!(s.next_event_id, deser.next_event_id);
     assert_eq!(s.dispatch_log.len(), deser.dispatch_log.len());
+    assert_eq!(s.replay_log, deser.replay_log);
 }
 
 // ---------------------------------------------------------------------------

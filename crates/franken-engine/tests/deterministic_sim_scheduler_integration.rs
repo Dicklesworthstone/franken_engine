@@ -620,6 +620,7 @@ fn scheduler_serde_roundtrip() {
     assert_eq!(sched.current_tick, back.current_tick);
     assert_eq!(sched.pending_count(), back.pending_count());
     assert_eq!(sched.total_dispatched(), back.total_dispatched());
+    assert_eq!(sched.replay_log, back.replay_log);
 }
 
 #[test]
@@ -732,15 +733,14 @@ fn run_to_completion_total_events_count() {
 
     let summary = sched.run_to_completion();
     assert_eq!(summary.total_events, 4);
-    // events_by_kind is empty by design — dispatch log only stores IDs,
-    // not full event metadata. SimReplayLog is the authoritative source.
-    assert!(summary.events_by_kind.is_empty());
+    assert_eq!(summary.events_by_kind.get("cache_hit"), Some(&2));
+    assert_eq!(summary.events_by_kind.get("cache_miss"), Some(&1));
+    assert_eq!(summary.events_by_kind.get("module_load"), Some(&1));
+    assert_eq!(summary.events_by_priority.get("normal"), Some(&4));
 }
 
 #[test]
-fn run_to_completion_summary_maps_are_empty_by_design() {
-    // The summary cannot recover kind/priority from IDs alone.
-    // This verifies the documented behavior.
+fn run_to_completion_summary_maps_track_dispatched_event_metadata() {
     let mut sched = default_scheduler();
     sched.schedule(SimEventKind::CacheHit, SimPriority::Normal, 0, "a", 1);
     sched.schedule(SimEventKind::CacheMiss, SimPriority::Microtask, 0, "b", 2);
@@ -749,8 +749,14 @@ fn run_to_completion_summary_maps_are_empty_by_design() {
 
     let summary = sched.run_to_completion();
     assert_eq!(summary.total_events, 4);
-    assert!(summary.events_by_kind.is_empty());
-    assert!(summary.events_by_priority.is_empty());
+    assert_eq!(summary.events_by_kind.len(), 4);
+    assert_eq!(summary.events_by_kind.get("cache_hit"), Some(&1));
+    assert_eq!(summary.events_by_kind.get("cache_miss"), Some(&1));
+    assert_eq!(summary.events_by_kind.get("module_load"), Some(&1));
+    assert_eq!(summary.events_by_kind.get("gc_pause"), Some(&1));
+    assert_eq!(summary.events_by_priority.get("microtask"), Some(&1));
+    assert_eq!(summary.events_by_priority.get("normal"), Some(&2));
+    assert_eq!(summary.events_by_priority.get("idle"), Some(&1));
 }
 
 // ===========================================================================
@@ -801,6 +807,17 @@ fn dispatch_log_matches_dispatch_order() {
     assert_eq!(outcome.events_dispatched[0], micro_id);
     assert_eq!(outcome.events_dispatched[1], normal_id);
     assert_eq!(outcome.microtasks_drained, 1);
+    assert_eq!(sched.replay_log.entries.len(), 2);
+    assert_eq!(sched.replay_log.entries[0].tick, 0);
+    assert_eq!(sched.replay_log.entries[0].event_id, micro_id);
+    assert_eq!(
+        sched.replay_log.entries[0].kind,
+        SimEventKind::PromiseSettle
+    );
+    assert_eq!(sched.replay_log.entries[0].priority, SimPriority::Microtask);
+    assert_eq!(sched.replay_log.entries[1].event_id, normal_id);
+    assert_eq!(sched.replay_log.entries[1].kind, SimEventKind::TimerFire);
+    assert_eq!(sched.replay_log.entries[1].priority, SimPriority::Normal);
 }
 
 #[test]
@@ -818,6 +835,7 @@ fn serde_roundtrip_after_run_to_completion() {
     assert_eq!(restored.pending_count(), sched.pending_count());
     assert_eq!(restored.total_dispatched(), sched.total_dispatched());
     assert_eq!(restored.content_hash(), sched.content_hash());
+    assert_eq!(restored.replay_log, sched.replay_log);
 
     let summary_json = serde_json::to_string(&summary).unwrap();
     let summary_back: SimRunSummary = serde_json::from_str(&summary_json).unwrap();

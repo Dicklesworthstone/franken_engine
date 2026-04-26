@@ -83,27 +83,78 @@ json_field() {
 # Check if high-water mark exists
 if [[ ! -f "$HIGH_WATER_MARK_FILE" && "$GATE_MODE" != "update" ]]; then
     echo "⚠️  No high-water mark found at $HIGH_WATER_MARK_FILE"
-    echo "Creating initial high-water mark with baseline measurements..."
+    echo "Creating initial high-water mark with REAL baseline measurements..."
 
-    # Use the baseline from our earlier measurement
+    # Run actual Test262 runner to get baseline measurements instead of fake values
+    echo "🧪 Running Test262 baseline measurement..."
+    require_command cargo
+    require_command jq
+
+    BASELINE_OUTPUT_ROOT="$ARTIFACTS_DIR/baseline_test262_runner"
+    BASELINE_LOG="$ARTIFACTS_DIR/baseline_runner.log"
+    BASELINE_HWM_JSON="$ARTIFACTS_DIR/baseline_high_water_mark.json"
+
+    BASELINE_RUNNER_ARGS=(
+        cargo run -p frankenengine-engine --bin franken_test262_runner --
+        --pins "$PINS_FILE"
+        --profile "$PROFILE_FILE"
+        --waivers "$WAIVERS_FILE"
+        --case-vectors "$CASE_VECTORS_FILE"
+        --output-root "$BASELINE_OUTPUT_ROOT"
+        --high-water-mark "$BASELINE_HWM_JSON"
+        --run-date "$RUN_DATE"
+        --worker-count "$WORKER_COUNT"
+    )
+
+    if ! "${BASELINE_RUNNER_ARGS[@]}" > >(tee "$BASELINE_LOG") 2>&1; then
+        fail "Baseline franken_test262_runner failed; cannot create initial high-water mark with real data"
+    fi
+
+    BASELINE_MANIFEST_PATH="$(grep -Eo 'test262 run_manifest=.*' "$BASELINE_LOG" | tail -n 1 | sed 's/.*test262 run_manifest=//')"
+    BASELINE_CANONICAL_HWM_PATH="$(grep -Eo 'test262 canonical_high_water_mark=.*' "$BASELINE_LOG" | tail -n 1 | sed 's/.*test262 canonical_high_water_mark=//')"
+
+    [[ -n "$BASELINE_MANIFEST_PATH" ]] || fail "Baseline runner did not report a run_manifest path"
+    [[ -n "$BASELINE_CANONICAL_HWM_PATH" ]] || fail "Baseline runner did not report a canonical_high_water_mark path"
+    [[ -f "$BASELINE_MANIFEST_PATH" ]] || fail "Baseline runner manifest missing: $BASELINE_MANIFEST_PATH"
+    [[ -f "$BASELINE_CANONICAL_HWM_PATH" ]] || fail "Baseline canonical high-water mark missing: $BASELINE_CANONICAL_HWM_PATH"
+
+    BASELINE_TOTAL_TESTS="$(json_field "$BASELINE_MANIFEST_PATH" '.total_profile_tests')"
+    BASELINE_PASSED_TESTS="$(json_field "$BASELINE_MANIFEST_PATH" '.passed')"
+    BASELINE_FAILED_TESTS="$(json_field "$BASELINE_MANIFEST_PATH" '.failed')"
+    BASELINE_WAIVED_TESTS="$(json_field "$BASELINE_MANIFEST_PATH" '.waived')"
+    BASELINE_HWM_PASS_COUNT="$(json_field "$BASELINE_CANONICAL_HWM_PATH" '.pass_count')"
+    BASELINE_HWM_RECORDED_AT="$(json_field "$BASELINE_CANONICAL_HWM_PATH" '.recorded_at_utc')"
+    BASELINE_PASS_RATE="$(calculate_rate "$BASELINE_PASSED_TESTS" "$BASELINE_TOTAL_TESTS")"
+
+    [[ "$BASELINE_TOTAL_TESTS" =~ ^[0-9]+$ && "$BASELINE_TOTAL_TESTS" -gt 0 ]] \
+        || fail "Baseline runner reported no profile tests"
+    [[ "$BASELINE_PASSED_TESTS" =~ ^[0-9]+$ ]] || fail "Baseline passed count is invalid"
+    [[ "$BASELINE_FAILED_TESTS" =~ ^[0-9]+$ ]] || fail "Baseline failed count is invalid"
+    [[ "$BASELINE_WAIVED_TESTS" =~ ^[0-9]+$ ]] || fail "Baseline waived count is invalid"
+    [[ "$BASELINE_HWM_PASS_COUNT" =~ ^[0-9]+$ ]] || fail "Baseline high-water pass_count is invalid"
+
+    # Create high-water mark with REAL measurements
     cat > "$HIGH_WATER_MARK_FILE" << EOF
 schema_version = "franken-engine.test262-high-water-mark.v1"
-measurement_date = "$(date -Iseconds)"
+measurement_date = "$BASELINE_HWM_RECORDED_AT"
 es_profile = "ES2020"
-created_by = "test262_regression_gate.sh"
+created_by = "test262_regression_gate.sh baseline"
+baseline_manifest = "$BASELINE_MANIFEST_PATH"
+baseline_canonical_high_water_mark = "$BASELINE_CANONICAL_HWM_PATH"
 
 [pass_counts]
-total_tests = 100
-passed_tests = 64
-failed_tests = 36
+total_tests = $BASELINE_TOTAL_TESTS
+passed_tests = $BASELINE_HWM_PASS_COUNT
+failed_tests = $BASELINE_FAILED_TESTS
 skipped_tests = 0
-waived_tests = 2
+waived_tests = $BASELINE_WAIVED_TESTS
 
 [chapter_breakdown]
-chapter_8_types_pass_rate = 0.75
-chapter_12_expressions_pass_rate = 0.60
-chapter_13_statements_pass_rate = 0.65
-chapter_14_functions_pass_rate = 0.55
+# Real chapter breakdown would require runner enhancement
+chapter_8_types_pass_rate = 0.0
+chapter_12_expressions_pass_rate = 0.0
+chapter_13_statements_pass_rate = 0.0
+chapter_14_functions_pass_rate = 0.0
 
 [regression_policy]
 allow_pass_rate_decrease = false
@@ -111,7 +162,8 @@ min_pass_rate_threshold = 0.60
 regression_acknowledgment_required = true
 EOF
 
-    echo "✅ Created initial high-water mark: $HIGH_WATER_MARK_FILE"
+    echo "✅ Created initial high-water mark with REAL baseline: $HIGH_WATER_MARK_FILE"
+    echo "📊 Real baseline: $BASELINE_HWM_PASS_COUNT/$BASELINE_TOTAL_TESTS tests passed ($(awk -v rate="$BASELINE_PASS_RATE" 'BEGIN { printf "%.1f%%", rate * 100 }'))"
 fi
 
 if [[ ! -f "$HIGH_WATER_MARK_FILE" ]]; then

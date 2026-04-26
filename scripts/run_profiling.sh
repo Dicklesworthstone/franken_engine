@@ -7,6 +7,7 @@ set -euo pipefail
 FRANKENCTL_BIN="${FRANKENCTL_BIN:-frankenctl}"
 LOG="${FRANKEN_PROFILE_LOG:-artifacts/profiling_$(date +%s).jsonl}"
 ARTIFACTS="${FRANKEN_PROFILE_ARTIFACTS_DIR:-artifacts/profiling_evidence/$(date +%Y%m%d_%H%M%S)}"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 mkdir -p "$(dirname "$LOG")"
 mkdir -p "$ARTIFACTS"
 
@@ -18,22 +19,79 @@ echo '{"suite":"profiling_infrastructure","started":"'$(date -Iseconds)'"}' >> "
 
 captured_profiles=()
 
-if ! command -v "$FRANKENCTL_BIN" >/dev/null 2>&1; then
+emit_degraded_marker() {
+    local status=$1
+    local reason=$2
+    local cli_supports_runtime_profiling=${3:-null}
+    local engine_hooks_implemented=${4:-null}
+
     cat > "$ARTIFACTS/degraded_non_authoritative.json" << EOF
 {
     "suite": "profiling_infrastructure",
-    "status": "degraded",
+    "status": "$status",
     "authoritative": false,
-    "reason": "frankenctl_missing",
+    "reason": "$reason",
     "frankenctl_bin": "$FRANKENCTL_BIN",
+    "cli_supports_runtime_profiling": $cli_supports_runtime_profiling,
+    "engine_hooks_implemented": $engine_hooks_implemented,
     "optimization_report_emitted": false,
     "time": "$(date -Iseconds)"
 }
 EOF
-    echo "{\"suite\":\"profiling_infrastructure\",\"status\":\"degraded\",\"authoritative\":false,\"reason\":\"frankenctl_missing\",\"time\":\"$(date -Iseconds)\"}" >> "$LOG"
+
+    echo "{\"suite\":\"profiling_infrastructure\",\"status\":\"$status\",\"authoritative\":false,\"reason\":\"$reason\",\"time\":\"$(date -Iseconds)\"}" >> "$LOG"
+}
+
+detect_runtime_profiling_support() {
+    local run_help
+    local cli_supports_runtime_profiling=false
+    local engine_hooks_implemented=false
+    local hook_files=(
+        "$REPO_ROOT/crates/franken-engine/src/baseline_interpreter.rs"
+        "$REPO_ROOT/crates/franken-core/src/baseline_interpreter.rs"
+    )
+    local found_hook_file=0
+
+    run_help="$("$FRANKENCTL_BIN" run --help 2>&1 || true)"
+    if [[ "$run_help" == *"--profile-config"* ]]; then
+        cli_supports_runtime_profiling=true
+    fi
+
+    for hook_file in "${hook_files[@]}"; do
+        if [[ -f "$hook_file" ]]; then
+            found_hook_file=1
+            if grep -q "TODO: Implement profiling integration" "$hook_file"; then
+                engine_hooks_implemented=false
+                break
+            fi
+            engine_hooks_implemented=true
+        fi
+    done
+
+    if [[ $found_hook_file -eq 0 ]]; then
+        engine_hooks_implemented=false
+    fi
+
+    printf '%s %s\n' "$cli_supports_runtime_profiling" "$engine_hooks_implemented"
+}
+
+if ! command -v "$FRANKENCTL_BIN" >/dev/null 2>&1; then
+    emit_degraded_marker "degraded" "frankenctl_missing" "null" "null"
     echo "❌ frankenctl not available; refusing to emit authoritative profiling evidence"
     echo "Non-authoritative degraded marker: $ARTIFACTS/degraded_non_authoritative.json"
     exit 127
+fi
+
+read -r cli_supports_runtime_profiling engine_hooks_implemented < <(detect_runtime_profiling_support)
+if [[ "$cli_supports_runtime_profiling" != "true" || "$engine_hooks_implemented" != "true" ]]; then
+    emit_degraded_marker \
+        "failed" \
+        "runtime_profiling_unavailable" \
+        "$cli_supports_runtime_profiling" \
+        "$engine_hooks_implemented"
+    echo "❌ runtime profiling is not shipped on the current frankenctl run surface; refusing to emit authoritative profiling evidence"
+    echo "Non-authoritative degraded marker: $ARTIFACTS/degraded_non_authoritative.json"
+    exit 1
 fi
 
 # Function to run a benchmark with profiling

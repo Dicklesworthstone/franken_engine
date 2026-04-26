@@ -20,6 +20,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Instant;
 
+use sha2::{Digest, Sha256};
+
 use crate::benchmark_denominator::BenchmarkCase;
 use crate::benchmark_evidence_bundle::{
     BenchmarkRun as EvidenceBenchmarkRun, EnvironmentSnapshot, EvidenceBundle, ParityTarget,
@@ -989,6 +991,8 @@ impl Default for BenchmarkComparisonManifest {
 pub struct BenchmarkComparisonSample {
     pub wall_time_ns: u64,
     pub peak_rss_bytes: u64,
+    #[serde(default = "empty_benchmark_comparison_output_digest")]
+    pub output_digest: ContentHash,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1080,6 +1084,14 @@ pub enum BenchmarkComparisonError {
     MissingProgramPath {
         benchmark_id: String,
     },
+    UnreadableProgramPath {
+        benchmark_id: String,
+        path: String,
+        detail: String,
+    },
+    UnsupportedCaseArgs {
+        benchmark_id: String,
+    },
     InvalidHarnessContract(String),
     Io(String),
     CommandFailed {
@@ -1118,6 +1130,22 @@ impl std::fmt::Display for BenchmarkComparisonError {
                 write!(
                     f,
                     "benchmark comparison case `{benchmark_id}` must define a program_path"
+                )
+            }
+            Self::UnreadableProgramPath {
+                benchmark_id,
+                path,
+                detail,
+            } => {
+                write!(
+                    f,
+                    "benchmark comparison case `{benchmark_id}` cannot read program `{path}`: {detail}"
+                )
+            }
+            Self::UnsupportedCaseArgs { benchmark_id } => {
+                write!(
+                    f,
+                    "benchmark comparison case `{benchmark_id}` cannot use args until frankenctl benchmark comparison supports forwarding case arguments consistently across runtimes"
                 )
             }
             Self::InvalidHarnessContract(detail) => {
@@ -1178,6 +1206,11 @@ pub fn validate_benchmark_comparison_manifest(
         }
         if case.program_path.as_os_str().is_empty() {
             return Err(BenchmarkComparisonError::MissingProgramPath {
+                benchmark_id: case.benchmark_id.clone(),
+            });
+        }
+        if !case.args.is_empty() {
+            return Err(BenchmarkComparisonError::UnsupportedCaseArgs {
                 benchmark_id: case.benchmark_id.clone(),
             });
         }
@@ -1317,9 +1350,72 @@ fn comparison_parity_target(runtime: RuntimeId) -> Option<ParityTarget> {
     }
 }
 
+#[derive(Debug, Clone)]
+struct ResolvedBenchmarkProgram {
+    path: PathBuf,
+    content_hash: ContentHash,
+}
+
+fn empty_benchmark_comparison_output_digest() -> ContentHash {
+    ContentHash::compute(&[])
+}
+
+fn benchmark_comparison_output_digest(stdout: &[u8], stderr: &[u8]) -> ContentHash {
+    let mut hasher = Sha256::new();
+    hasher.update((stdout.len() as u64).to_le_bytes());
+    hasher.update(stdout);
+    hasher.update((stderr.len() as u64).to_le_bytes());
+    hasher.update(stderr);
+    ContentHash::from_bytes(hasher.finalize().into())
+}
+
+fn benchmark_comparison_parity_details(
+    baseline_samples: &[BenchmarkComparisonSample],
+    runtime_samples: &[BenchmarkComparisonSample],
+) -> (bool, usize, Vec<String>, ContentHash) {
+    let compared_samples = baseline_samples.len().min(runtime_samples.len());
+    let digest_mismatches = baseline_samples
+        .iter()
+        .zip(runtime_samples.iter())
+        .filter(|(baseline, runtime)| baseline.output_digest != runtime.output_digest)
+        .count();
+    let sample_count_delta = baseline_samples.len().abs_diff(runtime_samples.len());
+    let behavioral_differences = digest_mismatches + sample_count_delta;
+    let mut difference_details = Vec::new();
+    if digest_mismatches > 0 {
+        difference_details.push(format!(
+            "output digest mismatch in {digest_mismatches} of {compared_samples} compared samples"
+        ));
+    }
+    if sample_count_delta > 0 {
+        difference_details.push(format!(
+            "sample count mismatch: baseline={} runtime={}",
+            baseline_samples.len(),
+            runtime_samples.len()
+        ));
+    }
+
+    let mut evidence_hasher = Sha256::new();
+    evidence_hasher.update((baseline_samples.len() as u64).to_le_bytes());
+    for sample in baseline_samples {
+        evidence_hasher.update(sample.output_digest.as_bytes());
+    }
+    evidence_hasher.update((runtime_samples.len() as u64).to_le_bytes());
+    for sample in runtime_samples {
+        evidence_hasher.update(sample.output_digest.as_bytes());
+    }
+
+    (
+        behavioral_differences == 0,
+        behavioral_differences,
+        difference_details,
+        ContentHash::from_bytes(evidence_hasher.finalize().into()),
+    )
+}
+
 fn build_benchmark_comparison_evidence_bundle(
     manifest: &BenchmarkComparisonManifest,
-    resolved_programs: &BTreeMap<String, PathBuf>,
+    resolved_programs: &BTreeMap<String, ResolvedBenchmarkProgram>,
     run_id: &str,
     results: &[BenchmarkComparisonRuntimeResult],
 ) -> Result<EvidenceBundle, BenchmarkComparisonError> {
@@ -1333,8 +1429,6 @@ fn build_benchmark_comparison_evidence_bundle(
                 case.benchmark_id
             ))
         })?;
-        let program_bytes = fs::read(resolved_program)
-            .unwrap_or_else(|_| resolved_program.display().to_string().into_bytes());
         let mut tags = BTreeSet::new();
         tags.insert("benchmark_comparison".to_string());
         tags.insert(case.category.as_str().to_string());
@@ -1343,9 +1437,9 @@ fn build_benchmark_comparison_evidence_bundle(
                 workload_id: case.benchmark_id.clone(),
                 name: case.benchmark_id.clone(),
                 category: comparison_workload_category(case.category),
-                source: resolved_program.display().to_string(),
-                pinned_version: ContentHash::compute(&program_bytes).to_hex(),
-                content_hash: ContentHash::compute(&program_bytes),
+                source: resolved_program.path.display().to_string(),
+                pinned_version: resolved_program.content_hash.to_hex(),
+                content_hash: resolved_program.content_hash,
                 provenance_epoch: run_epoch,
                 tags,
             })
@@ -1356,6 +1450,11 @@ fn build_benchmark_comparison_evidence_bundle(
         .iter()
         .filter(|entry| entry.runtime == RuntimeId::FrankenEngine)
         .map(|entry| (entry.benchmark_id.as_str(), entry.statistics.median_ns))
+        .collect();
+    let franken_samples: BTreeMap<&str, &[BenchmarkComparisonSample]> = results
+        .iter()
+        .filter(|entry| entry.runtime == RuntimeId::FrankenEngine)
+        .map(|entry| (entry.benchmark_id.as_str(), entry.raw_samples.as_slice()))
         .collect();
 
     for entry in results {
@@ -1390,6 +1489,15 @@ fn build_benchmark_comparison_evidence_bundle(
                         entry.benchmark_id
                     ))
                 })?;
+            let baseline_samples = franken_samples
+                .get(entry.benchmark_id.as_str())
+                .copied()
+                .ok_or_else(|| {
+                    BenchmarkComparisonError::EvidenceBundle(format!(
+                        "missing FrankenEngine output witness for benchmark `{}`",
+                        entry.benchmark_id
+                    ))
+                })?;
             let performance_ratio_millionths = if baseline_median == 0 {
                 0
             } else {
@@ -1399,24 +1507,29 @@ fn build_benchmark_comparison_evidence_bundle(
                     .unwrap_or(u128::from(u64::MAX)))
                 .min(u128::from(u64::MAX)) as u64
             };
-            let evidence_hash = ContentHash::compute(
-                format!(
-                    "{}:{}:{}:{}",
-                    entry.benchmark_id,
-                    target.as_str(),
-                    performance_ratio_millionths,
-                    entry.statistics.median_ns
-                )
-                .as_bytes(),
-            );
+            let (
+                output_equivalent,
+                behavioral_differences,
+                difference_details,
+                output_witness_hash,
+            ) = benchmark_comparison_parity_details(baseline_samples, &entry.raw_samples);
+            let mut evidence_hasher = Sha256::new();
+            evidence_hasher.update(entry.benchmark_id.as_bytes());
+            evidence_hasher.update(target.as_str().as_bytes());
+            evidence_hasher.update([u8::from(output_equivalent)]);
+            evidence_hasher.update(performance_ratio_millionths.to_le_bytes());
+            evidence_hasher.update(entry.statistics.median_ns.to_le_bytes());
+            evidence_hasher.update((behavioral_differences as u64).to_le_bytes());
+            evidence_hasher.update(output_witness_hash.as_bytes());
+            let evidence_hash = ContentHash::from_bytes(evidence_hasher.finalize().into());
             bundle
                 .add_parity_verdict(ParityVerdict {
                     workload_id: entry.benchmark_id.clone(),
                     target,
-                    output_equivalent: true,
+                    output_equivalent,
                     performance_ratio_millionths,
-                    behavioral_differences: 0,
-                    difference_details: Vec::new(),
+                    behavioral_differences,
+                    difference_details,
                     evidence_hash,
                 })
                 .map_err(|error| BenchmarkComparisonError::EvidenceBundle(error.to_string()))?;
@@ -1450,7 +1563,20 @@ pub fn run_benchmark_comparison_suite(
         } else {
             manifest_root.join(&case.program_path)
         };
-        resolved_programs.insert(case.benchmark_id.clone(), resolved_program.clone());
+        let resolved_program_bytes = fs::read(&resolved_program).map_err(|error| {
+            BenchmarkComparisonError::UnreadableProgramPath {
+                benchmark_id: case.benchmark_id.clone(),
+                path: resolved_program.display().to_string(),
+                detail: error.to_string(),
+            }
+        })?;
+        resolved_programs.insert(
+            case.benchmark_id.clone(),
+            ResolvedBenchmarkProgram {
+                path: resolved_program.clone(),
+                content_hash: ContentHash::compute(&resolved_program_bytes),
+            },
+        );
 
         let runtime_specs = [
             (
@@ -1582,10 +1708,8 @@ fn render_benchmark_comparison_command(
         shell_quote(runtime_bin.to_string_lossy().as_ref()),
         joined_args
     );
-    match runtime {
-        RuntimeId::FrankenEngine => format!("rch exec -- {}", base),
-        _ => base,
-    }
+    let _ = runtime;
+    base
 }
 
 fn run_single_benchmark_comparison_sample(
@@ -1613,11 +1737,10 @@ fn run_single_benchmark_comparison_sample(
         .args(runtime_args)
         .output()
         .map_err(|error| BenchmarkComparisonError::Io(error.to_string()))?;
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let stdout = String::from_utf8_lossy(&output.stdout);
     if !output.status.success() {
         let _ = fs::remove_file(&timing_output);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
         return Err(BenchmarkComparisonError::CommandFailed {
             benchmark_id: case.benchmark_id.clone(),
             runtime,
@@ -1669,6 +1792,7 @@ fn run_single_benchmark_comparison_sample(
     Ok(BenchmarkComparisonSample {
         wall_time_ns: elapsed_ns,
         peak_rss_bytes,
+        output_digest: benchmark_comparison_output_digest(&output.stdout, &output.stderr),
     })
 }
 
@@ -2907,7 +3031,7 @@ mod tests {
             "extension_lifecycle_control_plane"
         );
         assert!(!BENCHMARK_E2E_SURFACE_DESCRIPTION.is_empty());
-        assert!(!BENCHMARK_E2E_JS_RUNTIME_EXECUTION_INCLUDED);
+        const { assert!(!BENCHMARK_E2E_JS_RUNTIME_EXECUTION_INCLUDED) };
         const { assert!(MIN_START_BUDGET_MILLIONTHS > 0) };
     }
 

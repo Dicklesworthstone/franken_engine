@@ -36,7 +36,7 @@ use std::collections::BTreeSet;
 use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use frankenengine_engine::benchmark_e2e::{
     BENCHMARK_COMPARISON_MANIFEST_SCHEMA_VERSION, BENCHMARK_E2E_COMPONENT,
@@ -54,6 +54,7 @@ use frankenengine_engine::benchmark_e2e::{
     write_benchmark_comparison_artifacts, write_evidence_artifacts,
 };
 use frankenengine_engine::benchmark_evidence_bundle::{BundleStatus, ParityTarget};
+use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::runtime_comparison_gate::{BenchmarkCategory, RuntimeId};
 
 // ---------------------------------------------------------------------------
@@ -2200,14 +2201,17 @@ fn benchmark_comparison_sample_summary_reports_quantiles_and_cv() {
         BenchmarkComparisonSample {
             wall_time_ns: 10,
             peak_rss_bytes: 1024,
+            output_digest: ContentHash::compute(b"sample-a"),
         },
         BenchmarkComparisonSample {
             wall_time_ns: 20,
             peak_rss_bytes: 2048,
+            output_digest: ContentHash::compute(b"sample-b"),
         },
         BenchmarkComparisonSample {
             wall_time_ns: 30,
             peak_rss_bytes: 4096,
+            output_digest: ContentHash::compute(b"sample-c"),
         },
     ]);
     assert_eq!(summary.sample_count, 3);
@@ -2223,6 +2227,18 @@ fn write_mock_runtime(path: &Path, sleep_seconds: &str) {
     fs::write(
         path,
         format!("#!/usr/bin/env bash\nsleep {sleep_seconds}\n"),
+    )
+    .unwrap();
+    let mut perms = fs::metadata(path).unwrap().permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(path, perms).unwrap();
+}
+
+#[cfg(unix)]
+fn write_mock_runtime_with_output(path: &Path, sleep_seconds: &str, stdout_text: &str) {
+    fs::write(
+        path,
+        format!("#!/usr/bin/env bash\nsleep {sleep_seconds}\nprintf '%s\\n' '{stdout_text}'\n"),
     )
     .unwrap();
     let mut perms = fs::metadata(path).unwrap().permissions();
@@ -2280,6 +2296,15 @@ fn benchmark_comparison_runner_executes_mock_runtimes_and_emits_artifacts() {
             RuntimeId::NodeLts,
             RuntimeId::BunStable
         ])
+    );
+    let frankenctl_command = result
+        .commands
+        .iter()
+        .find(|command| command.contains(frankenctl.to_string_lossy().as_ref()))
+        .expect("comparison commands should include the frankenctl invocation");
+    assert!(
+        !frankenctl_command.starts_with("rch exec -- "),
+        "command transcript must describe the direct execution path the runner actually used"
     );
 
     let artifact_dir = root.join("artifacts");
@@ -2345,6 +2370,16 @@ fn benchmark_comparison_runner_executes_mock_runtimes_and_emits_artifacts() {
     assert_eq!(result.evidence_bundle.provenances.len(), 1);
     assert_eq!(result.evidence_bundle.runs.len(), 9);
     assert_eq!(result.evidence_bundle.parity_verdicts.len(), 2);
+    assert!(
+        result
+            .evidence_bundle
+            .parity_verdicts
+            .iter()
+            .all(|verdict| verdict.output_equivalent
+                && verdict.behavioral_differences == 0
+                && verdict.difference_details.is_empty()),
+        "comparison evidence must prove output equivalence from captured runtime bytes when all runtimes emit the same output"
+    );
     let parity_targets: BTreeSet<ParityTarget> = result
         .evidence_bundle
         .parity_verdicts
@@ -2355,6 +2390,79 @@ fn benchmark_comparison_runner_executes_mock_runtimes_and_emits_artifacts() {
         parity_targets,
         BTreeSet::from([ParityTarget::NodeJs, ParityTarget::Bun])
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn benchmark_comparison_runner_records_behavioral_differences_on_output_mismatch() {
+    let root = std::env::temp_dir().join(format!(
+        "franken_bench_compare_mismatch_{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+
+    let program = root.join("fixture.js");
+    fs::write(&program, "console.log('benchmark');\n").unwrap();
+
+    let frankenctl = root.join("mock-frankenctl");
+    let node = root.join("mock-node");
+    let bun = root.join("mock-bun");
+    write_mock_runtime_with_output(&frankenctl, "0.01", "shared-output");
+    write_mock_runtime_with_output(&node, "0.01", "shared-output");
+    write_mock_runtime_with_output(&bun, "0.01", "divergent-output");
+
+    let manifest = BenchmarkComparisonManifest {
+        schema_version: BENCHMARK_COMPARISON_MANIFEST_SCHEMA_VERSION.to_string(),
+        runtime_pins: BenchmarkRuntimePins::default(),
+        runtime_commands: BenchmarkComparisonRuntimeCommands {
+            frankenctl,
+            node,
+            bun,
+        },
+        fairness_policy: BenchmarkFairnessPolicy {
+            warmup_runs: 1,
+            sample_count: 3,
+            case_timeout_ms: 5_000,
+        },
+        cases: vec![BenchmarkComparisonCase {
+            benchmark_id: "micro-mismatch".to_string(),
+            category: BenchmarkCategory::Micro,
+            program_path: program,
+            args: vec![],
+        }],
+    };
+
+    let result = run_benchmark_comparison_suite(&manifest, &root, "cmp-run-mismatch", "2026-04-26")
+        .expect("comparison suite should execute");
+    let bun_verdict = result
+        .evidence_bundle
+        .parity_verdicts
+        .iter()
+        .find(|verdict| verdict.target == ParityTarget::Bun)
+        .expect("bun parity verdict should be present");
+    let node_verdict = result
+        .evidence_bundle
+        .parity_verdicts
+        .iter()
+        .find(|verdict| verdict.target == ParityTarget::NodeJs)
+        .expect("node parity verdict should be present");
+
+    assert!(
+        node_verdict.output_equivalent,
+        "node should match the FrankenEngine baseline when outputs are identical"
+    );
+    assert!(
+        !bun_verdict.output_equivalent,
+        "bun should fail parity when its captured output differs from the baseline"
+    );
+    assert_eq!(bun_verdict.behavioral_differences, 3);
+    assert_eq!(
+        bun_verdict.difference_details,
+        vec!["output digest mismatch in 3 of 3 compared samples".to_string()]
+    );
+
+    let _ = fs::remove_dir_all(&root);
 }
 
 #[test]
@@ -2495,4 +2603,69 @@ fn benchmark_comparison_manifest_rejects_duplicate_ids() {
         matches!(error, BenchmarkComparisonError::DuplicateBenchmarkId { .. }),
         "expected DuplicateBenchmarkId error, got {error:?}"
     );
+}
+
+#[test]
+fn benchmark_comparison_manifest_rejects_case_args_until_forwarding_is_supported() {
+    let manifest = BenchmarkComparisonManifest {
+        schema_version: BENCHMARK_COMPARISON_MANIFEST_SCHEMA_VERSION.to_string(),
+        runtime_pins: BenchmarkRuntimePins::default(),
+        runtime_commands: BenchmarkComparisonRuntimeCommands::default(),
+        fairness_policy: BenchmarkFairnessPolicy::default(),
+        cases: vec![BenchmarkComparisonCase {
+            benchmark_id: "with-args".to_string(),
+            category: BenchmarkCategory::Micro,
+            program_path: PathBuf::from("fixture.js"),
+            args: vec!["--iterations=10".to_string()],
+        }],
+    };
+
+    let error = validate_benchmark_comparison_manifest(&manifest)
+        .expect_err("non-empty case args must fail closed until all runtimes receive them equally");
+    assert!(
+        matches!(error, BenchmarkComparisonError::UnsupportedCaseArgs { .. }),
+        "expected UnsupportedCaseArgs error, got {error:?}"
+    );
+}
+
+#[test]
+fn benchmark_comparison_runner_rejects_unreadable_program_paths() {
+    let root = std::env::temp_dir().join(format!(
+        "franken_bench_compare_missing_prog_{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+
+    let missing_program = root.join("missing-fixture.js");
+    let manifest = BenchmarkComparisonManifest {
+        schema_version: BENCHMARK_COMPARISON_MANIFEST_SCHEMA_VERSION.to_string(),
+        runtime_pins: BenchmarkRuntimePins::default(),
+        runtime_commands: BenchmarkComparisonRuntimeCommands::default(),
+        fairness_policy: BenchmarkFairnessPolicy::default(),
+        cases: vec![BenchmarkComparisonCase {
+            benchmark_id: "missing-prog".to_string(),
+            category: BenchmarkCategory::Micro,
+            program_path: missing_program.clone(),
+            args: vec![],
+        }],
+    };
+
+    let error = run_benchmark_comparison_suite(&manifest, &root, "cmp-run-missing", "2026-04-26")
+        .expect_err("missing workload sources must fail before the runner emits evidence");
+    assert!(
+        matches!(
+            error,
+            BenchmarkComparisonError::UnreadableProgramPath { .. }
+        ),
+        "expected UnreadableProgramPath error, got {error:?}"
+    );
+    assert!(
+        error
+            .to_string()
+            .contains(missing_program.to_string_lossy().as_ref()),
+        "error should identify the unreadable workload path"
+    );
+
+    let _ = fs::remove_dir_all(&root);
 }

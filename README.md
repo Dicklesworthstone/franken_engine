@@ -77,8 +77,9 @@ frankenctl verify compile-artifact --input ./artifacts/demo.compile.json
 # 5) Execute the same source through the orchestrator
 frankenctl run --input ./demo.js --extension-id demo-ext --out ./artifacts/demo.run.json
 
-# 6) Replay execution with validation mode
-frankenctl replay run --trace ./artifacts/replay/demo-trace.json --mode validate --out ./artifacts/replay_report.json
+# 6) Replay a captured nondeterminism trace
+#    (steps 1-5 emit compile/run reports, not replay traces)
+frankenctl replay run --trace ./examples/05_replay_demo/sample_trace.json --mode strict --out ./artifacts/replay_report.json
 ```
 
 ## Design Philosophy

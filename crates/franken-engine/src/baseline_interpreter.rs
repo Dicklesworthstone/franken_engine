@@ -10784,42 +10784,31 @@ impl InterpreterCore {
                 )?;
                 self.set_object_property(map_id, "size".to_string(), Value::Int(0))?;
 
-                // Create internal entries storage
-                let _entries_id = self.next_object_id() - 1;
-                let _entries_obj = Object::new();
-                // TODO: If iterable argument provided, populate map with entries
                 if args.count > 0 {
-                    // Simplified: ignore iterable for now
+                    let iterable = self.read_reg(args.start)?;
+                    self.seed_map_entries_from_iterable(entries_id, Some(map_id), iterable, false)?;
                 }
 
                 Ok(Value::Object(map_id))
             }
             "builtin:Set" => {
                 // Set([iterable]) constructor implementation
-                let set_id = ObjectId(self.next_object_id());
-                let mut set_obj = Object::new();
+                let set_id = self.alloc_object_with_prototype(None)?;
+                let values_id = self.alloc_object_with_prototype(None)?;
 
-                // Mark as Set type
-                set_obj
-                    .properties
-                    .insert("__type".to_string(), Value::Str("Set".to_string()));
-                set_obj.properties.insert(
-                    "__values".to_string(),
-                    Value::Object(ObjectId(self.next_object_id())),
-                );
-                set_obj.properties.insert("size".to_string(), Value::Int(0));
+                self.set_object_property(
+                    set_id,
+                    "__type".to_string(),
+                    Value::Str("Set".to_string()),
+                )?;
+                self.set_object_property(set_id, "__values".to_string(), Value::Object(values_id))?;
+                self.set_object_property(set_id, "size".to_string(), Value::Int(0))?;
 
-                // Create internal values storage
-                let _values_id = self.next_object_id() - 1;
-                let values_obj = Object::new();
-                self.heap.push(values_obj);
-
-                // TODO: If iterable argument provided, populate set with values
                 if args.count > 0 {
-                    // Simplified: ignore iterable for now
+                    let iterable = self.read_reg(args.start)?;
+                    self.seed_set_values_from_iterable(values_id, Some(set_id), iterable, false)?;
                 }
 
-                self.heap.push(set_obj);
                 Ok(Value::Object(set_id))
             }
             "builtin:WeakMap" => {
@@ -10838,39 +10827,35 @@ impl InterpreterCore {
                 )?;
 
                 // Note: In a full implementation, WeakMap would use weak references
-                // TODO: If iterable argument provided, populate weakmap with entries
                 if args.count > 0 {
-                    // Simplified: ignore iterable for now
+                    let iterable = self.read_reg(args.start)?;
+                    self.seed_map_entries_from_iterable(entries_id, None, iterable, true)?;
                 }
 
                 Ok(Value::Object(weakmap_id))
             }
             "builtin:WeakSet" => {
                 // WeakSet([iterable]) constructor implementation (simplified)
-                let weakset_id = ObjectId(self.next_object_id());
-                let mut weakset_obj = Object::new();
+                let weakset_id = self.alloc_object_with_prototype(None)?;
+                let values_id = self.alloc_object_with_prototype(None)?;
 
-                // Mark as WeakSet type
-                weakset_obj
-                    .properties
-                    .insert("__type".to_string(), Value::Str("WeakSet".to_string()));
-                weakset_obj.properties.insert(
+                self.set_object_property(
+                    weakset_id,
+                    "__type".to_string(),
+                    Value::Str("WeakSet".to_string()),
+                )?;
+                self.set_object_property(
+                    weakset_id,
                     "__values".to_string(),
-                    Value::Object(ObjectId(self.next_object_id())),
-                );
-
-                // Create internal values storage (simplified - using regular object)
-                let _values_id = self.next_object_id() - 1;
-                let values_obj = Object::new();
-                self.heap.push(values_obj);
+                    Value::Object(values_id),
+                )?;
 
                 // Note: In a full implementation, WeakSet would use weak references
-                // TODO: If iterable argument provided, populate weakset with values
                 if args.count > 0 {
-                    // Simplified: ignore iterable for now
+                    let iterable = self.read_reg(args.start)?;
+                    self.seed_set_values_from_iterable(values_id, None, iterable, true)?;
                 }
 
-                self.heap.push(weakset_obj);
                 Ok(Value::Object(weakset_id))
             }
             "builtin:MapPrototypeSet" => {
@@ -11812,40 +11797,7 @@ impl InterpreterCore {
             }
 
             "builtin:PromiseAll" => {
-                // Promise.all(iterable) implementation
-                let _iterable = if args.count >= 1 {
-                    self.read_reg(args.start)?
-                } else {
-                    Value::Undefined
-                };
-
-                // Create a resolved Promise for now (simplified implementation)
-                // TODO: Implement proper Promise.all with iterable processing
-                let promise_id = self.alloc_object_with_prototype(None)?;
-
-                // Set Promise metadata
-                self.set_object_property(
-                    promise_id,
-                    "__type".to_string(),
-                    Value::Str("Promise".to_string()),
-                )?;
-                self.set_object_property(
-                    promise_id,
-                    "__state".to_string(),
-                    Value::Str("fulfilled".to_string()),
-                )?;
-
-                // Create empty array as resolved value for now
-                let empty_array_id = self.alloc_array_with_prototype(None)?;
-                self.set_object_property(empty_array_id, "length".to_string(), Value::Int(0))?;
-
-                self.set_object_property(
-                    promise_id,
-                    "__value".to_string(),
-                    Value::Object(empty_array_id),
-                )?;
-
-                Ok(Value::Object(promise_id))
+                self.dispatch_promise_combinator(PromiseCombinatorKind::All, args)
             }
 
             "builtin:FunctionPrototypeApply" => {
@@ -15051,6 +15003,109 @@ impl InterpreterCore {
         }
     }
 
+    fn collection_storage_key(value: &Value) -> String {
+        match value {
+            Value::Str(text) => format!("s:{text}"),
+            Value::Int(number) => format!("n:{number}"),
+            Value::Float(number) => format!("n:{}", number.inner()),
+            Value::Bool(boolean) => format!("b:{boolean}"),
+            Value::Null => "null".to_string(),
+            Value::Undefined => "undefined".to_string(),
+            Value::Object(object_id) => format!("o:{}", object_id.0),
+            _ => "other".to_string(),
+        }
+    }
+
+    fn increment_collection_size(&mut self, collection_id: ObjectId) {
+        if let Some(collection_obj) = self.heap.get_mut(collection_id.0 as usize)
+            && let Some(Value::Int(size)) = collection_obj.properties.get_mut("size")
+        {
+            *size += 1;
+        }
+    }
+
+    fn seed_map_entries_from_iterable(
+        &mut self,
+        entries_id: ObjectId,
+        size_owner: Option<ObjectId>,
+        iterable: Value,
+        weak_keys_only: bool,
+    ) -> Result<(), InterpreterError> {
+        let Ok(entries) = self.collect_for_of_values(&iterable) else {
+            return Ok(());
+        };
+
+        for entry in entries {
+            let Ok(pair) = self.collect_for_of_values(&entry) else {
+                continue;
+            };
+            let Some(key) = pair.first().cloned() else {
+                continue;
+            };
+            let value = pair.get(1).cloned().unwrap_or(Value::Undefined);
+            let key_str = if weak_keys_only {
+                Self::weakmap_object_key(key)
+            } else {
+                Some(Self::collection_storage_key(&key))
+            };
+            let Some(key_str) = key_str else {
+                continue;
+            };
+
+            let inserted = if let Some(entries_obj) = self.heap.get_mut(entries_id.0 as usize) {
+                entries_obj.properties.insert(key_str, value).is_none()
+            } else {
+                false
+            };
+
+            if inserted && let Some(collection_id) = size_owner {
+                self.increment_collection_size(collection_id);
+            }
+        }
+
+        Ok(())
+    }
+
+    fn seed_set_values_from_iterable(
+        &mut self,
+        values_id: ObjectId,
+        size_owner: Option<ObjectId>,
+        iterable: Value,
+        weak_values_only: bool,
+    ) -> Result<(), InterpreterError> {
+        let Ok(values) = self.collect_for_of_values(&iterable) else {
+            return Ok(());
+        };
+
+        for value in values {
+            let value_str = if weak_values_only {
+                Self::weakmap_object_key(value)
+            } else {
+                Some(Self::collection_storage_key(&value))
+            };
+            let Some(value_str) = value_str else {
+                continue;
+            };
+
+            let inserted = if let Some(values_obj) = self.heap.get_mut(values_id.0 as usize) {
+                if values_obj.properties.contains_key(&value_str) {
+                    false
+                } else {
+                    values_obj.properties.insert(value_str, Value::Bool(true));
+                    true
+                }
+            } else {
+                false
+            };
+
+            if inserted && let Some(collection_id) = size_owner {
+                self.increment_collection_size(collection_id);
+            }
+        }
+
+        Ok(())
+    }
+
     fn weakmap_entries_id(&self, receiver: Value) -> Result<ObjectId, InterpreterError> {
         let weakmap_id = match receiver {
             Value::Object(object_id) => object_id,
@@ -17628,6 +17683,175 @@ mod tests {
             core.call_builtin_by_id(328, RegRange { start: 0, count: 2 })
                 .expect("WeakMap.prototype.get should execute for primitive key"),
             Value::Undefined
+        );
+    }
+
+    fn alloc_indexed_object_for_test(core: &mut InterpreterCore, values: &[Value]) -> ObjectId {
+        let object_id = core
+            .alloc_object_with_prototype(None)
+            .expect("indexed iterable allocation should succeed");
+        for (index, value) in values.iter().enumerate() {
+            core.set_object_property(object_id, index.to_string(), value.clone())
+                .expect("indexed iterable element write should succeed");
+        }
+        object_id
+    }
+
+    #[test]
+    fn map_and_set_constructors_seed_iterable_input() {
+        let mut core = quickjs_test_core();
+
+        let first_pair = alloc_indexed_object_for_test(
+            &mut core,
+            &[Value::Str("alpha".to_string()), Value::Int(1)],
+        );
+        let second_pair = alloc_indexed_object_for_test(
+            &mut core,
+            &[Value::Str("beta".to_string()), Value::Int(2)],
+        );
+        let map_iterable = alloc_indexed_object_for_test(
+            &mut core,
+            &[Value::Object(first_pair), Value::Object(second_pair)],
+        );
+
+        core.registers[0] = Value::Object(map_iterable);
+        let Value::Object(map_id) = core
+            .call_builtin_by_id(170, RegRange { start: 0, count: 1 })
+            .expect("Map constructor should accept iterable seed")
+        else {
+            panic!("Map constructor should return object");
+        };
+
+        assert_eq!(
+            core.heap[map_id.0 as usize].properties.get("size"),
+            Some(&Value::Int(2))
+        );
+        core.registers[0] = Value::Object(map_id);
+        core.registers[1] = Value::Str("alpha".to_string());
+        assert_eq!(
+            core.call_builtin_by_id(175, RegRange { start: 0, count: 2 })
+                .expect("Map.prototype.get should read seeded entry"),
+            Value::Int(1)
+        );
+        core.registers[1] = Value::Str("beta".to_string());
+        assert_eq!(
+            core.call_builtin_by_id(175, RegRange { start: 0, count: 2 })
+                .expect("Map.prototype.get should read second seeded entry"),
+            Value::Int(2)
+        );
+
+        let set_iterable = alloc_indexed_object_for_test(
+            &mut core,
+            &[Value::Int(7), Value::Int(9), Value::Int(7)],
+        );
+        core.registers[0] = Value::Object(set_iterable);
+        let Value::Object(set_id) = core
+            .call_builtin_by_id(171, RegRange { start: 0, count: 1 })
+            .expect("Set constructor should accept iterable seed")
+        else {
+            panic!("Set constructor should return object");
+        };
+
+        assert_eq!(
+            core.heap[set_id.0 as usize].properties.get("size"),
+            Some(&Value::Int(2))
+        );
+        core.registers[0] = Value::Object(set_id);
+        core.registers[1] = Value::Int(7);
+        assert_eq!(
+            core.call_builtin_by_id(177, RegRange { start: 0, count: 2 })
+                .expect("Set.prototype.has should observe seeded value"),
+            Value::Bool(true)
+        );
+        core.registers[1] = Value::Int(9);
+        assert_eq!(
+            core.call_builtin_by_id(177, RegRange { start: 0, count: 2 })
+                .expect("Set.prototype.has should observe second seeded value"),
+            Value::Bool(true)
+        );
+    }
+
+    #[test]
+    fn weakmap_and_weakset_constructors_seed_iterable_input() {
+        let mut core = quickjs_test_core();
+        let key_a = core
+            .alloc_object_with_prototype(None)
+            .expect("weak collection key allocation should succeed");
+        let key_b = core
+            .alloc_object_with_prototype(None)
+            .expect("second weak collection key allocation should succeed");
+
+        let first_pair =
+            alloc_indexed_object_for_test(&mut core, &[Value::Object(key_a), Value::Int(11)]);
+        let second_pair =
+            alloc_indexed_object_for_test(&mut core, &[Value::Object(key_b), Value::Int(13)]);
+        let weakmap_iterable = alloc_indexed_object_for_test(
+            &mut core,
+            &[Value::Object(first_pair), Value::Object(second_pair)],
+        );
+
+        core.registers[0] = Value::Object(weakmap_iterable);
+        let Value::Object(weakmap_id) = core
+            .call_builtin_by_id(172, RegRange { start: 0, count: 1 })
+            .expect("WeakMap constructor should accept iterable seed")
+        else {
+            panic!("WeakMap constructor should return object");
+        };
+        let entries_id = weakmap_entries_for_test(&core, weakmap_id);
+        assert_eq!(
+            core.heap[entries_id.0 as usize]
+                .properties
+                .get(&format!("o:{}", key_a.0)),
+            Some(&Value::Int(11))
+        );
+        assert_eq!(
+            core.heap[entries_id.0 as usize]
+                .properties
+                .get(&format!("o:{}", key_b.0)),
+            Some(&Value::Int(13))
+        );
+
+        core.registers[0] = Value::Object(weakmap_id);
+        core.registers[1] = Value::Object(key_a);
+        assert_eq!(
+            core.call_builtin_by_id(324, RegRange { start: 0, count: 2 })
+                .expect("WeakMap.prototype.has should observe seeded key"),
+            Value::Bool(true)
+        );
+        assert_eq!(
+            core.call_builtin_by_id(328, RegRange { start: 0, count: 2 })
+                .expect("WeakMap.prototype.get should observe seeded value"),
+            Value::Int(11)
+        );
+
+        let weakset_iterable =
+            alloc_indexed_object_for_test(&mut core, &[Value::Object(key_a), Value::Object(key_b)]);
+        core.registers[0] = Value::Object(weakset_iterable);
+        let Value::Object(weakset_id) = core
+            .call_builtin_by_id(173, RegRange { start: 0, count: 1 })
+            .expect("WeakSet constructor should accept iterable seed")
+        else {
+            panic!("WeakSet constructor should return object");
+        };
+        let Value::Object(values_id) = core.heap[weakset_id.0 as usize]
+            .properties
+            .get("__values")
+            .cloned()
+            .expect("WeakSet should hold values backing storage")
+        else {
+            panic!("WeakSet values backing storage should be object");
+        };
+        assert_eq!(
+            core.heap[values_id.0 as usize]
+                .properties
+                .get(&format!("o:{}", key_a.0)),
+            Some(&Value::Bool(true))
+        );
+        assert_eq!(
+            core.heap[values_id.0 as usize]
+                .properties
+                .get(&format!("o:{}", key_b.0)),
+            Some(&Value::Bool(true))
         );
     }
 
@@ -25183,6 +25407,75 @@ mod tests {
             .cloned()
             .expect("Object.entries should produce a first entry");
         assert_array_tag(&mut core, first_entry);
+    }
+
+    #[test]
+    fn builtin_promise_all_uses_real_aggregate_tracking() {
+        let mut core = quickjs_test_core();
+        let label = crate::ifc_artifacts::Label::Public;
+
+        let first = core.promise_store.create();
+        let second = core.promise_store.create();
+        let input = core
+            .alloc_array_from_values(&[Value::Promise(first.0), Value::Promise(second.0)])
+            .expect("promise input array should allocate");
+        core.registers[0] = Value::Object(input);
+
+        let result = core
+            .dispatch_builtin_hostcall("builtin:PromiseAll", RegRange { start: 0, count: 1 }, None)
+            .expect("Promise.all should dispatch through the builtin surface");
+        let Value::Promise(aggregate_id) = result else {
+            panic!("Promise.all should return a runtime promise handle, got {result:?}");
+        };
+        let aggregate = crate::promise_model::PromiseHandle(aggregate_id);
+
+        let pending = core
+            .promise_store
+            .get(aggregate)
+            .expect("aggregate promise should exist");
+        assert!(
+            matches!(pending.state, crate::promise_model::PromiseState::Pending),
+            "aggregate should stay pending until all inputs settle"
+        );
+
+        core.fulfill_promise(first, crate::object_model::JsValue::Int(7), label.clone())
+            .expect("first input promise should fulfill");
+        let after_first = core
+            .promise_store
+            .get(aggregate)
+            .expect("aggregate promise should still exist");
+        assert!(
+            matches!(
+                after_first.state,
+                crate::promise_model::PromiseState::Pending
+            ),
+            "aggregate should remain pending after only one fulfillment"
+        );
+
+        core.fulfill_promise(second, crate::object_model::JsValue::Int(11), label)
+            .expect("second input promise should fulfill");
+        let resolved = core
+            .promise_store
+            .get(aggregate)
+            .expect("aggregate promise should resolve after all inputs fulfill");
+        let crate::promise_model::PromiseState::Fulfilled(crate::object_model::JsValue::Object(
+            values_handle,
+        )) = &resolved.state
+        else {
+            panic!(
+                "aggregate should fulfill with an array value, got {:?}",
+                resolved.state
+            );
+        };
+
+        let values = &core.heap[values_handle.0 as usize];
+        assert!(
+            values.is_array,
+            "Promise.all should resolve to an array object"
+        );
+        assert_eq!(values.properties.get("0"), Some(&Value::Int(7)));
+        assert_eq!(values.properties.get("1"), Some(&Value::Int(11)));
+        assert_eq!(values.properties.get("length"), Some(&Value::Int(2)));
     }
 
     #[test]

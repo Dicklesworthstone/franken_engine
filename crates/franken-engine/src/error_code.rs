@@ -839,7 +839,8 @@ impl HasErrorCode for LaneError {
             LaneError::LaneMismatch { .. }
             | LaneError::LaneFull { .. }
             | LaneError::TaskNotFound { .. }
-            | LaneError::EmptyTraceId => FrankenErrorCode::SchedulerLaneAdmissionError,
+            | LaneError::EmptyTraceId
+            | LaneError::BudgetExceeded { .. } => FrankenErrorCode::SchedulerLaneAdmissionError,
             LaneError::TaskIdExhausted => FrankenErrorCode::SchedulerLaneAdmissionError,
         }
     }

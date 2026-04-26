@@ -298,6 +298,16 @@ pub enum BudgetViolationReason {
     ExtensionLimitExceeded { current: usize, max: usize },
     /// Multiple dimensions exceeded simultaneously.
     MultipleDimensionsExceeded { dimensions: Vec<EnforcedDimension> },
+    /// Certificate carries a non-positive bound for a dimension. Bounds are
+    /// fixed-point millionths; a value of zero or below would silently
+    /// reject every operation against that dimension and is therefore
+    /// rejected at install time so misconfigured certificates surface as
+    /// installation failures rather than universal-reject runtime behaviour.
+    InvalidBound {
+        certificate_id: String,
+        dimension: EnforcedDimension,
+        upper_bound_millionths: i64,
+    },
 }
 
 impl fmt::Display for BudgetViolationReason {
@@ -357,6 +367,15 @@ impl fmt::Display for BudgetViolationReason {
                 let names: Vec<String> = dimensions.iter().map(|d| d.to_string()).collect();
                 write!(f, "multi_exceeded({})", names.join(","))
             }
+            Self::InvalidBound {
+                certificate_id,
+                dimension,
+                upper_bound_millionths,
+            } => write!(
+                f,
+                "invalid_bound({}: {}={})",
+                certificate_id, dimension, upper_bound_millionths
+            ),
         }
     }
 }
@@ -789,6 +808,21 @@ impl BudgetEnforcer {
                 certificate_id: digest.certificate_id.clone(),
                 abstention_count: digest.abstention_count,
             });
+        }
+
+        // Validate that every bound is positive. A bound of zero or less
+        // would unconditionally reject every operation against that dimension
+        // (compute_decision treats `bound <= 0` as always-reject), so an
+        // accidentally-misconfigured certificate would look like a runtime
+        // budget storm instead of a configuration mistake. Surface it here.
+        for bound in &digest.bounds {
+            if bound.upper_bound_millionths <= 0 {
+                return Err(BudgetViolationReason::InvalidBound {
+                    certificate_id: digest.certificate_id.clone(),
+                    dimension: bound.dimension,
+                    upper_bound_millionths: bound.upper_bound_millionths,
+                });
+            }
         }
 
         let state = self
@@ -1383,6 +1417,55 @@ mod tests {
             result,
             Err(BudgetViolationReason::ExtensionLimitExceeded { .. })
         ));
+    }
+
+    #[test]
+    fn test_install_zero_bound_rejected() {
+        // bd-3pe0a: a certificate with `upper_bound_millionths == 0` would
+        // unconditionally reject every operation against the dimension at
+        // runtime (compute_decision treats `bound <= 0` as always-reject),
+        // so install_certificate must surface it as a configuration error.
+        let mut enforcer = make_enforcer();
+        let mut digest = make_digest("cert-zero", CertificateVerdict::Certified);
+        digest.bounds[0].upper_bound_millionths = 0;
+        let result = enforcer.install_certificate("ext-zero", digest);
+        match result {
+            Err(BudgetViolationReason::InvalidBound {
+                certificate_id,
+                dimension,
+                upper_bound_millionths,
+            }) => {
+                assert_eq!(certificate_id, "cert-zero");
+                assert_eq!(dimension, EnforcedDimension::Time);
+                assert_eq!(upper_bound_millionths, 0);
+            }
+            other => panic!("expected InvalidBound for zero bound, got {other:?}"),
+        }
+        // Side-effect contract: rejected install must not register the extension.
+        assert!(enforcer.extension_state("ext-zero").is_none());
+    }
+
+    #[test]
+    fn test_install_negative_bound_rejected() {
+        // bd-3pe0a: same contract as zero — negative bounds (e.g. signed
+        // wrap-around in upstream certificate generation) must be rejected
+        // at install time rather than installed and silently always-rejecting.
+        let mut enforcer = make_enforcer();
+        let mut digest = make_digest("cert-neg", CertificateVerdict::Certified);
+        digest.bounds[1].upper_bound_millionths = -42;
+        let result = enforcer.install_certificate("ext-neg", digest);
+        match result {
+            Err(BudgetViolationReason::InvalidBound {
+                dimension,
+                upper_bound_millionths,
+                ..
+            }) => {
+                assert_eq!(dimension, EnforcedDimension::HeapMemory);
+                assert_eq!(upper_bound_millionths, -42);
+            }
+            other => panic!("expected InvalidBound for negative bound, got {other:?}"),
+        }
+        assert!(enforcer.extension_state("ext-neg").is_none());
     }
 
     // --- Enforcement tests ---

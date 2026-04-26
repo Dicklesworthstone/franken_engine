@@ -7,9 +7,10 @@
 //! - `Ready`: normal priority — general work (extension dispatch, GC, sync).
 //!
 //! Cancel tasks are always scheduled first. Timed tasks with imminent
-//! deadlines are promoted ahead of ready tasks. Ready tasks are FIFO
-//! within priority sub-bands. Anti-starvation ensures ready tasks make
-//! progress even under cancel/timed pressure.
+//! deadlines are promoted ahead of ready tasks. Ready tasks are currently
+//! plain FIFO; `priority_sub_band` is recorded for observability and future
+//! policy work, but this scheduler does not reorder on it yet. Anti-starvation
+//! ensures ready tasks make progress even under cancel/timed pressure.
 //!
 //! Plan references: Section 10.11 item 25, 9G.8 (scheduler lane model),
 //! Top-10 #4 (performance discipline), #8 (per-extension resource budget).
@@ -19,7 +20,9 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::resource_certificate_consumer::BudgetEnforcer;
+use crate::resource_certificate_consumer::{
+    BudgetEnforcer, EnforcedDimension, EnforcementDecision, EnforcementScope,
+};
 
 // ---------------------------------------------------------------------------
 // SchedulerLane — the three priority lanes
@@ -129,7 +132,11 @@ pub struct TaskLabel {
     pub task_type: TaskType,
     /// Trace ID for correlation.
     pub trace_id: String,
-    /// Optional fine-grained priority within the lane (lower = higher priority).
+    /// Optional fine-grained priority metadata within the lane.
+    ///
+    /// Lower values represent higher priority for any downstream policy that
+    /// consumes this field, but the scheduler itself currently preserves plain
+    /// FIFO ordering for ready-lane tasks.
     pub priority_sub_band: u32,
 }
 
@@ -254,6 +261,12 @@ pub enum LaneError {
     EmptyTraceId,
     /// Scheduler cannot allocate another unique task ID.
     TaskIdExhausted,
+    /// Per-extension budget enforcer rejected admission.
+    BudgetExceeded {
+        extension_id: String,
+        task_type: String,
+        reason: String,
+    },
 }
 
 impl fmt::Display for LaneError {
@@ -275,6 +288,14 @@ impl fmt::Display for LaneError {
             Self::TaskNotFound { task_id } => write!(f, "task {task_id} not found"),
             Self::EmptyTraceId => f.write_str("trace_id must be non-empty"),
             Self::TaskIdExhausted => f.write_str("task ID space exhausted"),
+            Self::BudgetExceeded {
+                extension_id,
+                task_type,
+                reason,
+            } => write!(
+                f,
+                "scheduler admission for {task_type} rejected for extension '{extension_id}': {reason}"
+            ),
         }
     }
 }
@@ -342,14 +363,7 @@ impl LaneScheduler {
         self.budget_enforcer = Some(enforcer);
     }
 
-    /// Submit a task to the scheduler.
-    pub fn submit(
-        &mut self,
-        label: TaskLabel,
-        deadline_tick: u64,
-        payload_id: &str,
-        current_ticks: u64,
-    ) -> Result<TaskId, LaneError> {
+    fn validate_submission(&self, label: &TaskLabel) -> Result<(), LaneError> {
         // Validate trace ID.
         if label.trace_id.is_empty() {
             return Err(LaneError::EmptyTraceId);
@@ -366,17 +380,34 @@ impl LaneScheduler {
         }
 
         // Check queue depth.
-        let (queue_depth, max_depth) = match label.lane {
-            SchedulerLane::Cancel => (self.cancel_queue.len(), self.config.cancel_max_depth),
-            SchedulerLane::Timed => (self.timed_queue.len(), self.config.timed_max_depth),
-            SchedulerLane::Ready => (self.ready_queue.len(), self.config.ready_max_depth),
+        let max_depth = match label.lane {
+            SchedulerLane::Cancel => self.config.cancel_max_depth,
+            SchedulerLane::Timed => self.config.timed_max_depth,
+            SchedulerLane::Ready => self.config.ready_max_depth,
         };
-        if queue_depth >= max_depth {
+        if self.queue_depth(label.lane) >= max_depth {
             return Err(LaneError::LaneFull {
                 lane: label.lane.to_string(),
                 max_depth,
             });
         }
+
+        if self.next_task_id.checked_add(1).is_none() {
+            return Err(LaneError::TaskIdExhausted);
+        }
+
+        Ok(())
+    }
+
+    /// Submit a task to the scheduler.
+    pub fn submit(
+        &mut self,
+        label: TaskLabel,
+        deadline_tick: u64,
+        payload_id: &str,
+        current_ticks: u64,
+    ) -> Result<TaskId, LaneError> {
+        self.validate_submission(&label)?;
 
         let task_id = TaskId(self.next_task_id);
         self.next_task_id = self
@@ -428,6 +459,93 @@ impl LaneScheduler {
         self.record_count("submit");
 
         Ok(task_id)
+    }
+
+    /// Submit a task on behalf of a specific extension, consulting the
+    /// budget enforcer (when set) for per-extension scheduler admission.
+    ///
+    /// Behaviour matches [`submit`] when no budget enforcer is configured.
+    /// When an enforcer is set:
+    /// - `Reject` decisions return [`LaneError::BudgetExceeded`] without
+    ///   ever queuing the task.
+    /// - `Throttle` decisions admit the task but emit a `submit_throttled`
+    ///   scheduler event so observers can record back-pressure.
+    /// - `Allow` decisions admit the task with a normal `submit` event.
+    pub fn submit_for_extension(
+        &mut self,
+        extension_id: &str,
+        label: TaskLabel,
+        deadline_tick: u64,
+        payload_id: &str,
+        current_ticks: u64,
+    ) -> Result<TaskId, LaneError> {
+        self.validate_submission(&label)?;
+
+        let throttled =
+            self.try_enforce_admission(extension_id, &label, deadline_tick, current_ticks)?;
+
+        let task_id = self.submit(label.clone(), deadline_tick, payload_id, current_ticks)?;
+
+        if throttled {
+            let queue_position = self.queue_depth(label.lane).saturating_sub(1);
+            self.emit_event(SchedulerEvent {
+                task_id: task_id.0,
+                lane: label.lane.to_string(),
+                task_type: label.task_type.to_string(),
+                trace_id: label.trace_id,
+                queue_position,
+                event: "submit_throttled".to_string(),
+            });
+            self.record_count("submit_throttled");
+        }
+
+        Ok(task_id)
+    }
+
+    /// Consult the budget enforcer for scheduler admission of a task.
+    /// Returns `Ok(throttled)` indicating whether the enforcer requested
+    /// throttling (the task is still admitted), and `Err(BudgetExceeded)`
+    /// when the enforcer rejects admission. A `None` enforcer is a no-op
+    /// returning `Ok(false)`.
+    fn try_enforce_admission(
+        &mut self,
+        extension_id: &str,
+        label: &TaskLabel,
+        deadline_tick: u64,
+        current_ticks: u64,
+    ) -> Result<bool, LaneError> {
+        let Some(enforcer) = self.budget_enforcer.as_mut() else {
+            return Ok(false);
+        };
+
+        // Charge remaining deadline slack instead of the absolute scheduler
+        // tick so admission stays invariant to uptime. We only have
+        // scheduler-local ticks here, so this remains a conservative proxy
+        // for wall-time until a tighter duration estimate is available.
+        let remaining_ticks = deadline_tick.saturating_sub(current_ticks);
+        let time_delta = if remaining_ticks > i64::MAX as u64 {
+            i64::MAX
+        } else {
+            remaining_ticks as i64
+        };
+        let usage_deltas = [(EnforcedDimension::Time, time_delta)];
+        let receipt = enforcer.enforce(
+            extension_id,
+            EnforcementScope::SchedulerAdmission {
+                task_type: label.task_type.to_string(),
+            },
+            &usage_deltas,
+        );
+
+        match receipt.decision {
+            EnforcementDecision::Allow => Ok(false),
+            EnforcementDecision::Throttle { .. } => Ok(true),
+            EnforcementDecision::Reject { reason } => Err(LaneError::BudgetExceeded {
+                extension_id: extension_id.to_string(),
+                task_type: label.task_type.to_string(),
+                reason: reason.to_string(),
+            }),
+        }
     }
 
     /// Schedule the next batch of tasks respecting lane priorities.
@@ -1075,6 +1193,11 @@ mod tests {
             },
             LaneError::TaskNotFound { task_id: 42 },
             LaneError::EmptyTraceId,
+            LaneError::BudgetExceeded {
+                extension_id: "ext-a".to_string(),
+                task_type: "extension_dispatch".to_string(),
+                reason: "budget exceeded".to_string(),
+            },
             LaneError::TaskIdExhausted,
         ];
         for err in &errors {
@@ -2571,5 +2694,263 @@ mod tests {
         let back: LaneConfig =
             serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(cfg, back);
+    }
+
+    // -----------------------------------------------------------------------
+    // bd-38uej: scheduler-side budget enforcer wiring
+    // -----------------------------------------------------------------------
+
+    use crate::resource_certificate_consumer::{
+        BudgetEnforcementPolicy, BudgetEnforcer, CertificateDigest, CertificateVerdict,
+        ExtractedBound,
+    };
+    use crate::security_epoch::SecurityEpoch;
+
+    fn admission_enforcer(extension_id: &str, time_bound: i64) -> BudgetEnforcer {
+        let mut enforcer = BudgetEnforcer::new(
+            BudgetEnforcementPolicy::default(),
+            SecurityEpoch::from_raw(1),
+        );
+        enforcer
+            .install_certificate(
+                extension_id,
+                CertificateDigest {
+                    certificate_id: format!("cert-{extension_id}"),
+                    region_id: format!("region-{extension_id}"),
+                    epoch: SecurityEpoch::from_raw(1),
+                    verdict: CertificateVerdict::Certified,
+                    bounds: vec![
+                        ExtractedBound {
+                            dimension: EnforcedDimension::Time,
+                            upper_bound_millionths: time_bound,
+                            is_tight: true,
+                            confidence_millionths: 1_000_000,
+                        },
+                        ExtractedBound {
+                            dimension: EnforcedDimension::HostcallCount,
+                            upper_bound_millionths: 1_000_000,
+                            is_tight: true,
+                            confidence_millionths: 1_000_000,
+                        },
+                    ],
+                    abstention_count: 0,
+                    min_confidence_millionths: 1_000_000,
+                },
+            )
+            .expect("certificate install should succeed");
+        enforcer
+    }
+
+    #[test]
+    fn submit_for_extension_without_enforcer_matches_submit() {
+        let mut sched = LaneScheduler::new(LaneConfig::default());
+        let id = sched
+            .submit_for_extension("ext-a", ready_label("trace-a"), 100, "payload-a", 0)
+            .expect("submit should succeed when no enforcer is wired");
+        assert_eq!(id, TaskId(1));
+        assert_eq!(
+            sched.metrics.get("ready").map(|m| m.tasks_submitted),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn submit_for_extension_admits_within_budget() {
+        let mut sched = LaneScheduler::new(LaneConfig::default());
+        sched.set_budget_enforcer(admission_enforcer("ext-a", 1_000_000));
+
+        let id = sched
+            .submit_for_extension("ext-a", ready_label("trace-a"), 100, "payload-a", 0)
+            .expect("admission within budget must succeed");
+        assert_eq!(id, TaskId(1));
+        assert_eq!(
+            sched.metrics.get("ready").map(|m| m.tasks_submitted),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn submit_for_extension_charges_remaining_deadline_slack() {
+        let mut baseline = LaneScheduler::new(LaneConfig::default());
+        baseline.set_budget_enforcer(admission_enforcer("ext-a", 150));
+        baseline
+            .submit_for_extension("ext-a", ready_label("trace-a"), 100, "payload-a", 0)
+            .expect("baseline admission should succeed");
+        let baseline_usage = baseline
+            .budget_enforcer
+            .as_ref()
+            .expect("enforcer should be present")
+            .extension_state("ext-a")
+            .expect("extension state should exist")
+            .budgets
+            .get(&EnforcedDimension::Time)
+            .expect("time budget should exist")
+            .current_usage_millionths;
+        assert_eq!(baseline_usage, 100);
+
+        let mut shifted = LaneScheduler::new(LaneConfig::default());
+        shifted.set_budget_enforcer(admission_enforcer("ext-a", 150));
+        shifted
+            .submit_for_extension("ext-a", ready_label("trace-b"), 1_000, "payload-b", 900)
+            .expect("identical slack must not depend on scheduler uptime");
+        let shifted_usage = shifted
+            .budget_enforcer
+            .as_ref()
+            .expect("enforcer should be present")
+            .extension_state("ext-a")
+            .expect("extension state should exist")
+            .budgets
+            .get(&EnforcedDimension::Time)
+            .expect("time budget should exist")
+            .current_usage_millionths;
+        assert_eq!(shifted_usage, 100);
+    }
+
+    #[test]
+    fn submit_for_extension_does_not_consume_hostcall_budget_on_admission() {
+        let mut sched = LaneScheduler::new(LaneConfig::default());
+        sched.set_budget_enforcer(admission_enforcer("ext-a", 1_000_000));
+
+        sched
+            .submit_for_extension("ext-a", ready_label("trace-a"), 100, "payload-a", 0)
+            .expect("admission within budget must succeed");
+
+        let hostcall_usage = sched
+            .budget_enforcer
+            .as_ref()
+            .expect("enforcer should be present")
+            .extension_state("ext-a")
+            .expect("extension state should exist")
+            .budgets
+            .get(&EnforcedDimension::HostcallCount)
+            .expect("hostcall budget should exist")
+            .current_usage_millionths;
+        assert_eq!(hostcall_usage, 0);
+    }
+
+    #[test]
+    fn submit_for_extension_rejects_over_budget_without_queueing() {
+        let mut sched = LaneScheduler::new(LaneConfig::default());
+        // Tight Time budget so a single 1_000_000-tick deadline pushes over
+        // the policy's reject threshold (1_000_000 millionths == 100%).
+        sched.set_budget_enforcer(admission_enforcer("ext-a", 100));
+
+        let result =
+            sched.submit_for_extension("ext-a", ready_label("trace-a"), 1_000_000, "payload-a", 0);
+        assert!(matches!(result, Err(LaneError::BudgetExceeded { .. })));
+
+        // Critical: rejection must not queue the task or bump submitted metrics.
+        assert_eq!(sched.ready_queue.len(), 0);
+        assert_eq!(
+            sched.metrics.get("ready").map(|m| m.tasks_submitted),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn submit_for_extension_does_not_charge_budget_when_scheduler_rejects() {
+        let mut sched = LaneScheduler::new(LaneConfig {
+            ready_max_depth: 0,
+            ..LaneConfig::default()
+        });
+        sched.set_budget_enforcer(admission_enforcer("ext-a", 1_000_000));
+
+        let result =
+            sched.submit_for_extension("ext-a", ready_label("trace-a"), 100, "payload-a", 0);
+        assert!(matches!(result, Err(LaneError::LaneFull { .. })));
+
+        let enforcer = sched
+            .budget_enforcer
+            .as_ref()
+            .expect("enforcer should be present");
+        assert_eq!(enforcer.decision_sequence(), 0);
+        assert!(enforcer.all_receipts().is_empty());
+        let state = enforcer
+            .extension_state("ext-a")
+            .expect("extension state should exist");
+        assert_eq!(state.allow_count, 0);
+        assert_eq!(state.throttle_count, 0);
+        assert_eq!(state.reject_count, 0);
+        let time_budget = state
+            .budgets
+            .get(&EnforcedDimension::Time)
+            .expect("time budget should exist");
+        assert_eq!(time_budget.current_usage_millionths, 0);
+    }
+
+    #[test]
+    fn submit_for_extension_does_not_charge_budget_when_task_id_exhausted() {
+        let mut sched = LaneScheduler::new(LaneConfig::default());
+        sched.set_budget_enforcer(admission_enforcer("ext-a", 1_000_000));
+        sched.next_task_id = u64::MAX;
+
+        let result =
+            sched.submit_for_extension("ext-a", ready_label("trace-a"), 100, "payload-a", 0);
+        assert_eq!(result, Err(LaneError::TaskIdExhausted));
+
+        let enforcer = sched
+            .budget_enforcer
+            .as_ref()
+            .expect("enforcer should be present");
+        assert_eq!(enforcer.decision_sequence(), 0);
+        assert!(enforcer.all_receipts().is_empty());
+        let state = enforcer
+            .extension_state("ext-a")
+            .expect("extension state should exist");
+        assert_eq!(state.allow_count, 0);
+        assert_eq!(state.throttle_count, 0);
+        assert_eq!(state.reject_count, 0);
+        let time_budget = state
+            .budgets
+            .get(&EnforcedDimension::Time)
+            .expect("time budget should exist");
+        assert_eq!(time_budget.current_usage_millionths, 0);
+    }
+
+    #[test]
+    fn submit_for_extension_throttled_event_records_actual_queue_position() {
+        let mut sched = LaneScheduler::new(LaneConfig::default());
+        sched.set_budget_enforcer(admission_enforcer("ext-a", 100));
+        sched
+            .submit(ready_label("trace-a"), 0, "payload-a", 0)
+            .expect("seed submit should succeed");
+        sched.drain_events();
+
+        let task_id = sched
+            .submit_for_extension("ext-a", ready_label("trace-b"), 95, "payload-b", 0)
+            .expect("throttled admission should still succeed");
+        let events = sched.drain_events();
+        let submit_event = events
+            .iter()
+            .find(|event| event.event == "submit")
+            .expect("submit event should be present");
+        assert_eq!(submit_event.queue_position, 1);
+
+        let throttled_event = events
+            .iter()
+            .find(|event| event.event == "submit_throttled")
+            .expect("submit_throttled event should be present");
+        assert_eq!(throttled_event.task_id, task_id.0);
+        assert_eq!(throttled_event.queue_position, 1);
+    }
+
+    #[test]
+    fn submit_for_extension_unknown_extension_under_default_policy_rejects() {
+        // The default BudgetEnforcementPolicy is fail-closed on missing
+        // certificates: an extension that has not installed a certificate
+        // must be rejected at scheduler admission. This documents the
+        // safety contract — opt-in fail-open requires constructing
+        // BudgetEnforcementPolicy with `fail_closed_on_missing = false`.
+        let mut sched = LaneScheduler::new(LaneConfig::default());
+        let enforcer = BudgetEnforcer::new(
+            BudgetEnforcementPolicy::default(),
+            SecurityEpoch::from_raw(1),
+        );
+        sched.set_budget_enforcer(enforcer);
+
+        let result =
+            sched.submit_for_extension("ext-unknown", ready_label("trace-x"), 100, "payload-x", 0);
+        assert!(matches!(result, Err(LaneError::BudgetExceeded { .. })));
+        assert_eq!(sched.ready_queue.len(), 0);
     }
 }

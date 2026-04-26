@@ -1693,8 +1693,8 @@ fn evidence_ledger_cli_writes_real_artifacts_and_structured_logs() {
 // ---------------------------------------------------------------------------
 
 use regex::Regex;
-use std::path::Path;
 use std::fs;
+use std::path::Path;
 
 /// Assert evidence entry matches golden file with scrubbed dynamic values.
 fn assert_evidence_golden(test_name: &str, entry: &EvidenceEntry) {
@@ -1798,10 +1798,12 @@ fn golden_evidence_entry_security_action_sandbox() {
     })
     .witness(Witness {
         witness_id: "resource_monitor".to_string(),
+        witness_type: "resource_monitor".to_string(),
         value: "cpu_usage_90_percent".to_string(),
     })
     .witness(Witness {
         witness_id: "capability_check".to_string(),
+        witness_type: "capability_check".to_string(),
         value: "network_access_requested".to_string(),
     })
     .meta("extension_id", "ext-malicious-crypto")
@@ -1835,6 +1837,7 @@ fn golden_evidence_entry_capability_decision_deny() {
     })
     .witness(Witness {
         witness_id: "permission_checker".to_string(),
+        witness_type: "permission_checker".to_string(),
         value: "user_level_2_required_level_5".to_string(),
     })
     .meta("requested_capability", "filesystem.write")
@@ -1874,14 +1877,17 @@ fn golden_evidence_entry_policy_update() {
     })
     .witness(Witness {
         witness_id: "policy_validator".to_string(),
+        witness_type: "policy_validator".to_string(),
         value: "schema_validation_passed".to_string(),
     })
     .witness(Witness {
         witness_id: "security_scanner".to_string(),
+        witness_type: "security_scanner".to_string(),
         value: "5_vulnerabilities_fixed".to_string(),
     })
     .witness(Witness {
         witness_id: "rollback_plan".to_string(),
+        witness_type: "rollback_plan".to_string(),
         value: "automatic_rollback_available".to_string(),
     })
     .meta("policy_source", "security_team")
@@ -1922,10 +1928,12 @@ fn golden_evidence_entry_extension_lifecycle_terminate() {
     })
     .witness(Witness {
         witness_id: "violation_tracker".to_string(),
+        witness_type: "violation_tracker".to_string(),
         value: "policy_violations_3_restart_failures_2".to_string(),
     })
     .witness(Witness {
         witness_id: "extension_monitor".to_string(),
+        witness_type: "extension_monitor".to_string(),
         value: "unresponsive_for_30s".to_string(),
     })
     .meta("extension_id", "ext-untrusted-network")

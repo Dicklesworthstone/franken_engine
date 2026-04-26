@@ -13,7 +13,9 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use crate::alloc_domain::{AllocDomainError, AllocationDomain, DomainRegistry};
-use crate::resource_certificate_consumer::{BudgetEnforcer, EnforcedDimension, EnforcementScope};
+use crate::resource_certificate_consumer::{
+    BudgetEnforcer, EnforcedDimension, EnforcementScope, SharedBudgetEnforcer,
+};
 
 // ---------------------------------------------------------------------------
 // GcObjectId — unique identity for managed objects
@@ -430,7 +432,7 @@ pub struct GcCollector {
     events: Vec<GcEvent>,
     /// Resource budget enforcer for GC operations.
     #[serde(skip)]
-    budget_enforcer: Option<BudgetEnforcer>,
+    budget_enforcer: Option<SharedBudgetEnforcer>,
 }
 
 impl GcCollector {
@@ -446,6 +448,11 @@ impl GcCollector {
 
     /// Set the budget enforcer for resource consumption monitoring.
     pub fn set_budget_enforcer(&mut self, enforcer: BudgetEnforcer) {
+        self.set_shared_budget_enforcer(SharedBudgetEnforcer::new(enforcer));
+    }
+
+    /// Set a shared budget enforcer for resource consumption monitoring.
+    pub(crate) fn set_shared_budget_enforcer(&mut self, enforcer: SharedBudgetEnforcer) {
         self.budget_enforcer = Some(enforcer);
     }
 
@@ -487,7 +494,7 @@ impl GcCollector {
         }
 
         // Check budget enforcement before allocation
-        if let Some(ref mut enforcer) = self.budget_enforcer {
+        if let Some(enforcer) = self.budget_enforcer.as_ref() {
             // Safely convert size_bytes to i64, capping at i64::MAX to prevent overflow
             let size_i64 = if size_bytes > i64::MAX as u64 {
                 i64::MAX
@@ -495,7 +502,7 @@ impl GcCollector {
                 size_bytes as i64
             };
             let usage_deltas = [(EnforcedDimension::HeapMemory, size_i64)];
-            let receipt = enforcer.enforce(
+            let receipt = enforcer.write().enforce(
                 extension_id,
                 EnforcementScope::GcPacing {
                     extension_id: extension_id.to_string(),
@@ -611,9 +618,9 @@ impl GcCollector {
         // GcPressure is a cycle-count dimension (see EnforcedDimension docs):
         // each collect() cycle charges +1 against the bound, so a bound of N
         // caps the workload to N collections.
-        if let Some(ref mut enforcer) = self.budget_enforcer {
+        if let Some(enforcer) = self.budget_enforcer.as_ref() {
             let usage_deltas = [(EnforcedDimension::GcPressure, 1)]; // One GC cycle
-            let receipt = enforcer.enforce(
+            let receipt = enforcer.write().enforce(
                 extension_id,
                 EnforcementScope::GcPacing {
                     extension_id: extension_id.to_string(),
@@ -669,14 +676,14 @@ impl GcCollector {
         // `current_usage_millionths` monotonically and eventually reject all
         // allocations even when the live heap is empty.
         if stats.bytes_reclaimed > 0
-            && let Some(ref mut enforcer) = self.budget_enforcer
+            && let Some(enforcer) = self.budget_enforcer.as_ref()
         {
             let release_i64 = if stats.bytes_reclaimed > i64::MAX as u64 {
                 i64::MIN
             } else {
                 -(stats.bytes_reclaimed as i64)
             };
-            let _ = enforcer.enforce(
+            let _ = enforcer.write().enforce(
                 extension_id,
                 EnforcementScope::GcPacing {
                     extension_id: extension_id.to_string(),

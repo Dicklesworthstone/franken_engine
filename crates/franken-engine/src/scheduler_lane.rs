@@ -21,7 +21,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use crate::resource_certificate_consumer::{
-    BudgetEnforcer, EnforcedDimension, EnforcementDecision, EnforcementScope,
+    BudgetEnforcer, EnforcedDimension, EnforcementDecision, EnforcementScope, SharedBudgetEnforcer,
 };
 
 // ---------------------------------------------------------------------------
@@ -337,7 +337,7 @@ pub struct LaneScheduler {
     /// Event counters.
     event_counts: BTreeMap<String, u64>,
     /// Resource budget enforcer for task scheduling.
-    budget_enforcer: Option<BudgetEnforcer>,
+    budget_enforcer: Option<SharedBudgetEnforcer>,
 }
 
 impl LaneScheduler {
@@ -370,6 +370,11 @@ impl LaneScheduler {
 
     /// Set the budget enforcer for task scheduling.
     pub fn set_budget_enforcer(&mut self, enforcer: BudgetEnforcer) {
+        self.set_shared_budget_enforcer(SharedBudgetEnforcer::new(enforcer));
+    }
+
+    /// Set a shared budget enforcer for task scheduling.
+    pub(crate) fn set_shared_budget_enforcer(&mut self, enforcer: SharedBudgetEnforcer) {
         self.budget_enforcer = Some(enforcer);
     }
 
@@ -528,7 +533,7 @@ impl LaneScheduler {
         deadline_tick: u64,
         current_ticks: u64,
     ) -> Result<bool, LaneError> {
-        let Some(enforcer) = self.budget_enforcer.as_mut() else {
+        let Some(enforcer) = self.budget_enforcer.as_ref() else {
             return Ok(false);
         };
 
@@ -543,7 +548,7 @@ impl LaneScheduler {
             remaining_ticks as i64
         };
         let usage_deltas = [(EnforcedDimension::Time, time_delta)];
-        let receipt = enforcer.enforce(
+        let receipt = enforcer.write().enforce(
             extension_id,
             EnforcementScope::SchedulerAdmission {
                 task_type: label.task_type.to_string(),

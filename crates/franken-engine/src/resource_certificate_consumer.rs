@@ -18,6 +18,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -1065,6 +1066,43 @@ impl BudgetEnforcer {
             total_reject,
             receipts_retained: self.receipts.len(),
         }
+    }
+}
+
+/// Shared handle for a live [`BudgetEnforcer`] instance.
+#[derive(Debug, Clone)]
+pub struct SharedBudgetEnforcer {
+    inner: Arc<RwLock<BudgetEnforcer>>,
+}
+
+impl SharedBudgetEnforcer {
+    /// Wrap an enforcer in a shareable synchronization handle.
+    pub fn new(enforcer: BudgetEnforcer) -> Self {
+        Self {
+            inner: Arc::new(RwLock::new(enforcer)),
+        }
+    }
+
+    /// Borrow the current enforcer for read-only inspection.
+    pub fn read(&self) -> RwLockReadGuard<'_, BudgetEnforcer> {
+        match self.inner.read() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        }
+    }
+
+    /// Borrow the current enforcer for mutation and enforcement decisions.
+    pub fn write(&self) -> RwLockWriteGuard<'_, BudgetEnforcer> {
+        match self.inner.write() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        }
+    }
+
+    /// Replace the live enforcer in place so existing handle clones observe
+    /// the new epoch/certificate state immediately.
+    pub fn replace(&self, enforcer: BudgetEnforcer) {
+        *self.write() = enforcer;
     }
 }
 

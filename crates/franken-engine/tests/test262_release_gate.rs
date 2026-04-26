@@ -47,7 +47,7 @@ fn observed_from_execution(
     test_id: &str,
     clause: &str,
     source_code: &str,
-    expected_outcome: Test262ObservedOutcome,
+    _expected_outcome: Test262ObservedOutcome,
 ) -> Test262ObservedResult {
     use frankenengine_engine::HybridRouter;
     use std::time::Instant;

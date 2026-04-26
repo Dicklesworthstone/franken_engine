@@ -514,8 +514,8 @@ impl GcCollector {
                     });
                 }
                 crate::resource_certificate_consumer::EnforcementDecision::Throttle {
-                    usage_ratio_millionths,
-                    ref dimension,
+                    usage_ratio_millionths: _,
+                    dimension: _,
                 } => {
                     // Emit throttle event for observability
                     self.event_sequence = self.event_sequence.saturating_add(1);
@@ -628,8 +628,8 @@ impl GcCollector {
                     });
                 }
                 crate::resource_certificate_consumer::EnforcementDecision::Throttle {
-                    usage_ratio_millionths,
-                    ref dimension,
+                    usage_ratio_millionths: _,
+                    dimension: _,
                 } => {
                     // Emit throttle event for observability
                     self.event_sequence = self.event_sequence.saturating_add(1);

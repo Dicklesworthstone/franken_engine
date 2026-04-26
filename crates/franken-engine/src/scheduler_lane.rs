@@ -314,11 +314,20 @@ impl std::error::Error for LaneError {}
 #[derive(Debug)]
 pub struct LaneScheduler {
     config: LaneConfig,
+    /// Next task ID to allocate. `0` is reserved as an internal exhausted
+    /// sentinel so the scheduler can still issue `TaskId(u64::MAX)` exactly
+    /// once before failing closed on subsequent submissions.
     next_task_id: u64,
     /// Cancel lane queue.
     cancel_queue: VecDeque<ScheduledTask>,
-    /// Timed lane queue (sorted by deadline on dequeue).
-    timed_queue: VecDeque<ScheduledTask>,
+    /// Timed lane queue, indexed by `deadline_tick` so the smallest
+    /// deadline can be retrieved in O(log n) via `BTreeMap::first_entry`.
+    /// Tasks sharing a deadline are FIFO-ordered within the per-bucket
+    /// `VecDeque`, preserving the deterministic insertion-order tiebreak.
+    timed_queue: BTreeMap<u64, VecDeque<ScheduledTask>>,
+    /// Cached total length of `timed_queue` so `queue_depth(Timed)` and
+    /// metric updates remain O(1) (BTreeMap iteration would be O(n)).
+    timed_queue_len: usize,
     /// Ready lane queue (FIFO within sub-bands).
     ready_queue: VecDeque<ScheduledTask>,
     /// Per-lane metrics.
@@ -349,7 +358,8 @@ impl LaneScheduler {
             config,
             next_task_id: 1,
             cancel_queue: VecDeque::new(),
-            timed_queue: VecDeque::new(),
+            timed_queue: BTreeMap::new(),
+            timed_queue_len: 0,
             ready_queue: VecDeque::new(),
             metrics,
             events: Vec::new(),
@@ -392,7 +402,7 @@ impl LaneScheduler {
             });
         }
 
-        if self.next_task_id.checked_add(1).is_none() {
+        if self.next_task_id == 0 {
             return Err(LaneError::TaskIdExhausted);
         }
 
@@ -409,11 +419,7 @@ impl LaneScheduler {
     ) -> Result<TaskId, LaneError> {
         self.validate_submission(&label)?;
 
-        let task_id = TaskId(self.next_task_id);
-        self.next_task_id = self
-            .next_task_id
-            .checked_add(1)
-            .ok_or(LaneError::TaskIdExhausted)?;
+        let task_id = self.allocate_task_id()?;
 
         let task = ScheduledTask {
             task_id,
@@ -429,8 +435,16 @@ impl LaneScheduler {
                 self.cancel_queue.len() - 1
             }
             SchedulerLane::Timed => {
-                self.timed_queue.push_back(task);
-                self.timed_queue.len() - 1
+                self.timed_queue
+                    .entry(task.deadline_tick)
+                    .or_default()
+                    .push_back(task);
+                self.timed_queue_len = self.timed_queue_len.saturating_add(1);
+                // Position is per-deadline FIFO within bucket; expose the
+                // pre-insert total length for backward compatibility with
+                // the original `len() - 1` semantic, since callers use
+                // queue_position only for telemetry/diagnostics.
+                self.timed_queue_len.saturating_sub(1)
             }
             SchedulerLane::Ready => {
                 self.ready_queue.push_back(task);
@@ -443,7 +457,7 @@ impl LaneScheduler {
             m.tasks_submitted += 1;
             m.queue_depth = match label.lane {
                 SchedulerLane::Cancel => self.cancel_queue.len(),
-                SchedulerLane::Timed => self.timed_queue.len(),
+                SchedulerLane::Timed => self.timed_queue_len,
                 SchedulerLane::Ready => self.ready_queue.len(),
             };
         }
@@ -571,22 +585,23 @@ impl LaneScheduler {
             }
         }
 
-        // 2. Timed lane: tasks with deadline <= current_ticks (sorted by deadline).
-        if batch.len() < batch_size {
-            // Sort by deadline for fair scheduling.
-            let mut timed_sorted: Vec<ScheduledTask> = self.timed_queue.drain(..).collect();
-            timed_sorted.sort_by_key(|t| t.deadline_tick);
-
-            let mut returned = VecDeque::new();
-            for task in timed_sorted {
-                if batch.len() < batch_size && task.deadline_tick <= current_ticks {
-                    self.record_schedule(&task);
-                    batch.push(task);
-                } else {
-                    returned.push_back(task);
-                }
+        // 2. Timed lane: tasks with deadline <= current_ticks (smallest
+        // deadline first). The BTreeMap keeps deadline buckets sorted, so
+        // peek-min is O(log n) and we only touch tasks we actually
+        // schedule (O(K log n) instead of the prior O(n log n) drain+sort).
+        while batch.len() < batch_size {
+            let due = match self.timed_queue.first_key_value() {
+                Some((deadline, _)) => *deadline <= current_ticks,
+                None => false,
+            };
+            if !due {
+                break;
             }
-            self.timed_queue = returned;
+            let Some(task) = self.pop_min_timed() else {
+                break;
+            };
+            self.record_schedule(&task);
+            batch.push(task);
         }
 
         // 3. Ready lane: FIFO, with anti-starvation.
@@ -608,17 +623,26 @@ impl LaneScheduler {
             }
         }
 
-        // Timeout expired timed tasks still in queue.
+        // Timeout expired timed tasks still in queue. Same min-heap walk:
+        // a strictly-overdue head (deadline > 0 && < current_ticks) means
+        // every task in that bucket is overdue, and the next bucket's
+        // smallest deadline is >=, so we can stop as soon as the head is
+        // not overdue. This is O(K' log n) where K' is the count expired
+        // (typically the leftover when batch_size was hit early).
         let mut timed_expired = Vec::new();
-        let mut remaining_timed = VecDeque::new();
-        for task in self.timed_queue.drain(..) {
-            if task.deadline_tick > 0 && task.deadline_tick < current_ticks {
-                timed_expired.push(task);
-            } else {
-                remaining_timed.push_back(task);
+        loop {
+            let overdue = match self.timed_queue.first_key_value() {
+                Some((deadline, _)) => *deadline > 0 && *deadline < current_ticks,
+                None => false,
+            };
+            if !overdue {
+                break;
             }
+            let Some(task) = self.pop_min_timed() else {
+                break;
+            };
+            timed_expired.push(task);
         }
-        self.timed_queue = remaining_timed;
 
         for task in &timed_expired {
             if let Some(m) = self.metrics.get_mut("timed") {
@@ -664,14 +688,14 @@ impl LaneScheduler {
     pub fn queue_depth(&self, lane: SchedulerLane) -> usize {
         match lane {
             SchedulerLane::Cancel => self.cancel_queue.len(),
-            SchedulerLane::Timed => self.timed_queue.len(),
+            SchedulerLane::Timed => self.timed_queue_len,
             SchedulerLane::Ready => self.ready_queue.len(),
         }
     }
 
     /// Total queue depth across all lanes.
     pub fn total_queue_depth(&self) -> usize {
-        self.cancel_queue.len() + self.timed_queue.len() + self.ready_queue.len()
+        self.cancel_queue.len() + self.timed_queue_len + self.ready_queue.len()
     }
 
     /// Drain accumulated events.
@@ -706,7 +730,7 @@ impl LaneScheduler {
             m.queue_depth = self.cancel_queue.len();
         }
         if let Some(m) = self.metrics.get_mut("timed") {
-            m.queue_depth = self.timed_queue.len();
+            m.queue_depth = self.timed_queue_len;
         }
         if let Some(m) = self.metrics.get_mut("ready") {
             m.queue_depth = self.ready_queue.len();
@@ -715,6 +739,30 @@ impl LaneScheduler {
 
     fn emit_event(&mut self, event: SchedulerEvent) {
         self.events.push(event);
+    }
+
+    /// Pop the smallest-deadline task from `timed_queue`. FIFO within
+    /// the per-deadline bucket. Removes empty buckets to keep the
+    /// BTreeMap from growing unboundedly. O(log n) where n is the number
+    /// of distinct deadline values currently queued.
+    fn pop_min_timed(&mut self) -> Option<ScheduledTask> {
+        let mut entry = self.timed_queue.first_entry()?;
+        let task = entry.get_mut().pop_front()?;
+        if entry.get().is_empty() {
+            entry.remove_entry();
+        }
+        self.timed_queue_len = self.timed_queue_len.saturating_sub(1);
+        Some(task)
+    }
+
+    fn allocate_task_id(&mut self) -> Result<TaskId, LaneError> {
+        if self.next_task_id == 0 {
+            return Err(LaneError::TaskIdExhausted);
+        }
+
+        let task_id = TaskId(self.next_task_id);
+        self.next_task_id = self.next_task_id.checked_add(1).unwrap_or(0);
+        Ok(task_id)
     }
 
     fn record_count(&mut self, event_type: &str) {
@@ -1211,7 +1259,7 @@ mod tests {
     #[test]
     fn submit_fails_closed_when_task_id_space_exhausted() {
         let mut sched = LaneScheduler::new(LaneConfig::default());
-        sched.next_task_id = u64::MAX;
+        sched.next_task_id = 0;
 
         let err = sched
             .submit(ready_label("t1"), 0, "payload", 0)
@@ -1220,6 +1268,23 @@ mod tests {
         assert_eq!(err, LaneError::TaskIdExhausted);
         assert_eq!(sched.queue_depth(SchedulerLane::Ready), 0);
         assert_eq!(sched.event_counts().get("submit"), None);
+    }
+
+    #[test]
+    fn submit_allocates_max_task_id_before_marking_id_space_exhausted() {
+        let mut sched = LaneScheduler::new(LaneConfig::default());
+        sched.next_task_id = u64::MAX;
+
+        let task_id = sched
+            .submit(ready_label("t1"), 0, "payload-max", 0)
+            .expect("u64::MAX should be the last allocatable task ID");
+        assert_eq!(task_id, TaskId(u64::MAX));
+        assert_eq!(sched.next_task_id, 0);
+
+        let err = sched
+            .submit(ready_label("t2"), 0, "payload-overflow", 0)
+            .expect_err("subsequent submissions must fail closed");
+        assert_eq!(err, LaneError::TaskIdExhausted);
     }
 
     #[test]
@@ -2882,7 +2947,7 @@ mod tests {
     fn submit_for_extension_does_not_charge_budget_when_task_id_exhausted() {
         let mut sched = LaneScheduler::new(LaneConfig::default());
         sched.set_budget_enforcer(admission_enforcer("ext-a", 1_000_000));
-        sched.next_task_id = u64::MAX;
+        sched.next_task_id = 0;
 
         let result =
             sched.submit_for_extension("ext-a", ready_label("trace-a"), 100, "payload-a", 0);
@@ -2932,6 +2997,102 @@ mod tests {
             .expect("submit_throttled event should be present");
         assert_eq!(throttled_event.task_id, task_id.0);
         assert_eq!(throttled_event.queue_position, 1);
+    }
+
+    // bd-3l528: timed-lane data structure switched from drain+sort+rebuild
+    // VecDeque to BTreeMap<u64, VecDeque>. These tests pin the determinism
+    // contract that the new min-heap structure must preserve.
+
+    #[test]
+    fn timed_lane_preserves_fifo_within_same_deadline_bucket() {
+        let mut sched = LaneScheduler::new(LaneConfig::default());
+        sched
+            .submit(timed_label("t1"), 100, "first-at-100", 0)
+            .expect("submit should succeed");
+        sched
+            .submit(timed_label("t2"), 100, "second-at-100", 0)
+            .expect("submit should succeed");
+        sched
+            .submit(timed_label("t3"), 50, "early", 0)
+            .expect("submit should succeed");
+        sched
+            .submit(timed_label("t4"), 100, "third-at-100", 0)
+            .expect("submit should succeed");
+
+        let batch = sched.schedule_batch(10, 200);
+        let timed_payloads: Vec<_> = batch
+            .iter()
+            .filter(|t| t.label.lane == SchedulerLane::Timed)
+            .map(|t| t.payload_id.as_str())
+            .collect();
+        assert_eq!(
+            timed_payloads,
+            vec!["early", "first-at-100", "second-at-100", "third-at-100",],
+            "smallest deadline first; FIFO insertion order preserved within each per-deadline bucket"
+        );
+    }
+
+    #[test]
+    fn timed_lane_queue_depth_tracks_btreemap_total_across_buckets() {
+        let mut sched = LaneScheduler::new(LaneConfig::default());
+        for (i, deadline) in [100_u64, 100, 200, 100, 300, 200].iter().enumerate() {
+            sched
+                .submit(
+                    timed_label(&format!("t{i}")),
+                    *deadline,
+                    &format!("p{i}"),
+                    0,
+                )
+                .expect("submit should succeed");
+        }
+        assert_eq!(sched.queue_depth(SchedulerLane::Timed), 6);
+        assert_eq!(sched.total_queue_depth(), 6);
+
+        // Schedule with current_ticks far past every deadline. All 6 should
+        // be drained, and the cached length must collapse back to zero.
+        let batch = sched.schedule_batch(10, 1_000);
+        assert_eq!(batch.len(), 6);
+        assert_eq!(sched.queue_depth(SchedulerLane::Timed), 0);
+        assert_eq!(sched.total_queue_depth(), 0);
+    }
+
+    #[test]
+    fn timed_lane_partial_batch_leaves_remaining_in_min_heap_order() {
+        let mut sched = LaneScheduler::new(LaneConfig::default());
+        for (i, deadline) in [50_u64, 100, 150, 200, 250].iter().enumerate() {
+            sched
+                .submit(
+                    timed_label(&format!("t{i}")),
+                    *deadline,
+                    &format!("p{i}"),
+                    0,
+                )
+                .expect("submit should succeed");
+        }
+
+        // batch_size=2, current_ticks=100 → take the two smallest (50, 100).
+        // Leftover deadlines 150/200/250 are all > 100, so the timeout
+        // sweep does not expire them; they must persist in the queue in
+        // min-heap order for the next round.
+        let first = sched.schedule_batch(2, 100);
+        let timed_first: Vec<_> = first
+            .iter()
+            .filter(|t| t.label.lane == SchedulerLane::Timed)
+            .map(|t| t.payload_id.as_str())
+            .collect();
+        assert_eq!(timed_first, vec!["p0", "p1"]);
+        assert_eq!(sched.queue_depth(SchedulerLane::Timed), 3);
+
+        // Next batch advances current_ticks past the rest. The remaining
+        // tasks come out in deadline order: 150, 200, 250.
+        let second = sched.schedule_batch(10, 300);
+        let timed_second: Vec<_> = second
+            .iter()
+            .filter(|t| t.label.lane == SchedulerLane::Timed)
+            .map(|t| t.payload_id.as_str())
+            .collect();
+        assert_eq!(timed_second, vec!["p2", "p3", "p4"]);
+        assert_eq!(sched.queue_depth(SchedulerLane::Timed), 0);
     }
 
     #[test]

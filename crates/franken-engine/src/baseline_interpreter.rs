@@ -4248,7 +4248,10 @@ impl InterpreterCore {
 
                     let (func_idx, captured_env, closure_id) = match &callee_val {
                         Value::Function(idx) => (*idx, None, None),
-                        Value::Closure(closure_id) => {
+                        Value::Closure(closure_id)
+                        | Value::GeneratorFunction(closure_id)
+                        | Value::AsyncFunction(closure_id)
+                        | Value::AsyncGeneratorFunction(closure_id) => {
                             let closure =
                                 self.closures.get(*closure_id as usize).ok_or_else(|| {
                                     InterpreterError::TypeError {
@@ -4269,6 +4272,165 @@ impl InterpreterCore {
                             });
                         }
                     };
+
+                    if let Value::GeneratorFunction(cid) = &callee_val {
+                        let gen_id = u32::try_from(self.generators.len()).map_err(|_| {
+                            InterpreterError::TypeError {
+                                expected: "generator table capacity".into(),
+                                got: format!("exceeded u32::MAX ({})", self.generators.len()),
+                            }
+                        })?;
+                        self.generators.push(GeneratorObject {
+                            function_index: func_idx,
+                            closure_index: Some(*cid),
+                            saved_ip: 0,
+                            saved_registers: Vec::new(),
+                            saved_register_base: 0,
+                            phase: GeneratorPhase::SuspendedStart,
+                        });
+                        self.write_reg(dst, Value::Generator(gen_id))?;
+                        self.ip += 1;
+                        continue;
+                    }
+
+                    if let Value::AsyncFunction(cid) = &callee_val {
+                        let func = module.function_table.get(func_idx as usize).ok_or(
+                            InterpreterError::FunctionNotFound {
+                                index: func_idx,
+                                table_size: module.function_table.len() as u32,
+                            },
+                        )?;
+
+                        if self.call_stack.len() >= self.config.max_call_depth {
+                            return Err(InterpreterError::StackOverflow {
+                                depth: self.call_stack.len(),
+                                max: self.config.max_call_depth,
+                            });
+                        }
+
+                        let mut arg_vals = Vec::new();
+                        for i in 0..args.count.min(func.arity) {
+                            let reg = args.start.checked_add(i).ok_or(
+                                InterpreterError::RegisterOutOfBounds {
+                                    register: args.start,
+                                    max: self.config.max_registers,
+                                },
+                            )?;
+                            arg_vals.push(self.read_reg(reg)?);
+                        }
+
+                        self.run_pre_call_hook(module, &callee_val, func_idx, &arg_vals)?;
+
+                        let result_promise = self.promise_store.create().0;
+                        let async_id = u32::try_from(self.async_functions.len()).map_err(|_| {
+                            InterpreterError::TypeError {
+                                expected: "async function table capacity".into(),
+                                got: format!("exceeded u32::MAX ({})", self.async_functions.len()),
+                            }
+                        })?;
+                        self.async_functions.push(AsyncFunctionObject {
+                            function_index: func_idx,
+                            closure_index: Some(*cid),
+                            saved_ip: 0,
+                            saved_registers: Vec::new(),
+                            saved_register_base: 0,
+                            phase: AsyncFunctionPhase::Executing,
+                            result_promise,
+                        });
+                        self.write_reg(dst, Value::Promise(result_promise))?;
+
+                        let scope_depth = self.scope_chain.depth();
+                        let captured_env_bytes = captured_env
+                            .as_ref()
+                            .map(|env| Self::estimate_scope_chain_bytes(env))
+                            .unwrap_or(0);
+                        let captured_scope_depth = captured_env.as_ref().map_or(0, Vec::len);
+                        let saved_chain =
+                            if captured_env.is_some() {
+                                Some(self.snapshot_scope_chain_with_temporary_budget(
+                                    captured_env_bytes,
+                                )?)
+                            } else {
+                                None
+                            };
+
+                        self.call_stack.push(CallFrame {
+                            return_ip: self.ip + 1,
+                            return_reg: dst,
+                            register_base: self.register_base,
+                            function_index: Some(func_idx),
+                            this_value: receiver_val.clone(),
+                            super_value: Value::Undefined,
+                            construct_this: None,
+                            saved_pending_exception: self.pending_exception.take(),
+                            saved_pending_return: self.pending_return.take(),
+                            saved_suspended_abrupt_depth: self.suspended_abrupt_completions.len(),
+                            saved_finally_mode_depth: self.finally_modes.len(),
+                            saved_scope_depth: scope_depth,
+                            saved_scope_chain: saved_chain,
+                            closure_id,
+                            captured_scope_depth,
+                            async_function_id: Some(async_id),
+                        });
+
+                        if let Some(env) = captured_env {
+                            self.scope_chain.frames = env;
+                        }
+
+                        if let Err(err) = self.scope_chain.push(self.config.max_scope_depth) {
+                            self.async_functions.pop();
+                            self.rollback_call_setup();
+                            return Err(err);
+                        }
+                        if let Err(err) = self.sync_estimated_memory_bytes() {
+                            self.async_functions.pop();
+                            self.rollback_call_setup();
+                            return Err(err);
+                        }
+
+                        self.register_base += self.config.max_registers as usize;
+
+                        let req_len = self.register_base + self.config.max_registers as usize;
+                        if req_len > self.registers.len() {
+                            self.registers.resize(req_len, Value::Undefined);
+                        } else {
+                            self.registers[self.register_base..req_len].fill(Value::Undefined);
+                        }
+
+                        for (i, val) in arg_vals.into_iter().enumerate() {
+                            let reg = i as u32;
+                            if reg < self.config.max_registers {
+                                self.write_reg(reg, val)?;
+                            }
+                        }
+
+                        self.ip = func.entry as usize;
+                        continue;
+                    }
+
+                    if let Value::AsyncGeneratorFunction(cid) = &callee_val {
+                        let async_gen_id =
+                            u32::try_from(self.async_generators.len()).map_err(|_| {
+                                InterpreterError::TypeError {
+                                    expected: "async generator table capacity".into(),
+                                    got: format!(
+                                        "exceeded u32::MAX ({})",
+                                        self.async_generators.len()
+                                    ),
+                                }
+                            })?;
+                        self.async_generators.push(AsyncGeneratorObject {
+                            function_index: func_idx,
+                            closure_index: Some(*cid),
+                            saved_ip: 0,
+                            saved_registers: Vec::new(),
+                            saved_register_base: 0,
+                            phase: AsyncGeneratorPhase::SuspendedStart,
+                        });
+                        self.write_reg(dst, Value::AsyncGeneratorObject(async_gen_id))?;
+                        self.ip += 1;
+                        continue;
+                    }
 
                     let func = module.function_table.get(func_idx as usize).ok_or(
                         InterpreterError::FunctionNotFound {
@@ -4313,7 +4475,7 @@ impl InterpreterCore {
                         return_reg: dst,
                         register_base: self.register_base,
                         function_index: Some(func_idx),
-                        this_value: receiver_val,
+                        this_value: receiver_val.clone(),
                         super_value: Value::Undefined,
                         construct_this: None,
                         saved_pending_exception: self.pending_exception.take(),
@@ -7220,6 +7382,62 @@ impl InterpreterCore {
         Ok(accumulator)
     }
 
+    fn array_prototype_reduce_right(
+        &mut self,
+        args: RegRange,
+        module: Option<&Ir3Module>,
+    ) -> Result<Value, InterpreterError> {
+        self.validate_array_callback_args(args, "Array.prototype.reduceRight")?;
+
+        let array_id = match self.read_reg(args.start)? {
+            Value::Object(object_id) => object_id,
+            other => {
+                return Err(InterpreterError::TypeError {
+                    expected: "array object".to_string(),
+                    got: other.type_name().to_string(),
+                });
+            }
+        };
+        let callback = self.read_reg(args.start + 1)?;
+        let length = self.array_like_length(array_id)?;
+        let mut next_index_exclusive = length;
+        let mut accumulator = if args.count > 2 {
+            self.read_reg(args.start + 2)?
+        } else {
+            let mut first_present = None;
+            for element_index in (0..length).rev() {
+                if let Some(value) = self.array_index_value(array_id, element_index)? {
+                    first_present = Some((element_index, value));
+                    break;
+                }
+            }
+            let Some((element_index, value)) = first_present else {
+                return Err(InterpreterError::TypeError {
+                    expected: "non-empty array or initialValue".to_string(),
+                    got: "empty Array.prototype.reduceRight without initialValue".to_string(),
+                });
+            };
+            next_index_exclusive = element_index;
+            value
+        };
+
+        for element_index in (0..next_index_exclusive).rev() {
+            let Some(current_value) = self.array_index_value(array_id, element_index)? else {
+                continue;
+            };
+            accumulator = self.invoke_simple_reduce_callback(
+                module,
+                &callback,
+                accumulator,
+                current_value,
+                element_index,
+                array_id,
+            )?;
+        }
+
+        Ok(accumulator)
+    }
+
     fn array_like_length(&self, array_id: ObjectId) -> Result<usize, InterpreterError> {
         let object = self
             .heap
@@ -7244,6 +7462,27 @@ impl InterpreterCore {
             .get(array_id.0 as usize)
             .ok_or(InterpreterError::ObjectNotFound { id: array_id.0 })?;
         Ok(object.properties.get(&element_index.to_string()).cloned())
+    }
+
+    fn array_like_argument_values(&self, value: Value) -> Result<Vec<Value>, InterpreterError> {
+        match value {
+            Value::Undefined | Value::Null => Ok(Vec::new()),
+            Value::Object(object_id) => {
+                let length = self.array_like_length(object_id)?;
+                let mut values = Vec::with_capacity(length);
+                for element_index in 0..length {
+                    values.push(
+                        self.array_index_value(object_id, element_index)?
+                            .unwrap_or(Value::Undefined),
+                    );
+                }
+                Ok(values)
+            }
+            other => Err(InterpreterError::TypeError {
+                expected: "array-like object or null/undefined".to_string(),
+                got: other.type_name().to_string(),
+            }),
+        }
     }
 
     fn array_prototype_iterator(
@@ -7507,6 +7746,93 @@ impl InterpreterCore {
             executed: self.config.instruction_budget,
             budget: self.config.instruction_budget,
         })
+    }
+
+    fn invoke_inline_method_call(
+        &mut self,
+        module: Option<&Ir3Module>,
+        callee: Value,
+        receiver: Value,
+        arguments: Vec<Value>,
+    ) -> Result<Value, InterpreterError> {
+        let module = module.ok_or_else(|| InterpreterError::TypeError {
+            expected: "module-backed Function.prototype.call/apply dispatch".to_string(),
+            got: "missing module context".to_string(),
+        })?;
+        let arg_count =
+            u32::try_from(arguments.len()).map_err(|_| InterpreterError::TypeError {
+                expected: "u32-bounded Function.prototype.call/apply argument count".to_string(),
+                got: format!("{} arguments", arguments.len()),
+            })?;
+        let required_registers =
+            2u32.checked_add(arg_count)
+                .ok_or_else(|| InterpreterError::TypeError {
+                    expected: "u32-bounded Function.prototype.call/apply register budget"
+                        .to_string(),
+                    got: format!("2 metadata registers + {arg_count} arguments"),
+                })?;
+        if required_registers > self.config.max_registers {
+            return Err(InterpreterError::TypeError {
+                expected: "Function.prototype.call/apply arguments within register budget"
+                    .to_string(),
+                got: format!(
+                    "{required_registers} registers required but max is {}",
+                    self.config.max_registers
+                ),
+            });
+        }
+
+        let mut wrapper = module.clone();
+        let wrapper_start = wrapper.instructions.len();
+        wrapper.instructions.push(Ir3Instruction::CallMethod {
+            receiver: 0,
+            callee: 1,
+            args: RegRange {
+                start: 2,
+                count: arg_count,
+            },
+            dst: 0,
+        });
+        wrapper.instructions.push(Ir3Instruction::Halt);
+
+        let snapshot = self.snapshot_module_execution();
+        let saved_active_cjs_context = self.active_cjs_context.clone();
+        let result = (|| -> Result<Value, InterpreterError> {
+            self.registers = vec![Value::Undefined; self.config.max_registers as usize];
+            self.call_stack.clear();
+            self.ip = wrapper_start;
+            self.register_base = 0;
+            self.catch_frames.clear();
+            self.pending_exception = None;
+            self.pending_return = None;
+            self.suspended_abrupt_completions.clear();
+            self.finally_modes.clear();
+            self.current_module_specifier = Some(module.header.source_label.clone());
+            self.sync_estimated_memory_bytes()?;
+            self.write_reg(0, receiver)?;
+            self.write_reg(1, callee)?;
+            for (index, argument) in arguments.into_iter().enumerate() {
+                let register = 2u32
+                    .checked_add(u32::try_from(index).map_err(|_| {
+                        InterpreterError::TypeError {
+                            expected: "u32-bounded Function.prototype.call/apply argument register"
+                                .to_string(),
+                            got: format!("argument index {index}"),
+                        }
+                    })?)
+                    .ok_or_else(|| InterpreterError::TypeError {
+                        expected: "u32-bounded Function.prototype.call/apply argument register"
+                            .to_string(),
+                        got: format!("r2 + argument index {index}"),
+                    })?;
+                self.write_reg(register, argument)?;
+            }
+            self.run_loop(&wrapper)
+        })();
+        self.restore_module_execution(snapshot);
+        self.active_cjs_context = saved_active_cjs_context;
+        self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+        result
     }
 
     fn read_local_register(registers: &[Value], register: u32) -> Result<Value, InterpreterError> {
@@ -11576,25 +11902,21 @@ impl InterpreterCore {
             }
 
             "builtin:FunctionPrototypeCall" => {
-                // Function.prototype.call(thisArg, ...args) implementation
-                // For now, simplified implementation without full function call support
-                // TODO: Implement proper function call mechanism with context binding
-
                 if args.count == 0 {
                     return Ok(Value::Undefined);
                 }
 
-                // The first argument is the function to call, second is thisArg
-                let _function = self.read_reg(args.start)?;
-                let _this_arg = if args.count >= 2 {
+                let function = self.read_reg(args.start)?;
+                let this_arg = if args.count >= 2 {
                     self.read_reg(args.start + 1)?
                 } else {
                     Value::Undefined
                 };
-
-                // For now, return undefined since we don't have full function call support
-                // This is a foundation for future function call implementation
-                Ok(Value::Undefined)
+                let mut call_args = Vec::with_capacity(args.count.saturating_sub(2) as usize);
+                for arg_offset in 2..args.count {
+                    call_args.push(self.read_reg(args.start + arg_offset)?);
+                }
+                self.invoke_inline_method_call(module, function, this_arg, call_args)
             }
 
             "builtin:MathAsin" => {
@@ -11669,41 +11991,7 @@ impl InterpreterCore {
                 Ok(Value::Object(regexp_id))
             }
 
-            "builtin:ArrayPrototypeReduceRight" => {
-                // Array.prototype.reduceRight(callback, initialValue) implementation
-                if args.count < 2 {
-                    return Ok(Value::Undefined);
-                }
-
-                let this_val = self.read_reg(args.start)?;
-                let array_id = match this_val {
-                    Value::Object(id) => id,
-                    _ => return Ok(Value::Undefined), // Non-objects can't be arrays
-                };
-
-                let _callback = self.read_reg(args.start + 1)?;
-                let initial_value = if args.count >= 3 {
-                    Some(self.read_reg(args.start + 2)?)
-                } else {
-                    None
-                };
-
-                // Get array length
-                let _length = if let Some(obj) = self.heap.get(array_id.0 as usize) {
-                    match obj.properties.get("length") {
-                        Some(Value::Int(len)) => *len as usize,
-                        Some(Value::Float(len)) => len.inner() as usize,
-                        _ => return Ok(Value::Undefined),
-                    }
-                } else {
-                    return Ok(Value::Undefined);
-                };
-
-                // For now, simplified implementation without function call support
-                // Return initial value or undefined since we can't execute callback functions yet
-                // TODO: Implement function call mechanism for full callback support
-                Ok(initial_value.unwrap_or(Value::Undefined))
-            }
+            "builtin:ArrayPrototypeReduceRight" => self.array_prototype_reduce_right(args, module),
 
             "builtin:StringPrototypeSubstr" => {
                 // String.prototype.substr(start, length) implementation
@@ -11801,30 +12089,23 @@ impl InterpreterCore {
             }
 
             "builtin:FunctionPrototypeApply" => {
-                // Function.prototype.apply(thisArg, argsArray) implementation
-                // For now, simplified implementation without full function call support
-                // TODO: Implement proper function call mechanism with context binding and argument spreading
-
                 if args.count == 0 {
                     return Ok(Value::Undefined);
                 }
 
-                // The first argument is the function to call, second is thisArg, third is args array
-                let _function = self.read_reg(args.start)?;
-                let _this_arg = if args.count >= 2 {
+                let function = self.read_reg(args.start)?;
+                let this_arg = if args.count >= 2 {
                     self.read_reg(args.start + 1)?
                 } else {
                     Value::Undefined
                 };
-                let _args_array = if args.count >= 3 {
+                let args_array = if args.count >= 3 {
                     self.read_reg(args.start + 2)?
                 } else {
                     Value::Undefined
                 };
-
-                // For now, return undefined since we don't have full function call support
-                // This is a foundation for future function call implementation with argument arrays
-                Ok(Value::Undefined)
+                let apply_args = self.array_like_argument_values(args_array)?;
+                self.invoke_inline_method_call(module, function, this_arg, apply_args)
             }
 
             "builtin:StringPrototypeLocaleCompare" => {
@@ -17289,6 +17570,212 @@ mod async_runtime_tests_current {
             promise.state,
             crate::promise_model::PromiseState::Fulfilled(crate::object_model::JsValue::Int(99))
         );
+    }
+}
+
+#[cfg(test)]
+mod function_prototype_call_apply_tests_current {
+    use super::*;
+    use crate::ir_contract::{
+        CapabilityTag, Ir3FunctionDesc, IrHeader, IrLevel, IrSchemaVersion, RegRange,
+    };
+
+    fn test_module_with_functions(
+        instructions: Vec<Ir3Instruction>,
+        functions: Vec<Ir3FunctionDesc>,
+    ) -> Ir3Module {
+        Ir3Module {
+            header: IrHeader {
+                schema_version: IrSchemaVersion::CURRENT,
+                level: IrLevel::Ir3,
+                source_hash: None,
+                source_label: "function-prototype-call-apply-test".to_string(),
+            },
+            instructions,
+            constant_pool: Vec::new(),
+            function_table: functions,
+            specialization: None,
+            required_capabilities: Vec::new(),
+        }
+    }
+
+    fn test_interpreter() -> InterpreterCore {
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config.granted_capabilities = std::collections::BTreeSet::from([
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+        ]);
+        InterpreterCore::new(config, "function-prototype-call-apply-test")
+    }
+
+    fn seed_object(core: &mut InterpreterCore, properties: &[(&str, Value)]) -> ObjectId {
+        core.alloc_object_with_properties(properties)
+            .expect("test object allocation should succeed")
+    }
+
+    fn seed_array_like(core: &mut InterpreterCore, values: &[Value]) -> ObjectId {
+        let array_id = core
+            .alloc_object_with_prototype(None)
+            .expect("test array allocation should succeed");
+        for (index, value) in values.iter().enumerate() {
+            core.set_object_property(array_id, index.to_string(), value.clone())
+                .expect("test array element write should succeed");
+        }
+        core.set_object_property(
+            array_id,
+            "length".to_string(),
+            Value::Int(values.len() as i64),
+        )
+        .expect("test array length write should succeed");
+        array_id
+    }
+
+    #[test]
+    fn function_prototype_call_invokes_function_with_bound_this() {
+        let mut module = test_module_with_functions(
+            vec![
+                Ir3Instruction::HostCall {
+                    capability: CapabilityTag("builtin:FunctionPrototypeCall".to_string()),
+                    args: RegRange { start: 0, count: 3 },
+                    dst: 0,
+                },
+                Ir3Instruction::Halt,
+                Ir3Instruction::LoadThis { dst: 1 },
+                Ir3Instruction::LoadStr {
+                    dst: 2,
+                    pool_index: 0,
+                },
+                Ir3Instruction::GetProperty {
+                    obj: 1,
+                    key: 2,
+                    dst: 3,
+                },
+                Ir3Instruction::Add {
+                    dst: 4,
+                    lhs: 0,
+                    rhs: 3,
+                },
+                Ir3Instruction::Return { value: 4 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 2,
+                arity: 1,
+                frame_size: 5,
+                name: Some("add_this_offset".to_string()),
+                is_generator: false,
+            }],
+        );
+        module.constant_pool.push("offset".to_string());
+
+        let mut core = test_interpreter();
+        let this_id = seed_object(&mut core, &[("offset", Value::Int(7))]);
+        core.registers[0] = Value::Function(0);
+        core.registers[1] = Value::Object(this_id);
+        core.registers[2] = Value::Int(5);
+
+        let result = core
+            .execute(&module)
+            .expect("Function.prototype.call should execute");
+        assert_eq!(result.value, Value::Int(12));
+    }
+
+    #[test]
+    fn function_prototype_apply_spreads_array_like_arguments() {
+        let mut module = test_module_with_functions(
+            vec![
+                Ir3Instruction::HostCall {
+                    capability: CapabilityTag("builtin:FunctionPrototypeApply".to_string()),
+                    args: RegRange { start: 0, count: 3 },
+                    dst: 0,
+                },
+                Ir3Instruction::Halt,
+                Ir3Instruction::LoadThis { dst: 2 },
+                Ir3Instruction::LoadStr {
+                    dst: 3,
+                    pool_index: 0,
+                },
+                Ir3Instruction::GetProperty {
+                    obj: 2,
+                    key: 3,
+                    dst: 4,
+                },
+                Ir3Instruction::Add {
+                    dst: 5,
+                    lhs: 0,
+                    rhs: 1,
+                },
+                Ir3Instruction::Add {
+                    dst: 6,
+                    lhs: 5,
+                    rhs: 4,
+                },
+                Ir3Instruction::Return { value: 6 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 2,
+                arity: 2,
+                frame_size: 7,
+                name: Some("sum_args_and_this_base".to_string()),
+                is_generator: false,
+            }],
+        );
+        module.constant_pool.push("base".to_string());
+
+        let mut core = test_interpreter();
+        let this_id = seed_object(&mut core, &[("base", Value::Int(5))]);
+        let args_array_id = seed_array_like(&mut core, &[Value::Int(3), Value::Int(4)]);
+        core.registers[0] = Value::Function(0);
+        core.registers[1] = Value::Object(this_id);
+        core.registers[2] = Value::Object(args_array_id);
+
+        let result = core
+            .execute(&module)
+            .expect("Function.prototype.apply should execute");
+        assert_eq!(result.value, Value::Int(12));
+    }
+
+    #[test]
+    fn array_prototype_reduce_right_invokes_callback_from_right_to_left() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::HostCall {
+                    capability: CapabilityTag("builtin:ArrayPrototypeReduceRight".to_string()),
+                    args: RegRange { start: 0, count: 3 },
+                    dst: 0,
+                },
+                Ir3Instruction::Halt,
+                Ir3Instruction::LoadInt { dst: 4, value: 10 },
+                Ir3Instruction::Mul {
+                    dst: 5,
+                    lhs: 0,
+                    rhs: 4,
+                },
+                Ir3Instruction::Add {
+                    dst: 6,
+                    lhs: 5,
+                    rhs: 1,
+                },
+                Ir3Instruction::Return { value: 6 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 2,
+                arity: 4,
+                frame_size: 7,
+                name: Some("reduce_right_digits".to_string()),
+                is_generator: false,
+            }],
+        );
+
+        let mut core = test_interpreter();
+        let array_id = seed_array_like(&mut core, &[Value::Int(1), Value::Int(2), Value::Int(3)]);
+        core.registers[0] = Value::Object(array_id);
+        core.registers[1] = Value::Function(0);
+        core.registers[2] = Value::Int(0);
+
+        let result = core
+            .execute(&module)
+            .expect("Array.prototype.reduceRight should execute");
+        assert_eq!(result.value, Value::Int(321));
     }
 }
 

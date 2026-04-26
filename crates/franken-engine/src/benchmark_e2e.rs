@@ -16,6 +16,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Instant;
@@ -1369,6 +1370,20 @@ fn benchmark_comparison_output_digest(stdout: &[u8], stderr: &[u8]) -> ContentHa
     ContentHash::from_bytes(hasher.finalize().into())
 }
 
+fn benchmark_comparison_program_content_hash(path: &Path) -> std::io::Result<ContentHash> {
+    let mut file = fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 8192];
+    loop {
+        let read = file.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(ContentHash::from_bytes(hasher.finalize().into()))
+}
+
 fn benchmark_comparison_parity_details(
     baseline_samples: &[BenchmarkComparisonSample],
     runtime_samples: &[BenchmarkComparisonSample],
@@ -1563,18 +1578,19 @@ pub fn run_benchmark_comparison_suite(
         } else {
             manifest_root.join(&case.program_path)
         };
-        let resolved_program_bytes = fs::read(&resolved_program).map_err(|error| {
-            BenchmarkComparisonError::UnreadableProgramPath {
-                benchmark_id: case.benchmark_id.clone(),
-                path: resolved_program.display().to_string(),
-                detail: error.to_string(),
-            }
-        })?;
+        let resolved_program_content_hash =
+            benchmark_comparison_program_content_hash(&resolved_program).map_err(|error| {
+                BenchmarkComparisonError::UnreadableProgramPath {
+                    benchmark_id: case.benchmark_id.clone(),
+                    path: resolved_program.display().to_string(),
+                    detail: error.to_string(),
+                }
+            })?;
         resolved_programs.insert(
             case.benchmark_id.clone(),
             ResolvedBenchmarkProgram {
                 path: resolved_program.clone(),
-                content_hash: ContentHash::compute(&resolved_program_bytes),
+                content_hash: resolved_program_content_hash,
             },
         );
 

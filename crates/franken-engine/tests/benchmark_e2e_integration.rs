@@ -40,6 +40,7 @@ use std::path::Path;
 
 use frankenengine_engine::benchmark_e2e::{
     BENCHMARK_COMPARISON_MANIFEST_SCHEMA_VERSION, BENCHMARK_E2E_COMPONENT,
+    BENCHMARK_E2E_JS_RUNTIME_EXECUTION_INCLUDED, BENCHMARK_E2E_MEASURED_SURFACE,
     BENCHMARK_E2E_SCHEMA_VERSION, BENCHMARK_ENV_SCHEMA_VERSION, BenchmarkComparisonCase,
     BenchmarkComparisonError, BenchmarkComparisonManifest, BenchmarkComparisonRuntimeCommands,
     BenchmarkComparisonSample, BenchmarkEnvironmentManifest, BenchmarkFairnessPolicy,
@@ -1661,6 +1662,14 @@ fn write_evidence_artifacts_manifest_valid_json() {
     assert_eq!(manifest["schema_version"], BENCHMARK_E2E_SCHEMA_VERSION);
     assert_eq!(manifest["run_id"], "test-manifest-json");
     assert_eq!(manifest["seed"], 42);
+    assert_eq!(
+        manifest["measured_surface"]["kind"],
+        BENCHMARK_E2E_MEASURED_SURFACE
+    );
+    assert_eq!(
+        manifest["measured_surface"]["js_runtime_execution_included"],
+        serde_json::json!(BENCHMARK_E2E_JS_RUNTIME_EXECUTION_INCLUDED)
+    );
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -1746,6 +1755,14 @@ fn write_evidence_artifacts_raw_results_archive_valid() {
         raw_archive["schema_version"],
         "franken-engine.benchmark-e2e.raw-results.v1"
     );
+    assert_eq!(
+        raw_archive["measured_surface"]["kind"],
+        BENCHMARK_E2E_MEASURED_SURFACE
+    );
+    assert_eq!(
+        raw_archive["measured_surface"]["js_runtime_execution_included"],
+        serde_json::json!(BENCHMARK_E2E_JS_RUNTIME_EXECUTION_INCLUDED)
+    );
     assert!(
         raw_archive["measurements"]
             .as_array()
@@ -1781,6 +1798,14 @@ fn write_evidence_artifacts_summary_valid() {
     assert_eq!(summary["configured_profiles"], serde_json::json!(["S"]));
     assert_eq!(summary["expected_measurement_count"], 2);
     assert_eq!(summary["complete_suite_evidence"], false);
+    assert_eq!(
+        summary["measured_surface"]["kind"],
+        BENCHMARK_E2E_MEASURED_SURFACE
+    );
+    assert_eq!(
+        summary["measured_surface"]["js_runtime_execution_included"],
+        serde_json::json!(BENCHMARK_E2E_JS_RUNTIME_EXECUTION_INCLUDED)
+    );
     let families = summary["families"].as_array().unwrap();
     assert_eq!(families.len(), 2);
 

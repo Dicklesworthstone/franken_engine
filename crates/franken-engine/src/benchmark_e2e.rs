@@ -1,7 +1,10 @@
-//! Performance benchmark E2E framework for FrankenEngine.
+//! Performance benchmark E2E framework for FrankenEngine control-plane surfaces.
 //!
-//! Implements the Extension-Heavy Benchmark Suite v1.0 with 5 benchmark families,
-//! 3 scale profiles per family, regression detection, and evidence artifact production.
+//! Implements a synthetic extension-lifecycle benchmark suite with 5 benchmark
+//! families, 3 scale profiles per family, regression detection, and evidence
+//! artifact production. This suite measures extension lifecycle, resource budget
+//! accounting, and related control-plane bookkeeping; it does not execute
+//! parser, lowering, or baseline-interpreter JS workloads.
 //!
 //! Families:
 //!   1. boot-storm — extension registration + lifecycle boot throughput
@@ -42,11 +45,22 @@ pub const BENCHMARK_COMPARISON_COMPONENT: &str = "benchmark_comparison";
 pub const BENCHMARK_COMPARISON_SCHEMA_VERSION: &str = "franken-engine.benchmark-comparison.v1";
 pub const BENCHMARK_COMPARISON_MANIFEST_SCHEMA_VERSION: &str =
     "franken-engine.benchmark-comparison-manifest.v1";
+pub const BENCHMARK_E2E_MEASURED_SURFACE: &str = "extension_lifecycle_control_plane";
+pub const BENCHMARK_E2E_SURFACE_DESCRIPTION: &str = "measures extension lifecycle, resource budget accounting, and control-plane bookkeeping rather than parser, lowering, or baseline-interpreter execution";
+pub const BENCHMARK_E2E_JS_RUNTIME_EXECUTION_INCLUDED: bool = false;
 pub const MIN_START_BUDGET_MILLIONTHS: u64 = 1_000;
 
 const MIN_WARMUP_RUNS: u32 = 1;
 const MIN_SAMPLE_COUNT: u32 = 3;
 const MIN_CASE_TIMEOUT_MS: u64 = 1;
+
+fn benchmark_surface_metadata() -> serde_json::Value {
+    serde_json::json!({
+        "kind": BENCHMARK_E2E_MEASURED_SURFACE,
+        "description": BENCHMARK_E2E_SURFACE_DESCRIPTION,
+        "js_runtime_execution_included": BENCHMARK_E2E_JS_RUNTIME_EXECUTION_INCLUDED,
+    })
+}
 
 // ---------------------------------------------------------------------------
 // Scale profiles
@@ -1941,6 +1955,7 @@ pub fn write_evidence_artifacts(
         "run_id": result.config.run_id,
         "run_date": result.config.run_date,
         "seed": result.config.seed,
+        "measured_surface": benchmark_surface_metadata(),
         "environment": environment_summary,
         "families": result.config.families.iter().map(|f| f.as_str()).collect::<Vec<_>>(),
         "profiles": result.config.profiles.iter().map(|p| p.as_str()).collect::<Vec<_>>(),
@@ -2002,6 +2017,7 @@ pub fn write_evidence_artifacts(
         "run_id": result.config.run_id,
         "run_date": result.config.run_date,
         "seed": result.config.seed,
+        "measured_surface": benchmark_surface_metadata(),
         "environment": {
             "os": env_manifest.os,
             "arch": env_manifest.arch,
@@ -2159,6 +2175,7 @@ pub fn write_evidence_artifacts(
         "configured_families": configured_families,
         "configured_profiles": configured_profiles,
         "complete_suite_evidence": complete_suite_evidence,
+        "measured_surface": benchmark_surface_metadata(),
         "environment": environment_summary,
         "families": family_summaries,
     });
@@ -2885,6 +2902,12 @@ mod tests {
     fn benchmark_e2e_constants() {
         assert_eq!(BENCHMARK_E2E_COMPONENT, "benchmark_e2e");
         assert!(!BENCHMARK_E2E_SCHEMA_VERSION.is_empty());
+        assert_eq!(
+            BENCHMARK_E2E_MEASURED_SURFACE,
+            "extension_lifecycle_control_plane"
+        );
+        assert!(!BENCHMARK_E2E_SURFACE_DESCRIPTION.is_empty());
+        assert!(!BENCHMARK_E2E_JS_RUNTIME_EXECUTION_INCLUDED);
         const { assert!(MIN_START_BUDGET_MILLIONTHS > 0) };
     }
 
@@ -3280,6 +3303,14 @@ mod tests {
         assert_eq!(manifest["schema_version"], BENCHMARK_E2E_SCHEMA_VERSION);
         assert_eq!(manifest["run_id"], "test-evidence");
         assert_eq!(manifest["seed"], 42);
+        assert_eq!(
+            manifest["measured_surface"]["kind"],
+            BENCHMARK_E2E_MEASURED_SURFACE
+        );
+        assert_eq!(
+            manifest["measured_surface"]["js_runtime_execution_included"],
+            serde_json::json!(false)
+        );
 
         // Verify evidence JSONL has entries
         let evidence = fs::read_to_string(&artifacts.evidence_path)
@@ -3429,6 +3460,14 @@ mod tests {
         assert_eq!(summary["configured_profiles"], serde_json::json!(["S"]));
         assert_eq!(summary["expected_measurement_count"], 2);
         assert_eq!(summary["complete_suite_evidence"], false);
+        assert_eq!(
+            summary["measured_surface"]["kind"],
+            BENCHMARK_E2E_MEASURED_SURFACE
+        );
+        assert_eq!(
+            summary["measured_surface"]["js_runtime_execution_included"],
+            serde_json::json!(false)
+        );
         assert!(
             summary["environment"]["cpu_model"]
                 .as_str()

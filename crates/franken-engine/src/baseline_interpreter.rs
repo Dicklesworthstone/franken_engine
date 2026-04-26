@@ -60,6 +60,7 @@ use crate::ir_contract::{
 use crate::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
 use crate::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
 use crate::runtime_config::ExecutionConfig;
+use crate::stdlib::normalize_unicode_string;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -1327,6 +1328,8 @@ pub enum InterpreterError {
     StackOverflow { depth: usize, max: usize },
     /// Type error (e.g. adding object + bool).
     TypeError { expected: String, got: String },
+    /// Range error (e.g. invalid normalize form).
+    RangeError { message: String },
     /// Division by zero.
     DivisionByZero,
     /// Undefined variable (register not initialized).
@@ -1420,6 +1423,7 @@ impl fmt::Display for InterpreterError {
             Self::TypeError { expected, got } => {
                 write!(f, "type error: expected {expected}, got {got}")
             }
+            Self::RangeError { message } => write!(f, "range error: {message}"),
             Self::DivisionByZero => write!(f, "division by zero"),
             Self::UndefinedRegister { register } => {
                 write!(f, "undefined register r{register}")
@@ -7760,6 +7764,212 @@ impl InterpreterCore {
         })
     }
 
+    fn invoke_simple_array_from_callback(
+        &mut self,
+        module: Option<&Ir3Module>,
+        callback: &Value,
+        this_arg: Value,
+        current_value: Value,
+        element_index: usize,
+    ) -> Result<Value, InterpreterError> {
+        let module = module.ok_or_else(|| InterpreterError::TypeError {
+            expected: "module-backed Array.from mapper callback".to_string(),
+            got: "Array.from called without module context".to_string(),
+        })?;
+        let function_index = match callback {
+            Value::Function(index) => *index,
+            Value::Closure(closure_id) => {
+                self.closures
+                    .get(*closure_id as usize)
+                    .ok_or_else(|| InterpreterError::TypeError {
+                        expected: "valid Array.from mapper closure".to_string(),
+                        got: format!("closure#{closure_id} not found"),
+                    })?
+                    .function_index
+            }
+            other => {
+                return Err(InterpreterError::TypeError {
+                    expected: "function".to_string(),
+                    got: other.type_name().to_string(),
+                });
+            }
+        };
+        let function = module.function_table.get(function_index as usize).ok_or(
+            InterpreterError::FunctionNotFound {
+                index: function_index,
+                table_size: module.function_table.len() as u32,
+            },
+        )?;
+        let register_count = self.config.max_registers as usize;
+        let mut local_registers = vec![Value::Undefined; register_count];
+        Self::write_local_register(&mut local_registers, 0, current_value)?;
+        Self::write_local_register(
+            &mut local_registers,
+            1,
+            Value::Int(i64::try_from(element_index).unwrap_or(i64::MAX)),
+        )?;
+
+        let mut instruction_pointer = function.entry as usize;
+        for _step in 0..self.config.instruction_budget {
+            let instruction = module
+                .instructions
+                .get(instruction_pointer)
+                .ok_or(InterpreterError::InstructionOutOfBounds {
+                    ip: instruction_pointer,
+                    count: module.instructions.len(),
+                })?
+                .clone();
+            match instruction {
+                Ir3Instruction::LoadInt { dst, value } => {
+                    Self::write_local_register(&mut local_registers, dst, Value::Int(value))?;
+                    instruction_pointer += 1;
+                }
+                Ir3Instruction::LoadFloat { dst, bits } => {
+                    Self::write_local_register(
+                        &mut local_registers,
+                        dst,
+                        Value::Float(Float64::new(f64::from_bits(bits))),
+                    )?;
+                    instruction_pointer += 1;
+                }
+                Ir3Instruction::LoadStr { dst, pool_index } => {
+                    let value = module
+                        .constant_pool
+                        .get(pool_index as usize)
+                        .cloned()
+                        .ok_or(InterpreterError::StringPoolOutOfBounds {
+                            index: pool_index,
+                            pool_size: module.constant_pool.len() as u32,
+                        })?;
+                    Self::write_local_register(&mut local_registers, dst, Value::Str(value))?;
+                    instruction_pointer += 1;
+                }
+                Ir3Instruction::LoadBool { dst, value } => {
+                    Self::write_local_register(&mut local_registers, dst, Value::Bool(value))?;
+                    instruction_pointer += 1;
+                }
+                Ir3Instruction::LoadNull { dst } => {
+                    Self::write_local_register(&mut local_registers, dst, Value::Null)?;
+                    instruction_pointer += 1;
+                }
+                Ir3Instruction::LoadUndefined { dst } => {
+                    Self::write_local_register(&mut local_registers, dst, Value::Undefined)?;
+                    instruction_pointer += 1;
+                }
+                Ir3Instruction::LoadThis { dst } => {
+                    Self::write_local_register(&mut local_registers, dst, this_arg.clone())?;
+                    instruction_pointer += 1;
+                }
+                Ir3Instruction::Move { dst, src } => {
+                    let value = Self::read_local_register(&local_registers, src)?;
+                    Self::write_local_register(&mut local_registers, dst, value)?;
+                    instruction_pointer += 1;
+                }
+                Ir3Instruction::Add { dst, lhs, rhs } => {
+                    let left = Self::read_local_register(&local_registers, lhs)?;
+                    let right = Self::read_local_register(&local_registers, rhs)?;
+                    let value = self.eval_add_values(&left, &right)?;
+                    Self::write_local_register(&mut local_registers, dst, value)?;
+                    instruction_pointer += 1;
+                }
+                Ir3Instruction::Sub { dst, lhs, rhs } => {
+                    let left = Self::read_local_register(&local_registers, lhs)?;
+                    let right = Self::read_local_register(&local_registers, rhs)?;
+                    let value = Self::eval_arith_values(&left, &right, "sub")?;
+                    Self::write_local_register(&mut local_registers, dst, value)?;
+                    instruction_pointer += 1;
+                }
+                Ir3Instruction::Mul { dst, lhs, rhs } => {
+                    let left = Self::read_local_register(&local_registers, lhs)?;
+                    let right = Self::read_local_register(&local_registers, rhs)?;
+                    let value = Self::eval_arith_values(&left, &right, "mul")?;
+                    Self::write_local_register(&mut local_registers, dst, value)?;
+                    instruction_pointer += 1;
+                }
+                Ir3Instruction::Div { dst, lhs, rhs } => {
+                    let left = Self::read_local_register(&local_registers, lhs)?;
+                    let right = Self::read_local_register(&local_registers, rhs)?;
+                    let value = Self::eval_div_values(&left, &right)?;
+                    Self::write_local_register(&mut local_registers, dst, value)?;
+                    instruction_pointer += 1;
+                }
+                Ir3Instruction::GetProperty { obj, key, dst } => {
+                    let object_value = Self::read_local_register(&local_registers, obj)?;
+                    let key_value = Self::read_local_register(&local_registers, key)?;
+                    let key_string = self.property_key_from_value(&key_value);
+                    let value = match object_value {
+                        Value::Object(object_id) => self
+                            .heap
+                            .get(object_id.0 as usize)
+                            .and_then(|object| object.properties.get(&key_string))
+                            .cloned()
+                            .unwrap_or(Value::Undefined),
+                        Value::Iterator(iterator_handle) => {
+                            self.iterator_property_value(iterator_handle, &key_string)
+                        }
+                        other => {
+                            return Err(InterpreterError::TypeError {
+                                expected: "object".to_string(),
+                                got: other.type_name().to_string(),
+                            });
+                        }
+                    };
+                    Self::write_local_register(&mut local_registers, dst, value)?;
+                    instruction_pointer += 1;
+                }
+                Ir3Instruction::SetProperty { obj, key, val } => {
+                    let object_value = Self::read_local_register(&local_registers, obj)?;
+                    let key_value = Self::read_local_register(&local_registers, key)?;
+                    let property_value = Self::read_local_register(&local_registers, val)?;
+                    match object_value {
+                        Value::Object(object_id) => {
+                            self.set_object_property(
+                                object_id,
+                                self.property_key_from_value(&key_value),
+                                property_value,
+                            )?;
+                        }
+                        other => {
+                            return Err(InterpreterError::TypeError {
+                                expected: "object".to_string(),
+                                got: other.type_name().to_string(),
+                            });
+                        }
+                    }
+                    instruction_pointer += 1;
+                }
+                Ir3Instruction::Jump { target } => {
+                    instruction_pointer = target as usize;
+                }
+                Ir3Instruction::JumpIf { cond, target } => {
+                    let value = Self::read_local_register(&local_registers, cond)?;
+                    if value.is_truthy() {
+                        instruction_pointer = target as usize;
+                    } else {
+                        instruction_pointer += 1;
+                    }
+                }
+                Ir3Instruction::Return { value } => {
+                    return Self::read_local_register(&local_registers, value);
+                }
+                Ir3Instruction::Halt => {
+                    return Ok(Value::Undefined);
+                }
+                other => {
+                    return Err(InterpreterError::TypeError {
+                        expected: "simple synchronous Array.from mapper callback".to_string(),
+                        got: format!("unsupported mapper instruction {other:?}"),
+                    });
+                }
+            }
+        }
+
+        Err(InterpreterError::BudgetExhausted {
+            executed: self.config.instruction_budget,
+            budget: self.config.instruction_budget,
+        })
+    }
+
     fn apply_array_from_map_fn(
         &mut self,
         module: Option<&Ir3Module>,
@@ -7768,18 +7978,25 @@ impl InterpreterCore {
         element: Value,
         index: usize,
     ) -> Result<Value, InterpreterError> {
-        let index_value = Value::Int(i64::try_from(index).unwrap_or(i64::MAX));
-        match (module, map_fn) {
-            (Some(module), _) => self.invoke_inline_method_call(
-                Some(module),
-                map_fn.clone(),
-                this_arg,
-                vec![element, index_value],
-            ),
-            (None, _) => Err(InterpreterError::TypeError {
-                expected: "module-backed Array.from mapper callback".to_string(),
-                got: "missing module context".to_string(),
-            }),
+        match map_fn {
+            Value::Function(_) | Value::Closure(_) => {
+                self.invoke_simple_array_from_callback(module, map_fn, this_arg, element, index)
+            }
+            _ => match (module, map_fn) {
+                (Some(module), _) => self.invoke_inline_method_call(
+                    Some(module),
+                    map_fn.clone(),
+                    this_arg,
+                    vec![
+                        element,
+                        Value::Int(i64::try_from(index).unwrap_or(i64::MAX)),
+                    ],
+                ),
+                (None, _) => Err(InterpreterError::TypeError {
+                    expected: "module-backed Array.from mapper callback".to_string(),
+                    got: "missing module context".to_string(),
+                }),
+            },
         }
     }
 
@@ -7828,7 +8045,9 @@ impl InterpreterCore {
             },
             dst: 0,
         });
-        wrapper.instructions.push(Ir3Instruction::Halt);
+        wrapper
+            .instructions
+            .push(Ir3Instruction::Return { value: 0 });
 
         let snapshot = self.snapshot_module_execution();
         let saved_active_cjs_context = self.active_cjs_context.clone();
@@ -12632,33 +12851,21 @@ impl InterpreterCore {
             "builtin:StringPrototypeNormalize" => {
                 // String.prototype.normalize(form) implementation - Unicode normalization
                 let this_val = self.read_reg(args.start)?;
-                let string_val = match this_val {
-                    Value::Str(s) => s,
-                    _ => {
-                        // Try to convert to string
-                        match this_val {
-                            Value::Int(n) => n.to_string(),
-                            Value::Float(f) => f.inner().to_string(),
-                            Value::Bool(b) => b.to_string(),
-                            Value::Null => "null".to_string(),
-                            Value::Undefined => "undefined".to_string(),
-                            _ => return Ok(Value::Str(String::new())),
-                        }
-                    }
-                };
+                let string_val = Self::require_object_coercible_to_string(&this_val)?;
 
-                let _form = if args.count >= 2 {
+                let form = if args.count >= 2 {
                     match self.read_reg(args.start + 1)? {
-                        Value::Str(f) => f,
-                        _ => "NFC".to_string(), // Default normalization form
+                        Value::Undefined => "NFC".to_string(),
+                        value => Self::value_to_primitive_string(&value),
                     }
                 } else {
                     "NFC".to_string()
                 };
 
-                // Simplified implementation - return the string as-is
-                // TODO: Implement proper Unicode normalization with different forms (NFC, NFD, NFKC, NFKD)
-                Ok(Value::Str(string_val))
+                let normalized = normalize_unicode_string(&string_val, &form)
+                    .map_err(|message| InterpreterError::RangeError { message })?;
+
+                Ok(Value::Str(normalized))
             }
 
             "builtin:StringPrototypeTrimStart" => {
@@ -26360,6 +26567,53 @@ mod tests {
                 .call_builtin_by_id(builtin_id, RegRange { start: 0, count: 1 })
                 .expect("StringPrototypeTrimStart ID should execute");
             assert_eq!(result, Value::Str("frankenengine  ".to_string()));
+        }
+    }
+
+    #[test]
+    fn string_prototype_normalize_deduplication_regression() {
+        let mut interpreter = InterpreterCore::new(test_quickjs_config(), "test-trace");
+
+        for builtin_id in [222_u32, 273_u32] {
+            assert_eq!(
+                interpreter.builtin_name_from_id(builtin_id),
+                Some("builtin:StringPrototypeNormalize".to_string())
+            );
+
+            interpreter.registers[0] = Value::Str("Cafe\u{301}".to_string());
+            let default_result = interpreter
+                .call_builtin_by_id(builtin_id, RegRange { start: 0, count: 1 })
+                .expect("StringPrototypeNormalize default NFC should execute");
+            assert_eq!(default_result, Value::Str("Café".to_string()));
+
+            interpreter.registers[0] = Value::Str("Café".to_string());
+            interpreter.registers[1] = Value::Str("NFD".to_string());
+            let nfd_result = interpreter
+                .call_builtin_by_id(builtin_id, RegRange { start: 0, count: 2 })
+                .expect("StringPrototypeNormalize NFD should execute");
+            assert_eq!(nfd_result, Value::Str("Cafe\u{301}".to_string()));
+
+            interpreter.registers[0] = Value::Str("\u{fb01}".to_string());
+            interpreter.registers[1] = Value::Str("NFKC".to_string());
+            let nfkc_result = interpreter
+                .call_builtin_by_id(builtin_id, RegRange { start: 0, count: 2 })
+                .expect("StringPrototypeNormalize NFKC should execute");
+            assert_eq!(nfkc_result, Value::Str("fi".to_string()));
+        }
+    }
+
+    #[test]
+    fn string_prototype_normalize_invalid_form_fails_closed() {
+        let mut interpreter = InterpreterCore::new(test_quickjs_config(), "test-trace");
+
+        for builtin_id in [222_u32, 273_u32] {
+            interpreter.registers[0] = Value::Str("hello".to_string());
+            interpreter.registers[1] = Value::Str("BAD".to_string());
+
+            let err = interpreter
+                .call_builtin_by_id(builtin_id, RegRange { start: 0, count: 2 })
+                .expect_err("StringPrototypeNormalize should reject unknown forms");
+            assert!(matches!(err, InterpreterError::RangeError { .. }));
         }
     }
 

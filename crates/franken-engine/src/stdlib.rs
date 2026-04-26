@@ -19,6 +19,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use unicode_normalization::UnicodeNormalization;
 
 use crate::object_model::{
     JsValue, ObjectHandle, ObjectHeap, PropertyDescriptor, PropertyKey, SymbolId,
@@ -2668,9 +2669,13 @@ pub fn exec_string_method(
             }
         }
         BuiltinId::StringPrototypeNormalize => {
-            // Without full Unicode normalization crate, return the string unchanged.
-            // This is correct for ASCII-only input (NFC == identity for ASCII).
-            Ok(JsValue::Str(this.to_string()))
+            let form = match args.first() {
+                None | Some(JsValue::Undefined) => "NFC".to_string(),
+                Some(value) => coerce_to_string(value),
+            };
+            let normalized =
+                normalize_unicode_string(this, &form).map_err(StdlibError::RangeError)?;
+            Ok(JsValue::Str(normalized))
         }
         _ => Err(StdlibError::TypeError(format!(
             "{} is not a String method",
@@ -3547,6 +3552,18 @@ fn coerce_to_string(value: &JsValue) -> String {
         JsValue::Symbol(id) => format!("Symbol({})", id.0),
         JsValue::Object(_) => "[object Object]".into(),
         JsValue::Function(_) => "function () {{ [native code] }}".into(),
+    }
+}
+
+pub(crate) fn normalize_unicode_string(input: &str, form: &str) -> Result<String, String> {
+    match form {
+        "NFC" => Ok(input.chars().nfc().collect()),
+        "NFD" => Ok(input.chars().nfd().collect()),
+        "NFKC" => Ok(input.chars().nfkc().collect()),
+        "NFKD" => Ok(input.chars().nfkd().collect()),
+        _ => Err(format!(
+            "The normalization form must be one of NFC, NFD, NFKC, or NFKD; got {form}"
+        )),
     }
 }
 
@@ -6883,6 +6900,57 @@ mod tests {
         let result = exec_string_method(BuiltinId::StringPrototypeNormalize, "hello", &[])
             .expect("serde deserialization should succeed");
         assert_eq!(result, JsValue::Str("hello".into()));
+    }
+
+    #[test]
+    fn test_string_normalize_nfc_composes_decomposed_input() {
+        let result = exec_string_method(
+            BuiltinId::StringPrototypeNormalize,
+            "Cafe\u{301}",
+            &[JsValue::Str("NFC".into())],
+        )
+        .expect("serde deserialization should succeed");
+        assert_eq!(result, JsValue::Str("Café".into()));
+    }
+
+    #[test]
+    fn test_string_normalize_nfd_decomposes_composed_input() {
+        let result = exec_string_method(
+            BuiltinId::StringPrototypeNormalize,
+            "Café",
+            &[JsValue::Str("NFD".into())],
+        )
+        .expect("serde deserialization should succeed");
+        assert_eq!(result, JsValue::Str("Cafe\u{301}".into()));
+    }
+
+    #[test]
+    fn test_string_normalize_nfkc_nfkd_expand_compatibility_ligatures() {
+        let nfkc = exec_string_method(
+            BuiltinId::StringPrototypeNormalize,
+            "\u{fb01}",
+            &[JsValue::Str("NFKC".into())],
+        )
+        .expect("serde deserialization should succeed");
+        let nfkd = exec_string_method(
+            BuiltinId::StringPrototypeNormalize,
+            "\u{fb01}",
+            &[JsValue::Str("NFKD".into())],
+        )
+        .expect("serde deserialization should succeed");
+        assert_eq!(nfkc, JsValue::Str("fi".into()));
+        assert_eq!(nfkd, JsValue::Str("fi".into()));
+    }
+
+    #[test]
+    fn test_string_normalize_rejects_unknown_form() {
+        let err = exec_string_method(
+            BuiltinId::StringPrototypeNormalize,
+            "hello",
+            &[JsValue::Str("BAD".into())],
+        )
+        .unwrap_err();
+        assert!(matches!(err, StdlibError::RangeError(_)));
     }
 
     #[test]

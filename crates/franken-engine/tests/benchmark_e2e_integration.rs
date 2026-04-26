@@ -2498,8 +2498,8 @@ fn benchmark_comparison_runner_times_out_fail_closed_without_shell_timeout_wrapp
             bun,
         },
         fairness_policy: BenchmarkFairnessPolicy {
-            warmup_runs: 0,
-            sample_count: 1,
+            warmup_runs: 1,
+            sample_count: 3,
             case_timeout_ms: 10,
         },
         cases: vec![BenchmarkComparisonCase {

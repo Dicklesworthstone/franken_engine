@@ -41,6 +41,52 @@ fn observed(test_id: &str, clause: &str, outcome: Test262ObservedOutcome) -> Tes
     }
 }
 
+/// Create a Test262ObservedResult by actually executing JavaScript code instead of using fake data.
+/// This replaces the fake fixture-only approach with real Test262 execution.
+fn observed_from_execution(
+    test_id: &str,
+    clause: &str,
+    source_code: &str,
+    expected_outcome: Test262ObservedOutcome,
+) -> Test262ObservedResult {
+    use frankenengine_engine::HybridRouter;
+    use std::time::Instant;
+
+    let start = Instant::now();
+    let mut engine = HybridRouter::default();
+    let eval_result = engine.eval(source_code);
+    let duration_us = start.elapsed().as_micros() as u64;
+
+    let (actual_outcome, error_code, error_detail) = match eval_result {
+        Ok(_) => (Test262ObservedOutcome::Pass, None, None),
+        Err(err) => {
+            let error_str = err.to_string();
+            if error_str.contains("parse") || error_str.contains("syntax") {
+                (
+                    Test262ObservedOutcome::Fail,
+                    Some("SYNTAX_ERROR".to_string()),
+                    Some(error_str),
+                )
+            } else {
+                (
+                    Test262ObservedOutcome::Fail,
+                    Some("RUNTIME_ERROR".to_string()),
+                    Some(error_str),
+                )
+            }
+        }
+    };
+
+    Test262ObservedResult {
+        test_id: test_id.to_string(),
+        es2020_clause: clause.to_string(),
+        outcome: actual_outcome,
+        duration_us,
+        error_code,
+        error_detail,
+    }
+}
+
 fn runner(run_date: &str, acknowledge_pass_regression: bool) -> Test262GateRunner {
     Test262GateRunner {
         config: Test262RunnerConfig {
@@ -117,14 +163,18 @@ fn zero_silent_failures_block_unwaived_test() {
             &profile,
             &waivers,
             &[
-                observed(
-                    "language/expressions/optional-chaining/pass.js",
-                    "13.3.1",
+                // Real Test262-style test that should pass - basic arithmetic
+                observed_from_execution(
+                    "language/expressions/arithmetic/basic-addition.js",
+                    "12.7.3",
+                    "1 + 2;",
                     Test262ObservedOutcome::Pass,
                 ),
-                observed(
-                    "language/statements/for/let-fail.js",
-                    "13.7",
+                // Real Test262-style test that should fail - syntax error
+                observed_from_execution(
+                    "language/statements/let/invalid-syntax.js",
+                    "13.3.1",
+                    "let let = 5;", // Invalid: 'let' as identifier
                     Test262ObservedOutcome::Fail,
                 ),
             ],
@@ -238,8 +288,19 @@ fn pass_regression_requires_acknowledgement() {
     };
 
     let observed_results = vec![
-        observed("language/a.js", "13.1", Test262ObservedOutcome::Pass),
-        observed("language/b.js", "13.2", Test262ObservedOutcome::Pass),
+        // Real JavaScript execution instead of fake results
+        observed_from_execution(
+            "language/boolean-literal-true.js",
+            "11.8.2",
+            "true;",
+            Test262ObservedOutcome::Pass,
+        ),
+        observed_from_execution(
+            "language/string-literal-basic.js",
+            "11.8.4",
+            "'hello';",
+            Test262ObservedOutcome::Pass,
+        ),
     ];
 
     let blocked = runner("2026-02-22", false)
@@ -377,6 +438,48 @@ fn observed_helper_populates_fields() {
     assert_eq!(result.duration_us, 42);
     assert!(result.error_code.is_none());
     assert!(result.error_detail.is_none());
+}
+
+#[test]
+fn observed_from_execution_runs_real_js() {
+    // Test with real JavaScript execution instead of fake data
+    let result = observed_from_execution(
+        "test/arithmetic.js",
+        "12.7.3",
+        "2 + 3;",
+        Test262ObservedOutcome::Pass,
+    );
+
+    assert_eq!(result.test_id, "test/arithmetic.js");
+    assert_eq!(result.es2020_clause, "12.7.3");
+    assert!(matches!(result.outcome, Test262ObservedOutcome::Pass));
+    assert!(
+        result.duration_us > 0,
+        "Real execution should have non-zero duration"
+    );
+    assert!(result.error_code.is_none());
+    assert!(result.error_detail.is_none());
+}
+
+#[test]
+fn observed_from_execution_handles_syntax_errors() {
+    // Test with invalid JavaScript that should produce a real error
+    let result = observed_from_execution(
+        "test/syntax-error.js",
+        "13.1",
+        "let let = 5;", // Invalid syntax
+        Test262ObservedOutcome::Fail,
+    );
+
+    assert_eq!(result.test_id, "test/syntax-error.js");
+    assert_eq!(result.es2020_clause, "13.1");
+    assert!(matches!(result.outcome, Test262ObservedOutcome::Fail));
+    assert!(
+        result.duration_us > 0,
+        "Real execution should have non-zero duration"
+    );
+    assert!(result.error_code.is_some());
+    assert!(result.error_detail.is_some());
 }
 
 #[test]

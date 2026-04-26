@@ -233,7 +233,7 @@ fn test_multi_extension_isolation() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn test_certificate_replacement_resets_budgets() {
+fn test_certificate_replacement_preserves_shared_budget_usage() {
     let mut enforcer = make_enforcer();
     enforcer
         .install_certificate("ext-r", certified_digest("cert-1"))
@@ -248,14 +248,29 @@ fn test_certificate_replacement_resets_budgets() {
         &[(EnforcedDimension::Time, 5_000_000)],
     );
 
-    // Install new certificate — resets budgets.
+    // Install new certificate — shared dimensions must keep their charged usage.
     enforcer
         .install_certificate("ext-r", certified_digest("cert-2"))
         .unwrap();
 
     let state = enforcer.extension_state("ext-r").unwrap();
     let time_budget = state.budgets.get(&EnforcedDimension::Time).unwrap();
-    assert_eq!(time_budget.current_usage_millionths, 0);
+    assert_eq!(time_budget.current_usage_millionths, 5_000_000);
+    assert_eq!(time_budget.source_certificate_id, "cert-2");
+
+    let receipt = enforcer.enforce(
+        "ext-r",
+        EnforcementScope::General {
+            description: "recheck".to_string(),
+        },
+        &[(EnforcedDimension::Time, 5_000_001)],
+    );
+    assert!(matches!(
+        receipt.decision,
+        EnforcementDecision::Reject {
+            reason: BudgetViolationReason::BudgetExceeded { .. }
+        }
+    ));
 }
 
 // ---------------------------------------------------------------------------
@@ -517,11 +532,15 @@ fn test_future_epoch_rejected() {
 }
 
 #[test]
-fn test_past_epoch_accepted() {
+fn test_past_epoch_rejected() {
     let mut enforcer = make_enforcer();
     let mut digest = certified_digest("cert-past");
     digest.epoch = SecurityEpoch::from_raw(5);
-    assert!(enforcer.install_certificate("ext-past", digest).is_ok());
+    let result = enforcer.install_certificate("ext-past", digest);
+    assert!(matches!(
+        result,
+        Err(BudgetViolationReason::EpochMismatch { .. })
+    ));
 }
 
 // ---------------------------------------------------------------------------

@@ -645,7 +645,7 @@ fn enrichment_extension_budget_state_install_replaces_budgets() {
     assert_eq!(state.budgets.len(), 5);
     state.record_usage(EnforcedDimension::Time, 3_000_000);
 
-    // Install new certificate - budgets reset.
+    // Install new certificate - usage on shared dimensions must be preserved.
     let d2 = CertificateDigest {
         certificate_id: "cert-2".to_string(),
         region_id: "region-alt".to_string(),
@@ -663,8 +663,9 @@ fn enrichment_extension_budget_state_install_replaces_budgets() {
     state.install_certificate(d2);
     assert_eq!(state.budgets.len(), 1);
     let time_budget = state.budgets.get(&EnforcedDimension::Time).unwrap();
-    assert_eq!(time_budget.current_usage_millionths, 0);
+    assert_eq!(time_budget.current_usage_millionths, 3_000_000);
     assert_eq!(time_budget.upper_bound_millionths, 20_000_000);
+    assert_eq!(time_budget.source_certificate_id, "cert-2");
 }
 
 #[test]
@@ -899,7 +900,7 @@ fn enrichment_install_replaces_same_extension() {
     assert_eq!(enforcer.extension_count(), 1);
     let state = enforcer.extension_state("ext-r").unwrap();
     let time_budget = state.budgets.get(&EnforcedDimension::Time).unwrap();
-    assert_eq!(time_budget.current_usage_millionths, 0);
+    assert_eq!(time_budget.current_usage_millionths, 5_000_000);
     assert_eq!(
         state.active_certificate.as_ref().unwrap().certificate_id,
         "cert-2"

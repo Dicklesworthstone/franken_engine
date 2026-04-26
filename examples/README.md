@@ -1,38 +1,41 @@
 # FrankenEngine Impossible-by-Default Demos
 
-## Setup
+## How To Use This Index
 
-```bash
-cargo build --workspace --release
-```
+These examples are directory-based demos and shell verifiers. The workspace does
+not ship Cargo `--example` targets, so commands like
+`cargo run --example 05_replay_demo` will fail in this checkout.
+
+Run the listed `verify.sh` or `demo.sh` command from the repository root.
 
 ## Impossible-by-Default Capabilities
 
-The following table maps FrankenEngine's 13 impossible-by-default capabilities from PLAN section 3.2 to actual demo directories:
+The following table maps FrankenEngine's 13 impossible-by-default capabilities
+from PLAN section 3.2 to the shipped example directories in this repository.
 
-| # | Capability | Demo Directory | Verify Command | Status |
-|---|------------|----------------|----------------|--------|
-| 1 | Receipts | `02_signed_decision_receipt` | `cargo run --example 02_signed_decision_receipt` | PASSING |
-| 2 | Replay | `05_replay_demo` | `cargo run --example 05_replay_demo` | IN_FLIGHT |
-| 3 | Checkpoints | `20_signed_checkpoints` | `cargo run --example 20_signed_checkpoints` | PASSING |
-| 4 | Quarantine | `07_quarantine_mesh` | `cargo run --example 07_quarantine_mesh` | PASSING |
-| 5 | Proof-carrying | `15_proof_carrying` | `cargo run --example 15_proof_carrying` | IN_FLIGHT |
-| 6 | Capability | `06_capability_typed` | `cargo run --example 06_capability_typed` | PASSING |
-| 7 | Budget | `13_resource_budget_demo` | `cargo run --example 13_resource_budget_demo` | PASSING |
-| 8 | Gate | `14_revocation_first_gate` | `cargo run --example 14_revocation_first_gate` | IN_FLIGHT |
-| 9 | Quarantine+ | `07_quarantine_mesh` | `cargo run --example 07_quarantine_mesh` | PASSING |
-| 10 | RedBlue | `19_redblue` | `cargo run --example 19_redblue` | IN_FLIGHT |
-| 11 | Lineage | `16_self_replacement_lineage` | `cargo run --example 16_self_replacement_lineage` | PASSING |
-| 12 | IFC | `17_information_flow_confinement` | `cargo run --example 17_information_flow_confinement` | PASSING |
-| 13 | Spec | `18_spec` | `cargo run --example 18_spec` | IN_FLIGHT |
+| # | Capability | Demo Directory | Command |
+|---|------------|----------------|---------|
+| 1 | Receipts | `02_signed_decision_receipt` | `./examples/02_signed_decision_receipt/verify.sh` |
+| 2 | Replay | `05_replay_demo` | `./examples/05_replay_demo/verify.sh` |
+| 3 | Checkpoints | `20_signed_checkpoints` | `./examples/20_signed_checkpoints/verify.sh` |
+| 4 | Quarantine | `07_quarantine_mesh` | `./examples/07_quarantine_mesh/demo.sh` |
+| 5 | Proof-carrying adaptive optimization | `15_proof_carrying_optimization` | `./examples/15_proof_carrying_optimization/verify.sh` |
+| 6 | Capability-typed execution | `06_capability_typed` | `./examples/06_capability_typed/verify.sh` |
+| 7 | Deterministic resource exhaustion semantics | `13_resource_budget_demo` | `./examples/13_resource_budget_demo/verify.sh` |
+| 8 | Revocation-first execution gates | `14_revocation_first_gate` | `./examples/14_revocation_first_gate/verify.sh` |
+| 9 | Distributed anti-entropy trust reconciliation | `-` | No dedicated example directory is currently shipped. |
+| 10 | Red/Blue coevolution | `19_red_blue_coevolution` | `./examples/19_red_blue_coevolution/verify.sh` |
+| 11 | Self-replacement lineage | `16_self_replacement_lineage` | `./examples/16_self_replacement_lineage/verify.sh` |
+| 12 | Information-flow confinement | `17_information_flow_confinement` | `./examples/17_information_flow_confinement/verify.sh` |
+| 13 | Security-proof-guided specialization | `18_proof_guided_specialization` | `./examples/18_proof_guided_specialization/verify.sh` |
 
-### Additional Examples
+## Additional Examples
 
 - `01_hello_world` - General FrankenEngine introduction
 - `03_doctor_input` - Doctor diagnostic tooling
 - `04_bench_vs_node` - Performance benchmarking
+- `08_proof_carrying_optimization` - Alternate certified rewrite demo for capability #5
 - `11_cli_workflow_smoke` - CLI workflow demonstration
+- `12_frankenctl_react_demo` - Fail-closed React compile contract demo
 
-## Usage
-
-Each demo directory contains a complete example with source code and documentation. Run the verify command to see the capability in action.
+Each example directory contains its own README plus the command listed above.

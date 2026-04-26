@@ -1380,7 +1380,10 @@ mod tests {
         let state = gc
             .budget_enforcer
             .as_ref()
-            .and_then(|enforcer| enforcer.extension_state("missing"))
+            .and_then(|enforcer| {
+                let guard = enforcer.read();
+                guard.extension_state("missing").cloned()
+            })
             .expect("missing extension should still have test budget state");
         assert_eq!(state.allow_count, 0);
         assert_eq!(state.throttle_count, 0);
@@ -1425,7 +1428,10 @@ mod tests {
         let state = gc
             .budget_enforcer
             .as_ref()
-            .and_then(|enforcer| enforcer.extension_state("ext-a"))
+            .and_then(|enforcer| {
+                let guard = enforcer.read();
+                guard.extension_state("ext-a").cloned()
+            })
             .expect("ext-a should have budget state after enforcement events");
         let heap_usage = state
             .budgets

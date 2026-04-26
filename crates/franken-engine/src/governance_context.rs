@@ -19,9 +19,9 @@
 
 use std::sync::{RwLockReadGuard, RwLockWriteGuard};
 
-use crate::gc::{GcCollector, GcConfig, GcError};
+use crate::gc::{GcCollector, GcConfig};
 use crate::resource_certificate_consumer::{BudgetEnforcer, SharedBudgetEnforcer};
-use crate::scheduler_lane::{LaneConfig, LaneError, LaneScheduler};
+use crate::scheduler_lane::{LaneConfig, LaneScheduler};
 
 // ---------------------------------------------------------------------------
 // GovernanceContext
@@ -98,11 +98,12 @@ impl GovernanceContext {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gc::GcError;
     use crate::resource_certificate_consumer::{
         BudgetEnforcementPolicy, CertificateDigest, CertificateVerdict, EnforcedDimension,
         EnforcementScope, ExtractedBound,
     };
-    use crate::scheduler_lane::{SchedulerLane, TaskLabel, TaskType};
+    use crate::scheduler_lane::{LaneError, SchedulerLane, TaskLabel, TaskType};
     use crate::security_epoch::SecurityEpoch;
 
     fn enforcer_with_extension(

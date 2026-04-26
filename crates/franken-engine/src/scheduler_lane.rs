@@ -2850,6 +2850,7 @@ mod tests {
             .budget_enforcer
             .as_ref()
             .expect("enforcer should be present")
+            .read()
             .extension_state("ext-a")
             .expect("extension state should exist")
             .budgets
@@ -2867,6 +2868,7 @@ mod tests {
             .budget_enforcer
             .as_ref()
             .expect("enforcer should be present")
+            .read()
             .extension_state("ext-a")
             .expect("extension state should exist")
             .budgets
@@ -2889,6 +2891,7 @@ mod tests {
             .budget_enforcer
             .as_ref()
             .expect("enforcer should be present")
+            .read()
             .extension_state("ext-a")
             .expect("extension state should exist")
             .budgets
@@ -2933,6 +2936,7 @@ mod tests {
             .budget_enforcer
             .as_ref()
             .expect("enforcer should be present");
+        let enforcer = enforcer.read();
         assert_eq!(enforcer.decision_sequence(), 0);
         assert!(enforcer.all_receipts().is_empty());
         let state = enforcer
@@ -2962,6 +2966,7 @@ mod tests {
             .budget_enforcer
             .as_ref()
             .expect("enforcer should be present");
+        let enforcer = enforcer.read();
         assert_eq!(enforcer.decision_sequence(), 0);
         assert!(enforcer.all_receipts().is_empty());
         let state = enforcer

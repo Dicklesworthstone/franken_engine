@@ -729,7 +729,7 @@ fn run_starvation_microbench(candidate: &CandidateRolloutInput) -> StarvationMic
         let next_value = committed_value + 1;
         let previous_value = committed_value;
         let during_write = RefCell::new(None);
-        fast_path.publish_with_hook(next_value, || {
+        fast_path.publish_with_unsafe_observer(next_value, || {
             let result = fast_path.read_clone_or_else(|| previous_value);
             *during_write.borrow_mut() = Some(result);
         });

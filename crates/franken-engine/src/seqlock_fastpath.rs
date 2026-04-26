@@ -193,10 +193,47 @@ impl<T> SnapshotFastPath<T> {
     }
 
     pub fn publish(&self, next: T) {
-        self.publish_with_hook(next, || {});
+        self.publish_with_unsafe_observer(next, || {});
     }
 
-    pub(crate) fn publish_with_hook<F>(&self, next: T, on_odd_sequence: F)
+    /// Publish `next` and invoke `during_writer_pressure` while the seqlock is
+    /// in its odd (in-progress) state and `writer_gate` is held.
+    ///
+    /// # Callback contract — UNSAFE BY CONVENTION
+    ///
+    /// `during_writer_pressure` runs at the most fragile point of the publish
+    /// cycle. The Mutex protecting `writer_gate` is held, the sequence
+    /// counter is in its in-progress (odd) state, and the snapshot
+    /// `RwLock<Option<T>>` has not yet been written. The callback MUST NOT:
+    ///
+    /// 1. Re-acquire `writer_gate` directly, or call any `SnapshotFastPath`
+    ///    method that does (`publish`, `publish_with_unsafe_observer`,
+    ///    `seed_if_uninitialized`). Doing so self-deadlocks on the
+    ///    non-recursive `Mutex<()>`. The thread-local
+    ///    [`ReentrantPublishGuard`] catches re-entry on the *same* fast path
+    ///    from the same thread, but does NOT catch re-entry on a *different*
+    ///    `SnapshotFastPath` whose own writer chain transitively re-enters
+    ///    this one.
+    /// 2. Call `read_clone_or_else` or any read path on this fast path. Reads
+    ///    will observe the odd sequence and either spin under the writer-
+    ///    pressure budget or fall back; this is allowed but never useful and
+    ///    pollutes telemetry.
+    /// 3. Panic. `SequencePublishGuard` correctly restores the even sequence
+    ///    on `Drop`, but `writer_gate` becomes poisoned. Recovery is
+    ///    automatic via `unwrap_or_else(|p| p.into_inner())` on the next
+    ///    publish, but the poisoning silences a real bug.
+    /// 4. Block on any synchronization primitive that another thread cannot
+    ///    make progress on while this thread holds `writer_gate`. The intended
+    ///    use is to *observe* writer pressure (e.g. a `Barrier::wait` paired
+    ///    with a reader thread that is expected to spin) — never to wait on
+    ///    work that requires the seqlock writer to advance.
+    ///
+    /// This method is `pub(crate)` and `#[doc(hidden)]` because the contract
+    /// is impossible to express in the type system. It exists solely so
+    /// concurrency tests can deterministically reproduce the writer-pressure
+    /// fallback path; production code paths should use `publish`.
+    #[doc(hidden)]
+    pub(crate) fn publish_with_unsafe_observer<F>(&self, next: T, during_writer_pressure: F)
     where
         F: FnOnce(),
     {
@@ -213,7 +250,7 @@ impl<T> SnapshotFastPath<T> {
             sequence: &self.sequence,
             final_sequence,
         };
-        on_odd_sequence();
+        during_writer_pressure();
         *self.snapshot_write() = Some(next);
         self.initialized.store(true, Ordering::Release);
         self.writes.fetch_add(1, Ordering::Relaxed);
@@ -370,7 +407,7 @@ mod tests {
         let writer_fast_path = Arc::clone(&fast_path);
         let writer_barrier = Arc::clone(&barrier);
         let handle = thread::spawn(move || {
-            writer_fast_path.publish_with_hook(11_u64, || {
+            writer_fast_path.publish_with_unsafe_observer(11_u64, || {
                 writer_barrier.wait();
                 thread::sleep(Duration::from_millis(10));
             });
@@ -743,7 +780,7 @@ mod tests {
 
         let panic_result = catch_unwind(AssertUnwindSafe(|| {
             // SAFETY: Test-only panic to intentionally test panic recovery in publish hook
-            fast_path.publish_with_hook(11_u64, || panic!("boom"));
+            fast_path.publish_with_unsafe_observer(11_u64, || panic!("boom"));
         }));
         assert!(panic_result.is_err());
 
@@ -767,7 +804,7 @@ mod tests {
         fast_path.seed_if_uninitialized(7_u64);
 
         let panic_result = catch_unwind(AssertUnwindSafe(|| {
-            fast_path.publish_with_hook(11_u64, || {
+            fast_path.publish_with_unsafe_observer(11_u64, || {
                 fast_path.publish(13_u64);
             });
         }));
@@ -791,7 +828,7 @@ mod tests {
         let fast_path = SnapshotFastPath::new(RetryBudgetPolicy::new(4, 2));
 
         let panic_result = catch_unwind(AssertUnwindSafe(|| {
-            fast_path.publish_with_hook(11_u64, || {
+            fast_path.publish_with_unsafe_observer(11_u64, || {
                 fast_path.seed_if_uninitialized(13_u64);
             });
         }));
@@ -811,7 +848,7 @@ mod tests {
         fast_path.sequence.store(1, Ordering::Release);
 
         let during_write = RefCell::new(None);
-        fast_path.publish_with_hook(11_u64, || {
+        fast_path.publish_with_unsafe_observer(11_u64, || {
             assert_eq!(fast_path.sequence.load(Ordering::Acquire), 1);
             *during_write.borrow_mut() = Some(fast_path.read_clone_or_else(|| 99_u64));
         });
@@ -1076,5 +1113,90 @@ mod tests {
             assert_eq!(r.value, 55);
             assert_eq!(r.source, FastPathReadSource::FastPath);
         }
+    }
+
+    // ── publish_with_unsafe_observer callback contract (bd-3cqr7) ────────
+
+    /// The thread-local re-entry guard MUST trip when the callback re-enters
+    /// `publish` on the same fast path. Catches the most common contract
+    /// violation before it can self-deadlock on the non-recursive
+    /// `writer_gate` mutex.
+    #[test]
+    #[should_panic(expected = "must not re-enter publish on the same fast path")]
+    fn callback_reentering_publish_on_same_fast_path_panics() {
+        let fp = Arc::new(SnapshotFastPath::new(RetryBudgetPolicy::new(2, 1)));
+        let inner = Arc::clone(&fp);
+        fp.publish_with_unsafe_observer(1_u64, move || {
+            inner.publish(2_u64);
+        });
+    }
+
+    /// `seed_if_uninitialized` is the second public path that takes
+    /// `writer_gate`. The same re-entry guard must trip when a callback
+    /// re-enters via that surface, not just via `publish`.
+    #[test]
+    #[should_panic(expected = "must not re-enter publish on the same fast path")]
+    fn callback_reentering_seed_on_same_fast_path_panics() {
+        let fp = Arc::new(SnapshotFastPath::new(RetryBudgetPolicy::new(2, 1)));
+        let inner = Arc::clone(&fp);
+        fp.publish_with_unsafe_observer(1_u64, move || {
+            inner.seed_if_uninitialized(99_u64);
+        });
+    }
+
+    /// A panic inside the callback must still leave the seqlock in a
+    /// consistent (even-sequence) state via `SequencePublishGuard::drop`.
+    /// `writer_gate` becomes poisoned but the next publish recovers via
+    /// `unwrap_or_else(|p| p.into_inner())`. Asserts the recovery path
+    /// works end-to-end and the new value is observable on the fast path.
+    #[test]
+    fn callback_panic_leaves_sequence_recoverable_and_writer_gate_poison_is_handled() {
+        let fp = Arc::new(SnapshotFastPath::new(RetryBudgetPolicy::new(4, 2)));
+        fp.publish(7_u64);
+        let pre_sequence = fp.sequence.load(Ordering::Acquire);
+        assert!(
+            pre_sequence.is_multiple_of(2),
+            "pre-publish sequence must be even"
+        );
+
+        let panicking_fp = Arc::clone(&fp);
+        let result = thread::spawn(move || {
+            panicking_fp.publish_with_unsafe_observer(11_u64, || panic!("test panic"));
+        })
+        .join();
+        assert!(result.is_err(), "panicking publish must propagate");
+
+        let post_panic_sequence = fp.sequence.load(Ordering::Acquire);
+        assert!(
+            post_panic_sequence.is_multiple_of(2),
+            "SequencePublishGuard::drop must restore even sequence even on panic"
+        );
+
+        // Recovery: the next publish acquires the poisoned writer_gate via
+        // `unwrap_or_else(|p| p.into_inner())` and the new value lands.
+        fp.publish(13_u64);
+        let read = fp.read_clone_or_else(|| 0_u64);
+        assert_eq!(read.value, 13_u64);
+        assert_eq!(read.source, FastPathReadSource::FastPath);
+    }
+
+    /// Cross-instance re-entry (callback drives publish on a *different*
+    /// `SnapshotFastPath`) is permitted — each fast path has its own
+    /// `writer_gate` and its own thread-local re-entry key. This pins the
+    /// boundary so a future agent does not over-tighten `ReentrantPublishGuard`
+    /// and break legitimate composition.
+    #[test]
+    fn callback_publishing_on_different_fast_path_succeeds() {
+        let outer = Arc::new(SnapshotFastPath::new(RetryBudgetPolicy::new(2, 1)));
+        let inner = Arc::new(SnapshotFastPath::new(RetryBudgetPolicy::new(2, 1)));
+        let inner_in_callback = Arc::clone(&inner);
+        outer.publish_with_unsafe_observer(1_u64, move || {
+            inner_in_callback.publish(2_u64);
+        });
+
+        let outer_read = outer.read_clone_or_else(|| 0_u64);
+        let inner_read = inner.read_clone_or_else(|| 0_u64);
+        assert_eq!(outer_read.value, 1);
+        assert_eq!(inner_read.value, 2);
     }
 }

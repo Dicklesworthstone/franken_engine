@@ -1,8 +1,11 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Certified Rewrite Demo - Proof-Carrying Adaptive Optimization
 # Uses certified_optimization_governance + lowering_parity_evidence
 
 set -euo pipefail
+
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+artifact_path="${script_dir}/sample_proof_artifact.json"
 
 echo "=== FrankenEngine Certified Optimization Demo ==="
 echo "Demonstrating impossible-by-default capability #5"
@@ -40,7 +43,7 @@ echo "  - Certificate status: VALID ✓"
 
 echo
 echo "Step 5: Generate cryptographic proof artifact..."
-cat sample_proof_artifact.json
+cat "${artifact_path}"
 
 echo
 echo "=== Demo Complete ==="

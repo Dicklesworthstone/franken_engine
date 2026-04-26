@@ -25,7 +25,7 @@ use sha2::{Digest as Sha2Digest, Sha256};
 use crate::hash_tiers::ContentHash;
 use crate::queueing_admission_control::AdmissionDecision;
 use crate::resource_certificate_governance::{GovernanceVerdict, ResourceDimension};
-use crate::runtime_decision_theory::{DecisionContext, LaneAction};
+use crate::runtime_decision_theory::{DecisionContext, DecisionState, LaneAction};
 use crate::security_epoch::SecurityEpoch;
 
 // ---------------------------------------------------------------------------
@@ -333,12 +333,83 @@ const fn representative_overbudget(dim: ResourceDimension) -> u64 {
 /// Main controller for resource budget escalation.
 #[derive(Debug, Clone)]
 pub struct ResourceEscalationController {
-    /// Security epoch.
-    #[allow(dead_code)]
+    /// Security epoch threaded into every emitted event's `basis.policy_epoch`.
     epoch: SecurityEpoch,
-    /// Decision context for runtime decisions.
-    #[allow(dead_code)]
+    /// Decision context consulted by [`Self::execute_escalation_from_inputs`]
+    /// to choose the suspend-step `LaneAction` from observed risk state.
     decision_context: DecisionContext,
+}
+
+/// Inputs for a real (non-template) escalation driven by observed subsystem
+/// state. Each field is the responsibility of the caller — the controller
+/// records the events into a deterministic, content-addressed log and
+/// invokes the [`DecisionContext`] to derive the suspend-step `LaneAction`
+/// from `decision_state`.
+///
+/// Use [`ResourceEscalationController::execute_escalation_from_inputs`]
+/// when escalation is being driven by real subsystem signals (admission
+/// decisions from `queueing_admission_control`, governance verdicts from
+/// `resource_certificate_governance`, decision-theory state, observed
+/// terminate state). Use [`ResourceEscalationController::execute_escalation`]
+/// only for replay-stability fixtures and demos.
+#[derive(Debug, Clone)]
+pub struct EscalationInputs {
+    /// Workload identifier recorded on the resulting log.
+    pub workload_id: String,
+    /// Resource dimensions the workload declared as bounded.
+    pub bounded_dimensions: Vec<ResourceDimension>,
+    /// Wall-clock timestamp (ns) at which the escalation began. The four
+    /// emitted events use `+0`, `+1`, `+2`, `+3` ns offsets; this preserves
+    /// monotonic ordering for `EscalationLog::has_monotonic_timestamps`
+    /// without forcing the caller to thread per-step timestamps when the
+    /// escalation collapsed in a single decision tick.
+    pub current_timestamp_ns: u64,
+    /// Real admission decision observed from the workload's queue.
+    pub throttle_decision: AdmissionDecision,
+    /// Operator-readable rationale for the throttle event.
+    pub throttle_rationale: String,
+    /// Caller-supplied basis blob for the throttle event. Merged with
+    /// `policy_epoch` on emission.
+    pub throttle_basis: serde_json::Value,
+    /// Real governance verdict produced for the workload.
+    pub sandbox_verdict: GovernanceVerdict,
+    /// Operator-readable rationale for the sandbox event.
+    pub sandbox_rationale: String,
+    /// Caller-supplied basis blob for the sandbox event (typically the
+    /// over-budget certificates list). Merged with `policy_epoch`.
+    pub sandbox_basis: serde_json::Value,
+    /// Observable runtime state passed to `DecisionContext::decide` to
+    /// select the suspend-step `LaneAction`.
+    pub decision_state: DecisionState,
+    /// Operator-readable rationale for the suspend event.
+    pub suspend_rationale: String,
+    /// Real termination reason; not synthesized by the controller.
+    pub termination_reason: TerminationReason,
+    /// Observed final measurements keyed by the dimensions the workload
+    /// actually exercised.
+    pub final_measurements: BTreeMap<ResourceDimension, u64>,
+    /// Operator-readable rationale for the terminate event.
+    pub terminate_rationale: String,
+    /// Caller-supplied basis blob for the terminate event. Merged with
+    /// `policy_epoch` and `primary_dimension`.
+    pub terminate_basis: serde_json::Value,
+}
+
+/// Merge `basis` (typically a JSON object) with a `policy_epoch` key. If
+/// `basis` is not an object, wrap it under a `basis` key.
+fn merge_with_policy_epoch(basis: serde_json::Value, policy_epoch: u64) -> serde_json::Value {
+    if let serde_json::Value::Object(mut map) = basis {
+        map.insert(
+            "policy_epoch".to_string(),
+            serde_json::Value::from(policy_epoch),
+        );
+        serde_json::Value::Object(map)
+    } else {
+        serde_json::json!({
+            "basis": basis,
+            "policy_epoch": policy_epoch
+        })
+    }
 }
 
 /// Error returned when constructing a [`ResourceEscalationController`] with
@@ -617,6 +688,104 @@ impl ResourceEscalationController {
             source_module: "resource_escalation_control".to_string(),
             basis: serde_json::json!({ "policy_epoch": self.epoch.as_u64() }),
         });
+    }
+
+    /// Execute a real escalation driven by observed subsystem state.
+    ///
+    /// Unlike [`Self::execute_escalation`] (which emits a fixed scripted
+    /// template suitable only for replay-stability fixtures), this entry
+    /// point consumes real inputs:
+    ///
+    /// - `throttle_decision` is the actual `AdmissionDecision` observed
+    ///   from `queueing_admission_control`.
+    /// - `sandbox_verdict` is the actual `GovernanceVerdict` produced by
+    ///   `resource_certificate_governance`.
+    /// - The suspend-step `LaneAction` is **derived by invoking
+    ///   `self.decision_context.decide(&inputs.decision_state)`**; the
+    ///   demotion reason returned by the decision context flows into the
+    ///   suspend-event basis. The controller does not fabricate
+    ///   `LaneAction::SuspendAdaptive` regardless of state.
+    /// - `termination_reason` and `final_measurements` come from observed
+    ///   workload state.
+    ///
+    /// Each event's `basis` is merged with `policy_epoch` so artifacts
+    /// remain attributable to the controller's policy snapshot.
+    pub fn execute_escalation_from_inputs(&mut self, inputs: EscalationInputs) -> EscalationLog {
+        let primary_dimension = inputs
+            .bounded_dimensions
+            .first()
+            .copied()
+            .unwrap_or(ResourceDimension::CpuTime);
+        let mut log = EscalationLog::new(inputs.workload_id, inputs.bounded_dimensions);
+        let policy_epoch = self.epoch.as_u64();
+        let base_ts = inputs.current_timestamp_ns;
+
+        // Step 1: Throttle — caller-supplied admission decision.
+        log.add_event(EscalationEvent {
+            timestamp_ns: base_ts,
+            action: EscalationAction::Throttle {
+                decision: inputs.throttle_decision,
+                rationale: inputs.throttle_rationale,
+            },
+            source_module: "queueing_admission_control".to_string(),
+            basis: merge_with_policy_epoch(inputs.throttle_basis, policy_epoch),
+        });
+
+        // Step 2: Sandbox — caller-supplied governance verdict.
+        log.add_event(EscalationEvent {
+            timestamp_ns: base_ts.saturating_add(1),
+            action: EscalationAction::Sandbox {
+                verdict: inputs.sandbox_verdict,
+                rationale: inputs.sandbox_rationale,
+            },
+            source_module: "resource_certificate_governance".to_string(),
+            basis: merge_with_policy_epoch(inputs.sandbox_basis, policy_epoch),
+        });
+
+        // Step 3: Suspend — derived by REAL DecisionContext::decide.
+        let regime_label = inputs.decision_state.regime.to_string();
+        let safe_mode_flag = inputs.decision_state.safe_mode_active;
+        let outcome = self.decision_context.decide(&inputs.decision_state);
+        let suspend_basis = serde_json::json!({
+            "policy_epoch": policy_epoch,
+            "lane_action": outcome.action.to_string(),
+            "demotion_reason": outcome
+                .demotion
+                .as_ref()
+                .map(|d| d.to_string()),
+            "regime": regime_label,
+            "safe_mode_active": safe_mode_flag,
+        });
+        log.add_event(EscalationEvent {
+            timestamp_ns: base_ts.saturating_add(2),
+            action: EscalationAction::Suspend {
+                action: outcome.action,
+                rationale: inputs.suspend_rationale,
+            },
+            source_module: "runtime_decision_theory".to_string(),
+            basis: suspend_basis,
+        });
+
+        // Step 4: Terminate — caller-supplied reason + measurements.
+        let mut terminate_basis = merge_with_policy_epoch(inputs.terminate_basis, policy_epoch);
+        if let serde_json::Value::Object(ref mut map) = terminate_basis {
+            map.insert(
+                "primary_dimension".to_string(),
+                serde_json::Value::String(primary_dimension.to_string()),
+            );
+        }
+        log.add_event(EscalationEvent {
+            timestamp_ns: base_ts.saturating_add(3),
+            action: EscalationAction::Terminate {
+                reason: inputs.termination_reason,
+                final_measurements: inputs.final_measurements,
+                rationale: inputs.terminate_rationale,
+            },
+            source_module: "resource_escalation_control".to_string(),
+            basis: terminate_basis,
+        });
+
+        log
     }
 
     /// Terminate a workload immediately with given reason.
@@ -1128,5 +1297,198 @@ mod tests {
         let m = template_final_measurements(&[], ResourceDimension::HeapMemory);
         assert_eq!(m.len(), 1);
         assert!(m.contains_key(&ResourceDimension::HeapMemory));
+    }
+
+    // bd-2ncan: execute_escalation_from_inputs must derive each event from
+    // caller-supplied real subsystem state, and the suspend step must
+    // invoke DecisionContext::decide rather than fabricate a fixed
+    // LaneAction. These tests pin the contract so future refactors cannot
+    // silently regress to scripted-fixture behavior.
+
+    use crate::runtime_decision_theory::{DecisionState, LatencyQuantiles, RegimeLabel};
+
+    fn baseline_state(epoch: SecurityEpoch) -> DecisionState {
+        DecisionState {
+            epoch,
+            regime: RegimeLabel::Normal,
+            risk_belief_millionths: BTreeMap::new(),
+            latency_quantiles_us: LatencyQuantiles {
+                p50_us: 100,
+                p95_us: 500,
+                p99_us: 1_000,
+                p999_us: 2_000,
+            },
+            budget_remaining_millionths: 0,
+            decisions_in_epoch: 0,
+            safe_mode_active: false,
+        }
+    }
+
+    fn baseline_inputs(epoch: SecurityEpoch) -> EscalationInputs {
+        EscalationInputs {
+            workload_id: "wl-real".to_string(),
+            bounded_dimensions: vec![ResourceDimension::HeapMemory],
+            current_timestamp_ns: 1_000_000,
+            throttle_decision: AdmissionDecision::Queue {
+                estimated_wait_ns: 12_345,
+                position: 7,
+            },
+            throttle_rationale: "real throttle".to_string(),
+            throttle_basis: serde_json::json!({ "queue_position": 7 }),
+            sandbox_verdict: GovernanceVerdict::MultipleViolations,
+            sandbox_rationale: "real sandbox".to_string(),
+            sandbox_basis: serde_json::json!({ "violations": ["heap"] }),
+            decision_state: baseline_state(epoch),
+            suspend_rationale: "real suspend".to_string(),
+            termination_reason: TerminationReason::PersistentExhaustion {
+                dimension: ResourceDimension::HeapMemory,
+                utilization_millionths: 1_400_000,
+                escalation_attempts: 2,
+            },
+            final_measurements: {
+                let mut m = BTreeMap::new();
+                m.insert(ResourceDimension::HeapMemory, 17_000_000);
+                m
+            },
+            terminate_rationale: "real terminate".to_string(),
+            terminate_basis: serde_json::json!({ "termination_type": "real" }),
+        }
+    }
+
+    fn suspend_action(action: &EscalationAction) -> &LaneAction {
+        match action {
+            EscalationAction::Suspend { action, .. } => action,
+            other => panic!("expected Suspend action, got {other:?}"),
+        }
+    }
+
+    fn throttle_decision(action: &EscalationAction) -> &AdmissionDecision {
+        match action {
+            EscalationAction::Throttle { decision, .. } => decision,
+            other => panic!("expected Throttle action, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn execute_escalation_from_inputs_uses_caller_throttle_decision_not_template() {
+        let mut controller = fresh_controller(7);
+        let mut inputs = baseline_inputs(SecurityEpoch::from_raw(7));
+        inputs.throttle_decision = AdmissionDecision::Shed {
+            reason: crate::queueing_admission_control::ShedReason::QueueFull {
+                current_depth: 100,
+                max_depth: 100,
+            },
+        };
+        let log = controller.execute_escalation_from_inputs(inputs);
+        let decision = throttle_decision(&log.events[0].action);
+        assert!(
+            matches!(decision, AdmissionDecision::Shed { .. }),
+            "throttle event must reflect the caller-supplied AdmissionDecision::Shed, not the template Queue"
+        );
+    }
+
+    #[test]
+    fn execute_escalation_from_inputs_invokes_decision_context_for_suspend_step() {
+        // safe_mode_active=true through DecisionContext::decide should not
+        // produce SuspendAdaptive unconditionally — the actual lane is
+        // chosen by the decision context's full guardrail chain. The key
+        // invariant for bd-2ncan is that the basis records the lane action
+        // that came out of decide(), not a hardcoded "suspend_adaptive".
+        let mut controller = fresh_controller(7);
+        let inputs = baseline_inputs(SecurityEpoch::from_raw(7));
+        let log = controller.execute_escalation_from_inputs(inputs);
+        let lane_action = log.events[2]
+            .basis
+            .get("lane_action")
+            .and_then(|v| v.as_str())
+            .expect("suspend basis must include lane_action from decision context");
+        let suspend_event_action = suspend_action(&log.events[2].action);
+        assert_eq!(
+            suspend_event_action.to_string(),
+            lane_action,
+            "suspend event action must match basis.lane_action (both sourced from decide())"
+        );
+        assert!(
+            log.events[2].basis.get("regime").is_some(),
+            "suspend basis must surface the input regime label from DecisionState"
+        );
+    }
+
+    #[test]
+    fn execute_escalation_from_inputs_carries_caller_terminate_state() {
+        let mut controller = fresh_controller(7);
+        let inputs = baseline_inputs(SecurityEpoch::from_raw(7));
+        let measurements_in = inputs.final_measurements.clone();
+        let log = controller.execute_escalation_from_inputs(inputs);
+        let measurements_out = terminate_measurements(&log.events[3].action);
+        assert_eq!(
+            measurements_out, &measurements_in,
+            "terminate event must carry caller-supplied final_measurements verbatim"
+        );
+        let primary = log.events[3]
+            .basis
+            .get("primary_dimension")
+            .and_then(|v| v.as_str())
+            .expect("terminate basis must surface primary_dimension");
+        assert_eq!(primary, "heap_memory");
+    }
+
+    #[test]
+    fn execute_escalation_from_inputs_threads_policy_epoch_into_every_basis() {
+        let mut controller = fresh_controller(123);
+        let inputs = baseline_inputs(SecurityEpoch::from_raw(123));
+        let log = controller.execute_escalation_from_inputs(inputs);
+        for (idx, event) in log.events.iter().enumerate() {
+            let policy_epoch = event
+                .basis
+                .get("policy_epoch")
+                .and_then(|v| v.as_u64())
+                .unwrap_or_else(|| panic!("event {idx} basis missing policy_epoch"));
+            assert_eq!(policy_epoch, 123);
+        }
+    }
+
+    #[test]
+    fn execute_escalation_from_inputs_log_differs_for_materially_different_inputs() {
+        // Acceptance criterion #6 from bd-2ncan: two materially different
+        // inputs must produce EscalationLogs that differ in at least one
+        // of action/basis/utilisation, beyond bounded_budget_dimensions.
+        let mut controller_a = fresh_controller(1);
+        let mut controller_b = fresh_controller(1);
+
+        let mut inputs_a = baseline_inputs(SecurityEpoch::from_raw(1));
+        inputs_a.bounded_dimensions = vec![ResourceDimension::CpuTime];
+        inputs_a.throttle_decision = AdmissionDecision::Queue {
+            estimated_wait_ns: 1_000,
+            position: 1,
+        };
+
+        let mut inputs_b = baseline_inputs(SecurityEpoch::from_raw(1));
+        inputs_b.bounded_dimensions = vec![ResourceDimension::IoOperations];
+        inputs_b.throttle_decision = AdmissionDecision::Shed {
+            reason: crate::queueing_admission_control::ShedReason::QueueFull {
+                current_depth: 64,
+                max_depth: 64,
+            },
+        };
+        inputs_b.termination_reason = TerminationReason::Unresponsive {
+            timeout_ns: 5_000_000_000,
+        };
+
+        let log_a = controller_a.execute_escalation_from_inputs(inputs_a);
+        let log_b = controller_b.execute_escalation_from_inputs(inputs_b);
+
+        assert_ne!(
+            log_a.events[0].action, log_b.events[0].action,
+            "different throttle decisions must produce different throttle actions"
+        );
+        assert_ne!(
+            log_a.events[3].action, log_b.events[3].action,
+            "different termination reasons must produce different terminate actions"
+        );
+        assert_ne!(
+            log_a.content_hash, log_b.content_hash,
+            "materially different inputs must yield different content hashes"
+        );
     }
 }

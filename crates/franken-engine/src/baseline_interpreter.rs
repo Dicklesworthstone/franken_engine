@@ -420,6 +420,18 @@ impl Value {
         matches!(self, Self::Undefined | Self::Null)
     }
 
+    pub fn is_callable(&self) -> bool {
+        matches!(
+            self,
+            Self::Function(_)
+                | Self::Closure(_)
+                | Self::GeneratorFunction(_)
+                | Self::AsyncFunction(_)
+                | Self::AsyncGeneratorFunction(_)
+                | Self::BuiltinFunction(_)
+        )
+    }
+
     /// Type name for error messages.
     pub fn type_name(&self) -> &'static str {
         match self {
@@ -7748,6 +7760,29 @@ impl InterpreterCore {
         })
     }
 
+    fn apply_array_from_map_fn(
+        &mut self,
+        module: Option<&Ir3Module>,
+        map_fn: &Value,
+        this_arg: Value,
+        element: Value,
+        index: usize,
+    ) -> Result<Value, InterpreterError> {
+        let index_value = Value::Int(i64::try_from(index).unwrap_or(i64::MAX));
+        match (module, map_fn) {
+            (Some(module), _) => self.invoke_inline_method_call(
+                Some(module),
+                map_fn.clone(),
+                this_arg,
+                vec![element, index_value],
+            ),
+            (None, _) => Err(InterpreterError::TypeError {
+                expected: "module-backed Array.from mapper callback".to_string(),
+                got: "missing module context".to_string(),
+            }),
+        }
+    }
+
     fn invoke_inline_method_call(
         &mut self,
         module: Option<&Ir3Module>,
@@ -8422,11 +8457,31 @@ impl InterpreterCore {
                 }
 
                 let first_arg = self.read_reg(args.start)?;
+                let map_fn = if args.count > 1 {
+                    let mapper = self.read_reg(args.start + 1)?;
+                    if matches!(mapper, Value::Undefined) {
+                        None
+                    } else if mapper.is_callable() {
+                        Some(mapper)
+                    } else {
+                        return Err(InterpreterError::TypeError {
+                            expected: "function".to_string(),
+                            got: mapper.type_name().to_string(),
+                        });
+                    }
+                } else {
+                    None
+                };
+                let this_arg = if args.count > 2 {
+                    self.read_reg(args.start + 2)?
+                } else {
+                    Value::Undefined
+                };
 
                 // Create new array object
                 let array_id = self.alloc_array_with_prototype(None)?;
 
-                match first_arg {
+                let mut elements = match first_arg {
                     Value::Object(obj_id) => {
                         // Check if object is array-like (has length property).
                         // Snapshot length + elements under an immutable borrow
@@ -8436,7 +8491,7 @@ impl InterpreterCore {
                             ObjectMissing,
                             NoLength,
                             InvalidLength,
-                            Valid(u32, Vec<Value>),
+                            Valid(Vec<Value>),
                         }
                         let snapshot: Snapshot = match self.heap.get(obj_id.0 as usize) {
                             None => Snapshot::ObjectMissing,
@@ -8452,65 +8507,51 @@ impl InterpreterCore {
                                                 .unwrap_or(Value::Undefined)
                                         })
                                         .collect();
-                                    Snapshot::Valid(len_u32, elements)
+                                    Snapshot::Valid(elements)
                                 }
                                 Some(_) => Snapshot::InvalidLength,
                             },
                         };
 
                         match snapshot {
-                            Snapshot::Valid(len_u32, elements) => {
-                                for (i, element) in elements.into_iter().enumerate() {
-                                    self.set_object_property(array_id, i.to_string(), element)?;
-                                }
-
-                                // Set length property
-                                self.set_object_property(
-                                    array_id,
-                                    "length".to_string(),
-                                    Value::Int(len_u32 as i64),
-                                )?;
-                            }
+                            Snapshot::Valid(elements) => elements,
                             // All of: invalid length value, missing length, or
                             // missing object — treat as empty array.
                             Snapshot::InvalidLength
                             | Snapshot::NoLength
-                            | Snapshot::ObjectMissing => {
-                                self.set_object_property(
-                                    array_id,
-                                    "length".to_string(),
-                                    Value::Int(0),
-                                )?;
-                            }
+                            | Snapshot::ObjectMissing => Vec::new(),
                         }
                     }
                     Value::Str(s) => {
                         // Convert string to array of characters
-                        let chars: Vec<char> = s.chars().collect();
-
-                        for (i, ch) in chars.iter().enumerate() {
-                            self.set_object_property(
-                                array_id,
-                                i.to_string(),
-                                Value::Str(ch.to_string()),
-                            )?;
-                        }
-
-                        // Set length property
-                        self.set_object_property(
-                            array_id,
-                            "length".to_string(),
-                            Value::Int(chars.len() as i64),
-                        )?;
+                        s.chars().map(|ch| Value::Str(ch.to_string())).collect()
                     }
                     _ => {
                         // Non-iterable value, create empty array
-                        self.set_object_property(array_id, "length".to_string(), Value::Int(0))?;
+                        Vec::new()
+                    }
+                };
+
+                if let Some(map_fn) = map_fn.as_ref() {
+                    for (index, element) in elements.iter_mut().enumerate() {
+                        *element = self.apply_array_from_map_fn(
+                            module,
+                            map_fn,
+                            this_arg.clone(),
+                            element.clone(),
+                            index,
+                        )?;
                     }
                 }
 
-                // TODO: Handle mapping function (second argument) if provided
-                // TODO: Handle thisArg (third argument) if provided
+                for (index, element) in elements.iter().cloned().enumerate() {
+                    self.set_object_property(array_id, index.to_string(), element)?;
+                }
+                self.set_object_property(
+                    array_id,
+                    "length".to_string(),
+                    Value::Int(elements.len() as i64),
+                )?;
 
                 Ok(Value::Object(array_id))
             }
@@ -17720,6 +17761,88 @@ mod function_prototype_call_apply_tests_current {
             .execute(&module)
             .expect("Function.prototype.apply should execute");
         assert_eq!(result.value, Value::Int(12));
+    }
+
+    #[test]
+    fn array_from_honors_map_fn_and_this_arg() {
+        let mut module = test_module_with_functions(
+            vec![
+                Ir3Instruction::HostCall {
+                    capability: CapabilityTag("builtin:ArrayFrom".to_string()),
+                    args: RegRange { start: 0, count: 3 },
+                    dst: 0,
+                },
+                Ir3Instruction::Halt,
+                Ir3Instruction::LoadThis { dst: 2 },
+                Ir3Instruction::LoadStr {
+                    dst: 3,
+                    pool_index: 0,
+                },
+                Ir3Instruction::GetProperty {
+                    obj: 2,
+                    key: 3,
+                    dst: 4,
+                },
+                Ir3Instruction::Add {
+                    dst: 5,
+                    lhs: 0,
+                    rhs: 1,
+                },
+                Ir3Instruction::Add {
+                    dst: 6,
+                    lhs: 5,
+                    rhs: 4,
+                },
+                Ir3Instruction::Return { value: 6 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 2,
+                arity: 2,
+                frame_size: 7,
+                name: Some("map_with_this_offset".to_string()),
+                is_generator: false,
+            }],
+        );
+        module.constant_pool.push("offset".to_string());
+
+        let mut core = test_interpreter();
+        let array_like_id = seed_array_like(&mut core, &[Value::Int(1), Value::Int(2)]);
+        let this_id = seed_object(&mut core, &[("offset", Value::Int(7))]);
+        core.registers[0] = Value::Object(array_like_id);
+        core.registers[1] = Value::Function(0);
+        core.registers[2] = Value::Object(this_id);
+
+        let result = core.execute(&module).expect("Array.from should execute");
+        let Value::Object(array_id) = result.value else {
+            panic!(
+                "Array.from should return an array object, got {:?}",
+                result.value
+            );
+        };
+        let array = core
+            .heap
+            .get(array_id.0 as usize)
+            .expect("result array should exist");
+        assert_eq!(array.properties.get("0"), Some(&Value::Int(8)));
+        assert_eq!(array.properties.get("1"), Some(&Value::Int(10)));
+        assert_eq!(array.properties.get("length"), Some(&Value::Int(2)));
+    }
+
+    #[test]
+    fn array_from_rejects_non_callable_map_fn() {
+        let mut core = test_interpreter();
+        let array_like_id = seed_array_like(&mut core, &[Value::Int(1)]);
+        core.registers[0] = Value::Object(array_like_id);
+        core.registers[1] = Value::Int(99);
+
+        let err = core
+            .dispatch_builtin_hostcall("builtin:ArrayFrom", RegRange { start: 0, count: 2 }, None)
+            .expect_err("Array.from should reject non-callable mapFn");
+        assert!(matches!(
+            err,
+            InterpreterError::TypeError { ref expected, ref got }
+                if expected == "function" && got == "number"
+        ));
     }
 
     #[test]

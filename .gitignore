@@ -30,6 +30,7 @@ crates/*/fuzz/target/
 Thumbs.db
 .idea/
 .vscode/
+.ruff_cache/
 *.swp
 *.swo
 
@@ -37,6 +38,9 @@ Thumbs.db
 *.log
 *.tmp
 *.bak
+/demo_output.txt
+/hierarchical-delta-review/
+/examples/*/examples/
 
 # Golden artifact test outputs (transient diff files)
 tests/golden/*.actual
@@ -52,8 +56,11 @@ storage.sqlite3
 
 # Additional build target directories (alternate targets, remote compilation helper)
 /target2/
+/target_*/
 /target_rch_*/
 /target_cod_*/
+.codex-target-*/
+.codex-tmp/
 .rch_cargo_home_*/
 .rch_*/
 

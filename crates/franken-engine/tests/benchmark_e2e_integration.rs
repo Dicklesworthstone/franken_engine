@@ -1774,6 +1774,13 @@ fn write_evidence_artifacts_summary_valid() {
         serde_json::from_str(&std::fs::read_to_string(&artifacts.summary_path).unwrap()).unwrap();
     assert_eq!(summary["schema_version"], BENCHMARK_E2E_SCHEMA_VERSION);
     assert_eq!(summary["run_id"], "test-summary");
+    assert_eq!(
+        summary["configured_families"],
+        serde_json::json!(["boot-storm", "capability-churn"])
+    );
+    assert_eq!(summary["configured_profiles"], serde_json::json!(["S"]));
+    assert_eq!(summary["expected_measurement_count"], 2);
+    assert_eq!(summary["complete_suite_evidence"], false);
     let families = summary["families"].as_array().unwrap();
     assert_eq!(families.len(), 2);
 

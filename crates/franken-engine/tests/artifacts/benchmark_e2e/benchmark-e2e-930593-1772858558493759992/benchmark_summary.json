@@ -1,0 +1,24 @@
+{
+  "schema_version": "franken-engine.benchmark-e2e.v1",
+  "run_id": "evidence-content-test",
+  "blocked": false,
+  "measurement_count": 1,
+  "expected_measurement_count": 1,
+  "regression_count": 0,
+  "configured_families": [
+    "boot-storm"
+  ],
+  "configured_profiles": [
+    "S"
+  ],
+  "complete_suite_evidence": false,
+  "environment": null,
+  "families": [
+    {
+      "avg_throughput_ops_per_sec": 38995.47652472313,
+      "family": "boot-storm",
+      "profiles_run": 1,
+      "total_invariant_violations": 0
+    }
+  ]
+}

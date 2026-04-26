@@ -1,0 +1,35 @@
+{
+  "artifacts": {
+    "benchmark_env_manifest": "/data/projects/franken_engine/crates/franken-engine/tests/artifacts/benchmark_e2e/benchmark-e2e-3857874-1772690136379047860/benchmark_env_manifest.json",
+    "benchmark_evidence": "/data/projects/franken_engine/crates/franken-engine/tests/artifacts/benchmark_e2e/benchmark-e2e-3857874-1772690136379047860/benchmark_evidence.jsonl",
+    "commands": "/data/projects/franken_engine/crates/franken-engine/tests/artifacts/benchmark_e2e/benchmark-e2e-3857874-1772690136379047860/commands.txt",
+    "events": "/data/projects/franken_engine/crates/franken-engine/tests/artifacts/benchmark_e2e/benchmark-e2e-3857874-1772690136379047860/events.jsonl",
+    "manifest": "/data/projects/franken_engine/crates/franken-engine/tests/artifacts/benchmark_e2e/benchmark-e2e-3857874-1772690136379047860/run_manifest.json",
+    "raw_results_archive": "/data/projects/franken_engine/crates/franken-engine/tests/artifacts/benchmark_e2e/benchmark-e2e-3857874-1772690136379047860/raw_results_archive.json",
+    "summary": "/data/projects/franken_engine/crates/franken-engine/tests/artifacts/benchmark_e2e/benchmark-e2e-3857874-1772690136379047860/benchmark_summary.json"
+  },
+  "blocked": false,
+  "fairness_policy": {
+    "case_timeout_ms": 30000,
+    "sample_count": 7,
+    "warmup_runs": 2
+  },
+  "families": [
+    "boot-storm"
+  ],
+  "invariant_violations": 0,
+  "profiles": [
+    "S"
+  ],
+  "run_date": "2026-02-22",
+  "run_id": "evidence-content-test",
+  "runtime_pins": {
+    "bun_stable": "1.1.43",
+    "franken_engine": "franken-engine-0.1.0",
+    "node_lts": "22.13.1"
+  },
+  "schema_version": "franken-engine.benchmark-e2e.v1",
+  "seed": 42,
+  "total_duration_us": 13831,
+  "total_operations": 1000
+}

@@ -1,0 +1,16 @@
+{
+  "blocked": false,
+  "families": [
+    "boot-storm"
+  ],
+  "invariant_violations": 0,
+  "profiles": [
+    "S"
+  ],
+  "run_date": "2026-02-22",
+  "run_id": "evidence-content-test",
+  "schema_version": "franken-engine.benchmark-e2e.v1",
+  "seed": 42,
+  "total_duration_us": 11593,
+  "total_operations": 1000
+}

@@ -1,0 +1,3 @@
+cargo test -p frankenengine-engine --test benchmark_e2e --test benchmark_e2e_integration
+cargo run -p frankenengine-engine --bin franken_lockstep_runner -- --preflight-only
+scripts/run_benchmark_e2e_suite.sh report

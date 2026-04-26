@@ -1,0 +1,20 @@
+{
+  "schema_version": "franken-engine.benchmark-env-manifest.v1",
+  "run_id": "evidence-content-test",
+  "run_date": "2026-02-22",
+  "seed": 42,
+  "locale": "C.UTF-8",
+  "timezone": "UTC",
+  "os": "linux",
+  "arch": "x86_64",
+  "runtime_pins": {
+    "franken_engine": "franken-engine-0.1.0",
+    "node_lts": "22.13.1",
+    "bun_stable": "1.1.43"
+  },
+  "fairness_policy": {
+    "warmup_runs": 2,
+    "sample_count": 7,
+    "case_timeout_ms": 30000
+  }
+}

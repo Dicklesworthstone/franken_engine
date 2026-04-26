@@ -68,6 +68,10 @@ impl ScaleProfile {
         }
     }
 
+    pub fn all() -> &'static [ScaleProfile] {
+        &[Self::Small, Self::Medium, Self::Large]
+    }
+
     pub fn extension_count(self) -> usize {
         match self {
             Self::Small => 10,
@@ -2125,12 +2129,36 @@ pub fn write_evidence_artifacts(
             "total_invariant_violations": family_measurements.iter().map(|m| m.invariant_violations).fold(0u64, |acc, x| acc.saturating_add(x)),
         }));
     }
+    let configured_families = result
+        .config
+        .families
+        .iter()
+        .map(|family| family.as_str())
+        .collect::<Vec<_>>();
+    let configured_profiles = result
+        .config
+        .profiles
+        .iter()
+        .map(|profile| profile.as_str())
+        .collect::<Vec<_>>();
+    let expected_measurement_count = result
+        .config
+        .families
+        .len()
+        .saturating_mul(result.config.profiles.len());
+    let complete_suite_evidence = result.config.families.len() == BenchmarkFamily::all().len()
+        && result.config.profiles.len() == ScaleProfile::all().len()
+        && result.measurements.len() == expected_measurement_count;
     let summary = serde_json::json!({
         "schema_version": BENCHMARK_E2E_SCHEMA_VERSION,
         "run_id": result.config.run_id,
         "blocked": result.blocked,
         "measurement_count": result.measurements.len(),
+        "expected_measurement_count": expected_measurement_count,
         "regression_count": result.regressions.len(),
+        "configured_families": configured_families,
+        "configured_profiles": configured_profiles,
+        "complete_suite_evidence": complete_suite_evidence,
         "environment": environment_summary,
         "families": family_summaries,
     });
@@ -3394,6 +3422,13 @@ mod tests {
             .as_array()
             .expect("serde deserialization should succeed");
         assert_eq!(families.len(), 2);
+        assert_eq!(
+            summary["configured_families"],
+            serde_json::json!(["boot-storm", "capability-churn"])
+        );
+        assert_eq!(summary["configured_profiles"], serde_json::json!(["S"]));
+        assert_eq!(summary["expected_measurement_count"], 2);
+        assert_eq!(summary["complete_suite_evidence"], false);
         assert!(
             summary["environment"]["cpu_model"]
                 .as_str()

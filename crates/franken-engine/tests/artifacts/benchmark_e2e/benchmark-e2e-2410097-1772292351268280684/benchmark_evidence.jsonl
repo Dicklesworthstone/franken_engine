@@ -1,0 +1,2 @@
+{"correctness_digest":"boot-storm:42:10:100:1000:0","duration_us":11560,"event":"benchmark_case_evaluated","family":"boot-storm","invariant_violations":0,"p50_us":6,"p95_us":7,"p99_us":9,"peak_extensions_alive":10,"profile":"S","security_events":0,"throughput_ops_per_sec":86505.19031141867,"total_operations":1000}
+{"component":"benchmark_e2e","decision_id":"bench-boot-storm-S","event":"benchmark_case_completed","family":"boot-storm","outcome":"pass","profile":"S","trace_id":"evidence-content-test"}

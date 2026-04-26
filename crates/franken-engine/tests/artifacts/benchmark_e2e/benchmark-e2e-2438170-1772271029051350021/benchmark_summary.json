@@ -1,0 +1,31 @@
+{
+  "schema_version": "franken-engine.benchmark-e2e.v1",
+  "run_id": "evidence-test",
+  "blocked": false,
+  "measurement_count": 2,
+  "expected_measurement_count": 2,
+  "regression_count": 0,
+  "configured_families": [
+    "boot-storm",
+    "capability-churn"
+  ],
+  "configured_profiles": [
+    "S"
+  ],
+  "complete_suite_evidence": false,
+  "environment": null,
+  "families": [
+    {
+      "avg_throughput_ops_per_sec": 87237.19794120213,
+      "family": "boot-storm",
+      "profiles_run": 1,
+      "total_invariant_violations": 0
+    },
+    {
+      "avg_throughput_ops_per_sec": 763358.7786259543,
+      "family": "capability-churn",
+      "profiles_run": 1,
+      "total_invariant_violations": 0
+    }
+  ]
+}

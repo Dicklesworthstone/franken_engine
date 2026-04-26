@@ -1,0 +1,78 @@
+{
+  "events": [
+    {
+      "component": "benchmark_e2e",
+      "decision_id": "bench-boot-storm-S",
+      "error_code": null,
+      "event": "benchmark_case_completed",
+      "family": "boot-storm",
+      "outcome": "pass",
+      "policy_id": "benchmark-e2e",
+      "profile": "S",
+      "trace_id": "evidence-test"
+    },
+    {
+      "component": "benchmark_e2e",
+      "decision_id": "bench-capability-churn-S",
+      "error_code": null,
+      "event": "benchmark_case_completed",
+      "family": "capability-churn",
+      "outcome": "pass",
+      "policy_id": "benchmark-e2e",
+      "profile": "S",
+      "trace_id": "evidence-test"
+    }
+  ],
+  "families": [
+    "boot-storm",
+    "capability-churn"
+  ],
+  "measurements": [
+    {
+      "correctness_digest": "boot-storm:42:10:100:1000:0",
+      "duration_us": 358975,
+      "family": "boot-storm",
+      "invariant_violations": 0,
+      "latency": {
+        "max_us": 176273,
+        "min_us": 5,
+        "p50_us": 8,
+        "p95_us": 10,
+        "p99_us": 23,
+        "sample_count": 1000
+      },
+      "peak_extensions_alive": 10,
+      "profile": "S",
+      "security_events": 0,
+      "throughput_ops_per_sec": 2785.709311233373,
+      "total_operations": 1000
+    },
+    {
+      "correctness_digest": "cap-churn:42:10:100:100:0",
+      "duration_us": 174,
+      "family": "capability-churn",
+      "invariant_violations": 0,
+      "latency": {
+        "max_us": 1,
+        "min_us": 0,
+        "p50_us": 0,
+        "p95_us": 1,
+        "p99_us": 1,
+        "sample_count": 100
+      },
+      "peak_extensions_alive": 10,
+      "profile": "S",
+      "security_events": 0,
+      "throughput_ops_per_sec": 574712.6436781608,
+      "total_operations": 100
+    }
+  ],
+  "profiles": [
+    "S"
+  ],
+  "regressions": [],
+  "run_date": "2026-02-22",
+  "run_id": "evidence-test",
+  "schema_version": "franken-engine.benchmark-e2e.raw-results.v1",
+  "seed": 42
+}

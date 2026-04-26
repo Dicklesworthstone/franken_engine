@@ -1,0 +1,22 @@
+schema_version = "franken-engine.test262-high-water-mark.v1"
+measurement_date = "2026-04-16T08:14:15-04:00"
+es_profile = "ES2020"
+created_by = "test262_regression_gate.sh"
+
+[pass_counts]
+total_tests = 100
+passed_tests = 64
+failed_tests = 36
+skipped_tests = 0
+waived_tests = 2
+
+[chapter_breakdown]
+chapter_8_types_pass_rate = 0.75
+chapter_12_expressions_pass_rate = 0.60
+chapter_13_statements_pass_rate = 0.65
+chapter_14_functions_pass_rate = 0.55
+
+[regression_policy]
+allow_pass_rate_decrease = false
+min_pass_rate_threshold = 0.60
+regression_acknowledgment_required = true

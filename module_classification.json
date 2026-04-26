@@ -1,0 +1,5461 @@
+{
+  "all_entry_points": [
+    "execution_orchestrator",
+    "franken-verify",
+    "franken_adversarial_campaign_gate",
+    "franken_ambient_mock_guard",
+    "franken_asupersync_contract_matrix",
+    "franken_cold_start_compilation_lane",
+    "franken_control_plane_benchmark_split_report",
+    "franken_control_plane_mock_inventory",
+    "franken_control_plane_policy_diagnostics",
+    "franken_engine_product_blocker_ledger",
+    "franken_evidence_ledger_stitching",
+    "franken_ifc_conformance_runner",
+    "franken_kernel_synthesis_contract",
+    "franken_law_mining",
+    "franken_lockstep_runner",
+    "franken_lowering_gap_inventory",
+    "franken_metadata_substrate_evidence",
+    "franken_npm_compatibility_matrix",
+    "franken_observability_publication_bundle",
+    "franken_orchestrator_context_refactor",
+    "franken_parser_gap_inventory",
+    "franken_parser_multi_engine_harness",
+    "franken_parser_oracle_report",
+    "franken_parser_phase0_report",
+    "franken_persistent_cache_contract",
+    "franken_react_package_cohort",
+    "franken_rgc_planning_track",
+    "franken_s3fifo_baseline_comparator",
+    "franken_security_conformance_runner",
+    "franken_seqlock_candidate_inventory",
+    "franken_seqlock_reader_writer_contract",
+    "franken_seqlock_rollout_guard",
+    "franken_shape_lattice_bundle",
+    "franken_shipped_path_parity",
+    "franken_signature_drift_gate",
+    "franken_tail_latency_control_plane",
+    "franken_test262_runner",
+    "franken_zero_placeholder_gate",
+    "franken_zero_placeholder_scan",
+    "frankenctl",
+    "frx_lockstep_oracle",
+    "lib",
+    "rgc_artifact_validator",
+    "runtime_diagnostics"
+  ],
+  "core_entry_points": [
+    "execution_orchestrator",
+    "lib"
+  ],
+  "modules": {
+    "aara_resource_certificate": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/aara_resource_certificate.rs",
+      "name": "aara_resource_certificate",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "aara_resource_consumer": {
+      "classification": "island",
+      "dependencies": [
+        "aara_resource_certificate",
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/aara_resource_consumer.rs",
+      "name": "aara_resource_consumer",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "acquisition_experiment_oracle": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/acquisition_experiment_oracle.rs",
+      "name": "acquisition_experiment_oracle",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "activation_lifecycle": {
+      "classification": "island",
+      "dependencies": [
+        "policy_checkpoint"
+      ],
+      "file_path": "crates/franken-engine/src/activation_lifecycle.rs",
+      "name": "activation_lifecycle",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "adversarial_campaign": {
+      "classification": "island",
+      "dependencies": [],
+      "file_path": "crates/franken-engine/src/adversarial_campaign.rs",
+      "name": "adversarial_campaign",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "adversarial_coevolution_harness": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/adversarial_coevolution_harness.rs",
+      "name": "adversarial_coevolution_harness",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "adversarial_supremacy_synthesis": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/adversarial_supremacy_synthesis.rs",
+      "name": "adversarial_supremacy_synthesis",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "adversarial_workload_synthesis": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/adversarial_workload_synthesis.rs",
+      "name": "adversarial_workload_synthesis",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "alloc_domain": {
+      "classification": "island",
+      "dependencies": [],
+      "file_path": "crates/franken-engine/src/alloc_domain.rs",
+      "name": "alloc_domain",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "allocation_elision_gate": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/allocation_elision_gate.rs",
+      "name": "allocation_elision_gate",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "ambient_authority": {
+      "classification": "island",
+      "dependencies": [],
+      "file_path": "crates/franken-engine/src/ambient_authority.rs",
+      "name": "ambient_authority",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "anti_entropy": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/anti_entropy.rs",
+      "name": "anti_entropy",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "aot_entrygraph_compiler": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/aot_entrygraph_compiler.rs",
+      "name": "aot_entrygraph_compiler",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "array_fast_lane": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/array_fast_lane.rs",
+      "name": "array_fast_lane",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "artifact_compression_pipeline": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/artifact_compression_pipeline.rs",
+      "name": "artifact_compression_pipeline",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "assumptions_ledger": {
+      "classification": "island",
+      "dependencies": [],
+      "file_path": "crates/franken-engine/src/assumptions_ledger.rs",
+      "name": "assumptions_ledger",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "ast": {
+      "classification": "core_reachable",
+      "dependencies": [
+        "deterministic_serde"
+      ],
+      "file_path": "crates/franken-engine/src/ast.rs",
+      "name": "ast",
+      "reachable_from_all": [
+        "execution_orchestrator",
+        "lib"
+      ],
+      "reachable_from_core": [
+        "execution_orchestrator",
+        "lib"
+      ]
+    },
+    "asupersync_contract_matrix": {
+      "classification": "island",
+      "dependencies": [
+        "conformance_catalog",
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/asupersync_contract_matrix.rs",
+      "name": "asupersync_contract_matrix",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "attack_surface_game_model": {
+      "classification": "island",
+      "dependencies": [
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/attack_surface_game_model.rs",
+      "name": "attack_surface_game_model",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "attestation_handshake": {
+      "classification": "island",
+      "dependencies": [
+        "attested_execution_cell",
+        "engine_object_id",
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/attestation_handshake.rs",
+      "name": "attestation_handshake",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "attested_execution_cell": {
+      "classification": "island",
+      "dependencies": [
+        "engine_object_id",
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/attested_execution_cell.rs",
+      "name": "attested_execution_cell",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "baseline_interpreter": {
+      "classification": "core_reachable",
+      "dependencies": [
+        "ast",
+        "capability",
+        "checkpoint",
+        "hash_tiers",
+        "ir_contract",
+        "lowering_pipeline",
+        "parser",
+        "runtime_config"
+      ],
+      "file_path": "crates/franken-engine/src/baseline_interpreter.rs",
+      "name": "baseline_interpreter",
+      "reachable_from_all": [
+        "execution_orchestrator",
+        "lib"
+      ],
+      "reachable_from_core": [
+        "execution_orchestrator",
+        "lib"
+      ]
+    },
+    "bayesian_error_recovery": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers"
+      ],
+      "file_path": "crates/franken-engine/src/bayesian_error_recovery.rs",
+      "name": "bayesian_error_recovery",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "bayesian_posterior": {
+      "classification": "core_reachable",
+      "dependencies": [
+        "hash_tiers",
+        "runtime_config",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/bayesian_posterior.rs",
+      "name": "bayesian_posterior",
+      "reachable_from_all": [
+        "execution_orchestrator"
+      ],
+      "reachable_from_core": [
+        "execution_orchestrator"
+      ]
+    },
+    "benchmark_behavior_equivalence": {
+      "classification": "island",
+      "dependencies": [
+        "benchmark_evidence_bundle",
+        "hash_tiers"
+      ],
+      "file_path": "crates/franken-engine/src/benchmark_behavior_equivalence.rs",
+      "name": "benchmark_behavior_equivalence",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "benchmark_coverage_saturation": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/benchmark_coverage_saturation.rs",
+      "name": "benchmark_coverage_saturation",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "benchmark_coverage_saturation_gate": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/benchmark_coverage_saturation_gate.rs",
+      "name": "benchmark_coverage_saturation_gate",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "benchmark_denominator": {
+      "classification": "island",
+      "dependencies": [],
+      "file_path": "crates/franken-engine/src/benchmark_denominator.rs",
+      "name": "benchmark_denominator",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "benchmark_e2e": {
+      "classification": "island",
+      "dependencies": [
+        "benchmark_denominator",
+        "benchmark_evidence_bundle",
+        "extension_lifecycle_manager",
+        "hash_tiers",
+        "runtime_comparison_gate",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/benchmark_e2e.rs",
+      "name": "benchmark_e2e",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "benchmark_evidence_bundle": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/benchmark_evidence_bundle.rs",
+      "name": "benchmark_evidence_bundle",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "benchmark_freshness_gate": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/benchmark_freshness_gate.rs",
+      "name": "benchmark_freshness_gate",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "bifurcation_boundary_scanner": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "runtime_decision_theory",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/bifurcation_boundary_scanner.rs",
+      "name": "bifurcation_boundary_scanner",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "bounded_feedback_controller": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch",
+        "stage_envelope_certificate"
+      ],
+      "file_path": "crates/franken-engine/src/bounded_feedback_controller.rs",
+      "name": "bounded_feedback_controller",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "bounded_regret_safety_case": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/bounded_regret_safety_case.rs",
+      "name": "bounded_regret_safety_case",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "budget_propagation_contract": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/budget_propagation_contract.rs",
+      "name": "budget_propagation_contract",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "budgeted_optimization": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers"
+      ],
+      "file_path": "crates/franken-engine/src/budgeted_optimization.rs",
+      "name": "budgeted_optimization",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "budgeted_synthesis_engine": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/budgeted_synthesis_engine.rs",
+      "name": "budgeted_synthesis_engine",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "bulkhead": {
+      "classification": "island",
+      "dependencies": [],
+      "file_path": "crates/franken-engine/src/bulkhead.rs",
+      "name": "bulkhead",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "bytecode_vm": {
+      "classification": "island",
+      "dependencies": [
+        "shape_transition_algebra"
+      ],
+      "file_path": "crates/franken-engine/src/bytecode_vm.rs",
+      "name": "bytecode_vm",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "cache_oblivious_metadata_substrate": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "metadata_substrate_inventory",
+        "metadata_substrate_optimized",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/cache_oblivious_metadata_substrate.rs",
+      "name": "cache_oblivious_metadata_substrate",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "calibration_sentinel": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/calibration_sentinel.rs",
+      "name": "calibration_sentinel",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "callback_stdlib_dispatch": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/callback_stdlib_dispatch.rs",
+      "name": "callback_stdlib_dispatch",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "cancel_mask": {
+      "classification": "island",
+      "dependencies": [],
+      "file_path": "crates/franken-engine/src/cancel_mask.rs",
+      "name": "cancel_mask",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "cancellation_lifecycle": {
+      "classification": "island",
+      "dependencies": [
+        "cx_threading",
+        "execution_cell",
+        "region_lifecycle"
+      ],
+      "file_path": "crates/franken-engine/src/cancellation_lifecycle.rs",
+      "name": "cancellation_lifecycle",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "canonical_encoding": {
+      "classification": "island",
+      "dependencies": [
+        "deterministic_serde",
+        "engine_object_id",
+        "hash_tiers"
+      ],
+      "file_path": "crates/franken-engine/src/canonical_encoding.rs",
+      "name": "canonical_encoding",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "canonical_evidence_emitter": {
+      "classification": "island",
+      "dependencies": [
+        "evidence_ledger",
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/canonical_evidence_emitter.rs",
+      "name": "canonical_evidence_emitter",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "capability": {
+      "classification": "core_reachable",
+      "dependencies": [],
+      "file_path": "crates/franken-engine/src/capability.rs",
+      "name": "capability",
+      "reachable_from_all": [
+        "execution_orchestrator",
+        "lib"
+      ],
+      "reachable_from_core": [
+        "execution_orchestrator",
+        "lib"
+      ]
+    },
+    "capability_pruned_dispatch": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "policy_theorem_compiler",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/capability_pruned_dispatch.rs",
+      "name": "capability_pruned_dispatch",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "capability_token": {
+      "classification": "island",
+      "dependencies": [
+        "capability",
+        "deterministic_serde",
+        "engine_object_id",
+        "hash_tiers",
+        "policy_checkpoint",
+        "security_epoch",
+        "signature_preimage"
+      ],
+      "file_path": "crates/franken-engine/src/capability_token.rs",
+      "name": "capability_token",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "capability_witness": {
+      "classification": "island",
+      "dependencies": [
+        "engine_object_id",
+        "evidence_ledger",
+        "hash_tiers",
+        "mmr_proof",
+        "policy_theorem_compiler",
+        "portfolio_governor",
+        "security_epoch",
+        "signature_preimage",
+        "storage_adapter"
+      ],
+      "file_path": "crates/franken-engine/src/capability_witness.rs",
+      "name": "capability_witness",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "catastrophe_witness_generator": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/catastrophe_witness_generator.rs",
+      "name": "catastrophe_witness_generator",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "catastrophic_tail_tournament_gate": {
+      "classification": "island",
+      "dependencies": [
+        "adversarial_coevolution_harness",
+        "hash_tiers",
+        "runtime_decision_theory",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/catastrophic_tail_tournament_gate.rs",
+      "name": "catastrophic_tail_tournament_gate",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "category_shift_report": {
+      "classification": "island",
+      "dependencies": [
+        "disruption_scorecard",
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/category_shift_report.rs",
+      "name": "category_shift_report",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "causal_intervention_dag": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers"
+      ],
+      "file_path": "crates/franken-engine/src/causal_intervention_dag.rs",
+      "name": "causal_intervention_dag",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "causal_intervention_planner": {
+      "classification": "island",
+      "dependencies": [
+        "deterministic_serde",
+        "hash_tiers"
+      ],
+      "file_path": "crates/franken-engine/src/causal_intervention_planner.rs",
+      "name": "causal_intervention_planner",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "causal_regret_evidence_gate": {
+      "classification": "island",
+      "dependencies": [
+        "counterfactual_evaluator",
+        "demotion_rollback",
+        "hash_tiers",
+        "moonshot_contract",
+        "regret_bounded_router",
+        "security_epoch",
+        "self_replacement"
+      ],
+      "file_path": "crates/franken-engine/src/causal_regret_evidence_gate.rs",
+      "name": "causal_regret_evidence_gate",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "causal_replay": {
+      "classification": "island",
+      "dependencies": [
+        "engine_object_id",
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/causal_replay.rs",
+      "name": "causal_replay",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "causal_uplift_evidence_gate": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/causal_uplift_evidence_gate.rs",
+      "name": "causal_uplift_evidence_gate",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "certified_optimization_governance": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/certified_optimization_governance.rs",
+      "name": "certified_optimization_governance",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "checkpoint": {
+      "classification": "core_reachable",
+      "dependencies": [],
+      "file_path": "crates/franken-engine/src/checkpoint.rs",
+      "name": "checkpoint",
+      "reachable_from_all": [
+        "execution_orchestrator",
+        "lib"
+      ],
+      "reachable_from_core": [
+        "execution_orchestrator",
+        "lib"
+      ]
+    },
+    "checkpoint_frontier": {
+      "classification": "island",
+      "dependencies": [
+        "engine_object_id",
+        "hash_tiers",
+        "policy_checkpoint",
+        "security_epoch",
+        "signature_preimage"
+      ],
+      "file_path": "crates/franken-engine/src/checkpoint_frontier.rs",
+      "name": "checkpoint_frontier",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "claim_atom_lattice": {
+      "classification": "island",
+      "dependencies": [],
+      "file_path": "crates/franken-engine/src/claim_atom_lattice.rs",
+      "name": "claim_atom_lattice",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "claim_entitlement": {
+      "classification": "island",
+      "dependencies": [],
+      "file_path": "crates/franken-engine/src/claim_entitlement.rs",
+      "name": "claim_entitlement",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "claim_envelope_contract": {
+      "classification": "island",
+      "dependencies": [],
+      "file_path": "crates/franken-engine/src/claim_envelope_contract.rs",
+      "name": "claim_envelope_contract",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "claim_publication_gate": {
+      "classification": "island",
+      "dependencies": [
+        "claim_entitlement"
+      ],
+      "file_path": "crates/franken-engine/src/claim_publication_gate.rs",
+      "name": "claim_publication_gate",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "cliff_margin_certificate": {
+      "classification": "island",
+      "dependencies": [
+        "catastrophe_witness_generator",
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/cliff_margin_certificate.rs",
+      "name": "cliff_margin_certificate",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "closure_model": {
+      "classification": "island",
+      "dependencies": [
+        "ifc_artifacts",
+        "ir_contract"
+      ],
+      "file_path": "crates/franken-engine/src/closure_model.rs",
+      "name": "closure_model",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "cold_start_aot_governance": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/cold_start_aot_governance.rs",
+      "name": "cold_start_aot_governance",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "cold_start_compilation_lane": {
+      "classification": "island",
+      "dependencies": [
+        "aot_entrygraph_compiler",
+        "cold_start_aot_governance",
+        "hash_tiers",
+        "persistent_cache_contract",
+        "runtime_image_contract",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/cold_start_compilation_lane.rs",
+      "name": "cold_start_compilation_lane",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "compiler_policy": {
+      "classification": "island",
+      "dependencies": [
+        "engine_object_id",
+        "ifc_artifacts",
+        "proof_specialization_receipt",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/compiler_policy.rs",
+      "name": "compiler_policy",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "component_shape_catalog": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "hook_effect_contract",
+        "react_jsx_lowering"
+      ],
+      "file_path": "crates/franken-engine/src/component_shape_catalog.rs",
+      "name": "component_shape_catalog",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "compression_residual_gate": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/compression_residual_gate.rs",
+      "name": "compression_residual_gate",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "conformance_catalog": {
+      "classification": "island",
+      "dependencies": [
+        "cross_repo_contract"
+      ],
+      "file_path": "crates/franken-engine/src/conformance_catalog.rs",
+      "name": "conformance_catalog",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "conformance_harness": {
+      "classification": "island",
+      "dependencies": [],
+      "file_path": "crates/franken-engine/src/conformance_harness.rs",
+      "name": "conformance_harness",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "conformance_vector_gen": {
+      "classification": "island",
+      "dependencies": [
+        "conformance_catalog",
+        "cross_repo_contract"
+      ],
+      "file_path": "crates/franken-engine/src/conformance_vector_gen.rs",
+      "name": "conformance_vector_gen",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "constrained_ambient_benchmark_lane": {
+      "classification": "island",
+      "dependencies": [],
+      "file_path": "crates/franken-engine/src/constrained_ambient_benchmark_lane.rs",
+      "name": "constrained_ambient_benchmark_lane",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "containment_executor": {
+      "classification": "core_reachable",
+      "dependencies": [
+        "expected_loss_selector",
+        "hash_tiers",
+        "runtime_config",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/containment_executor.rs",
+      "name": "containment_executor",
+      "reachable_from_all": [
+        "execution_orchestrator"
+      ],
+      "reachable_from_core": [
+        "execution_orchestrator"
+      ]
+    },
+    "contextual_policy_selector": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/contextual_policy_selector.rs",
+      "name": "contextual_policy_selector",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "control_plane_benchmark_split_gate": {
+      "classification": "island",
+      "dependencies": [
+        "deterministic_serde",
+        "hash_tiers"
+      ],
+      "file_path": "crates/franken-engine/src/control_plane_benchmark_split_gate.rs",
+      "name": "control_plane_benchmark_split_gate",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "control_plane_mock_inventory": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers"
+      ],
+      "file_path": "crates/franken-engine/src/control_plane_mock_inventory.rs",
+      "name": "control_plane_mock_inventory",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "control_plane_policy_diagnostics": {
+      "classification": "island",
+      "dependencies": [
+        "budget_propagation_contract",
+        "hash_tiers",
+        "outcome_capability_narrowing",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/control_plane_policy_diagnostics.rs",
+      "name": "control_plane_policy_diagnostics",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "controller_composition_matrix": {
+      "classification": "island",
+      "dependencies": [
+        "deterministic_serde",
+        "engine_object_id",
+        "hash_tiers"
+      ],
+      "file_path": "crates/franken-engine/src/controller_composition_matrix.rs",
+      "name": "controller_composition_matrix",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "controller_composition_stability_gate": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch",
+        "timescale_separation_certificate"
+      ],
+      "file_path": "crates/franken-engine/src/controller_composition_stability_gate.rs",
+      "name": "controller_composition_stability_gate",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "controller_interference_guard": {
+      "classification": "island",
+      "dependencies": [
+        "deterministic_serde",
+        "hash_tiers"
+      ],
+      "file_path": "crates/franken-engine/src/controller_interference_guard.rs",
+      "name": "controller_interference_guard",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "convergence_slo": {
+      "classification": "island",
+      "dependencies": [
+        "fleet_immune_protocol",
+        "hash_tiers",
+        "quarantine_propagation",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/convergence_slo.rs",
+      "name": "convergence_slo",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "counterexample_synthesizer": {
+      "classification": "island",
+      "dependencies": [
+        "causal_replay",
+        "engine_object_id",
+        "evidence_ledger",
+        "hash_tiers",
+        "policy_theorem_compiler",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/counterexample_synthesizer.rs",
+      "name": "counterexample_synthesizer",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "counterfactual_evaluator": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "runtime_decision_theory",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/counterfactual_evaluator.rs",
+      "name": "counterfactual_evaluator",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "counterfactual_intervention_planner": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/counterfactual_intervention_planner.rs",
+      "name": "counterfactual_intervention_planner",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "counterfactual_replay_engine": {
+      "classification": "island",
+      "dependencies": [
+        "causal_replay",
+        "counterfactual_evaluator",
+        "engine_object_id",
+        "hash_tiers",
+        "runtime_decision_theory",
+        "security_epoch",
+        "structural_causal_model"
+      ],
+      "file_path": "crates/franken-engine/src/counterfactual_replay_engine.rs",
+      "name": "counterfactual_replay_engine",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "cross_repo_contract": {
+      "classification": "island",
+      "dependencies": [
+        "frankentui_adapter",
+        "policy_controller",
+        "storage_adapter"
+      ],
+      "file_path": "crates/franken-engine/src/cross_repo_contract.rs",
+      "name": "cross_repo_contract",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "cross_workload_transfer": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/cross_workload_transfer.rs",
+      "name": "cross_workload_transfer",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "cut_line_automation": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch",
+        "self_replacement"
+      ],
+      "file_path": "crates/franken-engine/src/cut_line_automation.rs",
+      "name": "cut_line_automation",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "cx_threading": {
+      "classification": "core_reachable",
+      "dependencies": [],
+      "file_path": "crates/franken-engine/src/cx_threading.rs",
+      "name": "cx_threading",
+      "reachable_from_all": [
+        "execution_orchestrator"
+      ],
+      "reachable_from_core": [
+        "execution_orchestrator"
+      ]
+    },
+    "dark_matter_saturation_gate": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/dark_matter_saturation_gate.rs",
+      "name": "dark_matter_saturation_gate",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "declassification_pipeline": {
+      "classification": "island",
+      "dependencies": [
+        "ifc_artifacts",
+        "signature_preimage"
+      ],
+      "file_path": "crates/franken-engine/src/declassification_pipeline.rs",
+      "name": "declassification_pipeline",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "delegate_cell_harness": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch",
+        "self_replacement",
+        "slot_registry"
+      ],
+      "file_path": "crates/franken-engine/src/delegate_cell_harness.rs",
+      "name": "delegate_cell_harness",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "delegation_chain": {
+      "classification": "island",
+      "dependencies": [
+        "capability",
+        "capability_token",
+        "engine_object_id",
+        "hash_tiers",
+        "policy_checkpoint",
+        "security_epoch",
+        "signature_preimage"
+      ],
+      "file_path": "crates/franken-engine/src/delegation_chain.rs",
+      "name": "delegation_chain",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "demo_claim_linkage_gate": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/demo_claim_linkage_gate.rs",
+      "name": "demo_claim_linkage_gate",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "demotion_rollback": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch",
+        "self_replacement",
+        "signature_preimage",
+        "slot_registry"
+      ],
+      "file_path": "crates/franken-engine/src/demotion_rollback.rs",
+      "name": "demotion_rollback",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "descent_certificate_gate": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/descent_certificate_gate.rs",
+      "name": "descent_certificate_gate",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "deterministic_probabilistic_telemetry": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/deterministic_probabilistic_telemetry.rs",
+      "name": "deterministic_probabilistic_telemetry",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "deterministic_replay": {
+      "classification": "island",
+      "dependencies": [
+        "engine_object_id"
+      ],
+      "file_path": "crates/franken-engine/src/deterministic_replay.rs",
+      "name": "deterministic_replay",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "deterministic_serde": {
+      "classification": "core_reachable",
+      "dependencies": [
+        "hash_tiers"
+      ],
+      "file_path": "crates/franken-engine/src/deterministic_serde.rs",
+      "name": "deterministic_serde",
+      "reachable_from_all": [
+        "execution_orchestrator",
+        "lib"
+      ],
+      "reachable_from_core": [
+        "execution_orchestrator",
+        "lib"
+      ]
+    },
+    "deterministic_sim_scheduler": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/deterministic_sim_scheduler.rs",
+      "name": "deterministic_sim_scheduler",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "disruption_scorecard": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/disruption_scorecard.rs",
+      "name": "disruption_scorecard",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "distribution_shift_monitor": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers"
+      ],
+      "file_path": "crates/franken-engine/src/distribution_shift_monitor.rs",
+      "name": "distribution_shift_monitor",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "docs_accuracy_gate": {
+      "classification": "island",
+      "dependencies": [
+        "deterministic_serde",
+        "hash_tiers"
+      ],
+      "file_path": "crates/franken-engine/src/docs_accuracy_gate.rs",
+      "name": "docs_accuracy_gate",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "dp_budget_accountant": {
+      "classification": "island",
+      "dependencies": [
+        "privacy_learning_contract",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/dp_budget_accountant.rs",
+      "name": "dp_budget_accountant",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "dual_backend_parser": {
+      "classification": "island",
+      "dependencies": [
+        "ast",
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/dual_backend_parser.rs",
+      "name": "dual_backend_parser",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "e2e_harness": {
+      "classification": "island",
+      "dependencies": [],
+      "file_path": "crates/franken-engine/src/e2e_harness.rs",
+      "name": "e2e_harness",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "engine_object_id": {
+      "classification": "core_reachable",
+      "dependencies": [],
+      "file_path": "crates/franken-engine/src/engine_object_id.rs",
+      "name": "engine_object_id",
+      "reachable_from_all": [
+        "execution_orchestrator",
+        "lib"
+      ],
+      "reachable_from_core": [
+        "execution_orchestrator",
+        "lib"
+      ]
+    },
+    "engine_product_blocker_ledger": {
+      "classification": "island",
+      "dependencies": [
+        "deterministic_serde",
+        "hash_tiers"
+      ],
+      "file_path": "crates/franken-engine/src/engine_product_blocker_ledger.rs",
+      "name": "engine_product_blocker_ledger",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "entropic_policy_morphing": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "regime_detector",
+        "regime_signature_feature",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/entropic_policy_morphing.rs",
+      "name": "entropic_policy_morphing",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "entropy_evidence_compressor": {
+      "classification": "core_reachable",
+      "dependencies": [
+        "hash_tiers"
+      ],
+      "file_path": "crates/franken-engine/src/entropy_evidence_compressor.rs",
+      "name": "entropy_evidence_compressor",
+      "reachable_from_all": [
+        "execution_orchestrator"
+      ],
+      "reachable_from_core": [
+        "execution_orchestrator"
+      ]
+    },
+    "epoch_barrier": {
+      "classification": "island",
+      "dependencies": [
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/epoch_barrier.rs",
+      "name": "epoch_barrier",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "epoch_invalidation": {
+      "classification": "island",
+      "dependencies": [
+        "engine_object_id",
+        "hash_tiers",
+        "proof_schema",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/epoch_invalidation.rs",
+      "name": "epoch_invalidation",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "eprocess_guardrail": {
+      "classification": "island",
+      "dependencies": [
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/eprocess_guardrail.rs",
+      "name": "eprocess_guardrail",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "error_code": {
+      "classification": "island",
+      "dependencies": [
+        "alloc_domain",
+        "anti_entropy",
+        "bulkhead",
+        "cancel_mask",
+        "canonical_encoding",
+        "capability",
+        "capability_token",
+        "checkpoint_frontier",
+        "deterministic_serde",
+        "engine_object_id",
+        "epoch_barrier",
+        "eprocess_guardrail",
+        "evidence_contract",
+        "evidence_ledger",
+        "evidence_ordering",
+        "fork_detection",
+        "gc",
+        "idempotency_key",
+        "key_derivation",
+        "lease_tracker",
+        "marker_stream",
+        "mmr_proof",
+        "monitor_scheduler",
+        "obligation_channel",
+        "policy_checkpoint",
+        "policy_controller",
+        "proof_schema",
+        "recovery_artifact",
+        "regime_detector",
+        "region_lifecycle",
+        "remote_capability_gate",
+        "remote_computation_registry",
+        "saga_orchestrator",
+        "scheduler_lane",
+        "security_epoch",
+        "signature_preimage",
+        "slot_registry",
+        "sorted_multisig"
+      ],
+      "file_path": "crates/franken-engine/src/error_code.rs",
+      "name": "error_code",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "escape_analysis_certificate": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/escape_analysis_certificate.rs",
+      "name": "escape_analysis_certificate",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "esm_cjs_interop_parity": {
+      "classification": "island",
+      "dependencies": [
+        "esm_loader",
+        "hash_tiers",
+        "module_async_evaluation",
+        "module_compatibility_matrix",
+        "module_live_binding",
+        "module_resolver"
+      ],
+      "file_path": "crates/franken-engine/src/esm_cjs_interop_parity.rs",
+      "name": "esm_cjs_interop_parity",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "esm_cjs_parity_evidence": {
+      "classification": "island",
+      "dependencies": [
+        "execution_orchestrator",
+        "module_resolver"
+      ],
+      "file_path": "crates/franken-engine/src/esm_cjs_parity_evidence.rs",
+      "name": "esm_cjs_parity_evidence",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "esm_loader": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "module_resolver"
+      ],
+      "file_path": "crates/franken-engine/src/esm_loader.rs",
+      "name": "esm_loader",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "evidence_contract": {
+      "classification": "island",
+      "dependencies": [],
+      "file_path": "crates/franken-engine/src/evidence_contract.rs",
+      "name": "evidence_contract",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "evidence_emission": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/evidence_emission.rs",
+      "name": "evidence_emission",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "evidence_ledger": {
+      "classification": "core_reachable",
+      "dependencies": [
+        "hash_tiers",
+        "hindsight_boundary_capture",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/evidence_ledger.rs",
+      "name": "evidence_ledger",
+      "reachable_from_all": [
+        "execution_orchestrator"
+      ],
+      "reachable_from_core": [
+        "execution_orchestrator"
+      ]
+    },
+    "evidence_ordering": {
+      "classification": "island",
+      "dependencies": [
+        "evidence_ledger",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/evidence_ordering.rs",
+      "name": "evidence_ordering",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "evidence_replay_checker": {
+      "classification": "island",
+      "dependencies": [
+        "evidence_emission",
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/evidence_replay_checker.rs",
+      "name": "evidence_replay_checker",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "execution_cell": {
+      "classification": "core_reachable",
+      "dependencies": [
+        "cx_threading",
+        "region_lifecycle"
+      ],
+      "file_path": "crates/franken-engine/src/execution_cell.rs",
+      "name": "execution_cell",
+      "reachable_from_all": [
+        "execution_orchestrator"
+      ],
+      "reachable_from_core": [
+        "execution_orchestrator"
+      ]
+    },
+    "execution_orchestrator": {
+      "classification": "core_reachable",
+      "dependencies": [
+        "ast",
+        "baseline_interpreter",
+        "bayesian_posterior",
+        "capability",
+        "containment_executor",
+        "entropy_evidence_compressor",
+        "evidence_ledger",
+        "execution_cell",
+        "expected_loss_selector",
+        "flow_lattice",
+        "guardplane_adapter",
+        "hash_tiers",
+        "ifc_artifacts",
+        "ir_contract",
+        "lowering_pipeline",
+        "optimal_stopping",
+        "parser",
+        "region_lifecycle",
+        "regret_bounded_router",
+        "runtime_config",
+        "saga_orchestrator",
+        "security_epoch",
+        "signature_preimage",
+        "tropical_semiring",
+        "ts_normalization"
+      ],
+      "file_path": "crates/franken-engine/src/execution_orchestrator.rs",
+      "name": "execution_orchestrator",
+      "reachable_from_all": [
+        "execution_orchestrator"
+      ],
+      "reachable_from_core": [
+        "execution_orchestrator"
+      ]
+    },
+    "expected_loss_selector": {
+      "classification": "core_reachable",
+      "dependencies": [
+        "bayesian_posterior",
+        "hash_tiers",
+        "runtime_config",
+        "security_epoch",
+        "trust_economics"
+      ],
+      "file_path": "crates/franken-engine/src/expected_loss_selector.rs",
+      "name": "expected_loss_selector",
+      "reachable_from_all": [
+        "execution_orchestrator"
+      ],
+      "reachable_from_core": [
+        "execution_orchestrator"
+      ]
+    },
+    "extension_host_authority_guard": {
+      "classification": "island",
+      "dependencies": [
+        "ambient_authority"
+      ],
+      "file_path": "crates/franken-engine/src/extension_host_authority_guard.rs",
+      "name": "extension_host_authority_guard",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "extension_host_lifecycle": {
+      "classification": "island",
+      "dependencies": [
+        "cancellation_lifecycle",
+        "execution_cell",
+        "region_lifecycle"
+      ],
+      "file_path": "crates/franken-engine/src/extension_host_lifecycle.rs",
+      "name": "extension_host_lifecycle",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "extension_lifecycle_manager": {
+      "classification": "island",
+      "dependencies": [],
+      "file_path": "crates/franken-engine/src/extension_lifecycle_manager.rs",
+      "name": "extension_lifecycle_manager",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "extension_registry": {
+      "classification": "island",
+      "dependencies": [
+        "engine_object_id",
+        "hash_tiers",
+        "policy_checkpoint",
+        "signature_preimage"
+      ],
+      "file_path": "crates/franken-engine/src/extension_registry.rs",
+      "name": "extension_registry",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "feature_parity_tracker": {
+      "classification": "island",
+      "dependencies": [],
+      "file_path": "crates/franken-engine/src/feature_parity_tracker.rs",
+      "name": "feature_parity_tracker",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "flamegraph_pipeline": {
+      "classification": "island",
+      "dependencies": [
+        "storage_adapter"
+      ],
+      "file_path": "crates/franken-engine/src/flamegraph_pipeline.rs",
+      "name": "flamegraph_pipeline",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "fleet_convergence": {
+      "classification": "core_reachable",
+      "dependencies": [
+        "fleet_immune_protocol",
+        "hash_tiers",
+        "security_epoch",
+        "spectral_fleet_convergence"
+      ],
+      "file_path": "crates/franken-engine/src/fleet_convergence.rs",
+      "name": "fleet_convergence",
+      "reachable_from_all": [
+        "execution_orchestrator"
+      ],
+      "reachable_from_core": [
+        "execution_orchestrator"
+      ]
+    },
+    "fleet_immune_protocol": {
+      "classification": "core_reachable",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/fleet_immune_protocol.rs",
+      "name": "fleet_immune_protocol",
+      "reachable_from_all": [
+        "execution_orchestrator"
+      ],
+      "reachable_from_core": [
+        "execution_orchestrator"
+      ]
+    },
+    "fleet_simulator": {
+      "classification": "island",
+      "dependencies": [
+        "fleet_convergence",
+        "fleet_immune_protocol",
+        "hash_tiers"
+      ],
+      "file_path": "crates/franken-engine/src/fleet_simulator.rs",
+      "name": "fleet_simulator",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "flow_envelope": {
+      "classification": "island",
+      "dependencies": [
+        "deterministic_serde",
+        "engine_object_id",
+        "hash_tiers",
+        "ifc_artifacts",
+        "security_epoch",
+        "signature_preimage"
+      ],
+      "file_path": "crates/franken-engine/src/flow_envelope.rs",
+      "name": "flow_envelope",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "flow_lattice": {
+      "classification": "core_reachable",
+      "dependencies": [
+        "ifc_artifacts",
+        "signature_preimage"
+      ],
+      "file_path": "crates/franken-engine/src/flow_lattice.rs",
+      "name": "flow_lattice",
+      "reachable_from_all": [
+        "execution_orchestrator",
+        "lib"
+      ],
+      "reachable_from_core": [
+        "execution_orchestrator",
+        "lib"
+      ]
+    },
+    "forensic_replayer": {
+      "classification": "island",
+      "dependencies": [
+        "bayesian_posterior",
+        "containment_executor",
+        "expected_loss_selector",
+        "hash_tiers",
+        "hostcall_telemetry",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/forensic_replayer.rs",
+      "name": "forensic_replayer",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "fork_detection": {
+      "classification": "island",
+      "dependencies": [
+        "engine_object_id",
+        "hash_tiers",
+        "policy_checkpoint",
+        "security_epoch",
+        "signature_preimage"
+      ],
+      "file_path": "crates/franken-engine/src/fork_detection.rs",
+      "name": "fork_detection",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "frankenlab_bridge_contract": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/frankenlab_bridge_contract.rs",
+      "name": "frankenlab_bridge_contract",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "frankenlab_extension_lifecycle": {
+      "classification": "island",
+      "dependencies": [
+        "cancellation_lifecycle",
+        "extension_host_lifecycle",
+        "lab_runtime"
+      ],
+      "file_path": "crates/franken-engine/src/frankenlab_extension_lifecycle.rs",
+      "name": "frankenlab_extension_lifecycle",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "frankenlab_gap_matrix": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/frankenlab_gap_matrix.rs",
+      "name": "frankenlab_gap_matrix",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "frankenlab_harness_migration": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/frankenlab_harness_migration.rs",
+      "name": "frankenlab_harness_migration",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "frankenlab_release_gate": {
+      "classification": "island",
+      "dependencies": [
+        "frankenlab_extension_lifecycle",
+        "lab_runtime"
+      ],
+      "file_path": "crates/franken-engine/src/frankenlab_release_gate.rs",
+      "name": "frankenlab_release_gate",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "frankenlab_release_gate_promotion": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/frankenlab_release_gate_promotion.rs",
+      "name": "frankenlab_release_gate_promotion",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "frankenlab_surface_gap_matrix": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers"
+      ],
+      "file_path": "crates/franken-engine/src/frankenlab_surface_gap_matrix.rs",
+      "name": "frankenlab_surface_gap_matrix",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "frankentui_adapter": {
+      "classification": "island",
+      "dependencies": [
+        "capability_witness",
+        "slot_registry"
+      ],
+      "file_path": "crates/franken-engine/src/frankentui_adapter.rs",
+      "name": "frankentui_adapter",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "frir_schema": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "ir_contract"
+      ],
+      "file_path": "crates/franken-engine/src/frir_schema.rs",
+      "name": "frir_schema",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "frontier_complex_cartography": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/frontier_complex_cartography.rs",
+      "name": "frontier_complex_cartography",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "frontier_demo_gate": {
+      "classification": "island",
+      "dependencies": [
+        "engine_object_id",
+        "hash_tiers"
+      ],
+      "file_path": "crates/franken-engine/src/frontier_demo_gate.rs",
+      "name": "frontier_demo_gate",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "frontier_hole_governance": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "runtime_config",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/frontier_hole_governance.rs",
+      "name": "frontier_hole_governance",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "frx_lockstep_oracle": {
+      "classification": "gate_reachable",
+      "dependencies": [],
+      "file_path": "crates/franken-engine/src/frx_lockstep_oracle.rs",
+      "name": "frx_lockstep_oracle",
+      "reachable_from_all": [
+        "frx_lockstep_oracle"
+      ],
+      "reachable_from_core": []
+    },
+    "galaxy_brain_explainability": {
+      "classification": "island",
+      "dependencies": [
+        "runtime_decision_theory",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/galaxy_brain_explainability.rs",
+      "name": "galaxy_brain_explainability",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "gc": {
+      "classification": "island",
+      "dependencies": [
+        "alloc_domain"
+      ],
+      "file_path": "crates/franken-engine/src/gc.rs",
+      "name": "gc",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "gc_pause": {
+      "classification": "island",
+      "dependencies": [
+        "gc"
+      ],
+      "file_path": "crates/franken-engine/src/gc_pause.rs",
+      "name": "gc_pause",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "global_coherence_checker": {
+      "classification": "island",
+      "dependencies": [
+        "engine_object_id",
+        "hash_tiers",
+        "semantic_contract_baseline"
+      ],
+      "file_path": "crates/franken-engine/src/global_coherence_checker.rs",
+      "name": "global_coherence_checker",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "golden_vectors": {
+      "classification": "island",
+      "dependencies": [
+        "capability_token",
+        "deterministic_serde",
+        "engine_object_id",
+        "hash_tiers",
+        "policy_checkpoint",
+        "revocation_chain",
+        "signature_preimage",
+        "sorted_multisig"
+      ],
+      "file_path": "crates/franken-engine/src/golden_vectors.rs",
+      "name": "golden_vectors",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "governance_hooks": {
+      "classification": "island",
+      "dependencies": [
+        "engine_object_id",
+        "hash_tiers",
+        "policy_checkpoint"
+      ],
+      "file_path": "crates/franken-engine/src/governance_hooks.rs",
+      "name": "governance_hooks",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "governance_mechanism": {
+      "classification": "island",
+      "dependencies": [
+        "attack_surface_game_model",
+        "hash_tiers",
+        "policy_checkpoint",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/governance_mechanism.rs",
+      "name": "governance_mechanism",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "governance_scorecard": {
+      "classification": "island",
+      "dependencies": [
+        "dp_budget_accountant",
+        "portfolio_governor",
+        "privacy_learning_contract",
+        "security_epoch",
+        "signature_preimage",
+        "version_matrix_lane"
+      ],
+      "file_path": "crates/franken-engine/src/governance_scorecard.rs",
+      "name": "governance_scorecard",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "guardplane_adapter": {
+      "classification": "core_reachable",
+      "dependencies": [
+        "baseline_interpreter",
+        "bayesian_posterior",
+        "expected_loss_selector",
+        "fleet_convergence",
+        "fleet_immune_protocol",
+        "runtime_config",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/guardplane_adapter.rs",
+      "name": "guardplane_adapter",
+      "reachable_from_all": [
+        "execution_orchestrator"
+      ],
+      "reachable_from_core": [
+        "execution_orchestrator"
+      ]
+    },
+    "guardplane_calibration": {
+      "classification": "island",
+      "dependencies": [
+        "adversarial_campaign"
+      ],
+      "file_path": "crates/franken-engine/src/guardplane_calibration.rs",
+      "name": "guardplane_calibration",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "guardplane_integration": {
+      "classification": "island",
+      "dependencies": [
+        "ast",
+        "hash_tiers"
+      ],
+      "file_path": "crates/franken-engine/src/guardplane_integration.rs",
+      "name": "guardplane_integration",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "hardware_board_claim_gate": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/hardware_board_claim_gate.rs",
+      "name": "hardware_board_claim_gate",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "hardware_code_layout_gate": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/hardware_code_layout_gate.rs",
+      "name": "hardware_code_layout_gate",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "hardware_code_layout_governance": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/hardware_code_layout_governance.rs",
+      "name": "hardware_code_layout_governance",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "hardware_localization_residual": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/hardware_localization_residual.rs",
+      "name": "hardware_localization_residual",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "hardware_parameter_manifold": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/hardware_parameter_manifold.rs",
+      "name": "hardware_parameter_manifold",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "hash_tiers": {
+      "classification": "core_reachable",
+      "dependencies": [],
+      "file_path": "crates/franken-engine/src/hash_tiers.rs",
+      "name": "hash_tiers",
+      "reachable_from_all": [
+        "execution_orchestrator",
+        "lib"
+      ],
+      "reachable_from_core": [
+        "execution_orchestrator",
+        "lib"
+      ]
+    },
+    "hierarchical_delta_debug": {
+      "classification": "island",
+      "dependencies": [
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/hierarchical_delta_debug.rs",
+      "name": "hierarchical_delta_debug",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "hindsight_boundary_capture": {
+      "classification": "core_reachable",
+      "dependencies": [
+        "hash_tiers"
+      ],
+      "file_path": "crates/franken-engine/src/hindsight_boundary_capture.rs",
+      "name": "hindsight_boundary_capture",
+      "reachable_from_all": [
+        "execution_orchestrator"
+      ],
+      "reachable_from_core": [
+        "execution_orchestrator"
+      ]
+    },
+    "hindsight_escalation_bundle": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "hindsight_boundary_capture",
+        "runtime_config",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/hindsight_escalation_bundle.rs",
+      "name": "hindsight_escalation_bundle",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "hindsight_trace_escalator": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/hindsight_trace_escalator.rs",
+      "name": "hindsight_trace_escalator",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "hole_witness_generator": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/hole_witness_generator.rs",
+      "name": "hole_witness_generator",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "hook_effect_contract": {
+      "classification": "island",
+      "dependencies": [
+        "engine_object_id"
+      ],
+      "file_path": "crates/franken-engine/src/hook_effect_contract.rs",
+      "name": "hook_effect_contract",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "hostcall_batch_transport": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "hostcall_session_protocol",
+        "security_epoch",
+        "session_hostcall_channel"
+      ],
+      "file_path": "crates/franken-engine/src/hostcall_batch_transport.rs",
+      "name": "hostcall_batch_transport",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "hostcall_conformance_governance": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/hostcall_conformance_governance.rs",
+      "name": "hostcall_conformance_governance",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "hostcall_session_governance_gate": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/hostcall_session_governance_gate.rs",
+      "name": "hostcall_session_governance_gate",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "hostcall_session_protocol": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/hostcall_session_protocol.rs",
+      "name": "hostcall_session_protocol",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "hostcall_telemetry": {
+      "classification": "island",
+      "dependencies": [
+        "capability",
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/hostcall_telemetry.rs",
+      "name": "hostcall_telemetry",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "hot_path_telemetry_kernel": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/hot_path_telemetry_kernel.rs",
+      "name": "hot_path_telemetry_kernel",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "hybrid_lane_router": {
+      "classification": "island",
+      "dependencies": [
+        "engine_object_id"
+      ],
+      "file_path": "crates/franken-engine/src/hybrid_lane_router.rs",
+      "name": "hybrid_lane_router",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "idempotency_key": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/idempotency_key.rs",
+      "name": "idempotency_key",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "ifc_artifacts": {
+      "classification": "core_reachable",
+      "dependencies": [
+        "deterministic_serde",
+        "engine_object_id",
+        "hash_tiers",
+        "signature_preimage"
+      ],
+      "file_path": "crates/franken-engine/src/ifc_artifacts.rs",
+      "name": "ifc_artifacts",
+      "reachable_from_all": [
+        "execution_orchestrator",
+        "lib"
+      ],
+      "reachable_from_core": [
+        "execution_orchestrator",
+        "lib"
+      ]
+    },
+    "ifc_provenance_index": {
+      "classification": "island",
+      "dependencies": [
+        "ifc_artifacts",
+        "storage_adapter"
+      ],
+      "file_path": "crates/franken-engine/src/ifc_provenance_index.rs",
+      "name": "ifc_provenance_index",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "incentive_governance_mechanism": {
+      "classification": "island",
+      "dependencies": [
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/incentive_governance_mechanism.rs",
+      "name": "incentive_governance_mechanism",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "incident_replay_bundle": {
+      "classification": "island",
+      "dependencies": [
+        "causal_replay",
+        "engine_object_id",
+        "evidence_ledger",
+        "fleet_immune_protocol",
+        "hash_tiers",
+        "proof_schema",
+        "security_epoch",
+        "signature_preimage"
+      ],
+      "file_path": "crates/franken-engine/src/incident_replay_bundle.rs",
+      "name": "incident_replay_bundle",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "interleaving_explorer": {
+      "classification": "island",
+      "dependencies": [
+        "lab_runtime"
+      ],
+      "file_path": "crates/franken-engine/src/interleaving_explorer.rs",
+      "name": "interleaving_explorer",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "ir_contract": {
+      "classification": "core_reachable",
+      "dependencies": [
+        "ast",
+        "deterministic_serde",
+        "hash_tiers",
+        "ifc_artifacts"
+      ],
+      "file_path": "crates/franken-engine/src/ir_contract.rs",
+      "name": "ir_contract",
+      "reachable_from_all": [
+        "execution_orchestrator",
+        "lib"
+      ],
+      "reachable_from_core": [
+        "execution_orchestrator",
+        "lib"
+      ]
+    },
+    "iterator_protocol": {
+      "classification": "island",
+      "dependencies": [
+        "engine_object_id",
+        "object_model"
+      ],
+      "file_path": "crates/franken-engine/src/iterator_protocol.rs",
+      "name": "iterator_protocol",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "js_runtime_lane": {
+      "classification": "island",
+      "dependencies": [
+        "engine_object_id"
+      ],
+      "file_path": "crates/franken-engine/src/js_runtime_lane.rs",
+      "name": "js_runtime_lane",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "jsx_tsx_parser": {
+      "classification": "island",
+      "dependencies": [
+        "ast",
+        "hash_tiers"
+      ],
+      "file_path": "crates/franken-engine/src/jsx_tsx_parser.rs",
+      "name": "jsx_tsx_parser",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "kernel_shift_monitor": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/kernel_shift_monitor.rs",
+      "name": "kernel_shift_monitor",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "kernel_synthesis_contract": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers"
+      ],
+      "file_path": "crates/franken-engine/src/kernel_synthesis_contract.rs",
+      "name": "kernel_synthesis_contract",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "kernelized_shift_guard": {
+      "classification": "island",
+      "dependencies": [
+        "distribution_shift_monitor",
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/kernelized_shift_guard.rs",
+      "name": "kernelized_shift_guard",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "key_attestation": {
+      "classification": "island",
+      "dependencies": [
+        "capability_token",
+        "deterministic_serde",
+        "engine_object_id",
+        "policy_checkpoint",
+        "principal_key_roles",
+        "security_epoch",
+        "signature_preimage"
+      ],
+      "file_path": "crates/franken-engine/src/key_attestation.rs",
+      "name": "key_attestation",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "key_derivation": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/key_derivation.rs",
+      "name": "key_derivation",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "lab_runtime": {
+      "classification": "island",
+      "dependencies": [],
+      "file_path": "crates/franken-engine/src/lab_runtime.rs",
+      "name": "lab_runtime",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "law_mining": {
+      "classification": "island",
+      "dependencies": [
+        "counterexample_synthesizer",
+        "engine_object_id",
+        "evidence_ledger",
+        "hash_tiers",
+        "policy_theorem_compiler",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/law_mining.rs",
+      "name": "law_mining",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "law_promotion_lifecycle": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "law_mining",
+        "law_promotion_pack",
+        "law_proof_refutation",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/law_promotion_lifecycle.rs",
+      "name": "law_promotion_lifecycle",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "law_promotion_pack": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/law_promotion_pack.rs",
+      "name": "law_promotion_pack",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "law_proof_refutation": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "law_mining",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/law_proof_refutation.rs",
+      "name": "law_proof_refutation",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "lease_tracker": {
+      "classification": "island",
+      "dependencies": [
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/lease_tracker.rs",
+      "name": "lease_tracker",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "lib": {
+      "classification": "core_reachable",
+      "dependencies": [
+        "ast",
+        "baseline_interpreter",
+        "hash_tiers",
+        "ir_contract",
+        "lowering_pipeline",
+        "parser",
+        "ts_normalization"
+      ],
+      "file_path": "crates/franken-engine/src/lib.rs",
+      "name": "lib",
+      "reachable_from_all": [
+        "lib"
+      ],
+      "reachable_from_core": [
+        "lib"
+      ]
+    },
+    "lowering_gap_inventory": {
+      "classification": "island",
+      "dependencies": [],
+      "file_path": "crates/franken-engine/src/lowering_gap_inventory.rs",
+      "name": "lowering_gap_inventory",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "lowering_parity_evidence": {
+      "classification": "island",
+      "dependencies": [
+        "lowering_gap_inventory",
+        "parser_gap_inventory"
+      ],
+      "file_path": "crates/franken-engine/src/lowering_parity_evidence.rs",
+      "name": "lowering_parity_evidence",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "lowering_pipeline": {
+      "classification": "core_reachable",
+      "dependencies": [
+        "ast",
+        "flow_lattice",
+        "hash_tiers",
+        "ifc_artifacts",
+        "ir_contract",
+        "parser",
+        "parser_gap_inventory"
+      ],
+      "file_path": "crates/franken-engine/src/lowering_pipeline.rs",
+      "name": "lowering_pipeline",
+      "reachable_from_all": [
+        "execution_orchestrator",
+        "lib"
+      ],
+      "reachable_from_core": [
+        "execution_orchestrator",
+        "lib"
+      ]
+    },
+    "marker_stream": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers"
+      ],
+      "file_path": "crates/franken-engine/src/marker_stream.rs",
+      "name": "marker_stream",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "metadata_locality_governance_gate": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/metadata_locality_governance_gate.rs",
+      "name": "metadata_locality_governance_gate",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "metadata_substrate_governance": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/metadata_substrate_governance.rs",
+      "name": "metadata_substrate_governance",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "metadata_substrate_inventory": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/metadata_substrate_inventory.rs",
+      "name": "metadata_substrate_inventory",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "metadata_substrate_optimized": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers"
+      ],
+      "file_path": "crates/franken-engine/src/metadata_substrate_optimized.rs",
+      "name": "metadata_substrate_optimized",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "migration_compatibility": {
+      "classification": "island",
+      "dependencies": [
+        "evidence_emission",
+        "evidence_replay_checker",
+        "hash_tiers",
+        "policy_checkpoint"
+      ],
+      "file_path": "crates/franken-engine/src/migration_compatibility.rs",
+      "name": "migration_compatibility",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "migration_contract": {
+      "classification": "island",
+      "dependencies": [
+        "policy_checkpoint"
+      ],
+      "file_path": "crates/franken-engine/src/migration_contract.rs",
+      "name": "migration_contract",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "migration_kit": {
+      "classification": "island",
+      "dependencies": [
+        "engine_object_id",
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/migration_kit.rs",
+      "name": "migration_kit",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "milestone_release_test_evidence_integrator": {
+      "classification": "island",
+      "dependencies": [
+        "cut_line_automation",
+        "hash_tiers",
+        "release_checklist_gate"
+      ],
+      "file_path": "crates/franken-engine/src/milestone_release_test_evidence_integrator.rs",
+      "name": "milestone_release_test_evidence_integrator",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "minimized_repro_extraction": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/minimized_repro_extraction.rs",
+      "name": "minimized_repro_extraction",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "mmr_proof": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers"
+      ],
+      "file_path": "crates/franken-engine/src/mmr_proof.rs",
+      "name": "mmr_proof",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "mock_seam_guardrail": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/mock_seam_guardrail.rs",
+      "name": "mock_seam_guardrail",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "module_async_evaluation": {
+      "classification": "island",
+      "dependencies": [
+        "esm_loader",
+        "hash_tiers",
+        "module_live_binding",
+        "object_model",
+        "promise_model"
+      ],
+      "file_path": "crates/franken-engine/src/module_async_evaluation.rs",
+      "name": "module_async_evaluation",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "module_cache": {
+      "classification": "island",
+      "dependencies": [
+        "deterministic_serde",
+        "hash_tiers"
+      ],
+      "file_path": "crates/franken-engine/src/module_cache.rs",
+      "name": "module_cache",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "module_compatibility_matrix": {
+      "classification": "island",
+      "dependencies": [
+        "deterministic_serde",
+        "feature_parity_tracker",
+        "hash_tiers"
+      ],
+      "file_path": "crates/franken-engine/src/module_compatibility_matrix.rs",
+      "name": "module_compatibility_matrix",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "module_index_parity_gate": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/module_index_parity_gate.rs",
+      "name": "module_index_parity_gate",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "module_live_binding": {
+      "classification": "island",
+      "dependencies": [
+        "esm_loader",
+        "hash_tiers"
+      ],
+      "file_path": "crates/franken-engine/src/module_live_binding.rs",
+      "name": "module_live_binding",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "module_resolver": {
+      "classification": "island",
+      "dependencies": [
+        "capability",
+        "deterministic_serde",
+        "hash_tiers",
+        "module_compatibility_matrix"
+      ],
+      "file_path": "crates/franken-engine/src/module_resolver.rs",
+      "name": "module_resolver",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "monitor_scheduler": {
+      "classification": "island",
+      "dependencies": [
+        "regime_detector"
+      ],
+      "file_path": "crates/franken-engine/src/monitor_scheduler.rs",
+      "name": "monitor_scheduler",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "moonshot_contract": {
+      "classification": "island",
+      "dependencies": [
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/moonshot_contract.rs",
+      "name": "moonshot_contract",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "native_addon_cohort_gate": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/native_addon_cohort_gate.rs",
+      "name": "native_addon_cohort_gate",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "native_addon_membrane": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/native_addon_membrane.rs",
+      "name": "native_addon_membrane",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "native_addon_parity_gate": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/native_addon_parity_gate.rs",
+      "name": "native_addon_parity_gate",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "nitrosketch_telemetry": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/nitrosketch_telemetry.rs",
+      "name": "nitrosketch_telemetry",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "northstar_scorecard": {
+      "classification": "island",
+      "dependencies": [
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/northstar_scorecard.rs",
+      "name": "northstar_scorecard",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "novelty_scoring_contract": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/novelty_scoring_contract.rs",
+      "name": "novelty_scoring_contract",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "novelty_synthesis_engine": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/novelty_synthesis_engine.rs",
+      "name": "novelty_synthesis_engine",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "npm_compatibility_matrix": {
+      "classification": "island",
+      "dependencies": [
+        "deterministic_serde",
+        "hash_tiers"
+      ],
+      "file_path": "crates/franken-engine/src/npm_compatibility_matrix.rs",
+      "name": "npm_compatibility_matrix",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "object_model": {
+      "classification": "island",
+      "dependencies": [],
+      "file_path": "crates/franken-engine/src/object_model.rs",
+      "name": "object_model",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "obligation_channel": {
+      "classification": "island",
+      "dependencies": [],
+      "file_path": "crates/franken-engine/src/obligation_channel.rs",
+      "name": "obligation_channel",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "obligation_integration": {
+      "classification": "island",
+      "dependencies": [
+        "execution_cell",
+        "region_lifecycle"
+      ],
+      "file_path": "crates/franken-engine/src/obligation_integration.rs",
+      "name": "obligation_integration",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "obligation_leak_policy": {
+      "classification": "island",
+      "dependencies": [],
+      "file_path": "crates/franken-engine/src/obligation_leak_policy.rs",
+      "name": "obligation_leak_policy",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "observability_channel_model": {
+      "classification": "island",
+      "dependencies": [
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/observability_channel_model.rs",
+      "name": "observability_channel_model",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "observability_probe_design": {
+      "classification": "island",
+      "dependencies": [
+        "engine_object_id",
+        "hash_tiers"
+      ],
+      "file_path": "crates/franken-engine/src/observability_probe_design.rs",
+      "name": "observability_probe_design",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "observability_publication_bundle": {
+      "classification": "island",
+      "dependencies": [
+        "calibration_sentinel",
+        "deterministic_probabilistic_telemetry",
+        "hot_path_telemetry_kernel",
+        "observability_quality_sentinel",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/observability_publication_bundle.rs",
+      "name": "observability_publication_bundle",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "observability_quality_sentinel": {
+      "classification": "island",
+      "dependencies": [
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/observability_quality_sentinel.rs",
+      "name": "observability_quality_sentinel",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "obstruction_certificate": {
+      "classification": "island",
+      "dependencies": [
+        "engine_object_id",
+        "global_coherence_checker",
+        "hash_tiers"
+      ],
+      "file_path": "crates/franken-engine/src/obstruction_certificate.rs",
+      "name": "obstruction_certificate",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "obstruction_witness_emitter": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/obstruction_witness_emitter.rs",
+      "name": "obstruction_witness_emitter",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "offline_synthesis_pipeline": {
+      "classification": "island",
+      "dependencies": [],
+      "file_path": "crates/franken-engine/src/offline_synthesis_pipeline.rs",
+      "name": "offline_synthesis_pipeline",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "one_lever_policy": {
+      "classification": "island",
+      "dependencies": [],
+      "file_path": "crates/franken-engine/src/one_lever_policy.rs",
+      "name": "one_lever_policy",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "operator_diagnostic_contract": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/operator_diagnostic_contract.rs",
+      "name": "operator_diagnostic_contract",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "opportunity_matrix": {
+      "classification": "island",
+      "dependencies": [
+        "benchmark_denominator",
+        "flamegraph_pipeline"
+      ],
+      "file_path": "crates/franken-engine/src/opportunity_matrix.rs",
+      "name": "opportunity_matrix",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "optimal_stopping": {
+      "classification": "core_reachable",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/optimal_stopping.rs",
+      "name": "optimal_stopping",
+      "reachable_from_all": [
+        "execution_orchestrator"
+      ],
+      "reachable_from_core": [
+        "execution_orchestrator"
+      ]
+    },
+    "optimization_baseline": {
+      "classification": "island",
+      "dependencies": [
+        "engine_object_id"
+      ],
+      "file_path": "crates/franken-engine/src/optimization_baseline.rs",
+      "name": "optimization_baseline",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "optimized_metadata_substrate": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "metadata_substrate_inventory",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/optimized_metadata_substrate.rs",
+      "name": "optimized_metadata_substrate",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "oracle_release_gate": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "runtime_config",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/oracle_release_gate.rs",
+      "name": "oracle_release_gate",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "orchestration_context_contract": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/orchestration_context_contract.rs",
+      "name": "orchestration_context_contract",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "outcome_capability_narrowing": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/outcome_capability_narrowing.rs",
+      "name": "outcome_capability_narrowing",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "parallel_interference_gate": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "parallel_parser",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/parallel_interference_gate.rs",
+      "name": "parallel_interference_gate",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "parallel_parser": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch",
+        "simd_lexer"
+      ],
+      "file_path": "crates/franken-engine/src/parallel_parser.rs",
+      "name": "parallel_parser",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "parser": {
+      "classification": "core_reachable",
+      "dependencies": [
+        "ast",
+        "deterministic_serde"
+      ],
+      "file_path": "crates/franken-engine/src/parser.rs",
+      "name": "parser",
+      "reachable_from_all": [
+        "execution_orchestrator",
+        "lib"
+      ],
+      "reachable_from_core": [
+        "execution_orchestrator",
+        "lib"
+      ]
+    },
+    "parser_api_stability": {
+      "classification": "island",
+      "dependencies": [
+        "ast",
+        "deterministic_serde",
+        "parser"
+      ],
+      "file_path": "crates/franken-engine/src/parser_api_stability.rs",
+      "name": "parser_api_stability",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "parser_arena": {
+      "classification": "island",
+      "dependencies": [
+        "ast"
+      ],
+      "file_path": "crates/franken-engine/src/parser_arena.rs",
+      "name": "parser_arena",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "parser_error_recovery": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers"
+      ],
+      "file_path": "crates/franken-engine/src/parser_error_recovery.rs",
+      "name": "parser_error_recovery",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "parser_event_ast_equivalence": {
+      "classification": "island",
+      "dependencies": [
+        "ast",
+        "deterministic_serde",
+        "parser"
+      ],
+      "file_path": "crates/franken-engine/src/parser_event_ast_equivalence.rs",
+      "name": "parser_event_ast_equivalence",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "parser_evidence_indexer": {
+      "classification": "island",
+      "dependencies": [],
+      "file_path": "crates/franken-engine/src/parser_evidence_indexer.rs",
+      "name": "parser_evidence_indexer",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "parser_frontier_evidence": {
+      "classification": "island",
+      "dependencies": [
+        "ast",
+        "parser"
+      ],
+      "file_path": "crates/franken-engine/src/parser_frontier_evidence.rs",
+      "name": "parser_frontier_evidence",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "parser_gap_inventory": {
+      "classification": "core_reachable",
+      "dependencies": [
+        "ast",
+        "deterministic_serde",
+        "parser"
+      ],
+      "file_path": "crates/franken-engine/src/parser_gap_inventory.rs",
+      "name": "parser_gap_inventory",
+      "reachable_from_all": [
+        "execution_orchestrator",
+        "lib"
+      ],
+      "reachable_from_core": [
+        "execution_orchestrator",
+        "lib"
+      ]
+    },
+    "parser_multi_engine_harness": {
+      "classification": "island",
+      "dependencies": [
+        "ast",
+        "parser",
+        "simd_lexer"
+      ],
+      "file_path": "crates/franken-engine/src/parser_multi_engine_harness.rs",
+      "name": "parser_multi_engine_harness",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "parser_oracle": {
+      "classification": "island",
+      "dependencies": [
+        "ast",
+        "parser"
+      ],
+      "file_path": "crates/franken-engine/src/parser_oracle.rs",
+      "name": "parser_oracle",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "performance_regression_gate": {
+      "classification": "island",
+      "dependencies": [],
+      "file_path": "crates/franken-engine/src/performance_regression_gate.rs",
+      "name": "performance_regression_gate",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "performance_statistical_validation": {
+      "classification": "island",
+      "dependencies": [],
+      "file_path": "crates/franken-engine/src/performance_statistical_validation.rs",
+      "name": "performance_statistical_validation",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "persistent_cache_contract": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "module_cache"
+      ],
+      "file_path": "crates/franken-engine/src/persistent_cache_contract.rs",
+      "name": "persistent_cache_contract",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "phase_gate": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/phase_gate.rs",
+      "name": "phase_gate",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "plas_benchmark_bundle": {
+      "classification": "island",
+      "dependencies": [],
+      "file_path": "crates/franken-engine/src/plas_benchmark_bundle.rs",
+      "name": "plas_benchmark_bundle",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "plas_burn_in_gate": {
+      "classification": "island",
+      "dependencies": [
+        "capability_witness",
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/plas_burn_in_gate.rs",
+      "name": "plas_burn_in_gate",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "plas_lockstep": {
+      "classification": "island",
+      "dependencies": [],
+      "file_path": "crates/franken-engine/src/plas_lockstep.rs",
+      "name": "plas_lockstep",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "plas_release_gate": {
+      "classification": "island",
+      "dependencies": [
+        "capability_witness",
+        "engine_object_id",
+        "hash_tiers",
+        "policy_theorem_compiler",
+        "signature_preimage"
+      ],
+      "file_path": "crates/franken-engine/src/plas_release_gate.rs",
+      "name": "plas_release_gate",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "policy_as_data_security": {
+      "classification": "island",
+      "dependencies": [
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/policy_as_data_security.rs",
+      "name": "policy_as_data_security",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "policy_checkpoint": {
+      "classification": "island",
+      "dependencies": [
+        "deterministic_serde",
+        "engine_object_id",
+        "hash_tiers",
+        "security_epoch",
+        "signature_preimage",
+        "sorted_multisig"
+      ],
+      "file_path": "crates/franken-engine/src/policy_checkpoint.rs",
+      "name": "policy_checkpoint",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "policy_controller": {
+      "classification": "island",
+      "dependencies": [
+        "evidence_ledger",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/policy_controller.rs",
+      "name": "policy_controller",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "policy_theorem_compiler": {
+      "classification": "island",
+      "dependencies": [
+        "deterministic_serde",
+        "engine_object_id",
+        "security_epoch",
+        "signature_preimage"
+      ],
+      "file_path": "crates/franken-engine/src/policy_theorem_compiler.rs",
+      "name": "policy_theorem_compiler",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "polymorphic_inline_cache": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/polymorphic_inline_cache.rs",
+      "name": "polymorphic_inline_cache",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "portfolio_governor": {
+      "classification": "island",
+      "dependencies": [
+        "moonshot_contract",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/portfolio_governor.rs",
+      "name": "portfolio_governor",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "primitive_adoption_schema": {
+      "classification": "island",
+      "dependencies": [],
+      "file_path": "crates/franken-engine/src/primitive_adoption_schema.rs",
+      "name": "primitive_adoption_schema",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "principal_key_roles": {
+      "classification": "island",
+      "dependencies": [
+        "deterministic_serde",
+        "engine_object_id",
+        "hash_tiers",
+        "security_epoch",
+        "signature_preimage"
+      ],
+      "file_path": "crates/franken-engine/src/principal_key_roles.rs",
+      "name": "principal_key_roles",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "privacy_learning_contract": {
+      "classification": "island",
+      "dependencies": [
+        "deterministic_serde",
+        "engine_object_id",
+        "hash_tiers",
+        "security_epoch",
+        "signature_preimage"
+      ],
+      "file_path": "crates/franken-engine/src/privacy_learning_contract.rs",
+      "name": "privacy_learning_contract",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "profiling": {
+      "classification": "island",
+      "dependencies": [
+        "ir_contract"
+      ],
+      "file_path": "crates/franken-engine/src/profiling.rs",
+      "name": "profiling",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "promise_model": {
+      "classification": "island",
+      "dependencies": [
+        "closure_model",
+        "ifc_artifacts",
+        "object_model"
+      ],
+      "file_path": "crates/franken-engine/src/promise_model.rs",
+      "name": "promise_model",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "promotion_gate_runner": {
+      "classification": "island",
+      "dependencies": [
+        "security_epoch",
+        "self_replacement",
+        "slot_registry"
+      ],
+      "file_path": "crates/franken-engine/src/promotion_gate_runner.rs",
+      "name": "promotion_gate_runner",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "proof_backed_compression": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch",
+        "semantic_canonical_basis"
+      ],
+      "file_path": "crates/franken-engine/src/proof_backed_compression.rs",
+      "name": "proof_backed_compression",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "proof_ingestion": {
+      "classification": "island",
+      "dependencies": [
+        "engine_object_id",
+        "hash_tiers",
+        "proof_schema",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/proof_ingestion.rs",
+      "name": "proof_ingestion",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "proof_obligations": {
+      "classification": "island",
+      "dependencies": [
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/proof_obligations.rs",
+      "name": "proof_obligations",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "proof_release_gate": {
+      "classification": "island",
+      "dependencies": [
+        "deterministic_serde",
+        "hash_tiers"
+      ],
+      "file_path": "crates/franken-engine/src/proof_release_gate.rs",
+      "name": "proof_release_gate",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "proof_schema": {
+      "classification": "island",
+      "dependencies": [
+        "engine_object_id",
+        "hash_tiers",
+        "security_epoch",
+        "tee_attestation_policy"
+      ],
+      "file_path": "crates/franken-engine/src/proof_schema.rs",
+      "name": "proof_schema",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "proof_specialization_linkage": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "ir_contract",
+        "proof_specialization_receipt",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/proof_specialization_linkage.rs",
+      "name": "proof_specialization_linkage",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "proof_specialization_receipt": {
+      "classification": "island",
+      "dependencies": [
+        "deterministic_serde",
+        "engine_object_id",
+        "hash_tiers",
+        "security_epoch",
+        "signature_preimage"
+      ],
+      "file_path": "crates/franken-engine/src/proof_specialization_receipt.rs",
+      "name": "proof_specialization_receipt",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "quarantine_mesh_gate": {
+      "classification": "island",
+      "dependencies": [
+        "containment_executor",
+        "expected_loss_selector",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/quarantine_mesh_gate.rs",
+      "name": "quarantine_mesh_gate",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "quarantine_propagation": {
+      "classification": "island",
+      "dependencies": [
+        "fleet_convergence",
+        "fleet_immune_protocol",
+        "fleet_simulator",
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/quarantine_propagation.rs",
+      "name": "quarantine_propagation",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "queueing_admission_control": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "stage_envelope_certificate"
+      ],
+      "file_path": "crates/franken-engine/src/queueing_admission_control.rs",
+      "name": "queueing_admission_control",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "quickening_feedback_lattice": {
+      "classification": "island",
+      "dependencies": [],
+      "file_path": "crates/franken-engine/src/quickening_feedback_lattice.rs",
+      "name": "quickening_feedback_lattice",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "react_compilation_pipeline": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "jsx_tsx_parser",
+        "react_jsx_lowering"
+      ],
+      "file_path": "crates/franken-engine/src/react_compilation_pipeline.rs",
+      "name": "react_compilation_pipeline",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "react_compile_operator_surface": {
+      "classification": "island",
+      "dependencies": [
+        "deterministic_serde",
+        "hash_tiers"
+      ],
+      "file_path": "crates/franken-engine/src/react_compile_operator_surface.rs",
+      "name": "react_compile_operator_surface",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "react_compile_run_parity": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/react_compile_run_parity.rs",
+      "name": "react_compile_run_parity",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "react_compile_verification": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/react_compile_verification.rs",
+      "name": "react_compile_verification",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "react_doctor_preflight": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "react_mismatch_catalog",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/react_doctor_preflight.rs",
+      "name": "react_doctor_preflight",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "react_jsx_lowering": {
+      "classification": "island",
+      "dependencies": [
+        "ast",
+        "hash_tiers",
+        "jsx_tsx_parser"
+      ],
+      "file_path": "crates/franken-engine/src/react_jsx_lowering.rs",
+      "name": "react_jsx_lowering",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "react_lane_inference": {
+      "classification": "island",
+      "dependencies": [
+        "ast",
+        "component_shape_catalog",
+        "hash_tiers",
+        "hook_effect_contract",
+        "react_jsx_lowering",
+        "security_epoch",
+        "shape_transition_algebra"
+      ],
+      "file_path": "crates/franken-engine/src/react_lane_inference.rs",
+      "name": "react_lane_inference",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "react_mismatch_catalog": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/react_mismatch_catalog.rs",
+      "name": "react_mismatch_catalog",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "react_module_graph_verifier": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "react_package_cohort",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/react_module_graph_verifier.rs",
+      "name": "react_module_graph_verifier",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "react_package_cohort": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/react_package_cohort.rs",
+      "name": "react_package_cohort",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "react_repro_triage": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/react_repro_triage.rs",
+      "name": "react_repro_triage",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "react_specialization_benchmark_gate": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/react_specialization_benchmark_gate.rs",
+      "name": "react_specialization_benchmark_gate",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "react_ssr_verification": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/react_ssr_verification.rs",
+      "name": "react_ssr_verification",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "receipt_verifier_pipeline": {
+      "classification": "island",
+      "dependencies": [
+        "attested_execution_cell",
+        "engine_object_id",
+        "hash_tiers",
+        "mmr_proof",
+        "proof_schema",
+        "security_epoch",
+        "signature_preimage",
+        "tee_attestation_policy"
+      ],
+      "file_path": "crates/franken-engine/src/receipt_verifier_pipeline.rs",
+      "name": "receipt_verifier_pipeline",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "recovery_artifact": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/recovery_artifact.rs",
+      "name": "recovery_artifact",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "regexp_deterministic_engine": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/regexp_deterministic_engine.rs",
+      "name": "regexp_deterministic_engine",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "regexp_string_governance": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/regexp_string_governance.rs",
+      "name": "regexp_string_governance",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "regexp_string_governance_gate": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/regexp_string_governance_gate.rs",
+      "name": "regexp_string_governance_gate",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "regime_detector": {
+      "classification": "island",
+      "dependencies": [
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/regime_detector.rs",
+      "name": "regime_detector",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "regime_shift_detector": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "stage_envelope_certificate"
+      ],
+      "file_path": "crates/franken-engine/src/regime_shift_detector.rs",
+      "name": "regime_shift_detector",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "regime_signature_feature": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "regime_detector",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/regime_signature_feature.rs",
+      "name": "regime_signature_feature",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "region_lifecycle": {
+      "classification": "core_reachable",
+      "dependencies": [],
+      "file_path": "crates/franken-engine/src/region_lifecycle.rs",
+      "name": "region_lifecycle",
+      "reachable_from_all": [
+        "execution_orchestrator"
+      ],
+      "reachable_from_core": [
+        "execution_orchestrator"
+      ]
+    },
+    "regret_bounded_router": {
+      "classification": "core_reachable",
+      "dependencies": [
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/regret_bounded_router.rs",
+      "name": "regret_bounded_router",
+      "reachable_from_all": [
+        "execution_orchestrator"
+      ],
+      "reachable_from_core": [
+        "execution_orchestrator"
+      ]
+    },
+    "release_checklist_gate": {
+      "classification": "island",
+      "dependencies": [
+        "storage_adapter"
+      ],
+      "file_path": "crates/franken-engine/src/release_checklist_gate.rs",
+      "name": "release_checklist_gate",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "release_gate": {
+      "classification": "island",
+      "dependencies": [
+        "evidence_replay_checker",
+        "frankenlab_extension_lifecycle",
+        "lab_runtime"
+      ],
+      "file_path": "crates/franken-engine/src/release_gate.rs",
+      "name": "release_gate",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "remote_capability_gate": {
+      "classification": "island",
+      "dependencies": [
+        "capability",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/remote_capability_gate.rs",
+      "name": "remote_capability_gate",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "remote_computation_registry": {
+      "classification": "island",
+      "dependencies": [
+        "capability",
+        "deterministic_serde",
+        "hash_tiers"
+      ],
+      "file_path": "crates/franken-engine/src/remote_computation_registry.rs",
+      "name": "remote_computation_registry",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "render_lane_specializer": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/render_lane_specializer.rs",
+      "name": "render_lane_specializer",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "replacement_lineage_log": {
+      "classification": "island",
+      "dependencies": [
+        "engine_object_id",
+        "hash_tiers",
+        "security_epoch",
+        "self_replacement",
+        "slot_registry",
+        "storage_adapter"
+      ],
+      "file_path": "crates/franken-engine/src/replacement_lineage_log.rs",
+      "name": "replacement_lineage_log",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "reproducibility_provenance_pack": {
+      "classification": "island",
+      "dependencies": [
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/reproducibility_provenance_pack.rs",
+      "name": "reproducibility_provenance_pack",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "reputation": {
+      "classification": "island",
+      "dependencies": [
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/reputation.rs",
+      "name": "reputation",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "resolver_package_index": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/resolver_package_index.rs",
+      "name": "resolver_package_index",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "resource_certificate_consumer": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/resource_certificate_consumer.rs",
+      "name": "resource_certificate_consumer",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "resource_certificate_governance": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/resource_certificate_governance.rs",
+      "name": "resource_certificate_governance",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "resource_certificate_governance_gate": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/resource_certificate_governance_gate.rs",
+      "name": "resource_certificate_governance_gate",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "revocation_chain": {
+      "classification": "island",
+      "dependencies": [
+        "capability_token",
+        "deterministic_serde",
+        "engine_object_id",
+        "hash_tiers",
+        "policy_checkpoint",
+        "signature_preimage"
+      ],
+      "file_path": "crates/franken-engine/src/revocation_chain.rs",
+      "name": "revocation_chain",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "revocation_enforcement": {
+      "classification": "island",
+      "dependencies": [
+        "capability_token",
+        "engine_object_id",
+        "hash_tiers",
+        "policy_checkpoint",
+        "revocation_chain",
+        "signature_preimage"
+      ],
+      "file_path": "crates/franken-engine/src/revocation_enforcement.rs",
+      "name": "revocation_enforcement",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "revocation_freshness": {
+      "classification": "island",
+      "dependencies": [
+        "deterministic_serde",
+        "engine_object_id",
+        "policy_checkpoint",
+        "signature_preimage"
+      ],
+      "file_path": "crates/franken-engine/src/revocation_freshness.rs",
+      "name": "revocation_freshness",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "rgc_execution_waves": {
+      "classification": "island",
+      "dependencies": [],
+      "file_path": "crates/franken-engine/src/rgc_execution_waves.rs",
+      "name": "rgc_execution_waves",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "rgc_planning_track": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "rgc_execution_waves",
+        "wave_handoff_contract"
+      ],
+      "file_path": "crates/franken-engine/src/rgc_planning_track.rs",
+      "name": "rgc_planning_track",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "rgc_test_harness": {
+      "classification": "island",
+      "dependencies": [],
+      "file_path": "crates/franken-engine/src/rgc_test_harness.rs",
+      "name": "rgc_test_harness",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "rollback_safemode_synthesizer": {
+      "classification": "island",
+      "dependencies": [
+        "bifurcation_boundary_scanner",
+        "counterfactual_evaluator",
+        "counterfactual_replay_engine",
+        "hash_tiers",
+        "runtime_decision_theory",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/rollback_safemode_synthesizer.rs",
+      "name": "rollback_safemode_synthesizer",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "rough_path_regime_geometry": {
+      "classification": "island",
+      "dependencies": [
+        "entropic_policy_morphing",
+        "hash_tiers",
+        "regime_detector",
+        "regime_signature_feature",
+        "security_epoch",
+        "signature_drift_gate"
+      ],
+      "file_path": "crates/franken-engine/src/rough_path_regime_geometry.rs",
+      "name": "rough_path_regime_geometry",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "runtime_comparison_gate": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/runtime_comparison_gate.rs",
+      "name": "runtime_comparison_gate",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "runtime_config": {
+      "classification": "core_reachable",
+      "dependencies": [],
+      "file_path": "crates/franken-engine/src/runtime_config.rs",
+      "name": "runtime_config",
+      "reachable_from_all": [
+        "execution_orchestrator",
+        "lib"
+      ],
+      "reachable_from_core": [
+        "execution_orchestrator",
+        "lib"
+      ]
+    },
+    "runtime_decision_core": {
+      "classification": "island",
+      "dependencies": [
+        "baseline_interpreter",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/runtime_decision_core.rs",
+      "name": "runtime_decision_core",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "runtime_decision_theory": {
+      "classification": "island",
+      "dependencies": [
+        "baseline_interpreter",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/runtime_decision_theory.rs",
+      "name": "runtime_decision_theory",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "runtime_diagnostics_cli": {
+      "classification": "island",
+      "dependencies": [
+        "containment_executor",
+        "evidence_ledger",
+        "expected_loss_selector",
+        "hash_tiers",
+        "hostcall_telemetry",
+        "module_compatibility_matrix",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/runtime_diagnostics_cli.rs",
+      "name": "runtime_diagnostics_cli",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "runtime_hotspot_optimization_campaign": {
+      "classification": "island",
+      "dependencies": [],
+      "file_path": "crates/franken-engine/src/runtime_hotspot_optimization_campaign.rs",
+      "name": "runtime_hotspot_optimization_campaign",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "runtime_image_contract": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/runtime_image_contract.rs",
+      "name": "runtime_image_contract",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "runtime_kernel_lane_charter": {
+      "classification": "island",
+      "dependencies": [
+        "engine_object_id",
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/runtime_kernel_lane_charter.rs",
+      "name": "runtime_kernel_lane_charter",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "runtime_observability": {
+      "classification": "island",
+      "dependencies": [
+        "error_code"
+      ],
+      "file_path": "crates/franken-engine/src/runtime_observability.rs",
+      "name": "runtime_observability",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "s3_fifo_cache_gate": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/s3_fifo_cache_gate.rs",
+      "name": "s3_fifo_cache_gate",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "safe_mode_fallback": {
+      "classification": "island",
+      "dependencies": [
+        "receipt_verifier_pipeline",
+        "signature_preimage"
+      ],
+      "file_path": "crates/franken-engine/src/safe_mode_fallback.rs",
+      "name": "safe_mode_fallback",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "safety_decision_router": {
+      "classification": "island",
+      "dependencies": [],
+      "file_path": "crates/franken-engine/src/safety_decision_router.rs",
+      "name": "safety_decision_router",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "saga_orchestrator": {
+      "classification": "core_reachable",
+      "dependencies": [
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/saga_orchestrator.rs",
+      "name": "saga_orchestrator",
+      "reachable_from_all": [
+        "execution_orchestrator"
+      ],
+      "reachable_from_core": [
+        "execution_orchestrator"
+      ]
+    },
+    "scalar_replacement_engine": {
+      "classification": "island",
+      "dependencies": [
+        "escape_analysis_certificate",
+        "hash_tiers",
+        "runtime_config",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/scalar_replacement_engine.rs",
+      "name": "scalar_replacement_engine",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "scheduler_invariants": {
+      "classification": "island",
+      "dependencies": [
+        "engine_object_id"
+      ],
+      "file_path": "crates/franken-engine/src/scheduler_invariants.rs",
+      "name": "scheduler_invariants",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "scheduler_lane": {
+      "classification": "island",
+      "dependencies": [],
+      "file_path": "crates/franken-engine/src/scheduler_lane.rs",
+      "name": "scheduler_lane",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "security_conformance": {
+      "classification": "island",
+      "dependencies": [],
+      "file_path": "crates/franken-engine/src/security_conformance.rs",
+      "name": "security_conformance",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "security_e2e": {
+      "classification": "island",
+      "dependencies": [
+        "bayesian_posterior",
+        "containment_executor",
+        "expected_loss_selector",
+        "extension_lifecycle_manager",
+        "safe_mode_fallback",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/security_e2e.rs",
+      "name": "security_e2e",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "security_epoch": {
+      "classification": "core_reachable",
+      "dependencies": [],
+      "file_path": "crates/franken-engine/src/security_epoch.rs",
+      "name": "security_epoch",
+      "reachable_from_all": [
+        "execution_orchestrator"
+      ],
+      "reachable_from_core": [
+        "execution_orchestrator"
+      ]
+    },
+    "self_adjusting_resolution_graph": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/self_adjusting_resolution_graph.rs",
+      "name": "self_adjusting_resolution_graph",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "self_replacement": {
+      "classification": "island",
+      "dependencies": [
+        "deterministic_serde",
+        "engine_object_id",
+        "security_epoch",
+        "signature_preimage",
+        "slot_registry"
+      ],
+      "file_path": "crates/franken-engine/src/self_replacement.rs",
+      "name": "self_replacement",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "semantic_canonical_basis": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/semantic_canonical_basis.rs",
+      "name": "semantic_canonical_basis",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "semantic_contract_baseline": {
+      "classification": "island",
+      "dependencies": [
+        "engine_object_id",
+        "hash_tiers",
+        "ir_contract",
+        "static_analysis_graph"
+      ],
+      "file_path": "crates/franken-engine/src/semantic_contract_baseline.rs",
+      "name": "semantic_contract_baseline",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "semantic_cover_schema": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/semantic_cover_schema.rs",
+      "name": "semantic_cover_schema",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "semantic_dark_matter_engine": {
+      "classification": "island",
+      "dependencies": [
+        "dark_matter_saturation_gate",
+        "hash_tiers",
+        "novelty_scoring_contract",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/semantic_dark_matter_engine.rs",
+      "name": "semantic_dark_matter_engine",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "semantic_flattening_inventory": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/semantic_flattening_inventory.rs",
+      "name": "semantic_flattening_inventory",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "semantic_transport_ledger": {
+      "classification": "island",
+      "dependencies": [
+        "engine_object_id",
+        "hash_tiers",
+        "semantic_contract_baseline"
+      ],
+      "file_path": "crates/franken-engine/src/semantic_transport_ledger.rs",
+      "name": "semantic_transport_ledger",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "semantic_twin": {
+      "classification": "island",
+      "dependencies": [
+        "assumptions_ledger",
+        "structural_causal_model"
+      ],
+      "file_path": "crates/franken-engine/src/semantic_twin.rs",
+      "name": "semantic_twin",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "semantic_twin_state_space": {
+      "classification": "island",
+      "dependencies": [
+        "assumptions_ledger",
+        "structural_causal_model"
+      ],
+      "file_path": "crates/franken-engine/src/semantic_twin_state_space.rs",
+      "name": "semantic_twin_state_space",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "seqlock_candidate_inventory": {
+      "classification": "island",
+      "dependencies": [],
+      "file_path": "crates/franken-engine/src/seqlock_candidate_inventory.rs",
+      "name": "seqlock_candidate_inventory",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "seqlock_fastpath": {
+      "classification": "island",
+      "dependencies": [],
+      "file_path": "crates/franken-engine/src/seqlock_fastpath.rs",
+      "name": "seqlock_fastpath",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "seqlock_reader_writer_contract": {
+      "classification": "island",
+      "dependencies": [
+        "adversarial_campaign",
+        "hash_tiers",
+        "module_cache",
+        "portfolio_governor",
+        "seqlock_candidate_inventory",
+        "seqlock_fastpath"
+      ],
+      "file_path": "crates/franken-engine/src/seqlock_reader_writer_contract.rs",
+      "name": "seqlock_reader_writer_contract",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "seqlock_rollout_guard": {
+      "classification": "island",
+      "dependencies": [],
+      "file_path": "crates/franken-engine/src/seqlock_rollout_guard.rs",
+      "name": "seqlock_rollout_guard",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "session_hostcall_channel": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "signature_preimage"
+      ],
+      "file_path": "crates/franken-engine/src/session_hostcall_channel.rs",
+      "name": "session_hostcall_channel",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "shadow_ablation_engine": {
+      "classification": "island",
+      "dependencies": [
+        "deterministic_serde",
+        "engine_object_id",
+        "hash_tiers",
+        "security_epoch",
+        "signature_preimage",
+        "static_authority_analyzer",
+        "synthesis_budget"
+      ],
+      "file_path": "crates/franken-engine/src/shadow_ablation_engine.rs",
+      "name": "shadow_ablation_engine",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "shape_transition_algebra": {
+      "classification": "island",
+      "dependencies": [],
+      "file_path": "crates/franken-engine/src/shape_transition_algebra.rs",
+      "name": "shape_transition_algebra",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "shipped_path_matrix": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/shipped_path_matrix.rs",
+      "name": "shipped_path_matrix",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "shipped_path_parity_verifier": {
+      "classification": "island",
+      "dependencies": [
+        "deterministic_serde",
+        "hash_tiers"
+      ],
+      "file_path": "crates/franken-engine/src/shipped_path_parity_verifier.rs",
+      "name": "shipped_path_parity_verifier",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "sibling_integration_benchmark_gate": {
+      "classification": "island",
+      "dependencies": [
+        "deterministic_serde",
+        "hash_tiers"
+      ],
+      "file_path": "crates/franken-engine/src/sibling_integration_benchmark_gate.rs",
+      "name": "sibling_integration_benchmark_gate",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "signature_drift_gate": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "regime_detector",
+        "regime_signature_feature",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/signature_drift_gate.rs",
+      "name": "signature_drift_gate",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "signature_preimage": {
+      "classification": "core_reachable",
+      "dependencies": [
+        "deterministic_serde",
+        "engine_object_id",
+        "hash_tiers"
+      ],
+      "file_path": "crates/franken-engine/src/signature_preimage.rs",
+      "name": "signature_preimage",
+      "reachable_from_all": [
+        "execution_orchestrator",
+        "lib"
+      ],
+      "reachable_from_core": [
+        "execution_orchestrator",
+        "lib"
+      ]
+    },
+    "simd_lexer": {
+      "classification": "island",
+      "dependencies": [
+        "ast",
+        "engine_object_id"
+      ],
+      "file_path": "crates/franken-engine/src/simd_lexer.rs",
+      "name": "simd_lexer",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "simd_morsel_kernel": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch",
+        "vectorized_lane_contract"
+      ],
+      "file_path": "crates/franken-engine/src/simd_morsel_kernel.rs",
+      "name": "simd_morsel_kernel",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "slot_differential": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch",
+        "slot_registry"
+      ],
+      "file_path": "crates/franken-engine/src/slot_differential.rs",
+      "name": "slot_differential",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "slot_registry": {
+      "classification": "island",
+      "dependencies": [
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/slot_registry.rs",
+      "name": "slot_registry",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "sorted_multisig": {
+      "classification": "island",
+      "dependencies": [
+        "deterministic_serde",
+        "engine_object_id",
+        "signature_preimage"
+      ],
+      "file_path": "crates/franken-engine/src/sorted_multisig.rs",
+      "name": "sorted_multisig",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "specialization_conformance": {
+      "classification": "island",
+      "dependencies": [
+        "engine_object_id",
+        "hash_tiers",
+        "proof_specialization_receipt",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/specialization_conformance.rs",
+      "name": "specialization_conformance",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "specialization_index": {
+      "classification": "island",
+      "dependencies": [
+        "engine_object_id",
+        "proof_specialization_receipt",
+        "security_epoch",
+        "storage_adapter"
+      ],
+      "file_path": "crates/franken-engine/src/specialization_index.rs",
+      "name": "specialization_index",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "specialization_lane_gate": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/specialization_lane_gate.rs",
+      "name": "specialization_lane_gate",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "specialization_perf_release_gate": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/specialization_perf_release_gate.rs",
+      "name": "specialization_perf_release_gate",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "specialization_rollback_gate": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/specialization_rollback_gate.rs",
+      "name": "specialization_rollback_gate",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "spectral_fleet_convergence": {
+      "classification": "core_reachable",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/spectral_fleet_convergence.rs",
+      "name": "spectral_fleet_convergence",
+      "reachable_from_all": [
+        "execution_orchestrator"
+      ],
+      "reachable_from_core": [
+        "execution_orchestrator"
+      ]
+    },
+    "stage_envelope_certificate": {
+      "classification": "island",
+      "dependencies": [],
+      "file_path": "crates/franken-engine/src/stage_envelope_certificate.rs",
+      "name": "stage_envelope_certificate",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "static_analysis_graph": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "ir_contract"
+      ],
+      "file_path": "crates/franken-engine/src/static_analysis_graph.rs",
+      "name": "static_analysis_graph",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "static_authority_analyzer": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/static_authority_analyzer.rs",
+      "name": "static_authority_analyzer",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "static_semantics": {
+      "classification": "island",
+      "dependencies": [
+        "ast",
+        "deterministic_serde",
+        "ir_contract"
+      ],
+      "file_path": "crates/franken-engine/src/static_semantics.rs",
+      "name": "static_semantics",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "stdlib": {
+      "classification": "island",
+      "dependencies": [
+        "object_model"
+      ],
+      "file_path": "crates/franken-engine/src/stdlib.rs",
+      "name": "stdlib",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "stdlib_workload_verification": {
+      "classification": "island",
+      "dependencies": [
+        "callback_stdlib_dispatch",
+        "hash_tiers",
+        "runtime_config",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/stdlib_workload_verification.rs",
+      "name": "stdlib_workload_verification",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "storage_adapter": {
+      "classification": "island",
+      "dependencies": [],
+      "file_path": "crates/franken-engine/src/storage_adapter.rs",
+      "name": "storage_adapter",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "structural_causal_model": {
+      "classification": "island",
+      "dependencies": [],
+      "file_path": "crates/franken-engine/src/structural_causal_model.rs",
+      "name": "structural_causal_model",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "succinct_witness_compiler": {
+      "classification": "island",
+      "dependencies": [
+        "proof_obligations",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/succinct_witness_compiler.rs",
+      "name": "succinct_witness_compiler",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "superblock_formation": {
+      "classification": "island",
+      "dependencies": [
+        "quickening_feedback_lattice",
+        "stage_envelope_certificate",
+        "tier_up_profiler"
+      ],
+      "file_path": "crates/franken-engine/src/superblock_formation.rs",
+      "name": "superblock_formation",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "supervision": {
+      "classification": "island",
+      "dependencies": [],
+      "file_path": "crates/franken-engine/src/supervision.rs",
+      "name": "supervision",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "supremacy_cell_matrix": {
+      "classification": "island",
+      "dependencies": [],
+      "file_path": "crates/franken-engine/src/supremacy_cell_matrix.rs",
+      "name": "supremacy_cell_matrix",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "supremacy_evidence_bundle": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/supremacy_evidence_bundle.rs",
+      "name": "supremacy_evidence_bundle",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "supremacy_verdict_engine": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/supremacy_verdict_engine.rs",
+      "name": "supremacy_verdict_engine",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "swarm_control_loop": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/swarm_control_loop.rs",
+      "name": "swarm_control_loop",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "synthesis_budget": {
+      "classification": "island",
+      "dependencies": [
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/synthesis_budget.rs",
+      "name": "synthesis_budget",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "synthesis_eligibility_envelope": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/synthesis_eligibility_envelope.rs",
+      "name": "synthesis_eligibility_envelope",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "synthesis_kernel_promotion": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/synthesis_kernel_promotion.rs",
+      "name": "synthesis_kernel_promotion",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "tail_latency_control_plane": {
+      "classification": "island",
+      "dependencies": [
+        "bounded_feedback_controller",
+        "queueing_admission_control",
+        "security_epoch",
+        "stage_envelope_certificate"
+      ],
+      "file_path": "crates/franken-engine/src/tail_latency_control_plane.rs",
+      "name": "tail_latency_control_plane",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "tail_latency_feedback_control": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/tail_latency_feedback_control.rs",
+      "name": "tail_latency_feedback_control",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "tee_attestation_policy": {
+      "classification": "island",
+      "dependencies": [
+        "engine_object_id",
+        "hash_tiers",
+        "security_epoch",
+        "signature_preimage"
+      ],
+      "file_path": "crates/franken-engine/src/tee_attestation_policy.rs",
+      "name": "tee_attestation_policy",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "test262_release_gate": {
+      "classification": "island",
+      "dependencies": [],
+      "file_path": "crates/franken-engine/src/test262_release_gate.rs",
+      "name": "test262_release_gate",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "test_depth_gate": {
+      "classification": "island",
+      "dependencies": [
+        "engine_object_id",
+        "test_taxonomy"
+      ],
+      "file_path": "crates/franken-engine/src/test_depth_gate.rs",
+      "name": "test_depth_gate",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "test_flake_quarantine_workflow": {
+      "classification": "island",
+      "dependencies": [],
+      "file_path": "crates/franken-engine/src/test_flake_quarantine_workflow.rs",
+      "name": "test_flake_quarantine_workflow",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "test_logging_schema": {
+      "classification": "island",
+      "dependencies": [],
+      "file_path": "crates/franken-engine/src/test_logging_schema.rs",
+      "name": "test_logging_schema",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "test_taxonomy": {
+      "classification": "island",
+      "dependencies": [
+        "engine_object_id"
+      ],
+      "file_path": "crates/franken-engine/src/test_taxonomy.rs",
+      "name": "test_taxonomy",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "third_party_verifier": {
+      "classification": "island",
+      "dependencies": [
+        "benchmark_denominator",
+        "causal_replay",
+        "engine_object_id",
+        "hash_tiers",
+        "incident_replay_bundle",
+        "quarantine_mesh_gate",
+        "security_epoch",
+        "signature_preimage"
+      ],
+      "file_path": "crates/franken-engine/src/third_party_verifier.rs",
+      "name": "third_party_verifier",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "threshold_signing": {
+      "classification": "island",
+      "dependencies": [
+        "capability_token",
+        "deterministic_serde",
+        "engine_object_id",
+        "policy_checkpoint",
+        "security_epoch",
+        "signature_preimage"
+      ],
+      "file_path": "crates/franken-engine/src/threshold_signing.rs",
+      "name": "threshold_signing",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "tier_eligibility_substrate": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/tier_eligibility_substrate.rs",
+      "name": "tier_eligibility_substrate",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "tier_telemetry_contract": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/tier_telemetry_contract.rs",
+      "name": "tier_telemetry_contract",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "tier_up_profiler": {
+      "classification": "island",
+      "dependencies": [
+        "bytecode_vm"
+      ],
+      "file_path": "crates/franken-engine/src/tier_up_profiler.rs",
+      "name": "tier_up_profiler",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "timescale_separation_certificate": {
+      "classification": "island",
+      "dependencies": [],
+      "file_path": "crates/franken-engine/src/timescale_separation_certificate.rs",
+      "name": "timescale_separation_certificate",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "trace_fusion": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/trace_fusion.rs",
+      "name": "trace_fusion",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "trace_fusion_superinstruction": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers"
+      ],
+      "file_path": "crates/franken-engine/src/trace_fusion_superinstruction.rs",
+      "name": "trace_fusion_superinstruction",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "transfer_governance_gate": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/transfer_governance_gate.rs",
+      "name": "transfer_governance_gate",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "translation_validation": {
+      "classification": "island",
+      "dependencies": [
+        "engine_object_id",
+        "hash_tiers",
+        "proof_schema",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/translation_validation.rs",
+      "name": "translation_validation",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "translation_validation_receipt": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch",
+        "versioned_rewrite_pack"
+      ],
+      "file_path": "crates/franken-engine/src/translation_validation_receipt.rs",
+      "name": "translation_validation_receipt",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "transport_certificate_ledger": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/transport_certificate_ledger.rs",
+      "name": "transport_certificate_ledger",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "tropical_semiring": {
+      "classification": "core_reachable",
+      "dependencies": [
+        "hash_tiers",
+        "ir_contract"
+      ],
+      "file_path": "crates/franken-engine/src/tropical_semiring.rs",
+      "name": "tropical_semiring",
+      "reachable_from_all": [
+        "execution_orchestrator"
+      ],
+      "reachable_from_core": [
+        "execution_orchestrator"
+      ]
+    },
+    "trust_card": {
+      "classification": "island",
+      "dependencies": [
+        "reputation",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/trust_card.rs",
+      "name": "trust_card",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "trust_economics": {
+      "classification": "core_reachable",
+      "dependencies": [
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/trust_economics.rs",
+      "name": "trust_economics",
+      "reachable_from_all": [
+        "execution_orchestrator"
+      ],
+      "reachable_from_core": [
+        "execution_orchestrator"
+      ]
+    },
+    "trust_zone": {
+      "classification": "island",
+      "dependencies": [
+        "capability",
+        "engine_object_id"
+      ],
+      "file_path": "crates/franken-engine/src/trust_zone.rs",
+      "name": "trust_zone",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "ts_module_resolution": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers"
+      ],
+      "file_path": "crates/franken-engine/src/ts_module_resolution.rs",
+      "name": "ts_module_resolution",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "ts_normalization": {
+      "classification": "core_reachable",
+      "dependencies": [
+        "ast",
+        "ir_contract",
+        "lowering_pipeline",
+        "parser"
+      ],
+      "file_path": "crates/franken-engine/src/ts_normalization.rs",
+      "name": "ts_normalization",
+      "reachable_from_all": [
+        "execution_orchestrator",
+        "lib"
+      ],
+      "reachable_from_core": [
+        "execution_orchestrator",
+        "lib"
+      ]
+    },
+    "ts_normalization_evidence": {
+      "classification": "island",
+      "dependencies": [
+        "ts_normalization"
+      ],
+      "file_path": "crates/franken-engine/src/ts_normalization_evidence.rs",
+      "name": "ts_normalization_evidence",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "ts_resolution_manifest": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "ts_module_resolution"
+      ],
+      "file_path": "crates/franken-engine/src/ts_resolution_manifest.rs",
+      "name": "ts_resolution_manifest",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "ts_shipped_path_evidence": {
+      "classification": "island",
+      "dependencies": [
+        "execution_orchestrator",
+        "ts_normalization"
+      ],
+      "file_path": "crates/franken-engine/src/ts_shipped_path_evidence.rs",
+      "name": "ts_shipped_path_evidence",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "typed_array_fast_lane": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers"
+      ],
+      "file_path": "crates/franken-engine/src/typed_array_fast_lane.rs",
+      "name": "typed_array_fast_lane",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "unit_test_taxonomy": {
+      "classification": "island",
+      "dependencies": [],
+      "file_path": "crates/franken-engine/src/unit_test_taxonomy.rs",
+      "name": "unit_test_taxonomy",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "universal_dominance_ratchet": {
+      "classification": "island",
+      "dependencies": [],
+      "file_path": "crates/franken-engine/src/universal_dominance_ratchet.rs",
+      "name": "universal_dominance_ratchet",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "vectorized_builtin_governance": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/vectorized_builtin_governance.rs",
+      "name": "vectorized_builtin_governance",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "vectorized_lane_contract": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/vectorized_lane_contract.rs",
+      "name": "vectorized_lane_contract",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "vectorized_lane_governance_gate": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/vectorized_lane_governance_gate.rs",
+      "name": "vectorized_lane_governance_gate",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "version_matrix_lane": {
+      "classification": "island",
+      "dependencies": [],
+      "file_path": "crates/franken-engine/src/version_matrix_lane.rs",
+      "name": "version_matrix_lane",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "versioned_rewrite_pack": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "runtime_config",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/versioned_rewrite_pack.rs",
+      "name": "versioned_rewrite_pack",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "wasm_runtime_lane": {
+      "classification": "island",
+      "dependencies": [
+        "engine_object_id",
+        "js_runtime_lane"
+      ],
+      "file_path": "crates/franken-engine/src/wasm_runtime_lane.rs",
+      "name": "wasm_runtime_lane",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "wave_handoff_contract": {
+      "classification": "island",
+      "dependencies": [],
+      "file_path": "crates/franken-engine/src/wave_handoff_contract.rs",
+      "name": "wave_handoff_contract",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "workload_corpus_gate": {
+      "classification": "island",
+      "dependencies": [
+        "deterministic_serde",
+        "hash_tiers"
+      ],
+      "file_path": "crates/franken-engine/src/workload_corpus_gate.rs",
+      "name": "workload_corpus_gate",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "workload_embedding": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/workload_embedding.rs",
+      "name": "workload_embedding",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "workload_manifold_transfer": {
+      "classification": "island",
+      "dependencies": [
+        "deterministic_serde",
+        "hash_tiers"
+      ],
+      "file_path": "crates/franken-engine/src/workload_manifold_transfer.rs",
+      "name": "workload_manifold_transfer",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "workload_policy_manifold": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "regime_detector",
+        "regime_signature_feature",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/workload_policy_manifold.rs",
+      "name": "workload_policy_manifold",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "workload_transfer_prior": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/workload_transfer_prior.rs",
+      "name": "workload_transfer_prior",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "zero_placeholder_gate": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "security_epoch"
+      ],
+      "file_path": "crates/franken-engine/src/zero_placeholder_gate.rs",
+      "name": "zero_placeholder_gate",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    },
+    "zero_placeholder_scan": {
+      "classification": "island",
+      "dependencies": [
+        "hash_tiers",
+        "lowering_gap_inventory",
+        "parser_gap_inventory"
+      ],
+      "file_path": "crates/franken-engine/src/zero_placeholder_scan.rs",
+      "name": "zero_placeholder_scan",
+      "reachable_from_all": [],
+      "reachable_from_core": []
+    }
+  },
+  "summary": {
+    "core_reachable": 37,
+    "gate_reachable": 1,
+    "governance_reachable": 0,
+    "island": 423,
+    "total_modules": 461
+  }
+}

@@ -699,19 +699,26 @@ impl ExtensionBudgetState {
 
     /// Install a certificate digest and derive budgets.
     pub fn install_certificate(&mut self, digest: CertificateDigest) {
-        self.budgets.clear();
+        let mut next_budgets = BTreeMap::new();
         for bound in &digest.bounds {
+            let preserved_usage_millionths = self
+                .budgets
+                .get(&bound.dimension)
+                .map_or(0, |budget| budget.current_usage_millionths);
             let budget = DimensionBudget {
                 dimension: bound.dimension,
                 upper_bound_millionths: bound.upper_bound_millionths,
                 is_tight: bound.is_tight,
                 confidence_millionths: bound.confidence_millionths,
-                current_usage_millionths: 0,
+                // Reinstalling a certificate must not mint fresh budget for
+                // dimensions that remain in force for the same extension.
+                current_usage_millionths: preserved_usage_millionths,
                 source_certificate_id: digest.certificate_id.clone(),
                 extension_id: self.extension_id.clone(),
             };
-            self.budgets.insert(bound.dimension, budget);
+            next_budgets.insert(bound.dimension, budget);
         }
+        self.budgets = next_budgets;
         self.active_certificate = Some(digest);
     }
 
@@ -774,7 +781,7 @@ impl BudgetEnforcer {
         digest: CertificateDigest,
     ) -> Result<(), BudgetViolationReason> {
         // Validate epoch.
-        if digest.epoch.as_u64() > self.current_epoch.as_u64() {
+        if digest.epoch != self.current_epoch {
             return Err(BudgetViolationReason::EpochMismatch {
                 certificate_epoch: digest.epoch.as_u64(),
                 current_epoch: self.current_epoch.as_u64(),
@@ -1389,6 +1396,18 @@ mod tests {
         let mut enforcer = make_enforcer();
         let mut digest = make_digest("cert-1", CertificateVerdict::Certified);
         digest.epoch = SecurityEpoch::from_raw(100);
+        let result = enforcer.install_certificate("ext-1", digest);
+        assert!(matches!(
+            result,
+            Err(BudgetViolationReason::EpochMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn test_install_past_epoch_rejected() {
+        let mut enforcer = make_enforcer();
+        let mut digest = make_digest("cert-1", CertificateVerdict::Certified);
+        digest.epoch = SecurityEpoch::from_raw(5);
         let result = enforcer.install_certificate("ext-1", digest);
         assert!(matches!(
             result,
@@ -2331,5 +2350,36 @@ mod tests {
         state.install_certificate(digest);
         let snaps = state.budget_snapshots();
         assert_eq!(snaps.len(), 3);
+    }
+
+    #[test]
+    fn test_extension_state_install_preserves_usage_for_shared_dimensions() {
+        let mut state = ExtensionBudgetState::new("ext-1".to_string());
+        state.install_certificate(make_digest("cert-1", CertificateVerdict::Certified));
+        state.record_usage(EnforcedDimension::Time, 3_000_000);
+
+        let replacement = CertificateDigest {
+            certificate_id: "cert-2".to_string(),
+            region_id: "region-2".to_string(),
+            epoch: test_epoch(),
+            verdict: CertificateVerdict::Certified,
+            bounds: vec![ExtractedBound {
+                dimension: EnforcedDimension::Time,
+                upper_bound_millionths: 20_000_000,
+                is_tight: true,
+                confidence_millionths: 960_000,
+            }],
+            abstention_count: 0,
+            min_confidence_millionths: 960_000,
+        };
+        state.install_certificate(replacement);
+
+        let time_budget = state
+            .budgets
+            .get(&EnforcedDimension::Time)
+            .expect("shared dimension should remain installed");
+        assert_eq!(time_budget.current_usage_millionths, 3_000_000);
+        assert_eq!(time_budget.upper_bound_millionths, 20_000_000);
+        assert_eq!(time_budget.source_certificate_id, "cert-2");
     }
 }

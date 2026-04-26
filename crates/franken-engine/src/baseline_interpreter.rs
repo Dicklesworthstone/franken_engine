@@ -17583,6 +17583,52 @@ mod active_builtin_regressions {
             assert_eq!(properties.get("5"), Some(&Value::Undefined));
         }
     }
+
+    #[test]
+    fn string_prototype_normalize_builtin_dispatch_regression() {
+        for builtin_id in [222_u32, 273_u32] {
+            let mut core = test_core();
+
+            assert_eq!(
+                core.builtin_name_from_id(builtin_id),
+                Some("builtin:StringPrototypeNormalize".to_string())
+            );
+
+            core.registers[0] = Value::Str("Cafe\u{301}".to_string());
+            let default_result = core
+                .call_builtin_by_id(builtin_id, RegRange { start: 0, count: 1 })
+                .expect("StringPrototypeNormalize default NFC should execute");
+            assert_eq!(default_result, Value::Str("Café".to_string()));
+
+            core.registers[0] = Value::Str("Café".to_string());
+            core.registers[1] = Value::Str("NFD".to_string());
+            let nfd_result = core
+                .call_builtin_by_id(builtin_id, RegRange { start: 0, count: 2 })
+                .expect("StringPrototypeNormalize NFD should execute");
+            assert_eq!(nfd_result, Value::Str("Cafe\u{301}".to_string()));
+
+            core.registers[0] = Value::Str("\u{fb01}".to_string());
+            core.registers[1] = Value::Str("NFKC".to_string());
+            let nfkc_result = core
+                .call_builtin_by_id(builtin_id, RegRange { start: 0, count: 2 })
+                .expect("StringPrototypeNormalize NFKC should execute");
+            assert_eq!(nfkc_result, Value::Str("fi".to_string()));
+        }
+    }
+
+    #[test]
+    fn string_prototype_normalize_invalid_form_fails_closed() {
+        for builtin_id in [222_u32, 273_u32] {
+            let mut core = test_core();
+            core.registers[0] = Value::Str("hello".to_string());
+            core.registers[1] = Value::Str("BAD".to_string());
+
+            let err = core
+                .call_builtin_by_id(builtin_id, RegRange { start: 0, count: 2 })
+                .expect_err("StringPrototypeNormalize should reject unknown forms");
+            assert!(matches!(err, InterpreterError::RangeError { .. }));
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -26567,53 +26613,6 @@ mod tests {
                 .call_builtin_by_id(builtin_id, RegRange { start: 0, count: 1 })
                 .expect("StringPrototypeTrimStart ID should execute");
             assert_eq!(result, Value::Str("frankenengine  ".to_string()));
-        }
-    }
-
-    #[test]
-    fn string_prototype_normalize_deduplication_regression() {
-        let mut interpreter = InterpreterCore::new(test_quickjs_config(), "test-trace");
-
-        for builtin_id in [222_u32, 273_u32] {
-            assert_eq!(
-                interpreter.builtin_name_from_id(builtin_id),
-                Some("builtin:StringPrototypeNormalize".to_string())
-            );
-
-            interpreter.registers[0] = Value::Str("Cafe\u{301}".to_string());
-            let default_result = interpreter
-                .call_builtin_by_id(builtin_id, RegRange { start: 0, count: 1 })
-                .expect("StringPrototypeNormalize default NFC should execute");
-            assert_eq!(default_result, Value::Str("Café".to_string()));
-
-            interpreter.registers[0] = Value::Str("Café".to_string());
-            interpreter.registers[1] = Value::Str("NFD".to_string());
-            let nfd_result = interpreter
-                .call_builtin_by_id(builtin_id, RegRange { start: 0, count: 2 })
-                .expect("StringPrototypeNormalize NFD should execute");
-            assert_eq!(nfd_result, Value::Str("Cafe\u{301}".to_string()));
-
-            interpreter.registers[0] = Value::Str("\u{fb01}".to_string());
-            interpreter.registers[1] = Value::Str("NFKC".to_string());
-            let nfkc_result = interpreter
-                .call_builtin_by_id(builtin_id, RegRange { start: 0, count: 2 })
-                .expect("StringPrototypeNormalize NFKC should execute");
-            assert_eq!(nfkc_result, Value::Str("fi".to_string()));
-        }
-    }
-
-    #[test]
-    fn string_prototype_normalize_invalid_form_fails_closed() {
-        let mut interpreter = InterpreterCore::new(test_quickjs_config(), "test-trace");
-
-        for builtin_id in [222_u32, 273_u32] {
-            interpreter.registers[0] = Value::Str("hello".to_string());
-            interpreter.registers[1] = Value::Str("BAD".to_string());
-
-            let err = interpreter
-                .call_builtin_by_id(builtin_id, RegRange { start: 0, count: 2 })
-                .expect_err("StringPrototypeNormalize should reject unknown forms");
-            assert!(matches!(err, InterpreterError::RangeError { .. }));
         }
     }
 

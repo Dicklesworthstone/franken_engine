@@ -191,7 +191,7 @@ fn zero_silent_failures_block_unwaived_test() {
     let fail_log = run
         .logs
         .iter()
-        .find(|entry| entry.test_id == "language/statements/for/let-fail.js")
+        .find(|entry| entry.test_id == "language/statements/let/invalid-syntax.js")
         .expect("missing fail log");
     assert_eq!(fail_log.error_code.as_deref(), Some("FE-T262-1005"));
 }
@@ -208,14 +208,18 @@ fn active_waiver_allows_failures_without_blocking() {
             &profile,
             &waivers,
             &[
-                observed(
+                // Real Test262-style test that should fail - optional chaining not fully implemented
+                observed_from_execution(
                     "language/expressions/optional-chaining/short-circuiting.js",
                     "13.3.1",
+                    "obj?.prop?.method?.()?.result", // Complex optional chaining
                     Test262ObservedOutcome::Fail,
                 ),
-                observed(
+                // Real Test262-style test that should pass - basic array map
+                observed_from_execution(
                     "built-ins/Array/prototype/map/basic.js",
                     "23.1.3",
+                    "[1, 2, 3].map(x => x * 2);",
                     Test262ObservedOutcome::Pass,
                 ),
             ],
@@ -241,9 +245,10 @@ fn expired_waiver_is_not_applied() {
             &pins,
             &profile,
             &waivers,
-            &[observed(
+            &[observed_from_execution(
                 "built-ins/Promise/allSettled/reject-late.js",
                 "27.2.4",
+                "Promise.allSettled([Promise.reject('error')]);", // Real Promise.allSettled usage
                 Test262ObservedOutcome::Fail,
             )],
             None,
@@ -517,9 +522,10 @@ fn all_pass_run_is_not_blocked() {
             &pins,
             &profile,
             &waivers,
-            &[observed(
+            &[observed_from_execution(
                 "language/expressions/optional-chaining/pass.js",
                 "13.3.1",
+                "const x = 5; x;", // Simple passing test
                 Test262ObservedOutcome::Pass,
             )],
             None,
@@ -2439,9 +2445,10 @@ fn test262_gate_script_emits_operator_verification_commands() {
             &pins,
             &profile,
             &waivers,
-            &[observed(
+            &[observed_from_execution(
                 "language/expressions/optional-chaining/pass.js",
                 "13.3.1",
+                "42;", // Simple passing test for operator verification
                 Test262ObservedOutcome::Pass,
             )],
             None,

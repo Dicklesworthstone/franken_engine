@@ -9,7 +9,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # Configuration
-HIGH_WATER_MARK_FILE="${TEST262_GATE_HIGH_WATER_MARK_FILE:-$PROJECT_ROOT/test262_high_water_mark.toml}"
+HIGH_WATER_MARK_FILE="${TEST262_GATE_HIGH_WATER_MARK_FILE:-$PROJECT_ROOT/crates/franken-engine/tests/fixtures/test262_high_water_mark.toml}"
 GATE_MODE="${1:-validate}"  # validate|update|report
 ARTIFACTS_DIR="${TEST262_GATE_ARTIFACTS_DIR:-$PROJECT_ROOT/artifacts/test262/gate_$(date +%Y%m%d_%H%M%S)}"
 PINS_FILE="${TEST262_GATE_PINS_FILE:-$PROJECT_ROOT/crates/franken-engine/tests/test262_conformance_pins.toml}"

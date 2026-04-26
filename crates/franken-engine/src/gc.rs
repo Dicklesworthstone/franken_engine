@@ -62,6 +62,7 @@ pub enum GcPhase {
     Mark,
     Sweep,
     Complete,
+    Throttle,
 }
 
 impl fmt::Display for GcPhase {
@@ -70,6 +71,7 @@ impl fmt::Display for GcPhase {
             Self::Mark => "mark",
             Self::Sweep => "sweep",
             Self::Complete => "complete",
+            Self::Throttle => "throttle",
         };
         f.write_str(name)
     }
@@ -486,7 +488,13 @@ impl GcCollector {
 
         // Check budget enforcement before allocation
         if let Some(ref mut enforcer) = self.budget_enforcer {
-            let usage_deltas = [(EnforcedDimension::HeapMemory, size_bytes as i64)];
+            // Safely convert size_bytes to i64, capping at i64::MAX to prevent overflow
+            let size_i64 = if size_bytes > i64::MAX as u64 {
+                i64::MAX
+            } else {
+                size_bytes as i64
+            };
+            let usage_deltas = [(EnforcedDimension::HeapMemory, size_i64)];
             let receipt = enforcer.enforce(
                 extension_id,
                 EnforcementScope::GcPacing {
@@ -505,8 +513,26 @@ impl GcCollector {
                         reason: Some(format!("Budget exceeded: {}", reason)),
                     });
                 }
-                _ => {
-                    // Allow or throttle - continue with allocation
+                crate::resource_certificate_consumer::EnforcementDecision::Throttle {
+                    usage_ratio_millionths,
+                    ref dimension,
+                } => {
+                    // Emit throttle event for observability
+                    self.event_sequence = self.event_sequence.saturating_add(1);
+                    let throttle_event = GcEvent {
+                        sequence: self.event_sequence,
+                        extension_id: extension_id.to_string(),
+                        phase: GcPhase::Throttle,
+                        marked_count: 0,
+                        swept_count: 0,
+                        bytes_reclaimed: 0,
+                        pause_ns: if self.config.deterministic { 1000 } else { 0 },
+                    };
+                    self.events.push(throttle_event);
+                    // Continue with allocation despite throttling for back-pressure visibility
+                }
+                crate::resource_certificate_consumer::EnforcementDecision::Allow => {
+                    // Continue with normal allocation
                 }
             }
         }
@@ -601,8 +627,26 @@ impl GcCollector {
                         reason: Some(format!("GC budget exceeded: {}", reason)),
                     });
                 }
-                _ => {
-                    // Allow or throttle - continue with collection
+                crate::resource_certificate_consumer::EnforcementDecision::Throttle {
+                    usage_ratio_millionths,
+                    ref dimension,
+                } => {
+                    // Emit throttle event for observability
+                    self.event_sequence = self.event_sequence.saturating_add(1);
+                    let throttle_event = GcEvent {
+                        sequence: self.event_sequence,
+                        extension_id: extension_id.to_string(),
+                        phase: GcPhase::Throttle,
+                        marked_count: 0,
+                        swept_count: 0,
+                        bytes_reclaimed: 0,
+                        pause_ns: if self.config.deterministic { 1000 } else { 0 },
+                    };
+                    self.events.push(throttle_event);
+                    // Continue with collection despite throttling for back-pressure visibility
+                }
+                crate::resource_certificate_consumer::EnforcementDecision::Allow => {
+                    // Continue with normal collection
                 }
             }
         }
@@ -615,6 +659,28 @@ impl GcCollector {
             })?;
 
         let stats = heap.collect_mark_sweep();
+
+        // Release reclaimed bytes from the BudgetEnforcer so HeapMemory tracks
+        // the live heap level rather than cumulative allocation history.
+        // Without this, allocate→collect→allocate cycles inflate
+        // `current_usage_millionths` monotonically and eventually reject all
+        // allocations even when the live heap is empty.
+        if stats.bytes_reclaimed > 0
+            && let Some(ref mut enforcer) = self.budget_enforcer
+        {
+            let release_i64 = if stats.bytes_reclaimed > i64::MAX as u64 {
+                i64::MIN
+            } else {
+                -(stats.bytes_reclaimed as i64)
+            };
+            let _ = enforcer.enforce(
+                extension_id,
+                EnforcementScope::GcPacing {
+                    extension_id: extension_id.to_string(),
+                },
+                &[(EnforcedDimension::HeapMemory, release_i64)],
+            );
+        }
 
         self.event_sequence = self.event_sequence.saturating_add(1);
         let event = GcEvent {
@@ -1302,6 +1368,49 @@ mod tests {
                 .expect("heap-memory budget should exist")
                 .current_usage_millionths,
             0
+        );
+    }
+
+    #[test]
+    fn collect_releases_reclaimed_bytes_back_to_budget_enforcer() {
+        // Regression for the cumulative-HeapMemory monotonic-growth bug
+        // (bd-1f4rc): a single allocate→unroot→collect→re-allocate cycle
+        // must not push the enforcer's HeapMemory usage past the freshest
+        // allocation, otherwise long-running extensions starve themselves.
+        let mut gc = deterministic_collector();
+        gc.register_heap("ext-a".into())
+            .expect("heap registration should succeed");
+        gc.set_budget_enforcer(heap_budget_enforcer("ext-a", 200));
+
+        let id = gc
+            .allocate("ext-a", 100)
+            .expect("first allocation within budget should succeed");
+        gc.unroot("ext-a", id).expect("unroot should succeed");
+        let event = gc
+            .collect("ext-a")
+            .expect("collection within GcPressure budget should succeed");
+        assert_eq!(event.bytes_reclaimed, 100);
+
+        // Second 100-byte allocation must also succeed because the first 100
+        // bytes were released on collect. Without the release, the enforcer's
+        // HeapMemory tracker would project 200 (additive history) and reject.
+        let _ = gc
+            .allocate("ext-a", 100)
+            .expect("re-allocation after collect must succeed");
+
+        let state = gc
+            .budget_enforcer
+            .as_ref()
+            .and_then(|enforcer| enforcer.extension_state("ext-a"))
+            .expect("ext-a should have budget state after enforcement events");
+        let heap_usage = state
+            .budgets
+            .get(&EnforcedDimension::HeapMemory)
+            .expect("heap-memory budget should exist")
+            .current_usage_millionths;
+        assert_eq!(
+            heap_usage, 100,
+            "HeapMemory must reflect the live heap (100 bytes), not the cumulative allocation history (200 bytes)"
         );
     }
 

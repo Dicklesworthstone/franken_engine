@@ -16,7 +16,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 mod _support;
-use _support::test262_common::{ExpectedResult, RequirementLevel};
+use _support::test262_common::{
+    ExpectedResult, RequirementLevel, Test262Result, evaluate_test262_result,
+};
 
 // ---------------------------------------------------------------------------
 // Optional Chaining Test262 Conformance Suite
@@ -398,50 +400,27 @@ impl OptionalChainingHarness {
     }
 
     /// Execute a single optional chaining test.
+    ///
+    /// FIXED: Now properly compares expected output instead of ignoring it.
+    /// Uses shared evaluate_test262_result utility to ensure consistent
+    /// conformance validation across all harnesses.
     fn execute_test(
         &self,
         test: &OptionalChainingTest,
         _security_epoch: SecurityEpoch,
     ) -> OptionalChainingResult {
         let mut engine = HybridRouter::default();
+        let eval_result = engine.eval(&test.source);
 
-        match engine.eval(&test.source) {
-            Ok(_) => match &test.expected_result {
-                ExpectedResult::Success { output: _ } => OptionalChainingResult::Pass,
-                ExpectedResult::ParseSuccess => OptionalChainingResult::Pass,
-                ExpectedResult::SyntaxError { error_type: _ } => OptionalChainingResult::Fail {
-                    reason: "Expected syntax error but execution succeeded".to_string(),
-                },
-                ExpectedResult::RuntimeError { error_type: _ } => OptionalChainingResult::Fail {
-                    reason: "Expected runtime error but execution succeeded".to_string(),
-                },
-                ExpectedResult::IteratorSequence { values: _ } => OptionalChainingResult::Fail {
-                    reason: "Expected iterator sequence but got success".to_string(),
-                },
-            },
-            Err(error) => match &test.expected_result {
-                ExpectedResult::SyntaxError { error_type } => {
-                    if error.to_string().contains(error_type) {
-                        OptionalChainingResult::Pass
-                    } else {
-                        OptionalChainingResult::Fail {
-                            reason: format!("Expected {} but got {}", error_type, error),
-                        }
-                    }
-                }
-                ExpectedResult::RuntimeError { error_type } => {
-                    if error.to_string().contains(error_type) {
-                        OptionalChainingResult::Pass
-                    } else {
-                        OptionalChainingResult::Fail {
-                            reason: format!("Expected {} but got {}", error_type, error),
-                        }
-                    }
-                }
-                _ => OptionalChainingResult::Error {
-                    error: error.to_string(),
-                },
-            },
+        // Use shared utility for proper output comparison
+        let test262_result = evaluate_test262_result(eval_result, &test.expected_result, &test.id);
+
+        // Convert Test262Result to OptionalChainingResult
+        match test262_result {
+            Test262Result::Pass => OptionalChainingResult::Pass,
+            Test262Result::Fail { reason } => OptionalChainingResult::Fail { reason },
+            Test262Result::Error { error } => OptionalChainingResult::Error { error },
+            Test262Result::Skip { reason } => OptionalChainingResult::Skip { reason },
         }
     }
 

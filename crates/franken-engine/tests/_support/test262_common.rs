@@ -11,6 +11,7 @@
 //! iterator_protocol test262 conformance harnesses.
 
 use frankenengine_engine::security_epoch::SecurityEpoch;
+use frankenengine_engine::{EvalOutcome, EvalResult};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -46,6 +47,109 @@ pub enum ExpectedResult {
     ParseSuccess,
     /// Code should produce specific iterator sequence
     IteratorSequence { values: Vec<String> },
+}
+
+/// Evaluate a Test262 test case execution result against expected outcome.
+///
+/// This function fixes the systematic issue where conformance harnesses ignored
+/// expected output and only checked for !crash. Now properly compares actual
+/// execution output with expected results.
+///
+/// # Arguments
+/// * `eval_result` - Result from HybridRouter::eval()
+/// * `expected` - Expected test outcome
+/// * `test_id` - Test identifier for error reporting
+///
+/// # Returns
+/// Test262Result with proper pass/fail classification based on output comparison
+pub fn evaluate_test262_result(
+    eval_result: EvalResult<EvalOutcome>,
+    expected: &ExpectedResult,
+    test_id: &str,
+) -> Test262Result {
+    match eval_result {
+        Ok(outcome) => match expected {
+            ExpectedResult::Success { output } => {
+                // FIX: Actually compare output instead of ignoring it
+                if outcome.value.trim() == output.trim() {
+                    Test262Result::Pass
+                } else {
+                    Test262Result::Fail {
+                        reason: format!(
+                            "Output mismatch in {}: expected '{}', got '{}'",
+                            test_id, output, outcome.value
+                        ),
+                    }
+                }
+            }
+            ExpectedResult::ParseSuccess => {
+                // Code parsed and executed successfully - this is correct
+                Test262Result::Pass
+            }
+            ExpectedResult::SyntaxError { error_type } => Test262Result::Fail {
+                reason: format!(
+                    "Expected syntax error '{}' but execution succeeded in {}",
+                    error_type, test_id
+                ),
+            },
+            ExpectedResult::RuntimeError { error_type } => Test262Result::Fail {
+                reason: format!(
+                    "Expected runtime error '{}' but execution succeeded in {}",
+                    error_type, test_id
+                ),
+            },
+            ExpectedResult::IteratorSequence { values } => Test262Result::Fail {
+                reason: format!(
+                    "Expected iterator sequence {:?} but got success in {}",
+                    values, test_id
+                ),
+            },
+        },
+        Err(error) => match expected {
+            ExpectedResult::SyntaxError { error_type } => {
+                if error.to_string().contains(error_type) {
+                    Test262Result::Pass
+                } else {
+                    Test262Result::Fail {
+                        reason: format!(
+                            "Expected syntax error '{}' but got '{}' in {}",
+                            error_type, error, test_id
+                        ),
+                    }
+                }
+            }
+            ExpectedResult::RuntimeError { error_type } => {
+                if error.to_string().contains(error_type) {
+                    Test262Result::Pass
+                } else {
+                    Test262Result::Fail {
+                        reason: format!(
+                            "Expected runtime error '{}' but got '{}' in {}",
+                            error_type, error, test_id
+                        ),
+                    }
+                }
+            }
+            ExpectedResult::Success { output } => Test262Result::Fail {
+                reason: format!(
+                    "Expected success with output '{}' but got error '{}' in {}",
+                    output, error, test_id
+                ),
+            },
+            ExpectedResult::ParseSuccess => Test262Result::Fail {
+                reason: format!(
+                    "Expected parse success but got error '{}' in {}",
+                    error, test_id
+                ),
+            },
+            ExpectedResult::IteratorSequence { values } => Test262Result::Fail {
+                reason: format!(
+                    "Expected iterator sequence {:?} but got error '{}' in {}",
+                    values, error, test_id
+                ),
+            },
+        },
+    }
 }
 
 /// Generic test result classification for Test262 conformance.

@@ -15,7 +15,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 mod _support;
-use _support::test262_common::{ExpectedResult, RequirementLevel};
+use _support::test262_common::{
+    ExpectedResult, RequirementLevel, Test262Result, evaluate_test262_result,
+};
 
 // ---------------------------------------------------------------------------
 // Test262 Arrow Function Conformance Suite
@@ -369,50 +371,27 @@ impl ArrowFunctionHarness {
     }
 
     /// Execute a single arrow function test.
+    ///
+    /// FIXED: Now properly compares expected output instead of ignoring it.
+    /// Uses shared evaluate_test262_result utility to ensure consistent
+    /// conformance validation across all harnesses.
     fn execute_test(
         &self,
         test: &ArrowFunctionTest,
         _security_epoch: SecurityEpoch,
     ) -> ArrowFunctionResult {
         let mut engine = HybridRouter::default();
+        let eval_result = engine.eval(&test.source);
 
-        match engine.eval(&test.source) {
-            Ok(_) => match &test.expected_result {
-                ExpectedResult::Success { output: _ } => ArrowFunctionResult::Pass,
-                ExpectedResult::ParseSuccess => ArrowFunctionResult::Pass,
-                ExpectedResult::SyntaxError { error_type: _ } => ArrowFunctionResult::Fail {
-                    reason: "Expected syntax error but execution succeeded".to_string(),
-                },
-                ExpectedResult::RuntimeError { error_type: _ } => ArrowFunctionResult::Fail {
-                    reason: "Expected runtime error but execution succeeded".to_string(),
-                },
-                ExpectedResult::IteratorSequence { values: _ } => ArrowFunctionResult::Fail {
-                    reason: "Expected iterator sequence but got success".to_string(),
-                },
-            },
-            Err(error) => match &test.expected_result {
-                ExpectedResult::SyntaxError { error_type } => {
-                    if error.to_string().contains(error_type) {
-                        ArrowFunctionResult::Pass
-                    } else {
-                        ArrowFunctionResult::Fail {
-                            reason: format!("Expected {} but got {}", error_type, error),
-                        }
-                    }
-                }
-                ExpectedResult::RuntimeError { error_type } => {
-                    if error.to_string().contains(error_type) {
-                        ArrowFunctionResult::Pass
-                    } else {
-                        ArrowFunctionResult::Fail {
-                            reason: format!("Expected {} but got {}", error_type, error),
-                        }
-                    }
-                }
-                _ => ArrowFunctionResult::Error {
-                    error: error.to_string(),
-                },
-            },
+        // Use shared utility for proper output comparison
+        let test262_result = evaluate_test262_result(eval_result, &test.expected_result, &test.id);
+
+        // Convert Test262Result to ArrowFunctionResult
+        match test262_result {
+            Test262Result::Pass => ArrowFunctionResult::Pass,
+            Test262Result::Fail { reason } => ArrowFunctionResult::Fail { reason },
+            Test262Result::Error { error } => ArrowFunctionResult::Error { error },
+            Test262Result::Skip { reason } => ArrowFunctionResult::Skip { reason },
         }
     }
 

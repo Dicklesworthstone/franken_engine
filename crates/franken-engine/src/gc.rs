@@ -607,7 +607,10 @@ impl GcCollector {
             });
         }
 
-        // Check budget enforcement for GC pressure before collection
+        // Check budget enforcement for GC pressure before collection.
+        // GcPressure is a cycle-count dimension (see EnforcedDimension docs):
+        // each collect() cycle charges +1 against the bound, so a bound of N
+        // caps the workload to N collections.
         if let Some(ref mut enforcer) = self.budget_enforcer {
             let usage_deltas = [(EnforcedDimension::GcPressure, 1)]; // One GC cycle
             let receipt = enforcer.enforce(

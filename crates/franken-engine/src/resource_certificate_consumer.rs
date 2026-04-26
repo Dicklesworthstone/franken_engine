@@ -62,13 +62,19 @@ pub const MILLIONTHS: u64 = 1_000_000;
 pub enum EnforcedDimension {
     /// Wall-clock time budget (nanoseconds).
     Time,
-    /// Heap memory allocation budget (bytes).
+    /// Heap memory allocation budget (bytes). Charged additively on allocate
+    /// and released on collect, so the budget tracks the live heap level
+    /// rather than cumulative allocation history.
     HeapMemory,
     /// Stack depth budget (frames).
     StackDepth,
     /// Hostcall invocation count.
     HostcallCount,
-    /// GC pressure budget (allocation rate bytes/s).
+    /// GC cycle count budget. Charged `+1` on every collection cycle, so
+    /// the bound caps the number of collections per workload lifetime
+    /// rather than an allocation rate. (No rate normalization is performed
+    /// today; do not encode allocation-rate semantics in the bound — see
+    /// bd-3qrn3 for the rate-normalized variant if that semantic is needed.)
     GcPressure,
     /// Module load count.
     ModuleLoadCount,
@@ -1466,6 +1472,61 @@ mod tests {
             other => panic!("expected InvalidBound for negative bound, got {other:?}"),
         }
         assert!(enforcer.extension_state("ext-neg").is_none());
+    }
+
+    #[test]
+    fn test_gc_pressure_charged_per_cycle_not_per_byte() {
+        // bd-3qrn3: GcPressure is a cycle-count dimension. The bound caps
+        // the number of collections per workload; each enforce() call with
+        // a (GcPressure, 1) delta represents one cycle. This pins the
+        // documented semantics so any future shift to a rate-normalized
+        // bound is an explicit, intentional change.
+        let mut enforcer = make_enforcer();
+        let mut digest = make_digest("cert-gc", CertificateVerdict::Certified);
+        // Install a 3-cycle budget: bound is in raw units (cycles), not
+        // millionths of a rate, so 3 means 3 cycles, full stop.
+        for bound in &mut digest.bounds {
+            if bound.dimension == EnforcedDimension::HeapMemory {
+                bound.upper_bound_millionths = 1_000_000_000;
+            }
+        }
+        digest.bounds.push(ExtractedBound {
+            dimension: EnforcedDimension::GcPressure,
+            upper_bound_millionths: 3,
+            is_tight: true,
+            confidence_millionths: 1_000_000,
+        });
+        enforcer
+            .install_certificate("ext-gc", digest)
+            .expect("install with positive bounds should succeed");
+
+        let scope = EnforcementScope::GcPacing {
+            extension_id: "ext-gc".to_string(),
+        };
+        // Three cycles must be admitted.
+        for _ in 0..3 {
+            let receipt = enforcer.enforce(
+                "ext-gc",
+                scope.clone(),
+                &[(EnforcedDimension::GcPressure, 1)],
+            );
+            assert!(
+                matches!(
+                    receipt.decision,
+                    EnforcementDecision::Allow | EnforcementDecision::Throttle { .. }
+                ),
+                "cycle within budget must be admitted: {:?}",
+                receipt.decision
+            );
+        }
+        // The fourth cycle must be rejected (cumulative usage 4 > bound 3).
+        let fourth = enforcer.enforce("ext-gc", scope, &[(EnforcedDimension::GcPressure, 1)]);
+        match fourth.decision {
+            EnforcementDecision::Reject {
+                reason: BudgetViolationReason::BudgetExceeded { dimension, .. },
+            } => assert_eq!(dimension, EnforcedDimension::GcPressure),
+            other => panic!("expected GcPressure BudgetExceeded on 4th cycle, got {other:?}"),
+        }
     }
 
     // --- Enforcement tests ---

@@ -454,6 +454,7 @@ pub mod tail_latency_feedback_control;
 pub mod technical_report;
 pub mod tee_attestation_policy;
 pub mod test262_conformance_runner;
+pub mod test262_harness;
 pub mod test262_release_gate;
 pub mod test_depth_gate;
 pub mod test_flake_quarantine_workflow;

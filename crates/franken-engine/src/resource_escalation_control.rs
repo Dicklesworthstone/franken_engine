@@ -228,8 +228,18 @@ impl EscalationLog {
 
         for event in events {
             hasher.update(event.timestamp_ns.to_le_bytes());
-            hasher.update(event.action.to_string().as_bytes());
+
+            // Include full action payload, not just the variant name
+            let action_json = serde_json::to_string(&event.action)
+                .expect("EscalationAction should always serialize");
+            hasher.update(action_json.as_bytes());
+
             hasher.update(event.source_module.as_bytes());
+
+            // Include basis JSON for complete event context
+            let basis_json = serde_json::to_string(&event.basis)
+                .expect("serde_json::Value should always serialize");
+            hasher.update(basis_json.as_bytes());
         }
 
         let hash_bytes = hasher.finalize();
@@ -510,5 +520,67 @@ mod tests {
         log2.add_event(event);
 
         assert_eq!(log1.content_hash, log2.content_hash);
+    }
+
+    #[test]
+    fn test_content_hash_distinguishes_different_payloads() {
+        // Test that events with different payloads produce different content hashes
+        let mut log1 = EscalationLog::new("test".to_string(), vec![]);
+        let mut log2 = EscalationLog::new("test".to_string(), vec![]);
+        let mut log3 = EscalationLog::new("test".to_string(), vec![]);
+
+        let event1 = EscalationEvent {
+            timestamp_ns: 1000,
+            action: EscalationAction::Throttle {
+                decision: AdmissionDecision::Queue {
+                    estimated_wait_ns: 100,
+                    position: 1,
+                },
+                rationale: "Test 1".to_string(),
+            },
+            source_module: "test_module".to_string(),
+            basis: serde_json::json!({ "test": "value1" }),
+        };
+
+        let event2 = EscalationEvent {
+            timestamp_ns: 1000, // Same timestamp
+            action: EscalationAction::Throttle {
+                decision: AdmissionDecision::Queue {
+                    estimated_wait_ns: 200, // Different payload
+                    position: 2,            // Different payload
+                },
+                rationale: "Test 2".to_string(), // Different rationale
+            },
+            source_module: "test_module".to_string(), // Same module
+            basis: serde_json::json!({ "test": "value2" }), // Different basis
+        };
+
+        let event3 = EscalationEvent {
+            timestamp_ns: 1000, // Same timestamp
+            action: EscalationAction::Sandbox {
+                verdict: GovernanceVerdict::Approved, // Different action variant
+                rationale: "Test 3".to_string(),
+            },
+            source_module: "test_module".to_string(),
+            basis: serde_json::json!({ "test": "value1" }), // Same basis as event1
+        };
+
+        log1.add_event(event1);
+        log2.add_event(event2);
+        log3.add_event(event3);
+
+        // All three logs should have different content hashes despite similar timestamps/modules
+        assert_ne!(
+            log1.content_hash, log2.content_hash,
+            "Events with different payloads should have different content hashes"
+        );
+        assert_ne!(
+            log1.content_hash, log3.content_hash,
+            "Events with different action variants should have different content hashes"
+        );
+        assert_ne!(
+            log2.content_hash, log3.content_hash,
+            "All events with different details should have unique content hashes"
+        );
     }
 }

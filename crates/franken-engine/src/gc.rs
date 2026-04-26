@@ -805,6 +805,12 @@ mod tests {
             BudgetEnforcementPolicy::default(),
             SecurityEpoch::from_raw(1),
         );
+        // Default policy fail_closed_on_missing = true, so any dimension
+        // the GC enforces must appear in the certificate bounds. Both
+        // allocate() (HeapMemory) and collect() (GcPressure) checkpoints
+        // are exercised across the test suite, so install generous
+        // bounds for both dimensions and let individual tests vary the
+        // HeapMemory cap to exercise rejection paths.
         enforcer
             .install_certificate(
                 extension_id,
@@ -813,12 +819,20 @@ mod tests {
                     region_id: format!("region-{extension_id}"),
                     epoch: SecurityEpoch::from_raw(1),
                     verdict: CertificateVerdict::Certified,
-                    bounds: vec![ExtractedBound {
-                        dimension: EnforcedDimension::HeapMemory,
-                        upper_bound_millionths: heap_bound,
-                        is_tight: true,
-                        confidence_millionths: 1_000_000,
-                    }],
+                    bounds: vec![
+                        ExtractedBound {
+                            dimension: EnforcedDimension::HeapMemory,
+                            upper_bound_millionths: heap_bound,
+                            is_tight: true,
+                            confidence_millionths: 1_000_000,
+                        },
+                        ExtractedBound {
+                            dimension: EnforcedDimension::GcPressure,
+                            upper_bound_millionths: 1_000_000,
+                            is_tight: true,
+                            confidence_millionths: 1_000_000,
+                        },
+                    ],
                     abstention_count: 0,
                     min_confidence_millionths: 1_000_000,
                 },

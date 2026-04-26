@@ -1693,6 +1693,8 @@ fn evidence_ledger_cli_writes_real_artifacts_and_structured_logs() {
 // ---------------------------------------------------------------------------
 
 use regex::Regex;
+use std::path::Path;
+use std::fs;
 
 /// Assert evidence entry matches golden file with scrubbed dynamic values.
 fn assert_evidence_golden(test_name: &str, entry: &EvidenceEntry) {
@@ -1780,12 +1782,14 @@ fn golden_evidence_entry_security_action_sandbox() {
     .candidate(CandidateAction::new("challenge", 80_000))
     .candidate(CandidateAction::new("sandbox", 100_000))
     .constraint(Constraint {
-        constraint_name: "resource_budget".to_string(),
-        constraint_value: "cpu_time_ms < 1000".to_string(),
+        constraint_id: "resource_budget".to_string(),
+        description: "cpu_time_ms < 1000".to_string(),
+        active: true,
     })
     .constraint(Constraint {
-        constraint_name: "capability_required".to_string(),
-        constraint_value: "network.access".to_string(),
+        constraint_id: "capability_required".to_string(),
+        description: "network.access".to_string(),
+        active: true,
     })
     .chosen(ChosenAction {
         action_name: "sandbox".to_string(),
@@ -1793,15 +1797,15 @@ fn golden_evidence_entry_security_action_sandbox() {
         rationale: "resource limits exceeded, require isolation".to_string(),
     })
     .witness(Witness {
-        witness_name: "resource_monitor".to_string(),
-        witness_value: "cpu_usage_90_percent".to_string(),
+        witness_id: "resource_monitor".to_string(),
+        value: "cpu_usage_90_percent".to_string(),
     })
     .witness(Witness {
-        witness_name: "capability_check".to_string(),
-        witness_value: "network_access_requested".to_string(),
+        witness_id: "capability_check".to_string(),
+        value: "network_access_requested".to_string(),
     })
-    .metadata("extension_id", "ext-malicious-crypto")
-    .metadata("enforcement_mode", "strict")
+    .meta("extension_id", "ext-malicious-crypto")
+    .meta("enforcement_mode", "strict")
     .build()
     .expect("Evidence entry should build successfully");
 
@@ -1820,8 +1824,9 @@ fn golden_evidence_entry_capability_decision_deny() {
     .candidate(CandidateAction::new("grant", 200_000))
     .candidate(CandidateAction::new("deny", 10_000))
     .constraint(Constraint {
-        constraint_name: "permission_level".to_string(),
-        constraint_value: "user_permission < required_level".to_string(),
+        constraint_id: "permission_level".to_string(),
+        description: "user_permission < required_level".to_string(),
+        active: true,
     })
     .chosen(ChosenAction {
         action_name: "deny".to_string(),
@@ -1829,11 +1834,11 @@ fn golden_evidence_entry_capability_decision_deny() {
         rationale: "insufficient permissions for requested capability".to_string(),
     })
     .witness(Witness {
-        witness_name: "permission_checker".to_string(),
-        witness_value: "user_level_2_required_level_5".to_string(),
+        witness_id: "permission_checker".to_string(),
+        value: "user_level_2_required_level_5".to_string(),
     })
-    .metadata("requested_capability", "filesystem.write")
-    .metadata("user_context", "untrusted_extension")
+    .meta("requested_capability", "filesystem.write")
+    .meta("user_context", "untrusted_extension")
     .build()
     .expect("Evidence entry should build successfully");
 
@@ -1853,12 +1858,12 @@ fn golden_evidence_entry_policy_update() {
     .candidate(CandidateAction::new("update_policy", 150_000))
     .candidate(CandidateAction::new("rollback_policy", 300_000))
     .constraint(Constraint {
-        constraint_name: "update_window".to_string(),
-        constraint_value: "within_maintenance_hours".to_string(),
+        constraint_id: "update_window".to_string(),
+        description: "within_maintenance_hours".to_string(),
     })
     .constraint(Constraint {
-        constraint_name: "policy_validation".to_string(),
-        constraint_value: "schema_v3_compatible".to_string(),
+        constraint_id: "policy_validation".to_string(),
+        description: "schema_v3_compatible".to_string(),
     })
     .chosen(ChosenAction {
         action_name: "update_policy".to_string(),
@@ -1866,20 +1871,20 @@ fn golden_evidence_entry_policy_update() {
         rationale: "security vulnerabilities fixed in new policy version".to_string(),
     })
     .witness(Witness {
-        witness_name: "policy_validator".to_string(),
-        witness_value: "schema_validation_passed".to_string(),
+        witness_id: "policy_validator".to_string(),
+        value: "schema_validation_passed".to_string(),
     })
     .witness(Witness {
-        witness_name: "security_scanner".to_string(),
-        witness_value: "5_vulnerabilities_fixed".to_string(),
+        witness_id: "security_scanner".to_string(),
+        value: "5_vulnerabilities_fixed".to_string(),
     })
     .witness(Witness {
-        witness_name: "rollback_plan".to_string(),
-        witness_value: "automatic_rollback_available".to_string(),
+        witness_id: "rollback_plan".to_string(),
+        value: "automatic_rollback_available".to_string(),
     })
-    .metadata("policy_source", "security_team")
-    .metadata("update_urgency", "high")
-    .metadata("affected_extensions", "network,filesystem,crypto")
+    .meta("policy_source", "security_team")
+    .meta("update_urgency", "high")
+    .meta("affected_extensions", "network,filesystem,crypto")
     .build()
     .expect("Evidence entry should build successfully");
 
@@ -1899,12 +1904,12 @@ fn golden_evidence_entry_extension_lifecycle_terminate() {
     .candidate(CandidateAction::new("restart", 600_000))
     .candidate(CandidateAction::new("terminate", 800_000))
     .constraint(Constraint {
-        constraint_name: "violation_count".to_string(),
-        constraint_value: "security_violations >= 3".to_string(),
+        constraint_id: "violation_count".to_string(),
+        description: "security_violations >= 3".to_string(),
     })
     .constraint(Constraint {
-        constraint_name: "recovery_attempts".to_string(),
-        constraint_value: "restart_attempts >= 2".to_string(),
+        constraint_id: "recovery_attempts".to_string(),
+        description: "restart_attempts >= 2".to_string(),
     })
     .chosen(ChosenAction {
         action_name: "terminate".to_string(),
@@ -1912,19 +1917,19 @@ fn golden_evidence_entry_extension_lifecycle_terminate() {
         rationale: "repeated security violations with failed recovery attempts".to_string(),
     })
     .witness(Witness {
-        witness_name: "violation_tracker".to_string(),
-        witness_value: "policy_violations_3_restart_failures_2".to_string(),
+        witness_id: "violation_tracker".to_string(),
+        value: "policy_violations_3_restart_failures_2".to_string(),
     })
     .witness(Witness {
-        witness_name: "extension_monitor".to_string(),
-        witness_value: "unresponsive_for_30s".to_string(),
+        witness_id: "extension_monitor".to_string(),
+        value: "unresponsive_for_30s".to_string(),
     })
-    .metadata("extension_id", "ext-untrusted-network")
-    .metadata(
+    .meta("extension_id", "ext-untrusted-network")
+    .meta(
         "violation_types",
         "unauthorized_network_access,capability_escalation",
     )
-    .metadata("termination_reason", "security_risk")
+    .meta("termination_reason", "security_risk")
     .build()
     .expect("Evidence entry should build successfully");
 

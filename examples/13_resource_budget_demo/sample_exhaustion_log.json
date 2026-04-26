@@ -1,12 +1,9 @@
 {
-  "scenario": "resource budget exhaustion conceptual contract",
-  "mode": "static_contract_demo",
   "workload_id": "demo:budget-exhaustion",
   "bounded_budget_dimensions": [
     "cpu_time",
     "heap_memory"
   ],
-  "api_gap_follow_up_bead": "bd-g61cl",
   "expected_sequence": [
     "throttle",
     "sandbox",
@@ -16,60 +13,125 @@
   "events": [
     {
       "timestamp_ns": 1000000000,
-      "action": "throttle",
+      "action": {
+        "throttle": {
+          "decision": {
+            "queue": {
+              "estimated_wait_ns": 150000000,
+              "position": 3
+            }
+          },
+          "rationale": "Queueing under sustained overload is the deterministic throttle boundary."
+        }
+      },
       "source_module": "queueing_admission_control",
       "basis": {
-        "stage": "module_load",
         "admission_decision": "queue",
         "queue_position": 3,
-        "utilization_millionths": 880000,
-        "mapping_rationale": "Queueing under sustained overload is the deterministic throttle boundary."
+        "stage": "module_load",
+        "utilization_millionths": 880000
       }
     },
     {
       "timestamp_ns": 1150000000,
-      "action": "sandbox",
+      "action": {
+        "sandbox": {
+          "verdict": "multiple_violations",
+          "rationale": "Resource-governance failure is the point where the runtime should isolate the extension instead of only slowing it."
+        }
+      },
       "source_module": "resource_certificate_governance",
       "basis": {
-        "governance_verdict": "multiple_violations",
         "certificates": [
           {
-            "dimension": "cpu_time",
             "certified_budget": 100000,
+            "dimension": "cpu_time",
             "measured_usage": 112000,
             "utilisation_millionths": 1120000
           },
           {
-            "dimension": "heap_memory",
             "certified_budget": 67108864,
+            "dimension": "heap_memory",
             "measured_usage": 75497472,
             "utilisation_millionths": 1125000
           }
         ],
-        "mapping_rationale": "Resource-governance failure is the point where the runtime should isolate the extension instead of only slowing it."
+        "governance_verdict": "multiple_violations"
       }
     },
     {
       "timestamp_ns": 1300000000,
-      "action": "suspend",
+      "action": {
+        "suspend": {
+          "action": "SuspendAdaptive",
+          "rationale": "Budget exhaustion already has a direct deterministic suspend surface in DecisionContext."
+        }
+      },
       "source_module": "runtime_decision_theory",
       "basis": {
-        "lane_action": "suspend_adaptive",
-        "demotion_reason": "budget_exhausted",
         "budget_remaining_millionths": 0,
-        "mapping_rationale": "Budget exhaustion already has a direct deterministic suspend surface in DecisionContext."
+        "demotion_reason": "budget_exhausted",
+        "lane_action": "suspend_adaptive"
       }
     },
     {
       "timestamp_ns": 1450000000,
-      "action": "terminate",
-      "source_module": "conceptual_operator_contract",
+      "action": {
+        "terminate": {
+          "reason": {
+            "persistent_exhaustion": {
+              "dimension": "cpu_time",
+              "utilization_millionths": 1250000,
+              "escalation_attempts": 3
+            }
+          },
+          "final_measurements": {
+            "cpu_time": 125000,
+            "heap_memory": 80000000
+          },
+          "rationale": "Deterministic termination enforced after persistent resource exhaustion despite escalation attempts."
+        }
+      },
+      "source_module": "resource_escalation_control",
       "basis": {
-        "status": "api_gap",
-        "follow_up_bead": "bd-g61cl",
-        "missing_surface": "No first-class public API currently escalates the exhausted extension from suspend to deterministic terminate with a replay-stable artifact.",
-        "mapping_rationale": "Terminate is the intended terminal enforcement step once repeated exhaustion and governance failure persist."
+        "escalation_sequence_completed": true,
+        "final_resource_state": "over_budget",
+        "termination_reason": "persistent_exhaustion"
       }
     }
+  ],
+  "content_hash": [
+    212,
+    173,
+    222,
+    190,
+    182,
+    99,
+    201,
+    136,
+    5,
+    104,
+    13,
+    201,
+    255,
+    21,
+    41,
+    151,
+    64,
+    156,
+    165,
+    125,
+    112,
+    215,
+    193,
+    181,
+    142,
+    229,
+    152,
+    36,
+    204,
+    7,
+    56,
+    214
   ]
 }

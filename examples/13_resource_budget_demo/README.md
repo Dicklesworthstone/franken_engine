@@ -31,4 +31,4 @@ Node and Bun do not provide per-extension deterministic resource semantics as a 
 - replay-stable adaptive suspension on budget exhaustion,
 - or a unified deterministic escalation artifact that moves one extension from throttle to terminate.
 
-FrankenEngine is aiming at exactly that kind of extension-scoped resource governance. This example records the contract the runtime should expose once the missing termination surface lands.
+FrankenEngine is aiming at exactly that kind of extension-scoped resource governance. The checked-in [`sample_exhaustion_log.json`](./sample_exhaustion_log.json) is a fixed-timestamp capture of the same `EscalationLog` schema emitted by `franken_resource_budget_demo`, including the implemented terminate step from `resource_escalation_control`.

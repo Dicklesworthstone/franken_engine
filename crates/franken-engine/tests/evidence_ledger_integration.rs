@@ -1860,10 +1860,12 @@ fn golden_evidence_entry_policy_update() {
     .constraint(Constraint {
         constraint_id: "update_window".to_string(),
         description: "within_maintenance_hours".to_string(),
+        active: true,
     })
     .constraint(Constraint {
         constraint_id: "policy_validation".to_string(),
         description: "schema_v3_compatible".to_string(),
+        active: true,
     })
     .chosen(ChosenAction {
         action_name: "update_policy".to_string(),
@@ -1906,10 +1908,12 @@ fn golden_evidence_entry_extension_lifecycle_terminate() {
     .constraint(Constraint {
         constraint_id: "violation_count".to_string(),
         description: "security_violations >= 3".to_string(),
+        active: true,
     })
     .constraint(Constraint {
         constraint_id: "recovery_attempts".to_string(),
         description: "restart_attempts >= 2".to_string(),
+        active: true,
     })
     .chosen(ChosenAction {
         action_name: "terminate".to_string(),

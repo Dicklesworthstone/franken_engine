@@ -74,7 +74,7 @@ fi
 
 echo ""
 echo "🔒 VERIFICATION PASSED"
-echo "Translation validation proof is mathematically sound:"
+echo "Translation validation fixture checks passed:"
 echo "  - Hash chain integrity maintained"
-echo "  - Cryptographic signature valid"
-echo "  - Optimization equivalence provable"
+echo "  - Signature field format check"
+echo "  - Optimization metadata consistent"

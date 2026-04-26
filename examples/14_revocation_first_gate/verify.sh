@@ -60,7 +60,7 @@ fi
 
 echo ""
 echo "🔒 VERIFICATION PASSED"
-echo "Revocation-first execution gate is properly configured with:"
+echo "Revocation-first execution gate fixture is properly configured with:"
 echo "  - Fail-closed policy enforcement"
-echo "  - Valid cryptographic proof signature"
+echo "  - Signature field format check"
 echo "  - Explicit capability revocation"

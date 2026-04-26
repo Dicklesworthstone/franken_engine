@@ -12,12 +12,12 @@ signature=$(jq -r '.verification_signature_hex' "$SCRIPT_DIR/proof_artifact.json
 
 echo "Found verification signature: $signature"
 
-# Verify signature matches the required pattern: 64-character hex string
+# Verify the signature field matches the required pattern: 64-character hex string
 if [[ $signature =~ ^[0-9a-f]{64}$ ]]; then
-    echo "✅ Verification signature valid: $signature"
+    echo "✅ Verification signature field format valid: $signature"
     echo "   Pattern: /^[0-9a-f]{64}$/"
 else
-    echo "❌ Verification signature INVALID: $signature (expected 64-char hex)"
+    echo "❌ Verification signature field format invalid: $signature (expected 64-char hex)"
     exit 1
 fi
 
@@ -52,6 +52,6 @@ else
 fi
 
 echo ""
-echo "🎉 SUCCESS: Security-proof-guided specialization verified"
-echo "   Cryptographic signature authentic"
-echo "   Performance bounds proven and satisfied"
+echo "🎉 SUCCESS: Security-proof-guided specialization fixture checks passed"
+echo "   Signature field format checked"
+echo "   Performance bound artifact satisfied"

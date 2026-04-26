@@ -72,4 +72,4 @@ demonstrating the convergent security property that makes FrankenEngine uniquely
 
 ## Verification
 
-Run `./verify.sh` to validate cryptographic signatures ensuring the authenticity of each coevolution round.
+Run `./verify.sh` to check that each coevolution round includes the expected signature field format and round structure.

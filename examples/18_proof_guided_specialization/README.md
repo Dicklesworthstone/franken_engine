@@ -69,4 +69,4 @@ The specialization proof ensures:
 
 ## Verification
 
-Run `./verify.sh` to validate the proof artifact signature and ensure optimization authenticity.
+Run `./verify.sh` to check the proof artifact structure, signature field format, and specialization performance bound fixture.

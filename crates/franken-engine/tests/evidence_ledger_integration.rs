@@ -1687,3 +1687,268 @@ fn evidence_ledger_cli_writes_real_artifacts_and_structured_logs() {
         }),
     );
 }
+
+// ---------------------------------------------------------------------------
+// Golden artifact tests for evidence ledger output
+// ---------------------------------------------------------------------------
+
+use regex::Regex;
+
+/// Assert evidence entry matches golden file with scrubbed dynamic values.
+fn assert_evidence_golden(test_name: &str, entry: &EvidenceEntry) {
+    let golden_path = Path::new("tests/golden/evidence_ledger").join(format!("{test_name}.golden"));
+
+    let actual =
+        serde_json::to_string_pretty(entry).expect("EvidenceEntry should serialize to JSON");
+
+    let scrubbed_actual = scrub_evidence_dynamic_fields(&actual);
+
+    // UPDATE MODE: overwrite golden with scrubbed actual output
+    if std::env::var("UPDATE_GOLDENS").is_ok() {
+        fs::create_dir_all(golden_path.parent().unwrap()).unwrap();
+        fs::write(&golden_path, &scrubbed_actual).unwrap();
+        eprintln!("[GOLDEN] Updated: {}", golden_path.display());
+        return;
+    }
+
+    // COMPARE MODE: diff scrubbed actual vs golden
+    let expected = fs::read_to_string(&golden_path).unwrap_or_else(|_| {
+        panic!(
+            "Golden file missing: {}\n\
+             Run with UPDATE_GOLDENS=1 to create it\n\
+             Then review and commit: git diff tests/golden/evidence_ledger/",
+            golden_path.display()
+        )
+    });
+
+    if scrubbed_actual != expected {
+        let actual_path = golden_path.with_extension("actual");
+        fs::write(&actual_path, &scrubbed_actual).unwrap();
+
+        panic!(
+            "GOLDEN MISMATCH: {test_name}\n\n\
+             Expected: {}\n\
+             Actual: {}\n\n\
+             To update: UPDATE_GOLDENS=1 cargo test -- {test_name}\n\
+             To review: diff {} {}",
+            expected,
+            scrubbed_actual,
+            golden_path.display(),
+            actual_path.display(),
+        );
+    }
+}
+
+/// Scrub dynamic values from evidence entry JSON for stable golden comparison.
+fn scrub_evidence_dynamic_fields(json: &str) -> String {
+    let mut scrubbed = json.to_string();
+
+    // Replace UUIDs with [UUID]
+    let uuid_re =
+        Regex::new(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}").unwrap();
+    scrubbed = uuid_re.replace_all(&scrubbed, "[UUID]").to_string();
+
+    // Replace timestamps with [TIMESTAMP]
+    let ts_re = Regex::new(r"\d{10,}").unwrap();
+    scrubbed = ts_re.replace_all(&scrubbed, "[TIMESTAMP]").to_string();
+
+    // Replace evidence hash with [HASH] (content-addressed but may change)
+    let hash_re = Regex::new(r#""evidence_hash": "[0-9a-f]{64}""#).unwrap();
+    scrubbed = hash_re
+        .replace_all(&scrubbed, r#""evidence_hash": "[HASH]""#)
+        .to_string();
+
+    // Replace entry_id with [ENTRY_ID] (content-addressed)
+    let entry_id_re = Regex::new(r#""entry_id": "[^"]+""#).unwrap();
+    scrubbed = entry_id_re
+        .replace_all(&scrubbed, r#""entry_id": "[ENTRY_ID]""#)
+        .to_string();
+
+    scrubbed
+}
+
+#[test]
+fn golden_evidence_entry_security_action_sandbox() {
+    let entry = EvidenceEntryBuilder::new(
+        "trace-security-001",
+        "decision-sandbox-001",
+        "policy-v1.0",
+        SecurityEpoch::from_raw(42),
+        DecisionType::SecurityAction,
+    )
+    .candidate(CandidateAction::new("allow", 50_000))
+    .candidate(CandidateAction::new("challenge", 80_000))
+    .candidate(CandidateAction::new("sandbox", 100_000))
+    .constraint(Constraint {
+        constraint_name: "resource_budget".to_string(),
+        constraint_value: "cpu_time_ms < 1000".to_string(),
+    })
+    .constraint(Constraint {
+        constraint_name: "capability_required".to_string(),
+        constraint_value: "network.access".to_string(),
+    })
+    .chosen(ChosenAction {
+        action_name: "sandbox".to_string(),
+        expected_loss_millionths: 100_000,
+        rationale: "resource limits exceeded, require isolation".to_string(),
+    })
+    .witness(Witness {
+        witness_name: "resource_monitor".to_string(),
+        witness_value: "cpu_usage_90_percent".to_string(),
+    })
+    .witness(Witness {
+        witness_name: "capability_check".to_string(),
+        witness_value: "network_access_requested".to_string(),
+    })
+    .metadata("extension_id", "ext-malicious-crypto")
+    .metadata("enforcement_mode", "strict")
+    .build()
+    .expect("Evidence entry should build successfully");
+
+    assert_evidence_golden("security_action_sandbox", &entry);
+}
+
+#[test]
+fn golden_evidence_entry_capability_decision_deny() {
+    let entry = EvidenceEntryBuilder::new(
+        "trace-capability-002",
+        "decision-deny-002",
+        "policy-v2.1",
+        SecurityEpoch::from_raw(100),
+        DecisionType::CapabilityDecision,
+    )
+    .candidate(CandidateAction::new("grant", 200_000))
+    .candidate(CandidateAction::new("deny", 10_000))
+    .constraint(Constraint {
+        constraint_name: "permission_level".to_string(),
+        constraint_value: "user_permission < required_level".to_string(),
+    })
+    .chosen(ChosenAction {
+        action_name: "deny".to_string(),
+        expected_loss_millionths: 10_000,
+        rationale: "insufficient permissions for requested capability".to_string(),
+    })
+    .witness(Witness {
+        witness_name: "permission_checker".to_string(),
+        witness_value: "user_level_2_required_level_5".to_string(),
+    })
+    .metadata("requested_capability", "filesystem.write")
+    .metadata("user_context", "untrusted_extension")
+    .build()
+    .expect("Evidence entry should build successfully");
+
+    assert_evidence_golden("capability_decision_deny", &entry);
+}
+
+#[test]
+fn golden_evidence_entry_policy_update() {
+    let entry = EvidenceEntryBuilder::new(
+        "trace-policy-003",
+        "decision-update-003",
+        "policy-v3.0",
+        SecurityEpoch::from_raw(250),
+        DecisionType::PolicyUpdate,
+    )
+    .candidate(CandidateAction::new("keep_current", 500_000))
+    .candidate(CandidateAction::new("update_policy", 150_000))
+    .candidate(CandidateAction::new("rollback_policy", 300_000))
+    .constraint(Constraint {
+        constraint_name: "update_window".to_string(),
+        constraint_value: "within_maintenance_hours".to_string(),
+    })
+    .constraint(Constraint {
+        constraint_name: "policy_validation".to_string(),
+        constraint_value: "schema_v3_compatible".to_string(),
+    })
+    .chosen(ChosenAction {
+        action_name: "update_policy".to_string(),
+        expected_loss_millionths: 150_000,
+        rationale: "security vulnerabilities fixed in new policy version".to_string(),
+    })
+    .witness(Witness {
+        witness_name: "policy_validator".to_string(),
+        witness_value: "schema_validation_passed".to_string(),
+    })
+    .witness(Witness {
+        witness_name: "security_scanner".to_string(),
+        witness_value: "5_vulnerabilities_fixed".to_string(),
+    })
+    .witness(Witness {
+        witness_name: "rollback_plan".to_string(),
+        witness_value: "automatic_rollback_available".to_string(),
+    })
+    .metadata("policy_source", "security_team")
+    .metadata("update_urgency", "high")
+    .metadata("affected_extensions", "network,filesystem,crypto")
+    .build()
+    .expect("Evidence entry should build successfully");
+
+    assert_evidence_golden("policy_update", &entry);
+}
+
+#[test]
+fn golden_evidence_entry_extension_lifecycle_terminate() {
+    let entry = EvidenceEntryBuilder::new(
+        "trace-lifecycle-004",
+        "decision-terminate-004",
+        "policy-v1.5",
+        SecurityEpoch::from_raw(75),
+        DecisionType::ExtensionLifecycle,
+    )
+    .candidate(CandidateAction::new("suspend", 400_000))
+    .candidate(CandidateAction::new("restart", 600_000))
+    .candidate(CandidateAction::new("terminate", 800_000))
+    .constraint(Constraint {
+        constraint_name: "violation_count".to_string(),
+        constraint_value: "security_violations >= 3".to_string(),
+    })
+    .constraint(Constraint {
+        constraint_name: "recovery_attempts".to_string(),
+        constraint_value: "restart_attempts >= 2".to_string(),
+    })
+    .chosen(ChosenAction {
+        action_name: "terminate".to_string(),
+        expected_loss_millionths: 800_000,
+        rationale: "repeated security violations with failed recovery attempts".to_string(),
+    })
+    .witness(Witness {
+        witness_name: "violation_tracker".to_string(),
+        witness_value: "policy_violations_3_restart_failures_2".to_string(),
+    })
+    .witness(Witness {
+        witness_name: "extension_monitor".to_string(),
+        witness_value: "unresponsive_for_30s".to_string(),
+    })
+    .metadata("extension_id", "ext-untrusted-network")
+    .metadata(
+        "violation_types",
+        "unauthorized_network_access,capability_escalation",
+    )
+    .metadata("termination_reason", "security_risk")
+    .build()
+    .expect("Evidence entry should build successfully");
+
+    assert_evidence_golden("extension_lifecycle_terminate", &entry);
+}
+
+#[test]
+fn golden_evidence_entry_minimal_contract_evaluation() {
+    // Test evidence entry with minimal fields for edge case coverage
+    let entry = EvidenceEntryBuilder::new(
+        "trace-minimal-005",
+        "decision-minimal-005",
+        "policy-minimal",
+        SecurityEpoch::GENESIS,
+        DecisionType::ContractEvaluation,
+    )
+    .candidate(CandidateAction::new("default", 0))
+    .chosen(ChosenAction {
+        action_name: "default".to_string(),
+        expected_loss_millionths: 0,
+        rationale: "no action required".to_string(),
+    })
+    .build()
+    .expect("Minimal evidence entry should build successfully");
+
+    assert_evidence_golden("minimal_contract_evaluation", &entry);
+}

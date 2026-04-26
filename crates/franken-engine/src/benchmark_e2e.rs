@@ -17,9 +17,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
 use std::io::Read;
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::time::Instant;
+use std::process::{Child, Command, ExitStatus, Stdio};
+use std::time::{Duration, Instant};
 
 use sha2::{Digest, Sha256};
 
@@ -1384,6 +1386,82 @@ fn benchmark_comparison_program_content_hash(path: &Path) -> std::io::Result<Con
     Ok(ContentHash::from_bytes(hasher.finalize().into()))
 }
 
+fn benchmark_comparison_timeout_poll_interval(timeout: Duration) -> Duration {
+    Duration::from_millis(timeout.as_millis().clamp(1, 10) as u64)
+}
+
+fn benchmark_comparison_wait_for_exit(
+    child: &mut Child,
+    timeout: Duration,
+) -> std::io::Result<Option<ExitStatus>> {
+    let started = Instant::now();
+    let poll_interval = benchmark_comparison_timeout_poll_interval(timeout);
+    loop {
+        if let Some(status) = child.try_wait()? {
+            return Ok(Some(status));
+        }
+        let elapsed = started.elapsed();
+        if elapsed >= timeout {
+            return Ok(None);
+        }
+        std::thread::sleep((timeout - elapsed).min(poll_interval));
+    }
+}
+
+fn benchmark_comparison_spawn_reader<R>(
+    mut reader: R,
+) -> std::thread::JoinHandle<std::io::Result<Vec<u8>>>
+where
+    R: Read + Send + 'static,
+{
+    std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        reader.read_to_end(&mut bytes)?;
+        Ok(bytes)
+    })
+}
+
+fn benchmark_comparison_finish_reader(
+    handle: std::thread::JoinHandle<std::io::Result<Vec<u8>>>,
+) -> Result<Vec<u8>, BenchmarkComparisonError> {
+    match handle.join() {
+        Ok(Ok(bytes)) => Ok(bytes),
+        Ok(Err(error)) => Err(BenchmarkComparisonError::Io(error.to_string())),
+        Err(_) => Err(BenchmarkComparisonError::Io(
+            "benchmark comparison stream reader panicked".to_string(),
+        )),
+    }
+}
+
+#[cfg(unix)]
+fn benchmark_comparison_signal_process_group(
+    process_group_id: u32,
+    signal: &str,
+) -> std::io::Result<()> {
+    let _ = Command::new("kill")
+        .arg(format!("-{signal}"))
+        .arg(format!("-{process_group_id}"))
+        .status()?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn benchmark_comparison_force_terminate_child(child: &mut Child) -> std::io::Result<ExitStatus> {
+    let process_group_id = child.id();
+    benchmark_comparison_signal_process_group(process_group_id, "TERM")?;
+    if let Some(status) = benchmark_comparison_wait_for_exit(child, Duration::from_millis(100))? {
+        return Ok(status);
+    }
+    benchmark_comparison_signal_process_group(process_group_id, "KILL")?;
+    child.wait()
+}
+
+#[cfg(not(unix))]
+fn benchmark_comparison_force_terminate_child(child: &mut Child) -> std::io::Result<ExitStatus> {
+    child.kill()?;
+    child.wait()
+}
+
 fn benchmark_comparison_parity_details(
     baseline_samples: &[BenchmarkComparisonSample],
     runtime_samples: &[BenchmarkComparisonSample],
@@ -1712,15 +1790,13 @@ fn render_benchmark_comparison_command(
     runtime_args: &[String],
     case_timeout_ms: u64,
 ) -> String {
-    let timeout_secs = case_timeout_ms.div_ceil(1000).max(1);
     let joined_args = runtime_args
         .iter()
         .map(|arg| shell_quote(arg))
         .collect::<Vec<_>>()
         .join(" ");
     let base = format!(
-        "/usr/bin/time -o <timing-file> -f %e\\t%M timeout {}s {} {}",
-        timeout_secs,
+        "runner(timeout_ms={case_timeout_ms}) => /usr/bin/time -o <timing-file> -f %e\\t%M {} {}",
         shell_quote(runtime_bin.to_string_lossy().as_ref()),
         joined_args
     );
@@ -1741,30 +1817,64 @@ fn run_single_benchmark_comparison_sample(
         runtime.as_str(),
         current_unix_timestamp_ns(),
     ));
-    let timeout_secs = case_timeout_ms.div_ceil(1000).max(1);
-    let output = Command::new("/usr/bin/time")
+    let timeout = Duration::from_millis(case_timeout_ms);
+    let mut command = Command::new("/usr/bin/time");
+    command
         .arg("-o")
         .arg(&timing_output)
         .arg("-f")
         .arg("%e\t%M")
-        .arg("timeout")
-        .arg(format!("{timeout_secs}s"))
         .arg(runtime_bin)
         .args(runtime_args)
-        .output()
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(unix)]
+    command.process_group(0);
+    let mut child = command
+        .spawn()
         .map_err(|error| BenchmarkComparisonError::Io(error.to_string()))?;
-    if !output.status.success() {
+    let stdout_reader =
+        benchmark_comparison_spawn_reader(child.stdout.take().ok_or_else(|| {
+            BenchmarkComparisonError::Io("missing child stdout pipe".to_string())
+        })?);
+    let stderr_reader =
+        benchmark_comparison_spawn_reader(child.stderr.take().ok_or_else(|| {
+            BenchmarkComparisonError::Io("missing child stderr pipe".to_string())
+        })?);
+    let status = match benchmark_comparison_wait_for_exit(&mut child, timeout)
+        .map_err(|error| BenchmarkComparisonError::Io(error.to_string()))?
+    {
+        Some(status) => status,
+        None => {
+            let status = benchmark_comparison_force_terminate_child(&mut child)
+                .map_err(|error| BenchmarkComparisonError::Io(error.to_string()))?;
+            let stdout = benchmark_comparison_finish_reader(stdout_reader)?;
+            let stderr = benchmark_comparison_finish_reader(stderr_reader)?;
+            let _ = fs::remove_file(&timing_output);
+            return Err(BenchmarkComparisonError::CommandFailed {
+                benchmark_id: case.benchmark_id.clone(),
+                runtime,
+                detail: format!(
+                    "timed out after {case_timeout_ms}ms exit_code={:?} stdout=`{}` stderr=`{}`",
+                    status.code(),
+                    String::from_utf8_lossy(&stdout).trim(),
+                    String::from_utf8_lossy(&stderr).trim()
+                ),
+            });
+        }
+    };
+    let stdout = benchmark_comparison_finish_reader(stdout_reader)?;
+    let stderr = benchmark_comparison_finish_reader(stderr_reader)?;
+    if !status.success() {
         let _ = fs::remove_file(&timing_output);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let stdout = String::from_utf8_lossy(&output.stdout);
         return Err(BenchmarkComparisonError::CommandFailed {
             benchmark_id: case.benchmark_id.clone(),
             runtime,
             detail: format!(
                 "exit_code={:?} stdout=`{}` stderr=`{}`",
-                output.status.code(),
-                stdout.trim(),
-                stderr.trim()
+                status.code(),
+                String::from_utf8_lossy(&stdout).trim(),
+                String::from_utf8_lossy(&stderr).trim()
             ),
         });
     }
@@ -1808,7 +1918,7 @@ fn run_single_benchmark_comparison_sample(
     Ok(BenchmarkComparisonSample {
         wall_time_ns: elapsed_ns,
         peak_rss_bytes,
-        output_digest: benchmark_comparison_output_digest(&output.stdout, &output.stderr),
+        output_digest: benchmark_comparison_output_digest(&stdout, &stderr),
     })
 }
 

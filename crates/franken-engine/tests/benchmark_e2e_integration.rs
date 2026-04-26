@@ -2306,6 +2306,10 @@ fn benchmark_comparison_runner_executes_mock_runtimes_and_emits_artifacts() {
         !frankenctl_command.starts_with("rch exec -- "),
         "command transcript must describe the direct execution path the runner actually used"
     );
+    assert!(
+        !frankenctl_command.contains(" timeout "),
+        "command transcript must not claim a shell timeout wrapper once timeout is enforced in-process"
+    );
 
     let artifact_dir = root.join("artifacts");
     let artifacts = write_benchmark_comparison_artifacts(&result, &artifact_dir).unwrap();
@@ -2461,6 +2465,68 @@ fn benchmark_comparison_runner_records_behavioral_differences_on_output_mismatch
         bun_verdict.difference_details,
         vec!["output digest mismatch in 3 of 3 compared samples".to_string()]
     );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[cfg(unix)]
+#[test]
+fn benchmark_comparison_runner_times_out_fail_closed_without_shell_timeout_wrapper() {
+    let root = std::env::temp_dir().join(format!(
+        "franken_bench_compare_timeout_{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+
+    let program = root.join("fixture.js");
+    fs::write(&program, "console.log('benchmark');\n").unwrap();
+
+    let frankenctl = root.join("mock-frankenctl");
+    let node = root.join("mock-node");
+    let bun = root.join("mock-bun");
+    write_mock_runtime(&frankenctl, "0.20");
+    write_mock_runtime(&node, "0.20");
+    write_mock_runtime(&bun, "0.20");
+
+    let manifest = BenchmarkComparisonManifest {
+        schema_version: BENCHMARK_COMPARISON_MANIFEST_SCHEMA_VERSION.to_string(),
+        runtime_pins: BenchmarkRuntimePins::default(),
+        runtime_commands: BenchmarkComparisonRuntimeCommands {
+            frankenctl,
+            node,
+            bun,
+        },
+        fairness_policy: BenchmarkFairnessPolicy {
+            warmup_runs: 0,
+            sample_count: 1,
+            case_timeout_ms: 10,
+        },
+        cases: vec![BenchmarkComparisonCase {
+            benchmark_id: "micro-timeout".to_string(),
+            category: BenchmarkCategory::Micro,
+            program_path: program,
+            args: vec![],
+        }],
+    };
+
+    let error = run_benchmark_comparison_suite(&manifest, &root, "cmp-run-timeout", "2026-04-26")
+        .expect_err("comparison suite should fail closed on timeout");
+    match error {
+        BenchmarkComparisonError::CommandFailed {
+            benchmark_id,
+            runtime,
+            detail,
+        } => {
+            assert_eq!(benchmark_id, "micro-timeout");
+            assert_eq!(runtime, RuntimeId::FrankenEngine);
+            assert!(
+                detail.contains("timed out after 10ms"),
+                "timeout detail should stay explicit: {detail}"
+            );
+        }
+        other => panic!("expected CommandFailed timeout error, got {other:?}"),
+    }
 
     let _ = fs::remove_dir_all(&root);
 }

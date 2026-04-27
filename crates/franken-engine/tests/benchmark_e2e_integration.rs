@@ -2247,6 +2247,42 @@ fn write_mock_runtime_with_output(path: &Path, sleep_seconds: &str, stdout_text:
 }
 
 #[cfg(unix)]
+fn write_mock_runtime_with_stderr_failure(path: &Path, stderr_text: &str, exit_code: i32) {
+    fs::write(
+        path,
+        format!("#!/usr/bin/env bash\nprintf '%s\\n' '{stderr_text}' >&2\nexit {exit_code}\n"),
+    )
+    .unwrap();
+    let mut perms = fs::metadata(path).unwrap().permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(path, perms).unwrap();
+}
+
+#[cfg(unix)]
+fn write_mock_runtime_with_stderr_failure_after_runs(
+    path: &Path,
+    stderr_text: &str,
+    exit_code: i32,
+    successful_runs_before_failure: u32,
+) {
+    let counter_path = path.with_extension("count");
+    fs::write(
+        path,
+        format!(
+            "#!/usr/bin/env bash\ncounter_file='{}'\ncount=0\nif [[ -f \"$counter_file\" ]]; then\n  count=$(cat \"$counter_file\")\nfi\ncount=$((count + 1))\nprintf '%s' \"$count\" > \"$counter_file\"\nif [[ \"$count\" -le {} ]]; then\n  exit 0\nfi\nprintf '%s\\n' '{}' >&2\nexit {}\n",
+            counter_path.display(),
+            successful_runs_before_failure,
+            stderr_text,
+            exit_code
+        ),
+    )
+    .unwrap();
+    let mut perms = fs::metadata(path).unwrap().permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(path, perms).unwrap();
+}
+
+#[cfg(unix)]
 #[test]
 fn benchmark_comparison_runner_executes_mock_runtimes_and_emits_artifacts() {
     let root = std::env::temp_dir().join(format!("franken_bench_compare_{}", std::process::id()));
@@ -2309,6 +2345,33 @@ fn benchmark_comparison_runner_executes_mock_runtimes_and_emits_artifacts() {
     assert!(
         !frankenctl_command.contains(" timeout "),
         "command transcript must not claim a shell timeout wrapper once timeout is enforced in-process"
+    );
+    if frankenctl_command.contains("direct(wait4+pidfd)") {
+        assert!(
+            !frankenctl_command.contains("/usr/bin/time -q -f"),
+            "direct measurement should not claim the GNU time wrapper"
+        );
+        assert!(
+            !frankenctl_command.contains("<timing-footer-on-stderr>"),
+            "direct measurement should not claim an in-band timing footer"
+        );
+    } else {
+        assert!(
+            !frankenctl_command.contains(" -o "),
+            "benchmark comparison should not materialize a per-sample timing file"
+        );
+        assert!(
+            frankenctl_command.contains("<timing-footer-on-stderr>"),
+            "command transcript should describe the in-band timing footer path"
+        );
+        assert!(
+            frankenctl_command.contains("/usr/bin/time -q -f"),
+            "command transcript should describe the quiet GNU time wrapper the runner actually uses"
+        );
+    }
+    assert!(
+        !frankenctl_command.contains(" --out "),
+        "benchmark comparison should not force per-sample frankenctl report writes that the runner never reads"
     );
 
     let artifact_dir = root.join("artifacts");
@@ -2526,6 +2589,141 @@ fn benchmark_comparison_runner_times_out_fail_closed_without_shell_timeout_wrapp
             );
         }
         other => panic!("expected CommandFailed timeout error, got {other:?}"),
+    }
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[cfg(unix)]
+#[test]
+fn benchmark_comparison_runner_strips_timing_footer_from_failure_stderr() {
+    let root =
+        std::env::temp_dir().join(format!("franken_bench_compare_fail_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+
+    let program = root.join("fixture.js");
+    fs::write(&program, "console.log('benchmark');\n").unwrap();
+
+    let frankenctl = root.join("mock-frankenctl");
+    let node = root.join("mock-node");
+    let bun = root.join("mock-bun");
+    write_mock_runtime_with_stderr_failure_after_runs(&frankenctl, "child-failed", 17, 1);
+    write_mock_runtime_with_stderr_failure_after_runs(&node, "child-failed", 17, 1);
+    write_mock_runtime_with_stderr_failure_after_runs(&bun, "child-failed", 17, 1);
+
+    let manifest = BenchmarkComparisonManifest {
+        schema_version: BENCHMARK_COMPARISON_MANIFEST_SCHEMA_VERSION.to_string(),
+        runtime_pins: BenchmarkRuntimePins::default(),
+        runtime_commands: BenchmarkComparisonRuntimeCommands {
+            frankenctl,
+            node,
+            bun,
+        },
+        fairness_policy: BenchmarkFairnessPolicy {
+            warmup_runs: 1,
+            sample_count: 3,
+            case_timeout_ms: 5_000,
+        },
+        cases: vec![BenchmarkComparisonCase {
+            benchmark_id: "micro-fail".to_string(),
+            category: BenchmarkCategory::Micro,
+            program_path: program,
+            args: vec![],
+        }],
+    };
+
+    let error = run_benchmark_comparison_suite(&manifest, &root, "cmp-run-fail", "2026-04-26")
+        .expect_err("comparison suite should surface child failure");
+    match error {
+        BenchmarkComparisonError::CommandFailed {
+            benchmark_id,
+            runtime,
+            detail,
+        } => {
+            assert_eq!(benchmark_id, "micro-fail");
+            assert_eq!(runtime, RuntimeId::FrankenEngine);
+            assert!(
+                detail.contains("exit_code=Some(17)"),
+                "failure detail should preserve exit code: {detail}"
+            );
+            assert!(
+                detail.contains("stderr=`child-failed`"),
+                "failure detail should preserve child stderr: {detail}"
+            );
+            assert!(
+                !detail.contains("__FRANKEN_TIME__"),
+                "failure detail should strip the timing footer marker: {detail}"
+            );
+        }
+        other => panic!("expected CommandFailed exit error, got {other:?}"),
+    }
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[cfg(unix)]
+#[test]
+fn benchmark_comparison_runner_fails_closed_on_warmup_failures() {
+    let root = std::env::temp_dir().join(format!(
+        "franken_bench_compare_warmup_fail_{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+
+    let program = root.join("fixture.js");
+    fs::write(&program, "console.log('benchmark');\n").unwrap();
+
+    let frankenctl = root.join("mock-frankenctl");
+    let node = root.join("mock-node");
+    let bun = root.join("mock-bun");
+    write_mock_runtime_with_stderr_failure(&frankenctl, "warmup-failed", 17);
+    write_mock_runtime_with_stderr_failure(&node, "warmup-failed", 17);
+    write_mock_runtime_with_stderr_failure(&bun, "warmup-failed", 17);
+
+    let manifest = BenchmarkComparisonManifest {
+        schema_version: BENCHMARK_COMPARISON_MANIFEST_SCHEMA_VERSION.to_string(),
+        runtime_pins: BenchmarkRuntimePins::default(),
+        runtime_commands: BenchmarkComparisonRuntimeCommands {
+            frankenctl,
+            node,
+            bun,
+        },
+        fairness_policy: BenchmarkFairnessPolicy {
+            warmup_runs: 1,
+            sample_count: 3,
+            case_timeout_ms: 5_000,
+        },
+        cases: vec![BenchmarkComparisonCase {
+            benchmark_id: "micro-warmup-fail".to_string(),
+            category: BenchmarkCategory::Micro,
+            program_path: program,
+            args: vec![],
+        }],
+    };
+
+    let error =
+        run_benchmark_comparison_suite(&manifest, &root, "cmp-run-warmup-fail", "2026-04-26")
+            .expect_err("warmup fast path failures must stop the suite");
+    match error {
+        BenchmarkComparisonError::CommandFailed {
+            benchmark_id,
+            runtime,
+            detail,
+        } => {
+            assert_eq!(benchmark_id, "micro-warmup-fail");
+            assert_eq!(runtime, RuntimeId::FrankenEngine);
+            assert!(
+                detail.contains("warmup exit_code=Some(17)"),
+                "warmup failures should stay explicit: {detail}"
+            );
+            assert!(
+                detail.contains("stderr=`warmup-failed`"),
+                "warmup failures should preserve child stderr: {detail}"
+            );
+        }
+        other => panic!("expected CommandFailed warmup error, got {other:?}"),
     }
 
     let _ = fs::remove_dir_all(&root);

@@ -17,13 +17,28 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
 use std::io::Read;
+#[cfg(target_os = "linux")]
+use std::os::fd::AsFd;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
+#[cfg(target_os = "linux")]
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
+#[cfg(target_os = "linux")]
+use rustix::{
+    event::{PollFd, PollFlags, poll},
+    io::Errno,
+    process::{Pid, PidfdFlags, getpid, pidfd_open},
+    time::Timespec,
+};
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use wait_timeout::ChildExt;
+#[cfg(target_os = "linux")]
+use wait4::Wait4;
 
 use crate::benchmark_denominator::BenchmarkCase;
 use crate::benchmark_evidence_bundle::{
@@ -37,7 +52,6 @@ use crate::extension_lifecycle_manager::{
 use crate::hash_tiers::ContentHash;
 use crate::runtime_comparison_gate::{BenchmarkCategory, BenchmarkResult, RuntimeId};
 use crate::security_epoch::SecurityEpoch;
-use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -58,6 +72,8 @@ pub const MIN_START_BUDGET_MILLIONTHS: u64 = 1_000;
 const MIN_WARMUP_RUNS: u32 = 1;
 const MIN_SAMPLE_COUNT: u32 = 3;
 const MIN_CASE_TIMEOUT_MS: u64 = 1;
+const BENCHMARK_COMPARISON_TIMING_SENTINEL_PREFIX: &str = "__FRANKEN_TIME__";
+const BENCHMARK_COMPARISON_TIMING_FOOTER_PLACEHOLDER: &str = "<timing-footer-on-stderr>";
 
 fn benchmark_surface_metadata() -> serde_json::Value {
     serde_json::json!({
@@ -1359,6 +1375,12 @@ struct ResolvedBenchmarkProgram {
     content_hash: ContentHash,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BenchmarkComparisonMeasurementMode {
+    DirectLinuxWait4,
+    TimeWrapper,
+}
+
 fn empty_benchmark_comparison_output_digest() -> ContentHash {
     ContentHash::compute(&[])
 }
@@ -1386,26 +1408,160 @@ fn benchmark_comparison_program_content_hash(path: &Path) -> std::io::Result<Con
     Ok(ContentHash::from_bytes(hasher.finalize().into()))
 }
 
-fn benchmark_comparison_timeout_poll_interval(timeout: Duration) -> Duration {
-    Duration::from_millis(timeout.as_millis().clamp(1, 10) as u64)
+fn benchmark_comparison_timing_marker() -> String {
+    format!(
+        "{BENCHMARK_COMPARISON_TIMING_SENTINEL_PREFIX}{}__",
+        current_unix_timestamp_ns()
+    )
 }
 
+#[cfg(target_os = "linux")]
+fn benchmark_comparison_supports_direct_measurement() -> bool {
+    static DIRECT_MEASUREMENT_SUPPORTED: OnceLock<bool> = OnceLock::new();
+    *DIRECT_MEASUREMENT_SUPPORTED.get_or_init(|| pidfd_open(getpid(), PidfdFlags::empty()).is_ok())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn benchmark_comparison_supports_direct_measurement() -> bool {
+    false
+}
+
+fn benchmark_comparison_measurement_mode() -> BenchmarkComparisonMeasurementMode {
+    if benchmark_comparison_supports_direct_measurement() {
+        BenchmarkComparisonMeasurementMode::DirectLinuxWait4
+    } else {
+        BenchmarkComparisonMeasurementMode::TimeWrapper
+    }
+}
+
+fn benchmark_comparison_extract_timing_footer(
+    benchmark_id: &str,
+    runtime: RuntimeId,
+    mut stderr: Vec<u8>,
+    timing_marker: &str,
+) -> Result<(Vec<u8>, u64, u64), BenchmarkComparisonError> {
+    let marker_bytes = timing_marker.as_bytes();
+    let Some(start) = stderr
+        .windows(marker_bytes.len())
+        .rposition(|window| window == marker_bytes)
+    else {
+        return Err(BenchmarkComparisonError::TimingParse {
+            benchmark_id: benchmark_id.to_string(),
+            runtime,
+            detail: format!("missing timing footer marker `{timing_marker}`"),
+        });
+    };
+    let timing_bytes = &stderr[start..];
+    let timing_footer = std::str::from_utf8(timing_bytes).map_err(|error| {
+        BenchmarkComparisonError::TimingParse {
+            benchmark_id: benchmark_id.to_string(),
+            runtime,
+            detail: error.to_string(),
+        }
+    })?;
+    let timing_footer = timing_footer.trim_end_matches(['\n', '\r']);
+    let mut parts = timing_footer.split('\t');
+    let marker = parts
+        .next()
+        .ok_or_else(|| BenchmarkComparisonError::TimingParse {
+            benchmark_id: benchmark_id.to_string(),
+            runtime,
+            detail: format!("missing timing footer marker in `{timing_footer}`"),
+        })?;
+    if marker != timing_marker {
+        return Err(BenchmarkComparisonError::TimingParse {
+            benchmark_id: benchmark_id.to_string(),
+            runtime,
+            detail: format!(
+                "timing footer marker mismatch: expected `{timing_marker}`, got `{marker}`"
+            ),
+        });
+    }
+    let elapsed_seconds = parts
+        .next()
+        .ok_or_else(|| BenchmarkComparisonError::TimingParse {
+            benchmark_id: benchmark_id.to_string(),
+            runtime,
+            detail: format!("missing elapsed seconds in `{timing_footer}`"),
+        })?;
+    let peak_rss_kib = parts
+        .next()
+        .ok_or_else(|| BenchmarkComparisonError::TimingParse {
+            benchmark_id: benchmark_id.to_string(),
+            runtime,
+            detail: format!("missing peak rss in `{timing_footer}`"),
+        })?;
+    let elapsed_ns =
+        (elapsed_seconds
+            .parse::<f64>()
+            .map_err(|error| BenchmarkComparisonError::TimingParse {
+                benchmark_id: benchmark_id.to_string(),
+                runtime,
+                detail: error.to_string(),
+            })?
+            * 1_000_000_000.0)
+            .round() as u64;
+    let peak_rss_bytes = peak_rss_kib
+        .parse::<u64>()
+        .map_err(|error| BenchmarkComparisonError::TimingParse {
+            benchmark_id: benchmark_id.to_string(),
+            runtime,
+            detail: error.to_string(),
+        })?
+        .saturating_mul(1024);
+    stderr.truncate(start);
+    Ok((stderr, elapsed_ns, peak_rss_bytes))
+}
+
+#[cfg(target_os = "linux")]
+fn benchmark_comparison_wait_for_pidfd<P: AsFd>(
+    pidfd: &P,
+    timeout: Duration,
+) -> std::io::Result<bool> {
+    let started = Instant::now();
+    loop {
+        let elapsed = started.elapsed();
+        if elapsed >= timeout {
+            return Ok(false);
+        }
+        let remaining = timeout - elapsed;
+        let timeout = Timespec::try_from(remaining).map_err(|error| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("benchmark comparison timeout overflow: {error}"),
+            )
+        })?;
+        let mut poll_fds = [PollFd::new(pidfd, PollFlags::IN)];
+        match poll(&mut poll_fds, Some(&timeout)) {
+            Ok(0) => return Ok(false),
+            Ok(_) => return Ok(true),
+            Err(Errno::INTR) => continue,
+            Err(error) => return Err(std::io::Error::from(error)),
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
 fn benchmark_comparison_wait_for_exit(
     child: &mut Child,
     timeout: Duration,
 ) -> std::io::Result<Option<ExitStatus>> {
-    let started = Instant::now();
-    let poll_interval = benchmark_comparison_timeout_poll_interval(timeout);
-    loop {
-        if let Some(status) = child.try_wait()? {
-            return Ok(Some(status));
-        }
-        let elapsed = started.elapsed();
-        if elapsed >= timeout {
-            return Ok(None);
-        }
-        std::thread::sleep((timeout - elapsed).min(poll_interval));
+    let pidfd = match pidfd_open(Pid::from_child(child), PidfdFlags::empty()) {
+        Ok(pidfd) => pidfd,
+        Err(_) => return child.wait_timeout(timeout),
+    };
+    if !benchmark_comparison_wait_for_pidfd(&pidfd, timeout)? {
+        return Ok(None);
     }
+    child.wait().map(Some)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn benchmark_comparison_wait_for_exit(
+    child: &mut Child,
+    timeout: Duration,
+) -> std::io::Result<Option<ExitStatus>> {
+    child.wait_timeout(timeout)
 }
 
 fn benchmark_comparison_spawn_reader<R>(
@@ -1431,6 +1587,70 @@ fn benchmark_comparison_finish_reader(
             "benchmark comparison stream reader panicked".to_string(),
         )),
     }
+}
+
+fn run_benchmark_comparison_warmup(
+    case: &BenchmarkComparisonCase,
+    runtime: RuntimeId,
+    runtime_bin: &Path,
+    runtime_args: &[String],
+    case_timeout_ms: u64,
+) -> Result<(), BenchmarkComparisonError> {
+    let timeout = Duration::from_millis(case_timeout_ms);
+    let mut command = Command::new(runtime_bin);
+    command
+        .args(runtime_args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(unix)]
+    command.process_group(0);
+    let mut child = command
+        .spawn()
+        .map_err(|error| BenchmarkComparisonError::Io(error.to_string()))?;
+    let stdout_reader =
+        benchmark_comparison_spawn_reader(child.stdout.take().ok_or_else(|| {
+            BenchmarkComparisonError::Io("missing child stdout pipe".to_string())
+        })?);
+    let stderr_reader =
+        benchmark_comparison_spawn_reader(child.stderr.take().ok_or_else(|| {
+            BenchmarkComparisonError::Io("missing child stderr pipe".to_string())
+        })?);
+    let status = match benchmark_comparison_wait_for_exit(&mut child, timeout)
+        .map_err(|error| BenchmarkComparisonError::Io(error.to_string()))?
+    {
+        Some(status) => status,
+        None => {
+            let status = benchmark_comparison_force_terminate_child(&mut child)
+                .map_err(|error| BenchmarkComparisonError::Io(error.to_string()))?;
+            let stdout = benchmark_comparison_finish_reader(stdout_reader)?;
+            let stderr = benchmark_comparison_finish_reader(stderr_reader)?;
+            return Err(BenchmarkComparisonError::CommandFailed {
+                benchmark_id: case.benchmark_id.clone(),
+                runtime,
+                detail: format!(
+                    "warmup timed out after {case_timeout_ms}ms exit_code={:?} stdout=`{}` stderr=`{}`",
+                    status.code(),
+                    String::from_utf8_lossy(&stdout).trim(),
+                    String::from_utf8_lossy(&stderr).trim()
+                ),
+            });
+        }
+    };
+    let stdout = benchmark_comparison_finish_reader(stdout_reader)?;
+    let stderr = benchmark_comparison_finish_reader(stderr_reader)?;
+    if !status.success() {
+        return Err(BenchmarkComparisonError::CommandFailed {
+            benchmark_id: case.benchmark_id.clone(),
+            runtime,
+            detail: format!(
+                "warmup exit_code={:?} stdout=`{}` stderr=`{}`",
+                status.code(),
+                String::from_utf8_lossy(&stdout).trim(),
+                String::from_utf8_lossy(&stderr).trim()
+            ),
+        });
+    }
+    Ok(())
 }
 
 #[cfg(unix)]
@@ -1683,24 +1903,15 @@ pub fn run_benchmark_comparison_suite(
 
         for (runtime, runtime_bin) in runtime_specs {
             let mut raw_samples = Vec::new();
+            let measurement_mode = benchmark_comparison_measurement_mode();
             let mut runtime_args = match runtime {
-                RuntimeId::FrankenEngine => {
-                    let comparison_report = env::temp_dir().join(format!(
-                        "franken-benchmark-compare-{}-{}-{}.json",
-                        case.benchmark_id,
-                        runtime.as_str(),
-                        current_unix_timestamp_ns(),
-                    ));
-                    vec![
-                        "run".to_string(),
-                        "--input".to_string(),
-                        resolved_program.display().to_string(),
-                        "--extension-id".to_string(),
-                        format!("bench-{}-{}", case.benchmark_id, runtime.as_str()),
-                        "--out".to_string(),
-                        comparison_report.display().to_string(),
-                    ]
-                }
+                RuntimeId::FrankenEngine => vec![
+                    "run".to_string(),
+                    "--input".to_string(),
+                    resolved_program.display().to_string(),
+                    "--extension-id".to_string(),
+                    format!("bench-{}-{}", case.benchmark_id, runtime.as_str()),
+                ],
                 RuntimeId::NodeLts | RuntimeId::BunStable => {
                     let mut args = vec![resolved_program.display().to_string()];
                     args.extend(case.args.iter().cloned());
@@ -1709,6 +1920,7 @@ pub fn run_benchmark_comparison_suite(
             };
 
             commands.push(render_benchmark_comparison_command(
+                measurement_mode,
                 runtime,
                 &runtime_bin,
                 &runtime_args,
@@ -1716,7 +1928,7 @@ pub fn run_benchmark_comparison_suite(
             ));
 
             for _ in 0..manifest.fairness_policy.warmup_runs {
-                let _ = run_single_benchmark_comparison_sample(
+                run_benchmark_comparison_warmup(
                     case,
                     runtime,
                     &runtime_bin,
@@ -1732,6 +1944,7 @@ pub fn run_benchmark_comparison_suite(
                     &runtime_bin,
                     &runtime_args,
                     manifest.fairness_policy.case_timeout_ms,
+                    measurement_mode,
                 )?);
             }
 
@@ -1785,6 +1998,7 @@ pub fn run_benchmark_comparison_suite(
 }
 
 fn render_benchmark_comparison_command(
+    measurement_mode: BenchmarkComparisonMeasurementMode,
     runtime: RuntimeId,
     runtime_bin: &Path,
     runtime_args: &[String],
@@ -1795,35 +2009,110 @@ fn render_benchmark_comparison_command(
         .map(|arg| shell_quote(arg))
         .collect::<Vec<_>>()
         .join(" ");
-    let base = format!(
-        "runner(timeout_ms={case_timeout_ms}) => /usr/bin/time -o <timing-file> -f %e\\t%M {} {}",
-        shell_quote(runtime_bin.to_string_lossy().as_ref()),
-        joined_args
-    );
+    let base = match measurement_mode {
+        BenchmarkComparisonMeasurementMode::DirectLinuxWait4 => format!(
+            "runner(timeout_ms={case_timeout_ms}) => direct(wait4+pidfd) {} {}",
+            shell_quote(runtime_bin.to_string_lossy().as_ref()),
+            joined_args
+        ),
+        BenchmarkComparisonMeasurementMode::TimeWrapper => format!(
+            "runner(timeout_ms={case_timeout_ms}) => /usr/bin/time -q -f '{}\\t%e\\t%M' {} {}",
+            BENCHMARK_COMPARISON_TIMING_FOOTER_PLACEHOLDER,
+            shell_quote(runtime_bin.to_string_lossy().as_ref()),
+            joined_args
+        ),
+    };
     let _ = runtime;
     base
 }
 
-fn run_single_benchmark_comparison_sample(
+#[cfg(target_os = "linux")]
+fn run_single_benchmark_comparison_sample_direct_linux(
     case: &BenchmarkComparisonCase,
     runtime: RuntimeId,
     runtime_bin: &Path,
     runtime_args: &[String],
     case_timeout_ms: u64,
 ) -> Result<BenchmarkComparisonSample, BenchmarkComparisonError> {
-    let timing_output = env::temp_dir().join(format!(
-        "franken-benchmark-comparison-time-{}-{}-{}.txt",
-        case.benchmark_id,
-        runtime.as_str(),
-        current_unix_timestamp_ns(),
-    ));
+    let timeout = Duration::from_millis(case_timeout_ms);
+    let mut command = Command::new(runtime_bin);
+    command
+        .args(runtime_args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(unix)]
+    command.process_group(0);
+    let mut child = command
+        .spawn()
+        .map_err(|error| BenchmarkComparisonError::Io(error.to_string()))?;
+    let pidfd = pidfd_open(Pid::from_child(&child), PidfdFlags::empty())
+        .map_err(|error| BenchmarkComparisonError::Io(error.to_string()))?;
+    let stdout_reader =
+        benchmark_comparison_spawn_reader(child.stdout.take().ok_or_else(|| {
+            BenchmarkComparisonError::Io("missing child stdout pipe".to_string())
+        })?);
+    let stderr_reader =
+        benchmark_comparison_spawn_reader(child.stderr.take().ok_or_else(|| {
+            BenchmarkComparisonError::Io("missing child stderr pipe".to_string())
+        })?);
+    let started = Instant::now();
+    if !benchmark_comparison_wait_for_pidfd(&pidfd, timeout)
+        .map_err(|error| BenchmarkComparisonError::Io(error.to_string()))?
+    {
+        let status = benchmark_comparison_force_terminate_child(&mut child)
+            .map_err(|error| BenchmarkComparisonError::Io(error.to_string()))?;
+        let stdout = benchmark_comparison_finish_reader(stdout_reader)?;
+        let stderr = benchmark_comparison_finish_reader(stderr_reader)?;
+        return Err(BenchmarkComparisonError::CommandFailed {
+            benchmark_id: case.benchmark_id.clone(),
+            runtime,
+            detail: format!(
+                "timed out after {case_timeout_ms}ms exit_code={:?} stdout=`{}` stderr=`{}`",
+                status.code(),
+                String::from_utf8_lossy(&stdout).trim(),
+                String::from_utf8_lossy(&stderr).trim()
+            ),
+        });
+    }
+    let resuse = child
+        .wait4()
+        .map_err(|error| BenchmarkComparisonError::Io(error.to_string()))?;
+    let wall_time_ns = started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
+    let stdout = benchmark_comparison_finish_reader(stdout_reader)?;
+    let stderr = benchmark_comparison_finish_reader(stderr_reader)?;
+    if !resuse.status.success() {
+        return Err(BenchmarkComparisonError::CommandFailed {
+            benchmark_id: case.benchmark_id.clone(),
+            runtime,
+            detail: format!(
+                "exit_code={:?} stdout=`{}` stderr=`{}`",
+                resuse.status.code(),
+                String::from_utf8_lossy(&stdout).trim(),
+                String::from_utf8_lossy(&stderr).trim()
+            ),
+        });
+    }
+    Ok(BenchmarkComparisonSample {
+        wall_time_ns,
+        peak_rss_bytes: resuse.rusage.maxrss,
+        output_digest: benchmark_comparison_output_digest(&stdout, &stderr),
+    })
+}
+
+fn run_single_benchmark_comparison_sample_time_wrapper(
+    case: &BenchmarkComparisonCase,
+    runtime: RuntimeId,
+    runtime_bin: &Path,
+    runtime_args: &[String],
+    case_timeout_ms: u64,
+) -> Result<BenchmarkComparisonSample, BenchmarkComparisonError> {
+    let timing_marker = benchmark_comparison_timing_marker();
     let timeout = Duration::from_millis(case_timeout_ms);
     let mut command = Command::new("/usr/bin/time");
     command
-        .arg("-o")
-        .arg(&timing_output)
+        .arg("-q")
         .arg("-f")
-        .arg("%e\t%M")
+        .arg(format!("{timing_marker}\t%e\t%M"))
         .arg(runtime_bin)
         .args(runtime_args)
         .stdout(Stdio::piped())
@@ -1850,7 +2139,6 @@ fn run_single_benchmark_comparison_sample(
                 .map_err(|error| BenchmarkComparisonError::Io(error.to_string()))?;
             let stdout = benchmark_comparison_finish_reader(stdout_reader)?;
             let stderr = benchmark_comparison_finish_reader(stderr_reader)?;
-            let _ = fs::remove_file(&timing_output);
             return Err(BenchmarkComparisonError::CommandFailed {
                 benchmark_id: case.benchmark_id.clone(),
                 runtime,
@@ -1866,7 +2154,14 @@ fn run_single_benchmark_comparison_sample(
     let stdout = benchmark_comparison_finish_reader(stdout_reader)?;
     let stderr = benchmark_comparison_finish_reader(stderr_reader)?;
     if !status.success() {
-        let _ = fs::remove_file(&timing_output);
+        let stderr = benchmark_comparison_extract_timing_footer(
+            &case.benchmark_id,
+            runtime,
+            stderr.clone(),
+            &timing_marker,
+        )
+        .map(|(stderr, _, _)| stderr)
+        .unwrap_or(stderr);
         return Err(BenchmarkComparisonError::CommandFailed {
             benchmark_id: case.benchmark_id.clone(),
             runtime,
@@ -1879,47 +2174,52 @@ fn run_single_benchmark_comparison_sample(
         });
     }
 
-    let timing_raw = fs::read_to_string(&timing_output)
-        .map_err(|error| BenchmarkComparisonError::Io(error.to_string()))?;
-    let _ = fs::remove_file(&timing_output);
-    let mut parts = timing_raw.trim().split('\t');
-    let elapsed_seconds = parts
-        .next()
-        .ok_or_else(|| BenchmarkComparisonError::TimingParse {
-            benchmark_id: case.benchmark_id.clone(),
-            runtime,
-            detail: format!("missing elapsed seconds in `{}`", timing_raw.trim()),
-        })?;
-    let peak_rss_kib = parts
-        .next()
-        .ok_or_else(|| BenchmarkComparisonError::TimingParse {
-            benchmark_id: case.benchmark_id.clone(),
-            runtime,
-            detail: format!("missing peak rss in `{}`", timing_raw.trim()),
-        })?;
-    let elapsed_ns =
-        (elapsed_seconds
-            .parse::<f64>()
-            .map_err(|error| BenchmarkComparisonError::TimingParse {
-                benchmark_id: case.benchmark_id.clone(),
-                runtime,
-                detail: error.to_string(),
-            })?
-            * 1_000_000_000.0)
-            .round() as u64;
-    let peak_rss_bytes = peak_rss_kib
-        .parse::<u64>()
-        .map_err(|error| BenchmarkComparisonError::TimingParse {
-            benchmark_id: case.benchmark_id.clone(),
-            runtime,
-            detail: error.to_string(),
-        })?
-        .saturating_mul(1024);
+    let (stderr, elapsed_ns, peak_rss_bytes) = benchmark_comparison_extract_timing_footer(
+        &case.benchmark_id,
+        runtime,
+        stderr,
+        &timing_marker,
+    )?;
     Ok(BenchmarkComparisonSample {
         wall_time_ns: elapsed_ns,
         peak_rss_bytes,
         output_digest: benchmark_comparison_output_digest(&stdout, &stderr),
     })
+}
+
+fn run_single_benchmark_comparison_sample(
+    case: &BenchmarkComparisonCase,
+    runtime: RuntimeId,
+    runtime_bin: &Path,
+    runtime_args: &[String],
+    case_timeout_ms: u64,
+    measurement_mode: BenchmarkComparisonMeasurementMode,
+) -> Result<BenchmarkComparisonSample, BenchmarkComparisonError> {
+    match measurement_mode {
+        #[cfg(target_os = "linux")]
+        BenchmarkComparisonMeasurementMode::DirectLinuxWait4 => {
+            run_single_benchmark_comparison_sample_direct_linux(
+                case,
+                runtime,
+                runtime_bin,
+                runtime_args,
+                case_timeout_ms,
+            )
+        }
+        #[cfg(not(target_os = "linux"))]
+        BenchmarkComparisonMeasurementMode::DirectLinuxWait4 => {
+            unreachable!("direct benchmark comparison measurement mode is Linux-only")
+        }
+        BenchmarkComparisonMeasurementMode::TimeWrapper => {
+            run_single_benchmark_comparison_sample_time_wrapper(
+                case,
+                runtime,
+                runtime_bin,
+                runtime_args,
+                case_timeout_ms,
+            )
+        }
+    }
 }
 
 fn current_unix_timestamp_ns() -> u128 {

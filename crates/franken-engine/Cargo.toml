@@ -68,6 +68,9 @@ syn = { version = "2.0", features = ["full", "visit"] }
 toml = "0.8"
 clap = "4.5"
 unicode-normalization = "0.1"
+rustix = { version = "1.1", features = ["event", "process", "time"] }
+wait4 = "0.1"
+wait-timeout = "0.2"
 frankenengine-extension-host = { path = "../franken-extension-host" }
 franken-kernel = { version = "0.3.1", optional = true }
 franken-decision = { version = "0.3.1", optional = true }
@@ -75,7 +78,7 @@ franken-evidence = { version = "0.3.1", optional = true }
 
 [dev-dependencies]
 frankenengine-test-support = { path = "../franken-engine-test-support" }
-tempfile = "3"
 proptest = "1.6"
 regex = "1.0"
 criterion = { version = "0.5", features = ["html_reports"] }
+tempfile = "3.0"

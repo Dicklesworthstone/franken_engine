@@ -19,8 +19,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use crate::test262_release_gate::{ProfileDecision, Test262PinSet, Test262Profile};
 use serde::{Deserialize, Serialize};
-use crate::test262_release_gate::{Test262PinSet, Test262Profile, ProfileDecision};
 
 /// Test262 test metadata extracted from test file frontmatter.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -173,7 +173,7 @@ impl Test262Harness {
     /// Clone Test262 repository from GitHub.
     fn clone_test262(&self) -> Result<(), Test262HarnessError> {
         let output = Command::new("git")
-            .args(&[
+            .args([
                 "clone",
                 "--depth=1", // Shallow clone for speed
                 "https://github.com/tc39/test262.git",
@@ -195,7 +195,7 @@ impl Test262Harness {
     /// Checkout pinned commit specified in pins configuration.
     fn checkout_pinned_commit(&self) -> Result<(), Test262HarnessError> {
         let output = Command::new("git")
-            .args(&["checkout", &self.pins.test262_commit])
+            .args(["checkout", &self.pins.test262_commit])
             .current_dir(&self.test262_path)
             .output()
             .map_err(|e| Test262HarnessError::GitError(e.to_string()))?;
@@ -214,14 +214,14 @@ impl Test262Harness {
     /// Verify repository is at the correct pinned commit.
     fn verify_commit(&self) -> Result<(), Test262HarnessError> {
         let output = Command::new("git")
-            .args(&["rev-parse", "HEAD"])
+            .args(["rev-parse", "HEAD"])
             .current_dir(&self.test262_path)
             .output()
             .map_err(|e| Test262HarnessError::GitError(e.to_string()))?;
 
         if !output.status.success() {
             return Err(Test262HarnessError::GitError(
-                "Failed to get current commit".to_string()
+                "Failed to get current commit".to_string(),
             ));
         }
 
@@ -242,8 +242,7 @@ impl Test262Harness {
         dir: &Path,
         test_cases: &mut Vec<Test262TestCase>,
     ) -> Result<(), Test262HarnessError> {
-        let entries = fs::read_dir(dir)
-            .map_err(|e| Test262HarnessError::IoError(e.to_string()))?;
+        let entries = fs::read_dir(dir).map_err(|e| Test262HarnessError::IoError(e.to_string()))?;
 
         for entry in entries {
             let entry = entry.map_err(|e| Test262HarnessError::IoError(e.to_string()))?;
@@ -271,9 +270,9 @@ impl Test262Harness {
         // Extract relative path from Test262 repo root
         let relative_path = file_path
             .strip_prefix(&self.test262_path)
-            .map_err(|_| Test262HarnessError::PathError(
-                "Test file not under Test262 repo".to_string()
-            ))?
+            .map_err(|_| {
+                Test262HarnessError::PathError("Test file not under Test262 repo".to_string())
+            })?
             .to_string_lossy()
             .to_string();
 
@@ -283,8 +282,14 @@ impl Test262Harness {
 
         Ok(Test262TestCase {
             file_path: relative_path,
-            es_clause: metadata.get("esid").unwrap_or(&"unknown".to_string()).clone(),
-            description: metadata.get("description").unwrap_or(&"".to_string()).clone(),
+            es_clause: metadata
+                .get("esid")
+                .unwrap_or(&"unknown".to_string())
+                .clone(),
+            description: metadata
+                .get("description")
+                .unwrap_or(&"".to_string())
+                .clone(),
             source,
             expected_outcome: self.determine_expected_outcome(&metadata),
             features: self.parse_list_field(&metadata, "features"),
@@ -299,14 +304,13 @@ impl Test262Harness {
         // Test262 files start with /*--- frontmatter ---*/
         if !content.starts_with("/*---") {
             return Err(Test262HarnessError::ParseError(
-                "Missing Test262 frontmatter".to_string()
+                "Missing Test262 frontmatter".to_string(),
             ));
         }
 
-        let frontmatter_end = content.find("---*/")
-            .ok_or_else(|| Test262HarnessError::ParseError(
-                "Malformed frontmatter".to_string()
-            ))?;
+        let frontmatter_end = content
+            .find("---*/")
+            .ok_or_else(|| Test262HarnessError::ParseError("Malformed frontmatter".to_string()))?;
 
         let frontmatter = content[5..frontmatter_end].to_string(); // Skip "/*---"
         let source = content[frontmatter_end + 5..].to_string(); // Skip "---*/"
@@ -315,7 +319,10 @@ impl Test262Harness {
     }
 
     /// Parse YAML-like frontmatter into key-value map.
-    fn parse_frontmatter(&self, frontmatter: &str) -> Result<BTreeMap<String, String>, Test262HarnessError> {
+    fn parse_frontmatter(
+        &self,
+        frontmatter: &str,
+    ) -> Result<BTreeMap<String, String>, Test262HarnessError> {
         let mut metadata = BTreeMap::new();
 
         for line in frontmatter.lines() {
@@ -357,7 +364,7 @@ impl Test262Harness {
             // For simplicity, use basic string parsing
             if negative_str.contains("phase") && negative_str.contains("type") {
                 return Some(Test262Negative {
-                    phase: "parse".to_string(), // Simplified
+                    phase: "parse".to_string(),            // Simplified
                     error_type: "SyntaxError".to_string(), // Simplified
                 });
             }
@@ -366,13 +373,19 @@ impl Test262Harness {
     }
 
     /// Determine expected test outcome from metadata.
-    fn determine_expected_outcome(&self, metadata: &BTreeMap<String, String>) -> Test262ExpectedOutcome {
+    fn determine_expected_outcome(
+        &self,
+        metadata: &BTreeMap<String, String>,
+    ) -> Test262ExpectedOutcome {
         if metadata.contains_key("negative") {
             // Negative test - should throw error
             Test262ExpectedOutcome::ThrowError {
                 error_type: "Error".to_string(), // Simplified
             }
-        } else if metadata.get("flags").map_or(false, |flags| flags.contains("early")) {
+        } else if metadata
+            .get("flags")
+            .is_some_and(|flags| flags.contains("early"))
+        {
             // Early error - parse error
             Test262ExpectedOutcome::ParseError
         } else {

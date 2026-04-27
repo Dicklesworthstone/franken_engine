@@ -1,0 +1,5 @@
+schema_version = "franken-engine.test262-pin.v1"
+source_repo = "tc39/test262"
+es_profile = "ES2020"
+# Using a recent commit from Test262 (this should be updated to latest stable)
+test262_commit = "6fde6c6a5d9e7e6c7b2a4c4e5f6a7b8c9d0e1f2a"

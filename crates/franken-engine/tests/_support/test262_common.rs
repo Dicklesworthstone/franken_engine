@@ -11,9 +11,30 @@
 //! iterator_protocol test262 conformance harnesses.
 
 use frankenengine_engine::security_epoch::SecurityEpoch;
-use frankenengine_engine::{EvalOutcome, EvalResult};
+use frankenengine_engine::{EvalError, EvalErrorClass, EvalOutcome, EvalResult};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+
+/// Returns true when the engine error matches the JS-style error type test262
+/// expects. Combines two checks:
+///
+/// 1. Substring match on the full Display string. Many engine errors include
+///    the JS class name in their message (e.g. closure_model emits
+///    "SyntaxError: identifier ... has already been declared").
+/// 2. Class-based fallback for the cases where a correctly-classified engine
+///    error does not happen to mention the JS class name in its message — for
+///    example, a generic parse error like "Unexpected token at line 7" is
+///    correctly a SyntaxError per spec but its message does not contain the
+///    literal "SyntaxError".
+fn matches_expected_error_type(error: &EvalError, error_type: &str) -> bool {
+    if error.to_string().contains(error_type) {
+        return true;
+    }
+    matches!(
+        (error.class(), error_type),
+        (EvalErrorClass::Parse, "SyntaxError") | (EvalErrorClass::Resolution, "ReferenceError")
+    )
+}
 
 // ---------------------------------------------------------------------------
 // Common Test262 Enums and Types
@@ -98,16 +119,18 @@ pub fn evaluate_test262_result(
                     error_type, test_id
                 ),
             },
-            ExpectedResult::IteratorSequence { values } => Test262Result::Fail {
+            ExpectedResult::IteratorSequence { values: _ } => Test262Result::Fail {
                 reason: format!(
-                    "Expected iterator sequence {:?} but got success in {}",
-                    values, test_id
+                    "ExpectedResult::IteratorSequence is not supported by the shared \
+                     Test262 helper — use the iterator_protocol_test262 harness or \
+                     extend evaluate_test262_result with sequence comparison ({})",
+                    test_id
                 ),
             },
         },
         Err(error) => match expected {
             ExpectedResult::SyntaxError { error_type } => {
-                if error.to_string().contains(error_type) {
+                if matches_expected_error_type(&error, error_type) {
                     Test262Result::Pass
                 } else {
                     Test262Result::Fail {
@@ -119,7 +142,7 @@ pub fn evaluate_test262_result(
                 }
             }
             ExpectedResult::RuntimeError { error_type } => {
-                if error.to_string().contains(error_type) {
+                if matches_expected_error_type(&error, error_type) {
                     Test262Result::Pass
                 } else {
                     Test262Result::Fail {

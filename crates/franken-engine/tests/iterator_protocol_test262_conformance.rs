@@ -12,9 +12,24 @@
 
 use frankenengine_engine::HybridRouter;
 use frankenengine_engine::security_epoch::SecurityEpoch;
-use frankenengine_engine::{EvalOutcome, EvalResult};
+use frankenengine_engine::{EvalError, EvalErrorClass, EvalOutcome, EvalResult};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+
+/// Mirror of test262_common::matches_expected_error_type. Uses both the full
+/// Display string and a class-based fallback so engine-classified errors that
+/// don't happen to mention the JS class name in their message (e.g. a generic
+/// parse error like "Unexpected token at line 7") still match a SyntaxError
+/// expectation.
+fn matches_expected_error_type(error: &EvalError, error_type: &str) -> bool {
+    if error.to_string().contains(error_type) {
+        return true;
+    }
+    matches!(
+        (error.class(), error_type),
+        (EvalErrorClass::Parse, "SyntaxError") | (EvalErrorClass::Resolution, "ReferenceError")
+    )
+}
 
 // ---------------------------------------------------------------------------
 // Constants and Schema
@@ -445,6 +460,7 @@ impl IteratorConformanceHarness {
     }
 
     /// Execute a single conformance test.
+    #[allow(clippy::result_large_err)]
     fn execute_test(
         &self,
         test: &IteratorConformanceTest,
@@ -501,7 +517,7 @@ impl IteratorConformanceHarness {
             },
             Err(error) => match expected {
                 ExpectedResult::ThrowError { error_type } => {
-                    if error.to_string().contains(error_type) {
+                    if matches_expected_error_type(&error, error_type) {
                         IteratorConformanceResult::Pass
                     } else {
                         IteratorConformanceResult::Fail {

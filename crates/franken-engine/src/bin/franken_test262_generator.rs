@@ -94,7 +94,8 @@ fn parse_args() -> Result<CliArgs, String> {
             }
             "--sample-count" => {
                 let value = args.next().ok_or("--sample-count requires a value")?;
-                sample_count = value.parse()
+                sample_count = value
+                    .parse()
                     .map_err(|_| format!("--sample-count must be a number, got '{}'", value))?;
             }
             "--help" => {
@@ -127,8 +128,14 @@ fn run(args: CliArgs) -> Result<(), Box<dyn std::error::Error>> {
     let pins = load_pins(&args.pins_path)?;
     let profile = load_profile(&args.profile_path)?;
 
-    println!("  Pins: {} (commit: {})", pins.source_repo, pins.test262_commit);
-    println!("  Profile: {} ({})", profile.profile_name, profile.es_profile);
+    println!(
+        "  Pins: {} (commit: {})",
+        pins.source_repo, pins.test262_commit
+    );
+    println!(
+        "  Profile: {} ({})",
+        profile.profile_name, profile.es_profile
+    );
 
     // Create harness
     let harness = Test262Harness::new(args.test262_repo_path.clone(), pins, profile);
@@ -155,7 +162,10 @@ fn run(args: CliArgs) -> Result<(), Box<dyn std::error::Error>> {
     // Sample subset if requested
     if args.sample_only {
         test_cases.truncate(args.sample_count);
-        println!("  📝 Using sample of {} tests for development", test_cases.len());
+        println!(
+            "  📝 Using sample of {} tests for development",
+            test_cases.len()
+        );
     }
 
     // Generate case vectors
@@ -164,7 +174,10 @@ fn run(args: CliArgs) -> Result<(), Box<dyn std::error::Error>> {
     println!("  Generated {} case vectors", case_vectors.len());
 
     // Write output
-    println!("💾 Writing case vectors to {}...", args.output_path.display());
+    println!(
+        "💾 Writing case vectors to {}...",
+        args.output_path.display()
+    );
     harness.write_case_vectors(&case_vectors, &args.output_path)?;
 
     println!();
@@ -175,7 +188,10 @@ fn run(args: CliArgs) -> Result<(), Box<dyn std::error::Error>> {
     println!("  • File: {}", args.output_path.display());
     println!();
     println!("🚀 Next steps:");
-    println!("  1. Run: franken_test262_runner --case-vectors {}", args.output_path.display());
+    println!(
+        "  1. Run: franken_test262_runner --case-vectors {}",
+        args.output_path.display()
+    );
     println!("  2. View: Test262 gate results with real conformance data");
     println!("  3. Update: High-water marks based on actual Test262 results");
 

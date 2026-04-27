@@ -37,6 +37,8 @@ use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+#[cfg(unix)]
+use std::process::Command;
 
 use frankenengine_engine::benchmark_e2e::{
     BENCHMARK_COMPARISON_MANIFEST_SCHEMA_VERSION, BENCHMARK_E2E_COMPONENT,
@@ -2223,10 +2225,15 @@ fn benchmark_comparison_sample_summary_reports_quantiles_and_cv() {
 }
 
 #[cfg(unix)]
+fn perl_single_quote_literal(input: &str) -> String {
+    format!("'{}'", input.replace('\\', "\\\\").replace('\'', "\\'"))
+}
+
+#[cfg(unix)]
 fn write_mock_runtime(path: &Path, sleep_seconds: &str) {
     fs::write(
         path,
-        format!("#!/usr/bin/env bash\nsleep {sleep_seconds}\n"),
+        format!("#!/usr/bin/env perl\nselect undef, undef, undef, {sleep_seconds};\n"),
     )
     .unwrap();
     let mut perms = fs::metadata(path).unwrap().permissions();
@@ -2238,7 +2245,10 @@ fn write_mock_runtime(path: &Path, sleep_seconds: &str) {
 fn write_mock_runtime_with_output(path: &Path, sleep_seconds: &str, stdout_text: &str) {
     fs::write(
         path,
-        format!("#!/usr/bin/env bash\nsleep {sleep_seconds}\nprintf '%s\\n' '{stdout_text}'\n"),
+        format!(
+            "#!/usr/bin/env perl\nselect undef, undef, undef, {sleep_seconds};\nprint {} , qq(\\n);\n",
+            perl_single_quote_literal(stdout_text)
+        ),
     )
     .unwrap();
     let mut perms = fs::metadata(path).unwrap().permissions();
@@ -2250,7 +2260,11 @@ fn write_mock_runtime_with_output(path: &Path, sleep_seconds: &str, stdout_text:
 fn write_mock_runtime_with_stderr_failure(path: &Path, stderr_text: &str, exit_code: i32) {
     fs::write(
         path,
-        format!("#!/usr/bin/env bash\nprintf '%s\\n' '{stderr_text}' >&2\nexit {exit_code}\n"),
+        format!(
+            "#!/usr/bin/env perl\nprint STDERR {}, qq(\\n);\nexit {};\n",
+            perl_single_quote_literal(stderr_text),
+            exit_code
+        ),
     )
     .unwrap();
     let mut perms = fs::metadata(path).unwrap().permissions();
@@ -2269,10 +2283,10 @@ fn write_mock_runtime_with_stderr_failure_after_runs(
     fs::write(
         path,
         format!(
-            "#!/usr/bin/env bash\ncounter_file='{}'\ncount=0\nif [[ -f \"$counter_file\" ]]; then\n  count=$(cat \"$counter_file\")\nfi\ncount=$((count + 1))\nprintf '%s' \"$count\" > \"$counter_file\"\nif [[ \"$count\" -le {} ]]; then\n  exit 0\nfi\nprintf '%s\\n' '{}' >&2\nexit {}\n",
-            counter_path.display(),
+            "#!/usr/bin/env perl\nmy $counter_file = {};\nmy $count = 0;\nif (-f $counter_file) {{\n  open my $in, '<', $counter_file or die $!;\n  my $value = <$in>;\n  close $in;\n  $count = $value // 0;\n  chomp $count;\n}}\n$count++;\nopen my $out, '>', $counter_file or die $!;\nprint {{$out}} $count;\nclose $out;\nif ($count <= {}) {{\n  exit 0;\n}}\nprint STDERR {}, qq(\\n);\nexit {};\n",
+            perl_single_quote_literal(counter_path.to_string_lossy().as_ref()),
             successful_runs_before_failure,
-            stderr_text,
+            perl_single_quote_literal(stderr_text),
             exit_code
         ),
     )
@@ -2295,9 +2309,9 @@ fn benchmark_comparison_runner_executes_mock_runtimes_and_emits_artifacts() {
     let frankenctl = root.join("mock-frankenctl");
     let node = root.join("mock-node");
     let bun = root.join("mock-bun");
-    write_mock_runtime(&frankenctl, "0.01");
-    write_mock_runtime(&node, "0.02");
-    write_mock_runtime(&bun, "0.03");
+    write_mock_runtime(&frankenctl, "0.005");
+    write_mock_runtime(&node, "0.01");
+    write_mock_runtime(&bun, "0.015");
 
     let manifest = BenchmarkComparisonManifest {
         schema_version: BENCHMARK_COMPARISON_MANIFEST_SCHEMA_VERSION.to_string(),
@@ -2461,6 +2475,52 @@ fn benchmark_comparison_runner_executes_mock_runtimes_and_emits_artifacts() {
 
 #[cfg(unix)]
 #[test]
+fn benchmark_comparison_mock_runtime_helpers_preserve_perl_sensitive_text() {
+    let root = std::env::temp_dir().join(format!(
+        "franken_bench_compare_special_chars_{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+
+    let output_runtime = root.join("mock-output");
+    let stderr_runtime = root.join("mock-stderr");
+    let delayed_failure_runtime = root.join("dir$quote'").join("mock-delayed");
+    fs::create_dir_all(delayed_failure_runtime.parent().unwrap()).unwrap();
+
+    let special_text = "quoted '$HOME' and slash \\\\ text";
+    write_mock_runtime_with_output(&output_runtime, "0", special_text);
+    write_mock_runtime_with_stderr_failure(&stderr_runtime, special_text, 7);
+    write_mock_runtime_with_stderr_failure_after_runs(&delayed_failure_runtime, special_text, 9, 1);
+
+    let output = Command::new(&output_runtime).output().unwrap();
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        format!("{special_text}\n")
+    );
+
+    let stderr_failure = Command::new(&stderr_runtime).output().unwrap();
+    assert_eq!(stderr_failure.status.code(), Some(7));
+    assert_eq!(
+        String::from_utf8(stderr_failure.stderr).unwrap(),
+        format!("{special_text}\n")
+    );
+
+    let first_delayed = Command::new(&delayed_failure_runtime).output().unwrap();
+    assert!(first_delayed.status.success());
+    let second_delayed = Command::new(&delayed_failure_runtime).output().unwrap();
+    assert_eq!(second_delayed.status.code(), Some(9));
+    assert_eq!(
+        String::from_utf8(second_delayed.stderr).unwrap(),
+        format!("{special_text}\n")
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[cfg(unix)]
+#[test]
 fn benchmark_comparison_runner_records_behavioral_differences_on_output_mismatch() {
     let root = std::env::temp_dir().join(format!(
         "franken_bench_compare_mismatch_{}",
@@ -2475,9 +2535,9 @@ fn benchmark_comparison_runner_records_behavioral_differences_on_output_mismatch
     let frankenctl = root.join("mock-frankenctl");
     let node = root.join("mock-node");
     let bun = root.join("mock-bun");
-    write_mock_runtime_with_output(&frankenctl, "0.01", "shared-output");
-    write_mock_runtime_with_output(&node, "0.01", "shared-output");
-    write_mock_runtime_with_output(&bun, "0.01", "divergent-output");
+    write_mock_runtime_with_output(&frankenctl, "0.005", "shared-output");
+    write_mock_runtime_with_output(&node, "0.005", "shared-output");
+    write_mock_runtime_with_output(&bun, "0.005", "divergent-output");
 
     let manifest = BenchmarkComparisonManifest {
         schema_version: BENCHMARK_COMPARISON_MANIFEST_SCHEMA_VERSION.to_string(),
@@ -2548,9 +2608,9 @@ fn benchmark_comparison_runner_times_out_fail_closed_without_shell_timeout_wrapp
     let frankenctl = root.join("mock-frankenctl");
     let node = root.join("mock-node");
     let bun = root.join("mock-bun");
-    write_mock_runtime(&frankenctl, "0.20");
-    write_mock_runtime(&node, "0.20");
-    write_mock_runtime(&bun, "0.20");
+    write_mock_runtime(&frankenctl, "0.05");
+    write_mock_runtime(&node, "0.05");
+    write_mock_runtime(&bun, "0.05");
 
     let manifest = BenchmarkComparisonManifest {
         schema_version: BENCHMARK_COMPARISON_MANIFEST_SCHEMA_VERSION.to_string(),

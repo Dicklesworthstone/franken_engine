@@ -11,14 +11,13 @@ use std::fs;
 use std::path::Path;
 
 use regex::Regex;
-use serde_json;
 
-use frankenengine_engine::queueing_admission_control::AdmissionDecision;
+use frankenengine_engine::queueing_admission_control::{AdmissionDecision, ShedReason};
 use frankenengine_engine::resource_certificate_governance::{GovernanceVerdict, ResourceDimension};
 use frankenengine_engine::resource_escalation_control::{
     EscalationAction, EscalationEvent, EscalationLog, TerminationReason,
 };
-use frankenengine_engine::runtime_decision_theory::LaneAction;
+use frankenengine_engine::runtime_decision_theory::{DemotionReason, LaneAction, LaneId};
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -208,7 +207,7 @@ fn golden_escalation_log_early_termination() {
         source_module: "resource_escalation_control".to_string(),
         basis: serde_json::json!({
             "termination_reason": "unresponsive",
-            "timeout_ns": 5_000_000_000
+            "timeout_ns": 5_000_000_000i64
         }),
     });
 
@@ -259,7 +258,10 @@ fn golden_escalation_log_shed_decision() {
         timestamp_ns: 1_000_000_000,
         action: EscalationAction::Throttle {
             decision: AdmissionDecision::Shed {
-                reason: "overload".to_string(),
+                reason: ShedReason::UtilizationOverload {
+                    current_utilization_millionths: 950_000,
+                    shed_threshold_millionths: 900_000,
+                },
             },
             rationale: "immediate shedding required under extreme load".to_string(),
         },
@@ -283,7 +285,10 @@ fn golden_escalation_log_minimal_single_dimension() {
     log.add_event(EscalationEvent {
         timestamp_ns: 1_000_000_000,
         action: EscalationAction::Suspend {
-            action: LaneAction::Demote,
+            action: LaneAction::Demote {
+                from_lane: LaneId::throughput_profile(),
+                reason: DemotionReason::BudgetExhausted,
+            },
             rationale: "direct demotion for budget exhaustion".to_string(),
         },
         source_module: "runtime_decision_theory".to_string(),
@@ -335,7 +340,10 @@ fn escalation_action_display() {
     assert_eq!(sandbox.to_string(), "sandbox");
 
     let suspend = EscalationAction::Suspend {
-        action: LaneAction::Demote,
+        action: LaneAction::Demote {
+            from_lane: LaneId::throughput_profile(),
+            reason: DemotionReason::BudgetExhausted,
+        },
         rationale: "test".to_string(),
     };
     assert_eq!(suspend.to_string(), "suspend");

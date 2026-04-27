@@ -7,12 +7,10 @@
 //! compilation pipeline. Tests cover basic expressions, complex statements,
 //! declarations, module syntax, JSX/TSX, error recovery, and diagnostic output.
 
-use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
 use regex::Regex;
-use serde_json;
 
 use frankenengine_engine::ast::{ParseGoal, SyntaxTree};
 use frankenengine_engine::parser::{
@@ -31,13 +29,14 @@ fn default_parser_options() -> ParserOptions {
     ParserOptions::default()
 }
 
+#[allow(dead_code)]
 fn budget_limited_options() -> ParserOptions {
     ParserOptions {
         mode: ParserMode::ScalarReference,
         budget: ParserBudget {
             max_source_bytes: 1000,
-            max_syntax_tree_nodes: 100,
-            max_diagnostic_entries: 10,
+            max_token_count: 100,
+            max_recursion_depth: 10,
         },
     }
 }
@@ -403,8 +402,8 @@ fn golden_parse_error_budget_exceeded() {
         mode: ParserMode::ScalarReference,
         budget: ParserBudget {
             max_source_bytes: 10, // Very small limit
-            max_syntax_tree_nodes: 100,
-            max_diagnostic_entries: 10,
+            max_token_count: 100,
+            max_recursion_depth: 10,
         },
     };
 
@@ -540,18 +539,18 @@ fn ast_parser_constants_consistency() {
 
     // Verify constants match tree methods
     assert_eq!(
-        tree.canonical_contract_version(),
+        SyntaxTree::canonical_contract_version(),
         CANONICAL_AST_CONTRACT_VERSION
     );
     assert_eq!(
-        tree.canonical_schema_version(),
+        SyntaxTree::canonical_schema_version(),
         CANONICAL_AST_SCHEMA_VERSION
     );
     assert_eq!(
-        tree.canonical_hash_algorithm(),
+        SyntaxTree::canonical_hash_algorithm(),
         CANONICAL_AST_HASH_ALGORITHM
     );
-    assert_eq!(tree.canonical_hash_prefix(), CANONICAL_AST_HASH_PREFIX);
+    assert_eq!(SyntaxTree::canonical_hash_prefix(), CANONICAL_AST_HASH_PREFIX);
 
     // Verify hash has expected prefix
     assert!(tree.canonical_hash().starts_with(CANONICAL_AST_HASH_PREFIX));

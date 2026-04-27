@@ -550,7 +550,10 @@ fn ast_parser_constants_consistency() {
         SyntaxTree::canonical_hash_algorithm(),
         CANONICAL_AST_HASH_ALGORITHM
     );
-    assert_eq!(SyntaxTree::canonical_hash_prefix(), CANONICAL_AST_HASH_PREFIX);
+    assert_eq!(
+        SyntaxTree::canonical_hash_prefix(),
+        CANONICAL_AST_HASH_PREFIX
+    );
 
     // Verify hash has expected prefix
     assert!(tree.canonical_hash().starts_with(CANONICAL_AST_HASH_PREFIX));

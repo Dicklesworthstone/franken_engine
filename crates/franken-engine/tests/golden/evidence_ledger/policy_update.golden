@@ -1,0 +1,74 @@
+{
+  "schema_version": {
+    "major": 1,
+    "minor": 0,
+    "patch": 0
+  },
+  "entry_id": "[ENTRY_ID]",
+  "trace_id": "trace-policy-003",
+  "decision_id": "decision-update-003",
+  "policy_id": "policy-v3.0",
+  "epoch_id": 250,
+  "timestamp_ns": 0,
+  "decision_type": "PolicyUpdate",
+  "candidates": [
+    {
+      "action_name": "keep_current",
+      "expected_loss_millionths": 500000,
+      "filtered": false,
+      "filter_reason": null
+    },
+    {
+      "action_name": "rollback_policy",
+      "expected_loss_millionths": 300000,
+      "filtered": false,
+      "filter_reason": null
+    },
+    {
+      "action_name": "update_policy",
+      "expected_loss_millionths": 150000,
+      "filtered": false,
+      "filter_reason": null
+    }
+  ],
+  "constraints": [
+    {
+      "constraint_id": "policy_validation",
+      "description": "schema_v3_compatible",
+      "active": true
+    },
+    {
+      "constraint_id": "update_window",
+      "description": "within_maintenance_hours",
+      "active": true
+    }
+  ],
+  "chosen_action": {
+    "action_name": "update_policy",
+    "expected_loss_millionths": 150000,
+    "rationale": "security vulnerabilities fixed in new policy version"
+  },
+  "witnesses": [
+    {
+      "witness_id": "policy_validator",
+      "witness_type": "policy_validator",
+      "value": "schema_validation_passed"
+    },
+    {
+      "witness_id": "rollback_plan",
+      "witness_type": "rollback_plan",
+      "value": "automatic_rollback_available"
+    },
+    {
+      "witness_id": "security_scanner",
+      "witness_type": "security_scanner",
+      "value": "5_vulnerabilities_fixed"
+    }
+  ],
+  "evidence_hash": "[HASH]",
+  "metadata": {
+    "affected_extensions": "network,filesystem,crypto",
+    "policy_source": "security_team",
+    "update_urgency": "high"
+  }
+}

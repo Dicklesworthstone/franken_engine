@@ -1,0 +1,69 @@
+{
+  "schema_version": {
+    "major": 1,
+    "minor": 0,
+    "patch": 0
+  },
+  "entry_id": "[ENTRY_ID]",
+  "trace_id": "trace-lifecycle-004",
+  "decision_id": "decision-terminate-004",
+  "policy_id": "policy-v1.5",
+  "epoch_id": 75,
+  "timestamp_ns": 0,
+  "decision_type": "ExtensionLifecycle",
+  "candidates": [
+    {
+      "action_name": "restart",
+      "expected_loss_millionths": 600000,
+      "filtered": false,
+      "filter_reason": null
+    },
+    {
+      "action_name": "suspend",
+      "expected_loss_millionths": 400000,
+      "filtered": false,
+      "filter_reason": null
+    },
+    {
+      "action_name": "terminate",
+      "expected_loss_millionths": 800000,
+      "filtered": false,
+      "filter_reason": null
+    }
+  ],
+  "constraints": [
+    {
+      "constraint_id": "recovery_attempts",
+      "description": "restart_attempts >= 2",
+      "active": true
+    },
+    {
+      "constraint_id": "violation_count",
+      "description": "security_violations >= 3",
+      "active": true
+    }
+  ],
+  "chosen_action": {
+    "action_name": "terminate",
+    "expected_loss_millionths": 800000,
+    "rationale": "repeated security violations with failed recovery attempts"
+  },
+  "witnesses": [
+    {
+      "witness_id": "extension_monitor",
+      "witness_type": "extension_monitor",
+      "value": "unresponsive_for_30s"
+    },
+    {
+      "witness_id": "violation_tracker",
+      "witness_type": "violation_tracker",
+      "value": "policy_violations_3_restart_failures_2"
+    }
+  ],
+  "evidence_hash": "e73bacd5750fa8aceb3c9f878cb735d45d8d9a6f702e14fded[TIMESTAMP]eb",
+  "metadata": {
+    "extension_id": "ext-untrusted-network",
+    "termination_reason": "security_risk",
+    "violation_types": "unauthorized_network_access,capability_escalation"
+  }
+}

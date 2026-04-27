@@ -1,0 +1,68 @@
+{
+  "schema_version": {
+    "major": 1,
+    "minor": 0,
+    "patch": 0
+  },
+  "entry_id": "[ENTRY_ID]",
+  "trace_id": "trace-security-001",
+  "decision_id": "decision-sandbox-001",
+  "policy_id": "policy-v1.0",
+  "epoch_id": 42,
+  "timestamp_ns": 0,
+  "decision_type": "SecurityAction",
+  "candidates": [
+    {
+      "action_name": "allow",
+      "expected_loss_millionths": 50000,
+      "filtered": false,
+      "filter_reason": null
+    },
+    {
+      "action_name": "challenge",
+      "expected_loss_millionths": 80000,
+      "filtered": false,
+      "filter_reason": null
+    },
+    {
+      "action_name": "sandbox",
+      "expected_loss_millionths": 100000,
+      "filtered": false,
+      "filter_reason": null
+    }
+  ],
+  "constraints": [
+    {
+      "constraint_id": "capability_required",
+      "description": "network.access",
+      "active": true
+    },
+    {
+      "constraint_id": "resource_budget",
+      "description": "cpu_time_ms < 1000",
+      "active": true
+    }
+  ],
+  "chosen_action": {
+    "action_name": "sandbox",
+    "expected_loss_millionths": 100000,
+    "rationale": "resource limits exceeded, require isolation"
+  },
+  "witnesses": [
+    {
+      "witness_id": "capability_check",
+      "witness_type": "capability_check",
+      "value": "network_access_requested"
+    },
+    {
+      "witness_id": "resource_monitor",
+      "witness_type": "resource_monitor",
+      "value": "cpu_usage_90_percent"
+    }
+  ],
+  "evidence_hash": "[HASH]",
+  "metadata": {
+    "enforcement_mode": "strict",
+    "extension_id": "ext-malicious-crypto"
+  }
+}

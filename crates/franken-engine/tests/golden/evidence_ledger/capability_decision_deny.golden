@@ -1,0 +1,52 @@
+{
+  "schema_version": {
+    "major": 1,
+    "minor": 0,
+    "patch": 0
+  },
+  "entry_id": "[ENTRY_ID]",
+  "trace_id": "trace-capability-002",
+  "decision_id": "decision-deny-002",
+  "policy_id": "policy-v2.1",
+  "epoch_id": 100,
+  "timestamp_ns": 0,
+  "decision_type": "CapabilityDecision",
+  "candidates": [
+    {
+      "action_name": "deny",
+      "expected_loss_millionths": 10000,
+      "filtered": false,
+      "filter_reason": null
+    },
+    {
+      "action_name": "grant",
+      "expected_loss_millionths": 200000,
+      "filtered": false,
+      "filter_reason": null
+    }
+  ],
+  "constraints": [
+    {
+      "constraint_id": "permission_level",
+      "description": "user_permission < required_level",
+      "active": true
+    }
+  ],
+  "chosen_action": {
+    "action_name": "deny",
+    "expected_loss_millionths": 10000,
+    "rationale": "insufficient permissions for requested capability"
+  },
+  "witnesses": [
+    {
+      "witness_id": "permission_checker",
+      "witness_type": "permission_checker",
+      "value": "user_level_2_required_level_5"
+    }
+  ],
+  "evidence_hash": "[HASH]",
+  "metadata": {
+    "requested_capability": "filesystem.write",
+    "user_context": "untrusted_extension"
+  }
+}

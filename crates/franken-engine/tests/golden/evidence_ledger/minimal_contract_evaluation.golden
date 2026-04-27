@@ -1,0 +1,31 @@
+{
+  "schema_version": {
+    "major": 1,
+    "minor": 0,
+    "patch": 0
+  },
+  "entry_id": "[ENTRY_ID]",
+  "trace_id": "trace-minimal-005",
+  "decision_id": "decision-minimal-005",
+  "policy_id": "policy-minimal",
+  "epoch_id": 0,
+  "timestamp_ns": 0,
+  "decision_type": "ContractEvaluation",
+  "candidates": [
+    {
+      "action_name": "default",
+      "expected_loss_millionths": 0,
+      "filtered": false,
+      "filter_reason": null
+    }
+  ],
+  "constraints": [],
+  "chosen_action": {
+    "action_name": "default",
+    "expected_loss_millionths": 0,
+    "rationale": "no action required"
+  },
+  "witnesses": [],
+  "evidence_hash": "[HASH]",
+  "metadata": {}
+}

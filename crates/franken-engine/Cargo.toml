@@ -68,7 +68,7 @@ syn = { version = "2.0", features = ["full", "visit"] }
 toml = "0.8"
 clap = "4.5"
 unicode-normalization = "0.1"
-rustix = { version = "1.1", features = ["event", "process", "time"] }
+rustix = { version = "1.1", features = ["event", "fs", "process", "time"] }
 wait4 = "0.1"
 wait-timeout = "0.2"
 frankenengine-extension-host = { path = "../franken-extension-host" }

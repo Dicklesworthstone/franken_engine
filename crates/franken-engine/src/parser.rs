@@ -2656,7 +2656,8 @@ fn split_statement_segments(line: &str) -> Vec<(usize, usize, &str)> {
                         || starts_with_keyword(seg, "do")
                         || starts_with_keyword(seg, "try")
                         || starts_with_keyword(seg, "switch")
-                        || starts_with_keyword(seg, "class");
+                        || starts_with_keyword(seg, "class")
+                        || starts_with_export_block_statement(seg);
                     if starts_with_block {
                         let after = index.saturating_add(1);
                         let rest = line[after..].trim_start();
@@ -2690,6 +2691,28 @@ fn starts_with_keyword(text: &str, kw: &str) -> bool {
             .as_bytes()
             .get(kw.len())
             .is_none_or(|b| !b.is_ascii_alphanumeric() && *b != b'_')
+}
+
+fn starts_with_export_block_statement(text: &str) -> bool {
+    let Some(rest) = text.strip_prefix("export") else {
+        return false;
+    };
+    let Some(first) = rest.chars().next() else {
+        return false;
+    };
+    if !first.is_whitespace() {
+        return false;
+    }
+
+    let rest = rest.trim_start();
+    let rest = rest
+        .strip_prefix("default")
+        .map(str::trim_start)
+        .unwrap_or(rest);
+    starts_with_keyword(rest, "function")
+        || rest.starts_with("function*")
+        || rest.starts_with("async function")
+        || starts_with_keyword(rest, "class")
 }
 
 fn push_segment<'a>(
@@ -9264,6 +9287,55 @@ mod tests {
             &tree.body[1],
             Statement::Export(export)
                 if matches!(&export.kind, ExportKind::NamedClause(clause) if clause == "{ run }")
+        ));
+    }
+
+    #[test]
+    fn export_function_statement_splits_before_following_same_line_statement() {
+        let parser = CanonicalEs2020Parser;
+        let tree = parser
+            .parse(
+                "export function run() {} const after = 1",
+                ParseGoal::Module,
+            )
+            .expect("exported function followed by declaration should parse");
+
+        assert_eq!(tree.body.len(), 3);
+        assert!(matches!(
+            &tree.body[0],
+            Statement::FunctionDeclaration(function) if function.name.as_deref() == Some("run")
+        ));
+        assert!(matches!(
+            &tree.body[1],
+            Statement::Export(export)
+                if matches!(&export.kind, ExportKind::NamedClause(clause) if clause == "{ run }")
+        ));
+        assert!(matches!(
+            &tree.body[2],
+            Statement::VariableDeclaration(declaration)
+                if declaration.declarations[0].name() == Some("after")
+        ));
+    }
+
+    #[test]
+    fn export_default_function_statement_splits_before_following_same_line_statement() {
+        let parser = CanonicalEs2020Parser;
+        let tree = parser
+            .parse(
+                "export default function() {} const after = 1",
+                ParseGoal::Module,
+            )
+            .expect("default exported function followed by declaration should parse");
+
+        assert_eq!(tree.body.len(), 2);
+        assert!(matches!(
+            &tree.body[0],
+            Statement::Export(export) if matches!(&export.kind, ExportKind::Default(_))
+        ));
+        assert!(matches!(
+            &tree.body[1],
+            Statement::VariableDeclaration(declaration)
+                if declaration.declarations[0].name() == Some("after")
         ));
     }
 

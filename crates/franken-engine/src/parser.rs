@@ -2452,7 +2452,12 @@ fn parse_source(
                 logical_line.end_line,
                 end_in_line.saturating_add(1) as u64,
             );
-            statements.push(parse_statement(statement_text, goal, span, &mut context)?);
+            statements.extend(parse_module_statement_segment(
+                statement_text,
+                goal,
+                span,
+                &mut context,
+            )?);
         }
     }
 
@@ -2463,6 +2468,132 @@ fn parse_source(
         body: statements,
         span,
     })
+}
+
+fn parse_module_statement_segment(
+    statement: &str,
+    goal: ParseGoal,
+    span: SourceSpan,
+    context: &mut ParseExecutionContext<'_>,
+) -> ParseResult<Vec<Statement>> {
+    if goal == ParseGoal::Module
+        && statement.starts_with("export ")
+        && let Some(expanded) = parse_named_declaration_export(statement, span.clone(), context)?
+    {
+        return Ok(expanded);
+    }
+
+    Ok(vec![parse_statement(statement, goal, span, context)?])
+}
+
+fn parse_named_declaration_export(
+    statement: &str,
+    span: SourceSpan,
+    context: &mut ParseExecutionContext<'_>,
+) -> ParseResult<Option<Vec<Statement>>> {
+    let Some(rest) = statement.strip_prefix("export") else {
+        return Ok(None);
+    };
+    let Some(first) = rest.chars().next() else {
+        return Ok(None);
+    };
+    if !first.is_whitespace() {
+        return Ok(None);
+    }
+
+    let declaration_text = rest.trim_start();
+    if declaration_text.is_empty()
+        || declaration_text.starts_with("default")
+        || declaration_text.starts_with('{')
+        || declaration_text.starts_with('*')
+    {
+        return Ok(None);
+    }
+
+    let declaration_span = span_after_prefix(
+        &span,
+        statement.len().saturating_sub(declaration_text.len()),
+    );
+    let declaration = if let Some(kind) = parse_variable_declaration_kind(declaration_text) {
+        Statement::VariableDeclaration(parse_variable_declaration(
+            declaration_text,
+            kind,
+            declaration_span,
+            context,
+        )?)
+    } else if starts_named_exportable_declaration(declaration_text) {
+        parse_statement(
+            declaration_text,
+            ParseGoal::Module,
+            declaration_span,
+            context,
+        )?
+    } else {
+        return Ok(None);
+    };
+
+    let export_names = export_names_for_declaration(&declaration, &span, context.source_label)?;
+    let clause = format_named_export_clause(&export_names);
+    Ok(Some(vec![
+        declaration,
+        Statement::Export(ExportDeclaration {
+            kind: ExportKind::NamedClause(clause),
+            span,
+        }),
+    ]))
+}
+
+fn span_after_prefix(span: &SourceSpan, prefix_len: usize) -> SourceSpan {
+    let delta = prefix_len as u64;
+    SourceSpan::new(
+        span.start_offset.saturating_add(delta),
+        span.end_offset,
+        span.start_line,
+        span.start_column.saturating_add(delta),
+        span.end_line,
+        span.end_column,
+    )
+}
+
+fn starts_named_exportable_declaration(statement: &str) -> bool {
+    statement.starts_with("function ")
+        || statement.starts_with("function*")
+        || statement.starts_with("async function ")
+        || statement.starts_with("async function*")
+        || statement.starts_with("class ")
+}
+
+fn export_names_for_declaration(
+    declaration: &Statement,
+    export_span: &SourceSpan,
+    source_label: &str,
+) -> ParseResult<Vec<String>> {
+    let names: Vec<String> = match declaration {
+        Statement::VariableDeclaration(declaration) => declaration
+            .declarations
+            .iter()
+            .flat_map(|declarator| declarator.pattern.binding_names())
+            .map(str::to_string)
+            .collect(),
+        Statement::FunctionDeclaration(function) => function.name.iter().cloned().collect(),
+        Statement::ClassDeclaration(class) => class.name.iter().cloned().collect(),
+        _ => Vec::new(),
+    };
+
+    if names.is_empty() {
+        return Err(ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            "named export declaration must introduce at least one binding",
+            source_label.to_string(),
+            Some(export_span.clone()),
+        ));
+    }
+
+    Ok(names)
+}
+
+fn format_named_export_clause(names: &[String]) -> String {
+    format!("{{ {} }}", names.join(", "))
 }
 
 fn line_count(source: &str) -> u64 {
@@ -9094,6 +9225,65 @@ mod tests {
             },
             _ => panic!("expected export statement"),
         }
+    }
+
+    #[test]
+    fn export_const_declaration_expands_to_declaration_and_named_export() {
+        let parser = CanonicalEs2020Parser;
+        let tree = parser
+            .parse("export const x = 42", ParseGoal::Module)
+            .expect("named const export should parse");
+
+        assert_eq!(tree.body.len(), 2);
+        assert!(matches!(
+            &tree.body[0],
+            Statement::VariableDeclaration(declaration)
+                if declaration.kind == VariableDeclarationKind::Const
+                    && declaration.declarations[0].name() == Some("x")
+        ));
+        assert!(matches!(
+            &tree.body[1],
+            Statement::Export(export)
+                if matches!(&export.kind, ExportKind::NamedClause(clause) if clause == "{ x }")
+        ));
+    }
+
+    #[test]
+    fn export_function_declaration_expands_to_declaration_and_named_export() {
+        let parser = CanonicalEs2020Parser;
+        let tree = parser
+            .parse("export function run() {}", ParseGoal::Module)
+            .expect("named function export should parse");
+
+        assert_eq!(tree.body.len(), 2);
+        assert!(matches!(
+            &tree.body[0],
+            Statement::FunctionDeclaration(function) if function.name.as_deref() == Some("run")
+        ));
+        assert!(matches!(
+            &tree.body[1],
+            Statement::Export(export)
+                if matches!(&export.kind, ExportKind::NamedClause(clause) if clause == "{ run }")
+        ));
+    }
+
+    #[test]
+    fn export_class_declaration_expands_to_declaration_and_named_export() {
+        let parser = CanonicalEs2020Parser;
+        let tree = parser
+            .parse("export class Runner {}", ParseGoal::Module)
+            .expect("named class export should parse");
+
+        assert_eq!(tree.body.len(), 2);
+        assert!(matches!(
+            &tree.body[0],
+            Statement::ClassDeclaration(class) if class.name.as_deref() == Some("Runner")
+        ));
+        assert!(matches!(
+            &tree.body[1],
+            Statement::Export(export)
+                if matches!(&export.kind, ExportKind::NamedClause(clause) if clause == "{ Runner }")
+        ));
     }
 
     #[test]

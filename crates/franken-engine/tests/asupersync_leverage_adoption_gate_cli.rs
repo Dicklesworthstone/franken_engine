@@ -127,8 +127,12 @@ fn binary_emits_adoption_gate_bundle() {
     )
     .expect("parse manifest");
     assert_eq!(manifest["seed"].as_u64(), Some(4317));
-    assert_eq!(manifest["outcome"].as_str(), Some("fail")); // After bd-2yez8: fail when artifacts missing
+    assert_eq!(manifest["outcome"].as_str(), Some("blocked"));
     assert_eq!(manifest["verdict"].as_str(), Some("stop"));
+    assert_eq!(
+        manifest["error_code"].as_str(),
+        Some("asupersync_leverage.stop.open_gap")
+    );
     assert_eq!(
         manifest["artifact_paths"]["adoption_gate"].as_str(),
         Some("asupersync_leverage_adoption_gate.json")
@@ -146,19 +150,22 @@ fn binary_emits_adoption_gate_bundle() {
     for line in lines {
         let event: serde_json::Value = serde_json::from_str(line).expect("parse event");
         assert_eq!(event["trace_id"], trace_ids["trace_id"]);
-        assert_eq!(event["outcome"].as_str(), Some("pass"));
-        assert_eq!(event["error_code"], serde_json::Value::Null);
+        assert_eq!(event["outcome"].as_str(), Some("blocked"));
+        assert_eq!(
+            event["error_code"].as_str(),
+            Some("asupersync_leverage.stop.open_gap")
+        );
         assert_eq!(event["scenario_id"].as_str(), Some("bd-3nr.1.7"));
         assert!(
             event["stop_go_code"]
                 .as_str()
                 .expect("stop_go_code")
-                .contains("targeted_lifecycle_supervision")
+                .contains("stop.open_gap")
         );
     }
 
     let summary = fs::read_to_string(out_dir.join("summary.md")).expect("read summary");
-    assert!(summary.contains("go_targeted"));
+    assert!(summary.contains("stop"));
     assert!(summary.contains("Mandatory Child Artifacts"));
     assert!(summary.contains("Diagnostic Contracts"));
 

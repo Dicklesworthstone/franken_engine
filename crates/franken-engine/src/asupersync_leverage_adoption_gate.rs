@@ -197,9 +197,7 @@ pub fn build_asupersync_leverage_adoption_gate_from_topology(
         topology.decision,
     );
     let next_action = match verdict {
-        AdoptionGateVerdict::Stop => {
-            "Close outstanding risk IDs before publishing adoption guidance.".to_string()
-        }
+        AdoptionGateVerdict::Stop => "Generate or repair outstanding child artifacts before publishing adoption guidance.".to_string(),
         AdoptionGateVerdict::GoTargeted => "Proceed with the extension lifecycle manager supervision adapter first; keep other seams on the direct-manager topology.".to_string(),
         AdoptionGateVerdict::GoBroader => "Sequence broader topology promotion behind a dedicated migration plan and rollback rehearsal.".to_string(),
     };

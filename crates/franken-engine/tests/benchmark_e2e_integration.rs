@@ -2231,17 +2231,17 @@ fn perl_single_quote_literal(input: &str) -> String {
 
 #[cfg(unix)]
 fn write_mock_runtime(path: &Path, sleep_seconds: &str) {
-    fs::write(
-        path,
-        format!("#!/usr/bin/env perl\nselect undef, undef, undef, {sleep_seconds};\n"),
-    )
-    .unwrap();
+    let body = if sleep_seconds == "0" {
+        "#!/usr/bin/env perl\n".to_string()
+    } else {
+        format!("#!/usr/bin/env perl\nselect undef, undef, undef, {sleep_seconds};\n")
+    };
+    fs::write(path, body).unwrap();
     let mut perms = fs::metadata(path).unwrap().permissions();
     perms.set_mode(0o755);
     fs::set_permissions(path, perms).unwrap();
 }
 
-#[cfg(unix)]
 fn write_mock_runtime_with_output(path: &Path, sleep_seconds: &str, stdout_text: &str) {
     fs::write(
         path,
@@ -2298,7 +2298,7 @@ fn write_mock_runtime_with_stderr_failure_after_runs(
 
 #[cfg(unix)]
 #[test]
-fn benchmark_comparison_runner_executes_mock_runtimes_and_emits_artifacts() {
+fn benchmark_comparison_runner_executes_mock_runtimes_and_preserves_runner_contract() {
     let root = std::env::temp_dir().join(format!("franken_bench_compare_{}", std::process::id()));
     let _ = fs::remove_dir_all(&root);
     fs::create_dir_all(&root).unwrap();
@@ -2306,12 +2306,9 @@ fn benchmark_comparison_runner_executes_mock_runtimes_and_emits_artifacts() {
     let program = root.join("fixture.js");
     fs::write(&program, "console.log('benchmark');\n").unwrap();
 
-    let frankenctl = root.join("mock-frankenctl");
-    let node = root.join("mock-node");
-    let bun = root.join("mock-bun");
-    write_mock_runtime(&frankenctl, "0.005");
-    write_mock_runtime(&node, "0.01");
-    write_mock_runtime(&bun, "0.015");
+    let frankenctl = PathBuf::from("/bin/true");
+    let node = PathBuf::from("/bin/true");
+    let bun = PathBuf::from("/bin/true");
 
     let manifest = BenchmarkComparisonManifest {
         schema_version: BENCHMARK_COMPARISON_MANIFEST_SCHEMA_VERSION.to_string(),
@@ -2387,7 +2384,49 @@ fn benchmark_comparison_runner_executes_mock_runtimes_and_emits_artifacts() {
         !frankenctl_command.contains(" --out "),
         "benchmark comparison should not force per-sample frankenctl report writes that the runner never reads"
     );
+}
 
+#[cfg(unix)]
+#[test]
+fn benchmark_comparison_artifacts_capture_environment_and_evidence_metadata() {
+    let root = std::env::temp_dir().join(format!(
+        "franken_bench_compare_metadata_{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+
+    let program = root.join("fixture.js");
+    fs::write(&program, "console.log('benchmark');\n").unwrap();
+
+    let frankenctl = PathBuf::from("/bin/true");
+    let node = PathBuf::from("/bin/true");
+    let bun = PathBuf::from("/bin/true");
+
+    let manifest = BenchmarkComparisonManifest {
+        schema_version: BENCHMARK_COMPARISON_MANIFEST_SCHEMA_VERSION.to_string(),
+        runtime_pins: BenchmarkRuntimePins::default(),
+        runtime_commands: BenchmarkComparisonRuntimeCommands {
+            frankenctl: frankenctl.clone(),
+            node: node.clone(),
+            bun: bun.clone(),
+        },
+        fairness_policy: BenchmarkFairnessPolicy {
+            warmup_runs: 1,
+            sample_count: 3,
+            case_timeout_ms: 5_000,
+        },
+        cases: vec![BenchmarkComparisonCase {
+            benchmark_id: "micro-1".to_string(),
+            category: BenchmarkCategory::Micro,
+            program_path: program.clone(),
+            args: vec![],
+        }],
+    };
+    validate_benchmark_comparison_manifest(&manifest).unwrap();
+
+    let result = run_benchmark_comparison_suite(&manifest, &root, "cmp-run-1", "2026-04-07")
+        .expect("comparison suite should execute");
     let artifact_dir = root.join("artifacts");
     let artifacts = write_benchmark_comparison_artifacts(&result, &artifact_dir).unwrap();
     assert!(artifacts.run_manifest_path.exists());
@@ -2532,12 +2571,10 @@ fn benchmark_comparison_runner_records_behavioral_differences_on_output_mismatch
     let program = root.join("fixture.js");
     fs::write(&program, "console.log('benchmark');\n").unwrap();
 
-    let frankenctl = root.join("mock-frankenctl");
-    let node = root.join("mock-node");
+    let frankenctl = PathBuf::from("/bin/true");
+    let node = PathBuf::from("/bin/true");
     let bun = root.join("mock-bun");
-    write_mock_runtime_with_output(&frankenctl, "0.005", "shared-output");
-    write_mock_runtime_with_output(&node, "0.005", "shared-output");
-    write_mock_runtime_with_output(&bun, "0.005", "divergent-output");
+    write_mock_runtime_with_output(&bun, "0", "divergent-output");
 
     let manifest = BenchmarkComparisonManifest {
         schema_version: BENCHMARK_COMPARISON_MANIFEST_SCHEMA_VERSION.to_string(),
@@ -2606,11 +2643,9 @@ fn benchmark_comparison_runner_times_out_fail_closed_without_shell_timeout_wrapp
     fs::write(&program, "console.log('benchmark');\n").unwrap();
 
     let frankenctl = root.join("mock-frankenctl");
-    let node = root.join("mock-node");
-    let bun = root.join("mock-bun");
-    write_mock_runtime(&frankenctl, "0.05");
-    write_mock_runtime(&node, "0.05");
-    write_mock_runtime(&bun, "0.05");
+    let node = PathBuf::from("/bin/true");
+    let bun = PathBuf::from("/bin/true");
+    write_mock_runtime(&frankenctl, "0.02");
 
     let manifest = BenchmarkComparisonManifest {
         schema_version: BENCHMARK_COMPARISON_MANIFEST_SCHEMA_VERSION.to_string(),
@@ -2623,7 +2658,7 @@ fn benchmark_comparison_runner_times_out_fail_closed_without_shell_timeout_wrapp
         fairness_policy: BenchmarkFairnessPolicy {
             warmup_runs: 1,
             sample_count: 3,
-            case_timeout_ms: 10,
+            case_timeout_ms: 5,
         },
         cases: vec![BenchmarkComparisonCase {
             benchmark_id: "micro-timeout".to_string(),
@@ -2644,7 +2679,7 @@ fn benchmark_comparison_runner_times_out_fail_closed_without_shell_timeout_wrapp
             assert_eq!(benchmark_id, "micro-timeout");
             assert_eq!(runtime, RuntimeId::FrankenEngine);
             assert!(
-                detail.contains("timed out after 10ms"),
+                detail.contains("timed out after 5ms"),
                 "timeout detail should stay explicit: {detail}"
             );
         }
@@ -2666,11 +2701,9 @@ fn benchmark_comparison_runner_strips_timing_footer_from_failure_stderr() {
     fs::write(&program, "console.log('benchmark');\n").unwrap();
 
     let frankenctl = root.join("mock-frankenctl");
-    let node = root.join("mock-node");
-    let bun = root.join("mock-bun");
+    let node = PathBuf::from("/bin/true");
+    let bun = PathBuf::from("/bin/true");
     write_mock_runtime_with_stderr_failure_after_runs(&frankenctl, "child-failed", 17, 1);
-    write_mock_runtime_with_stderr_failure_after_runs(&node, "child-failed", 17, 1);
-    write_mock_runtime_with_stderr_failure_after_runs(&bun, "child-failed", 17, 1);
 
     let manifest = BenchmarkComparisonManifest {
         schema_version: BENCHMARK_COMPARISON_MANIFEST_SCHEMA_VERSION.to_string(),
@@ -2736,11 +2769,9 @@ fn benchmark_comparison_runner_fails_closed_on_warmup_failures() {
     fs::write(&program, "console.log('benchmark');\n").unwrap();
 
     let frankenctl = root.join("mock-frankenctl");
-    let node = root.join("mock-node");
-    let bun = root.join("mock-bun");
+    let node = PathBuf::from("/bin/true");
+    let bun = PathBuf::from("/bin/true");
     write_mock_runtime_with_stderr_failure(&frankenctl, "warmup-failed", 17);
-    write_mock_runtime_with_stderr_failure(&node, "warmup-failed", 17);
-    write_mock_runtime_with_stderr_failure(&bun, "warmup-failed", 17);
 
     let manifest = BenchmarkComparisonManifest {
         schema_version: BENCHMARK_COMPARISON_MANIFEST_SCHEMA_VERSION.to_string(),

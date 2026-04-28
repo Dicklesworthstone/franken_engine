@@ -1,0 +1,106 @@
+{
+  "goal": "Script",
+  "body": [
+    {
+      "VariableDeclaration": {
+        "kind": "Var",
+        "declarations": [
+          {
+            "pattern": {
+              "Identifier": "x"
+            },
+            "initializer": {
+              "NumericLiteral": 1
+            },
+            "span": {
+              "start_offset": "[START_OFFSET]",
+              "end_offset": "[END_OFFSET]",
+              "start_line": "[START_LINE]",
+              "start_column": "[START_COLUMN]",
+              "end_line": "[END_LINE]",
+              "end_column": "[END_COLUMN]"
+            }
+          }
+        ],
+        "span": {
+          "start_offset": "[START_OFFSET]",
+          "end_offset": "[END_OFFSET]",
+          "start_line": "[START_LINE]",
+          "start_column": "[START_COLUMN]",
+          "end_line": "[END_LINE]",
+          "end_column": "[END_COLUMN]"
+        }
+      }
+    },
+    {
+      "VariableDeclaration": {
+        "kind": "Let",
+        "declarations": [
+          {
+            "pattern": {
+              "Identifier": "y"
+            },
+            "initializer": {
+              "NumericLiteral": 2
+            },
+            "span": {
+              "start_offset": "[START_OFFSET]",
+              "end_offset": "[END_OFFSET]",
+              "start_line": "[START_LINE]",
+              "start_column": "[START_COLUMN]",
+              "end_line": "[END_LINE]",
+              "end_column": "[END_COLUMN]"
+            }
+          }
+        ],
+        "span": {
+          "start_offset": "[START_OFFSET]",
+          "end_offset": "[END_OFFSET]",
+          "start_line": "[START_LINE]",
+          "start_column": "[START_COLUMN]",
+          "end_line": "[END_LINE]",
+          "end_column": "[END_COLUMN]"
+        }
+      }
+    },
+    {
+      "VariableDeclaration": {
+        "kind": "Const",
+        "declarations": [
+          {
+            "pattern": {
+              "Identifier": "z"
+            },
+            "initializer": {
+              "NumericLiteral": 3
+            },
+            "span": {
+              "start_offset": "[START_OFFSET]",
+              "end_offset": "[END_OFFSET]",
+              "start_line": "[START_LINE]",
+              "start_column": "[START_COLUMN]",
+              "end_line": "[END_LINE]",
+              "end_column": "[END_COLUMN]"
+            }
+          }
+        ],
+        "span": {
+          "start_offset": "[START_OFFSET]",
+          "end_offset": "[END_OFFSET]",
+          "start_line": "[START_LINE]",
+          "start_column": "[START_COLUMN]",
+          "end_line": "[END_LINE]",
+          "end_column": "[END_COLUMN]"
+        }
+      }
+    }
+  ],
+  "span": {
+    "start_offset": "[START_OFFSET]",
+    "end_offset": "[END_OFFSET]",
+    "start_line": "[START_LINE]",
+    "start_column": "[START_COLUMN]",
+    "end_line": "[END_LINE]",
+    "end_column": "[END_COLUMN]"
+  }
+}

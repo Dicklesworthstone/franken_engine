@@ -1,0 +1,91 @@
+{
+  "goal": "Script",
+  "body": [
+    {
+      "FunctionDeclaration": {
+        "name": "add",
+        "params": [
+          {
+            "pattern": {
+              "Identifier": "a"
+            },
+            "span": {
+              "start_offset": "[START_OFFSET]",
+              "end_offset": "[END_OFFSET]",
+              "start_line": "[START_LINE]",
+              "start_column": "[START_COLUMN]",
+              "end_line": "[END_LINE]",
+              "end_column": "[END_COLUMN]"
+            }
+          },
+          {
+            "pattern": {
+              "Identifier": "b"
+            },
+            "span": {
+              "start_offset": "[START_OFFSET]",
+              "end_offset": "[END_OFFSET]",
+              "start_line": "[START_LINE]",
+              "start_column": "[START_COLUMN]",
+              "end_line": "[END_LINE]",
+              "end_column": "[END_COLUMN]"
+            }
+          }
+        ],
+        "body": {
+          "body": [
+            {
+              "Return": {
+                "argument": {
+                  "Binary": {
+                    "operator": "Add",
+                    "left": {
+                      "Identifier": "a"
+                    },
+                    "right": {
+                      "Identifier": "b"
+                    }
+                  }
+                },
+                "span": {
+                  "start_offset": "[START_OFFSET]",
+                  "end_offset": "[END_OFFSET]",
+                  "start_line": "[START_LINE]",
+                  "start_column": "[START_COLUMN]",
+                  "end_line": "[END_LINE]",
+                  "end_column": "[END_COLUMN]"
+                }
+              }
+            }
+          ],
+          "span": {
+            "start_offset": "[START_OFFSET]",
+            "end_offset": "[END_OFFSET]",
+            "start_line": "[START_LINE]",
+            "start_column": "[START_COLUMN]",
+            "end_line": "[END_LINE]",
+            "end_column": "[END_COLUMN]"
+          }
+        },
+        "is_async": false,
+        "is_generator": false,
+        "span": {
+          "start_offset": "[START_OFFSET]",
+          "end_offset": "[END_OFFSET]",
+          "start_line": "[START_LINE]",
+          "start_column": "[START_COLUMN]",
+          "end_line": "[END_LINE]",
+          "end_column": "[END_COLUMN]"
+        }
+      }
+    }
+  ],
+  "span": {
+    "start_offset": "[START_OFFSET]",
+    "end_offset": "[END_OFFSET]",
+    "start_line": "[START_LINE]",
+    "start_column": "[START_COLUMN]",
+    "end_line": "[END_LINE]",
+    "end_column": "[END_COLUMN]"
+  }
+}

@@ -1,0 +1,178 @@
+{
+  "goal": "Script",
+  "body": [
+    {
+      "VariableDeclaration": {
+        "kind": "Const",
+        "declarations": [
+          {
+            "pattern": {
+              "ObjectPattern": [
+                {
+                  "key": {
+                    "Identifier": "a"
+                  },
+                  "value": {
+                    "Identifier": "a"
+                  },
+                  "computed": false,
+                  "shorthand": true
+                },
+                {
+                  "key": {
+                    "Identifier": "b"
+                  },
+                  "value": {
+                    "Identifier": "b"
+                  },
+                  "computed": false,
+                  "shorthand": true
+                },
+                {
+                  "key": {
+                    "Identifier": "c"
+                  },
+                  "value": {
+                    "AssignmentPattern": {
+                      "left": {
+                        "Identifier": "c"
+                      },
+                      "right": {
+                        "Identifier": "defaultValue"
+                      }
+                    }
+                  },
+                  "computed": false,
+                  "shorthand": true
+                }
+              ]
+            },
+            "initializer": {
+              "Identifier": "object"
+            },
+            "span": {
+              "start_offset": "[START_OFFSET]",
+              "end_offset": "[END_OFFSET]",
+              "start_line": "[START_LINE]",
+              "start_column": "[START_COLUMN]",
+              "end_line": "[END_LINE]",
+              "end_column": "[END_COLUMN]"
+            }
+          }
+        ],
+        "span": {
+          "start_offset": "[START_OFFSET]",
+          "end_offset": "[END_OFFSET]",
+          "start_line": "[START_LINE]",
+          "start_column": "[START_COLUMN]",
+          "end_line": "[END_LINE]",
+          "end_column": "[END_COLUMN]"
+        }
+      }
+    },
+    {
+      "VariableDeclaration": {
+        "kind": "Const",
+        "declarations": [
+          {
+            "pattern": {
+              "ArrayPattern": [
+                {
+                  "Identifier": "x"
+                },
+                {
+                  "Identifier": "y"
+                },
+                {
+                  "Rest": {
+                    "Identifier": "rest"
+                  }
+                }
+              ]
+            },
+            "initializer": {
+              "Identifier": "array"
+            },
+            "span": {
+              "start_offset": "[START_OFFSET]",
+              "end_offset": "[END_OFFSET]",
+              "start_line": "[START_LINE]",
+              "start_column": "[START_COLUMN]",
+              "end_line": "[END_LINE]",
+              "end_column": "[END_COLUMN]"
+            }
+          }
+        ],
+        "span": {
+          "start_offset": "[START_OFFSET]",
+          "end_offset": "[END_OFFSET]",
+          "start_line": "[START_LINE]",
+          "start_column": "[START_COLUMN]",
+          "end_line": "[END_LINE]",
+          "end_column": "[END_COLUMN]"
+        }
+      }
+    },
+    {
+      "VariableDeclaration": {
+        "kind": "Const",
+        "declarations": [
+          {
+            "pattern": {
+              "ObjectPattern": [
+                {
+                  "key": {
+                    "Identifier": "nested"
+                  },
+                  "value": {
+                    "ObjectPattern": [
+                      {
+                        "key": {
+                          "Identifier": "prop"
+                        },
+                        "value": {
+                          "Identifier": "prop"
+                        },
+                        "computed": false,
+                        "shorthand": true
+                      }
+                    ]
+                  },
+                  "computed": false,
+                  "shorthand": false
+                }
+              ]
+            },
+            "initializer": {
+              "Identifier": "deepObject"
+            },
+            "span": {
+              "start_offset": "[START_OFFSET]",
+              "end_offset": "[END_OFFSET]",
+              "start_line": "[START_LINE]",
+              "start_column": "[START_COLUMN]",
+              "end_line": "[END_LINE]",
+              "end_column": "[END_COLUMN]"
+            }
+          }
+        ],
+        "span": {
+          "start_offset": "[START_OFFSET]",
+          "end_offset": "[END_OFFSET]",
+          "start_line": "[START_LINE]",
+          "start_column": "[START_COLUMN]",
+          "end_line": "[END_LINE]",
+          "end_column": "[END_COLUMN]"
+        }
+      }
+    }
+  ],
+  "span": {
+    "start_offset": "[START_OFFSET]",
+    "end_offset": "[END_OFFSET]",
+    "start_line": "[START_LINE]",
+    "start_column": "[START_COLUMN]",
+    "end_line": "[END_LINE]",
+    "end_column": "[END_COLUMN]"
+  }
+}

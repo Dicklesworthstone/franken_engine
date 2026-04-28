@@ -1,0 +1,136 @@
+{
+  "goal": "Script",
+  "body": [
+    {
+      "TryCatch": {
+        "block": {
+          "body": [
+            {
+              "Expression": {
+                "expression": {
+                  "Call": {
+                    "callee": {
+                      "Identifier": "riskyOperation"
+                    },
+                    "arguments": []
+                  }
+                },
+                "span": {
+                  "start_offset": "[START_OFFSET]",
+                  "end_offset": "[END_OFFSET]",
+                  "start_line": "[START_LINE]",
+                  "start_column": "[START_COLUMN]",
+                  "end_line": "[END_LINE]",
+                  "end_column": "[END_COLUMN]"
+                }
+              }
+            }
+          ],
+          "span": {
+            "start_offset": "[START_OFFSET]",
+            "end_offset": "[END_OFFSET]",
+            "start_line": "[START_LINE]",
+            "start_column": "[START_COLUMN]",
+            "end_line": "[END_LINE]",
+            "end_column": "[END_COLUMN]"
+          }
+        },
+        "handler": {
+          "parameter": "error",
+          "body": {
+            "body": [
+              {
+                "Expression": {
+                  "expression": {
+                    "Call": {
+                      "callee": {
+                        "Identifier": "handleError"
+                      },
+                      "arguments": [
+                        {
+                          "Identifier": "error"
+                        }
+                      ]
+                    }
+                  },
+                  "span": {
+                    "start_offset": "[START_OFFSET]",
+                    "end_offset": "[END_OFFSET]",
+                    "start_line": "[START_LINE]",
+                    "start_column": "[START_COLUMN]",
+                    "end_line": "[END_LINE]",
+                    "end_column": "[END_COLUMN]"
+                  }
+                }
+              }
+            ],
+            "span": {
+              "start_offset": "[START_OFFSET]",
+              "end_offset": "[END_OFFSET]",
+              "start_line": "[START_LINE]",
+              "start_column": "[START_COLUMN]",
+              "end_line": "[END_LINE]",
+              "end_column": "[END_COLUMN]"
+            }
+          },
+          "span": {
+            "start_offset": "[START_OFFSET]",
+            "end_offset": "[END_OFFSET]",
+            "start_line": "[START_LINE]",
+            "start_column": "[START_COLUMN]",
+            "end_line": "[END_LINE]",
+            "end_column": "[END_COLUMN]"
+          }
+        },
+        "finalizer": {
+          "body": [
+            {
+              "Expression": {
+                "expression": {
+                  "Call": {
+                    "callee": {
+                      "Identifier": "cleanup"
+                    },
+                    "arguments": []
+                  }
+                },
+                "span": {
+                  "start_offset": "[START_OFFSET]",
+                  "end_offset": "[END_OFFSET]",
+                  "start_line": "[START_LINE]",
+                  "start_column": "[START_COLUMN]",
+                  "end_line": "[END_LINE]",
+                  "end_column": "[END_COLUMN]"
+                }
+              }
+            }
+          ],
+          "span": {
+            "start_offset": "[START_OFFSET]",
+            "end_offset": "[END_OFFSET]",
+            "start_line": "[START_LINE]",
+            "start_column": "[START_COLUMN]",
+            "end_line": "[END_LINE]",
+            "end_column": "[END_COLUMN]"
+          }
+        },
+        "span": {
+          "start_offset": "[START_OFFSET]",
+          "end_offset": "[END_OFFSET]",
+          "start_line": "[START_LINE]",
+          "start_column": "[START_COLUMN]",
+          "end_line": "[END_LINE]",
+          "end_column": "[END_COLUMN]"
+        }
+      }
+    }
+  ],
+  "span": {
+    "start_offset": "[START_OFFSET]",
+    "end_offset": "[END_OFFSET]",
+    "start_line": "[START_LINE]",
+    "start_column": "[START_COLUMN]",
+    "end_line": "[END_LINE]",
+    "end_column": "[END_COLUMN]"
+  }
+}

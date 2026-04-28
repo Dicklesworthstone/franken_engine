@@ -1,0 +1,328 @@
+{
+  "goal": "Script",
+  "body": [
+    {
+      "VariableDeclaration": {
+        "kind": "Const",
+        "declarations": [
+          {
+            "pattern": {
+              "Identifier": "simple"
+            },
+            "initializer": {
+              "ArrowFunction": {
+                "params": [
+                  {
+                    "pattern": {
+                      "Identifier": "x"
+                    },
+                    "span": {
+                      "start_offset": "[START_OFFSET]",
+                      "end_offset": "[END_OFFSET]",
+                      "start_line": "[START_LINE]",
+                      "start_column": "[START_COLUMN]",
+                      "end_line": "[END_LINE]",
+                      "end_column": "[END_COLUMN]"
+                    }
+                  }
+                ],
+                "body": {
+                  "Expression": {
+                    "Binary": {
+                      "operator": "Multiply",
+                      "left": {
+                        "Identifier": "x"
+                      },
+                      "right": {
+                        "NumericLiteral": 2
+                      }
+                    }
+                  }
+                },
+                "is_async": false
+              }
+            },
+            "span": {
+              "start_offset": "[START_OFFSET]",
+              "end_offset": "[END_OFFSET]",
+              "start_line": "[START_LINE]",
+              "start_column": "[START_COLUMN]",
+              "end_line": "[END_LINE]",
+              "end_column": "[END_COLUMN]"
+            }
+          }
+        ],
+        "span": {
+          "start_offset": "[START_OFFSET]",
+          "end_offset": "[END_OFFSET]",
+          "start_line": "[START_LINE]",
+          "start_column": "[START_COLUMN]",
+          "end_line": "[END_LINE]",
+          "end_column": "[END_COLUMN]"
+        }
+      }
+    },
+    {
+      "VariableDeclaration": {
+        "kind": "Const",
+        "declarations": [
+          {
+            "pattern": {
+              "Identifier": "withParens"
+            },
+            "initializer": {
+              "ArrowFunction": {
+                "params": [
+                  {
+                    "pattern": {
+                      "Identifier": "x"
+                    },
+                    "span": {
+                      "start_offset": "[START_OFFSET]",
+                      "end_offset": "[END_OFFSET]",
+                      "start_line": "[START_LINE]",
+                      "start_column": "[START_COLUMN]",
+                      "end_line": "[END_LINE]",
+                      "end_column": "[END_COLUMN]"
+                    }
+                  },
+                  {
+                    "pattern": {
+                      "Identifier": "y"
+                    },
+                    "span": {
+                      "start_offset": "[START_OFFSET]",
+                      "end_offset": "[END_OFFSET]",
+                      "start_line": "[START_LINE]",
+                      "start_column": "[START_COLUMN]",
+                      "end_line": "[END_LINE]",
+                      "end_column": "[END_COLUMN]"
+                    }
+                  }
+                ],
+                "body": {
+                  "Expression": {
+                    "Binary": {
+                      "operator": "Add",
+                      "left": {
+                        "Identifier": "x"
+                      },
+                      "right": {
+                        "Identifier": "y"
+                      }
+                    }
+                  }
+                },
+                "is_async": false
+              }
+            },
+            "span": {
+              "start_offset": "[START_OFFSET]",
+              "end_offset": "[END_OFFSET]",
+              "start_line": "[START_LINE]",
+              "start_column": "[START_COLUMN]",
+              "end_line": "[END_LINE]",
+              "end_column": "[END_COLUMN]"
+            }
+          }
+        ],
+        "span": {
+          "start_offset": "[START_OFFSET]",
+          "end_offset": "[END_OFFSET]",
+          "start_line": "[START_LINE]",
+          "start_column": "[START_COLUMN]",
+          "end_line": "[END_LINE]",
+          "end_column": "[END_COLUMN]"
+        }
+      }
+    },
+    {
+      "VariableDeclaration": {
+        "kind": "Const",
+        "declarations": [
+          {
+            "pattern": {
+              "Identifier": "withBody"
+            },
+            "initializer": {
+              "ArrowFunction": {
+                "params": [
+                  {
+                    "pattern": {
+                      "Identifier": "x"
+                    },
+                    "span": {
+                      "start_offset": "[START_OFFSET]",
+                      "end_offset": "[END_OFFSET]",
+                      "start_line": "[START_LINE]",
+                      "start_column": "[START_COLUMN]",
+                      "end_line": "[END_LINE]",
+                      "end_column": "[END_COLUMN]"
+                    }
+                  }
+                ],
+                "body": {
+                  "Block": {
+                    "body": [
+                      {
+                        "VariableDeclaration": {
+                          "kind": "Const",
+                          "declarations": [
+                            {
+                              "pattern": {
+                                "Identifier": "result"
+                              },
+                              "initializer": {
+                                "Binary": {
+                                  "operator": "Multiply",
+                                  "left": {
+                                    "Identifier": "x"
+                                  },
+                                  "right": {
+                                    "NumericLiteral": 2
+                                  }
+                                }
+                              },
+                              "span": {
+                                "start_offset": "[START_OFFSET]",
+                                "end_offset": "[END_OFFSET]",
+                                "start_line": "[START_LINE]",
+                                "start_column": "[START_COLUMN]",
+                                "end_line": "[END_LINE]",
+                                "end_column": "[END_COLUMN]"
+                              }
+                            }
+                          ],
+                          "span": {
+                            "start_offset": "[START_OFFSET]",
+                            "end_offset": "[END_OFFSET]",
+                            "start_line": "[START_LINE]",
+                            "start_column": "[START_COLUMN]",
+                            "end_line": "[END_LINE]",
+                            "end_column": "[END_COLUMN]"
+                          }
+                        }
+                      },
+                      {
+                        "Return": {
+                          "argument": {
+                            "Identifier": "result"
+                          },
+                          "span": {
+                            "start_offset": "[START_OFFSET]",
+                            "end_offset": "[END_OFFSET]",
+                            "start_line": "[START_LINE]",
+                            "start_column": "[START_COLUMN]",
+                            "end_line": "[END_LINE]",
+                            "end_column": "[END_COLUMN]"
+                          }
+                        }
+                      }
+                    ],
+                    "span": {
+                      "start_offset": "[START_OFFSET]",
+                      "end_offset": "[END_OFFSET]",
+                      "start_line": "[START_LINE]",
+                      "start_column": "[START_COLUMN]",
+                      "end_line": "[END_LINE]",
+                      "end_column": "[END_COLUMN]"
+                    }
+                  }
+                },
+                "is_async": false
+              }
+            },
+            "span": {
+              "start_offset": "[START_OFFSET]",
+              "end_offset": "[END_OFFSET]",
+              "start_line": "[START_LINE]",
+              "start_column": "[START_COLUMN]",
+              "end_line": "[END_LINE]",
+              "end_column": "[END_COLUMN]"
+            }
+          }
+        ],
+        "span": {
+          "start_offset": "[START_OFFSET]",
+          "end_offset": "[END_OFFSET]",
+          "start_line": "[START_LINE]",
+          "start_column": "[START_COLUMN]",
+          "end_line": "[END_LINE]",
+          "end_column": "[END_COLUMN]"
+        }
+      }
+    },
+    {
+      "VariableDeclaration": {
+        "kind": "Const",
+        "declarations": [
+          {
+            "pattern": {
+              "Identifier": "async"
+            },
+            "initializer": {
+              "ArrowFunction": {
+                "params": [
+                  {
+                    "pattern": {
+                      "Identifier": "x"
+                    },
+                    "span": {
+                      "start_offset": "[START_OFFSET]",
+                      "end_offset": "[END_OFFSET]",
+                      "start_line": "[START_LINE]",
+                      "start_column": "[START_COLUMN]",
+                      "end_line": "[END_LINE]",
+                      "end_column": "[END_COLUMN]"
+                    }
+                  }
+                ],
+                "body": {
+                  "Expression": {
+                    "Await": {
+                      "Call": {
+                        "callee": {
+                          "Identifier": "process"
+                        },
+                        "arguments": [
+                          {
+                            "Identifier": "x"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                },
+                "is_async": true
+              }
+            },
+            "span": {
+              "start_offset": "[START_OFFSET]",
+              "end_offset": "[END_OFFSET]",
+              "start_line": "[START_LINE]",
+              "start_column": "[START_COLUMN]",
+              "end_line": "[END_LINE]",
+              "end_column": "[END_COLUMN]"
+            }
+          }
+        ],
+        "span": {
+          "start_offset": "[START_OFFSET]",
+          "end_offset": "[END_OFFSET]",
+          "start_line": "[START_LINE]",
+          "start_column": "[START_COLUMN]",
+          "end_line": "[END_LINE]",
+          "end_column": "[END_COLUMN]"
+        }
+      }
+    }
+  ],
+  "span": {
+    "start_offset": "[START_OFFSET]",
+    "end_offset": "[END_OFFSET]",
+    "start_line": "[START_LINE]",
+    "start_column": "[START_COLUMN]",
+    "end_line": "[END_LINE]",
+    "end_column": "[END_COLUMN]"
+  }
+}

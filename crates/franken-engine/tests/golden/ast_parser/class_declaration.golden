@@ -1,0 +1,277 @@
+{
+  "goal": "Script",
+  "body": [
+    {
+      "ClassDeclaration": {
+        "name": "Rectangle",
+        "super_class": null,
+        "body": [
+          {
+            "key": {
+              "Identifier": "constructor"
+            },
+            "kind": "Constructor",
+            "params": [
+              {
+                "pattern": {
+                  "Identifier": "width"
+                },
+                "span": {
+                  "start_offset": "[START_OFFSET]",
+                  "end_offset": "[END_OFFSET]",
+                  "start_line": "[START_LINE]",
+                  "start_column": "[START_COLUMN]",
+                  "end_line": "[END_LINE]",
+                  "end_column": "[END_COLUMN]"
+                }
+              },
+              {
+                "pattern": {
+                  "Identifier": "height"
+                },
+                "span": {
+                  "start_offset": "[START_OFFSET]",
+                  "end_offset": "[END_OFFSET]",
+                  "start_line": "[START_LINE]",
+                  "start_column": "[START_COLUMN]",
+                  "end_line": "[END_LINE]",
+                  "end_column": "[END_COLUMN]"
+                }
+              }
+            ],
+            "body": {
+              "body": [
+                {
+                  "Expression": {
+                    "expression": {
+                      "Assignment": {
+                        "operator": "Assign",
+                        "left": {
+                          "Member": {
+                            "object": "This",
+                            "property": {
+                              "Identifier": "width"
+                            },
+                            "computed": false
+                          }
+                        },
+                        "right": {
+                          "Identifier": "width"
+                        }
+                      }
+                    },
+                    "span": {
+                      "start_offset": "[START_OFFSET]",
+                      "end_offset": "[END_OFFSET]",
+                      "start_line": "[START_LINE]",
+                      "start_column": "[START_COLUMN]",
+                      "end_line": "[END_LINE]",
+                      "end_column": "[END_COLUMN]"
+                    }
+                  }
+                },
+                {
+                  "Expression": {
+                    "expression": {
+                      "Assignment": {
+                        "operator": "Assign",
+                        "left": {
+                          "Member": {
+                            "object": "This",
+                            "property": {
+                              "Identifier": "height"
+                            },
+                            "computed": false
+                          }
+                        },
+                        "right": {
+                          "Identifier": "height"
+                        }
+                      }
+                    },
+                    "span": {
+                      "start_offset": "[START_OFFSET]",
+                      "end_offset": "[END_OFFSET]",
+                      "start_line": "[START_LINE]",
+                      "start_column": "[START_COLUMN]",
+                      "end_line": "[END_LINE]",
+                      "end_column": "[END_COLUMN]"
+                    }
+                  }
+                }
+              ],
+              "span": {
+                "start_offset": "[START_OFFSET]",
+                "end_offset": "[END_OFFSET]",
+                "start_line": "[START_LINE]",
+                "start_column": "[START_COLUMN]",
+                "end_line": "[END_LINE]",
+                "end_column": "[END_COLUMN]"
+              }
+            },
+            "is_static": false,
+            "computed": false,
+            "span": {
+              "start_offset": "[START_OFFSET]",
+              "end_offset": "[END_OFFSET]",
+              "start_line": "[START_LINE]",
+              "start_column": "[START_COLUMN]",
+              "end_line": "[END_LINE]",
+              "end_column": "[END_COLUMN]"
+            }
+          },
+          {
+            "key": {
+              "Identifier": "area"
+            },
+            "kind": "Get",
+            "params": [],
+            "body": {
+              "body": [
+                {
+                  "Return": {
+                    "argument": {
+                      "Binary": {
+                        "operator": "Multiply",
+                        "left": {
+                          "Member": {
+                            "object": "This",
+                            "property": {
+                              "Identifier": "width"
+                            },
+                            "computed": false
+                          }
+                        },
+                        "right": {
+                          "Member": {
+                            "object": "This",
+                            "property": {
+                              "Identifier": "height"
+                            },
+                            "computed": false
+                          }
+                        }
+                      }
+                    },
+                    "span": {
+                      "start_offset": "[START_OFFSET]",
+                      "end_offset": "[END_OFFSET]",
+                      "start_line": "[START_LINE]",
+                      "start_column": "[START_COLUMN]",
+                      "end_line": "[END_LINE]",
+                      "end_column": "[END_COLUMN]"
+                    }
+                  }
+                }
+              ],
+              "span": {
+                "start_offset": "[START_OFFSET]",
+                "end_offset": "[END_OFFSET]",
+                "start_line": "[START_LINE]",
+                "start_column": "[START_COLUMN]",
+                "end_line": "[END_LINE]",
+                "end_column": "[END_COLUMN]"
+              }
+            },
+            "is_static": false,
+            "computed": false,
+            "span": {
+              "start_offset": "[START_OFFSET]",
+              "end_offset": "[END_OFFSET]",
+              "start_line": "[START_LINE]",
+              "start_column": "[START_COLUMN]",
+              "end_line": "[END_LINE]",
+              "end_column": "[END_COLUMN]"
+            }
+          },
+          {
+            "key": {
+              "Identifier": "create"
+            },
+            "kind": "Method",
+            "params": [
+              {
+                "pattern": {
+                  "Identifier": "size"
+                },
+                "span": {
+                  "start_offset": "[START_OFFSET]",
+                  "end_offset": "[END_OFFSET]",
+                  "start_line": "[START_LINE]",
+                  "start_column": "[START_COLUMN]",
+                  "end_line": "[END_LINE]",
+                  "end_column": "[END_COLUMN]"
+                }
+              }
+            ],
+            "body": {
+              "body": [
+                {
+                  "Return": {
+                    "argument": {
+                      "New": {
+                        "callee": {
+                          "Identifier": "Rectangle"
+                        },
+                        "arguments": [
+                          {
+                            "Identifier": "size"
+                          },
+                          {
+                            "Identifier": "size"
+                          }
+                        ]
+                      }
+                    },
+                    "span": {
+                      "start_offset": "[START_OFFSET]",
+                      "end_offset": "[END_OFFSET]",
+                      "start_line": "[START_LINE]",
+                      "start_column": "[START_COLUMN]",
+                      "end_line": "[END_LINE]",
+                      "end_column": "[END_COLUMN]"
+                    }
+                  }
+                }
+              ],
+              "span": {
+                "start_offset": "[START_OFFSET]",
+                "end_offset": "[END_OFFSET]",
+                "start_line": "[START_LINE]",
+                "start_column": "[START_COLUMN]",
+                "end_line": "[END_LINE]",
+                "end_column": "[END_COLUMN]"
+              }
+            },
+            "is_static": true,
+            "computed": false,
+            "span": {
+              "start_offset": "[START_OFFSET]",
+              "end_offset": "[END_OFFSET]",
+              "start_line": "[START_LINE]",
+              "start_column": "[START_COLUMN]",
+              "end_line": "[END_LINE]",
+              "end_column": "[END_COLUMN]"
+            }
+          }
+        ],
+        "span": {
+          "start_offset": "[START_OFFSET]",
+          "end_offset": "[END_OFFSET]",
+          "start_line": "[START_LINE]",
+          "start_column": "[START_COLUMN]",
+          "end_line": "[END_LINE]",
+          "end_column": "[END_COLUMN]"
+        }
+      }
+    }
+  ],
+  "span": {
+    "start_offset": "[START_OFFSET]",
+    "end_offset": "[END_OFFSET]",
+    "start_line": "[START_LINE]",
+    "start_column": "[START_COLUMN]",
+    "end_line": "[END_LINE]",
+    "end_column": "[END_COLUMN]"
+  }
+}

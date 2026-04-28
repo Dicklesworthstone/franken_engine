@@ -1,0 +1,6 @@
+{
+  "code": "EmptySource",
+  "message": "source is empty after whitespace normalization",
+  "source_label": "<inline>",
+  "span": null
+}

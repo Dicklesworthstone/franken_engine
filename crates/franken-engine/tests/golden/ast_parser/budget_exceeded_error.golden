@@ -1,0 +1,16 @@
+{
+  "code": "BudgetExceeded",
+  "message": "source byte budget exceeded: source_bytes=38 max_source_bytes=10",
+  "source_label": "<inline>",
+  "span": null,
+  "witness": {
+    "mode": "scalar_reference",
+    "budget_kind": "source_bytes",
+    "source_bytes": 38,
+    "token_count": 15,
+    "max_recursion_observed": 0,
+    "max_source_bytes": 10,
+    "max_token_count": 100,
+    "max_recursion_depth": 10
+  }
+}

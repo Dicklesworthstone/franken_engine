@@ -1,0 +1,197 @@
+{
+  "goal": "Module",
+  "body": [
+    {
+      "Import": {
+        "clause": {
+          "Default": {
+            "local": "defaultExport"
+          }
+        },
+        "binding": "defaultExport",
+        "source": "module-name",
+        "span": {
+          "start_offset": "[START_OFFSET]",
+          "end_offset": "[END_OFFSET]",
+          "start_line": "[START_LINE]",
+          "start_column": "[START_COLUMN]",
+          "end_line": "[END_LINE]",
+          "end_column": "[END_COLUMN]"
+        }
+      }
+    },
+    {
+      "Import": {
+        "clause": {
+          "Named": {
+            "specifiers": [
+              {
+                "import_name": "export1",
+                "local_name": "export1"
+              },
+              {
+                "import_name": "export2",
+                "local_name": "export2"
+              }
+            ]
+          }
+        },
+        "binding": null,
+        "source": "module-name",
+        "span": {
+          "start_offset": "[START_OFFSET]",
+          "end_offset": "[END_OFFSET]",
+          "start_line": "[START_LINE]",
+          "start_column": "[START_COLUMN]",
+          "end_line": "[END_LINE]",
+          "end_column": "[END_COLUMN]"
+        }
+      }
+    },
+    {
+      "Import": {
+        "clause": {
+          "Named": {
+            "specifiers": [
+              {
+                "import_name": "export1",
+                "local_name": "alias1"
+              }
+            ]
+          }
+        },
+        "binding": null,
+        "source": "module-name",
+        "span": {
+          "start_offset": "[START_OFFSET]",
+          "end_offset": "[END_OFFSET]",
+          "start_line": "[START_LINE]",
+          "start_column": "[START_COLUMN]",
+          "end_line": "[END_LINE]",
+          "end_column": "[END_COLUMN]"
+        }
+      }
+    },
+    {
+      "Import": {
+        "clause": {
+          "Namespace": {
+            "local": "name"
+          }
+        },
+        "binding": "name",
+        "source": "module-name",
+        "span": {
+          "start_offset": "[START_OFFSET]",
+          "end_offset": "[END_OFFSET]",
+          "start_line": "[START_LINE]",
+          "start_column": "[START_COLUMN]",
+          "end_line": "[END_LINE]",
+          "end_column": "[END_COLUMN]"
+        }
+      }
+    },
+    {
+      "Export": {
+        "kind": {
+          "Default": {
+            "Function": {
+              "name": null,
+              "params": [],
+              "body": {
+                "body": [],
+                "span": {
+                  "start_offset": "[START_OFFSET]",
+                  "end_offset": "[END_OFFSET]",
+                  "start_line": "[START_LINE]",
+                  "start_column": "[START_COLUMN]",
+                  "end_line": "[END_LINE]",
+                  "end_column": "[END_COLUMN]"
+                }
+              },
+              "is_async": false,
+              "is_generator": false
+            }
+          }
+        },
+        "span": {
+          "start_offset": "[START_OFFSET]",
+          "end_offset": "[END_OFFSET]",
+          "start_line": "[START_LINE]",
+          "start_column": "[START_COLUMN]",
+          "end_line": "[END_LINE]",
+          "end_column": "[END_COLUMN]"
+        }
+      }
+    },
+    {
+      "Export": {
+        "kind": {
+          "NamedClause": "{ name1, name2 }"
+        },
+        "span": {
+          "start_offset": "[START_OFFSET]",
+          "end_offset": "[END_OFFSET]",
+          "start_line": "[START_LINE]",
+          "start_column": "[START_COLUMN]",
+          "end_line": "[END_LINE]",
+          "end_column": "[END_COLUMN]"
+        }
+      }
+    },
+    {
+      "VariableDeclaration": {
+        "kind": "Const",
+        "declarations": [
+          {
+            "pattern": {
+              "Identifier": "config"
+            },
+            "initializer": {
+              "ObjectLiteral": []
+            },
+            "span": {
+              "start_offset": "[START_OFFSET]",
+              "end_offset": "[END_OFFSET]",
+              "start_line": "[START_LINE]",
+              "start_column": "[START_COLUMN]",
+              "end_line": "[END_LINE]",
+              "end_column": "[END_COLUMN]"
+            }
+          }
+        ],
+        "span": {
+          "start_offset": "[START_OFFSET]",
+          "end_offset": "[END_OFFSET]",
+          "start_line": "[START_LINE]",
+          "start_column": "[START_COLUMN]",
+          "end_line": "[END_LINE]",
+          "end_column": "[END_COLUMN]"
+        }
+      }
+    },
+    {
+      "Export": {
+        "kind": {
+          "NamedClause": "{ config }"
+        },
+        "span": {
+          "start_offset": "[START_OFFSET]",
+          "end_offset": "[END_OFFSET]",
+          "start_line": "[START_LINE]",
+          "start_column": "[START_COLUMN]",
+          "end_line": "[END_LINE]",
+          "end_column": "[END_COLUMN]"
+        }
+      }
+    }
+  ],
+  "span": {
+    "start_offset": "[START_OFFSET]",
+    "end_offset": "[END_OFFSET]",
+    "start_line": "[START_LINE]",
+    "start_column": "[START_COLUMN]",
+    "end_line": "[END_LINE]",
+    "end_column": "[END_COLUMN]"
+  }
+}

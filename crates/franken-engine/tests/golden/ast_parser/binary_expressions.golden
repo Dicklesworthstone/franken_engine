@@ -1,0 +1,151 @@
+{
+  "goal": "Script",
+  "body": [
+    {
+      "Expression": {
+        "expression": {
+          "Binary": {
+            "operator": "Add",
+            "left": {
+              "NumericLiteral": 1
+            },
+            "right": {
+              "NumericLiteral": 2
+            }
+          }
+        },
+        "span": {
+          "start_offset": "[START_OFFSET]",
+          "end_offset": "[END_OFFSET]",
+          "start_line": "[START_LINE]",
+          "start_column": "[START_COLUMN]",
+          "end_line": "[END_LINE]",
+          "end_column": "[END_COLUMN]"
+        }
+      }
+    },
+    {
+      "Expression": {
+        "expression": {
+          "Binary": {
+            "operator": "Multiply",
+            "left": {
+              "Identifier": "x"
+            },
+            "right": {
+              "Identifier": "y"
+            }
+          }
+        },
+        "span": {
+          "start_offset": "[START_OFFSET]",
+          "end_offset": "[END_OFFSET]",
+          "start_line": "[START_LINE]",
+          "start_column": "[START_COLUMN]",
+          "end_line": "[END_LINE]",
+          "end_column": "[END_COLUMN]"
+        }
+      }
+    },
+    {
+      "Expression": {
+        "expression": {
+          "Binary": {
+            "operator": "LogicalAnd",
+            "left": {
+              "Identifier": "a"
+            },
+            "right": {
+              "Identifier": "b"
+            }
+          }
+        },
+        "span": {
+          "start_offset": "[START_OFFSET]",
+          "end_offset": "[END_OFFSET]",
+          "start_line": "[START_LINE]",
+          "start_column": "[START_COLUMN]",
+          "end_line": "[END_LINE]",
+          "end_column": "[END_COLUMN]"
+        }
+      }
+    },
+    {
+      "Expression": {
+        "expression": {
+          "Binary": {
+            "operator": "LogicalOr",
+            "left": {
+              "Identifier": "c"
+            },
+            "right": {
+              "Identifier": "d"
+            }
+          }
+        },
+        "span": {
+          "start_offset": "[START_OFFSET]",
+          "end_offset": "[END_OFFSET]",
+          "start_line": "[START_LINE]",
+          "start_column": "[START_COLUMN]",
+          "end_line": "[END_LINE]",
+          "end_column": "[END_COLUMN]"
+        }
+      }
+    },
+    {
+      "Expression": {
+        "expression": {
+          "Binary": {
+            "operator": "StrictEqual",
+            "left": {
+              "Identifier": "e"
+            },
+            "right": {
+              "Identifier": "f"
+            }
+          }
+        },
+        "span": {
+          "start_offset": "[START_OFFSET]",
+          "end_offset": "[END_OFFSET]",
+          "start_line": "[START_LINE]",
+          "start_column": "[START_COLUMN]",
+          "end_line": "[END_LINE]",
+          "end_column": "[END_COLUMN]"
+        }
+      }
+    },
+    {
+      "Expression": {
+        "expression": {
+          "Binary": {
+            "operator": "StrictNotEqual",
+            "left": {
+              "Identifier": "g"
+            },
+            "right": {
+              "Identifier": "h"
+            }
+          }
+        },
+        "span": {
+          "start_offset": "[START_OFFSET]",
+          "end_offset": "[END_OFFSET]",
+          "start_line": "[START_LINE]",
+          "start_column": "[START_COLUMN]",
+          "end_line": "[END_LINE]",
+          "end_column": "[END_COLUMN]"
+        }
+      }
+    }
+  ],
+  "span": {
+    "start_offset": "[START_OFFSET]",
+    "end_offset": "[END_OFFSET]",
+    "start_line": "[START_LINE]",
+    "start_column": "[START_COLUMN]",
+    "end_line": "[END_LINE]",
+    "end_column": "[END_COLUMN]"
+  }
+}

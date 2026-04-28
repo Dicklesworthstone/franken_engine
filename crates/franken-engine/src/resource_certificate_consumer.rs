@@ -961,7 +961,12 @@ impl BudgetEnforcer {
                 .checked_div(bound as u64)
                 .unwrap_or(MILLIONTHS);
 
-            if ratio >= self.policy.reject_threshold_millionths {
+            let exceeds_bound = projected > bound;
+            let reaches_configured_reject_threshold = self.policy.reject_threshold_millionths
+                < MILLIONTHS
+                && ratio >= self.policy.reject_threshold_millionths;
+
+            if exceeds_bound || reaches_configured_reject_threshold {
                 exceeded_dims.push((*dim, projected, bound));
             }
 
@@ -2035,7 +2040,7 @@ mod tests {
             .expect("serde deserialization should succeed");
 
         assert!(!enforcer.is_exhausted("ext-1"));
-        // Enforcement rejects when projected ratio >= reject_threshold, so usage
+        // Enforcement rejects when projected ratio exceeds reject_threshold, so usage
         // can never reach the bound through enforce() alone. Record usage directly
         // on the extension state to test the is_exhausted boundary.
         if let Some(state) = enforcer.extensions.get_mut("ext-1") {

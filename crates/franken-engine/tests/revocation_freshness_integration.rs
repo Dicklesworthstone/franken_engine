@@ -375,17 +375,21 @@ fn operations_proceed_in_stale() {
 }
 
 #[test]
-fn operations_proceed_in_recovering() {
+fn revocation_dependent_operations_denied_in_recovering() {
     let mut ctrl = make_controller();
     ctrl.set_tick(100);
     ctrl.update_expected_head(10, "t-degrade");
     ctrl.update_local_head(10, "t-recover");
     assert_eq!(ctrl.state(), FreshnessState::Recovering);
 
-    assert!(ctrl.evaluate(OperationType::TokenAcceptance, "t1").is_ok());
+    assert!(ctrl.evaluate(OperationType::TokenAcceptance, "t1").is_err());
     assert!(
         ctrl.evaluate(OperationType::ExtensionActivation, "t2")
-            .is_ok()
+            .is_err()
+    );
+    assert!(
+        ctrl.evaluate(OperationType::HighRiskOperation, "t3")
+            .is_err()
     );
 }
 
@@ -772,13 +776,18 @@ fn state_change_event_has_correct_fields() {
     ctrl.update_expected_head(10, "t-check-fields");
 
     let events = ctrl.drain_state_events();
-    assert_eq!(events.len(), 1);
-    let evt = &events[0];
-    assert_eq!(evt.local_head_seq, 0);
-    assert_eq!(evt.expected_head_seq, 10);
-    assert_eq!(evt.staleness_gap, 10);
-    assert_eq!(evt.threshold, 5);
-    assert_eq!(evt.timestamp, DeterministicTimestamp(42));
+    assert_eq!(events.len(), 2);
+    assert_eq!(events[0].from_state, FreshnessState::Fresh);
+    assert_eq!(events[0].to_state, FreshnessState::Stale);
+    assert_eq!(events[1].from_state, FreshnessState::Stale);
+    assert_eq!(events[1].to_state, FreshnessState::Degraded);
+    for evt in events {
+        assert_eq!(evt.local_head_seq, 0);
+        assert_eq!(evt.expected_head_seq, 10);
+        assert_eq!(evt.staleness_gap, 10);
+        assert_eq!(evt.threshold, 5);
+        assert_eq!(evt.timestamp, DeterministicTimestamp(42));
+    }
 }
 
 // =========================================================================

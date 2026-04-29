@@ -8,8 +8,8 @@ use std::collections::BTreeSet;
 
 use frankenengine_engine::ast::SourceSpan;
 use frankenengine_engine::component_shape_catalog::{
-    ImpurityReason, PropFlowKind, PropValueKind, PurityClassification, RenderPurityClass,
-    analyze_render_tree,
+    ImpurityReason, PropFlowKind, PropValueKind, PurityClassification, PurityConfig,
+    RenderPurityClass, analyze_render_tree,
 };
 use frankenengine_engine::hook_effect_contract::{HookKind, HookManifest, HookSlot, HookSlotIndex};
 use frankenengine_engine::react_jsx_lowering::{
@@ -138,6 +138,16 @@ fn make_hook_manifest(name: &str, hooks: Vec<HookKind>) -> HookManifest {
         })
         .collect();
     HookManifest::new(name, slots)
+}
+
+fn low_obs_config() -> InferenceConfig {
+    InferenceConfig {
+        purity_config: PurityConfig {
+            min_observations: 1,
+            ..PurityConfig::default()
+        },
+        ..InferenceConfig::default()
+    }
 }
 
 fn make_element_with_children(tag: &str, children: Vec<LoweredElement>) -> LoweredElement {
@@ -391,7 +401,7 @@ fn pipeline_infer_single_intrinsic() {
 
 #[test]
 fn pipeline_infer_pure_no_hooks() {
-    let mut p = ReactLaneInferencePipeline::new(epoch());
+    let mut p = ReactLaneInferencePipeline::with_config(low_obs_config(), epoch());
     let el = make_element("div");
     let result = p.infer_component("PureDiv", &el, None, None);
     // No hooks, no effects — should be pure or at least allow partial eval.
@@ -401,7 +411,7 @@ fn pipeline_infer_pure_no_hooks() {
 
 #[test]
 fn pipeline_infer_with_memo_hook() {
-    let mut p = ReactLaneInferencePipeline::new(epoch());
+    let mut p = ReactLaneInferencePipeline::with_config(low_obs_config(), epoch());
     let el = make_element("div");
     let manifest = make_hook_manifest("MemoComp", vec![HookKind::Memo]);
     let result = p.infer_component("MemoComp", &el, Some(&manifest), None);
@@ -421,7 +431,7 @@ fn pipeline_infer_with_state_hook() {
 
 #[test]
 fn pipeline_infer_with_effect_hook() {
-    let mut p = ReactLaneInferencePipeline::new(epoch());
+    let mut p = ReactLaneInferencePipeline::with_config(low_obs_config(), epoch());
     let el = make_element("div");
     let manifest = make_hook_manifest("EffectComp", vec![HookKind::Effect]);
     let result = p.infer_component("EffectComp", &el, Some(&manifest), None);
@@ -436,7 +446,7 @@ fn pipeline_infer_with_effect_hook() {
 
 #[test]
 fn pipeline_infer_with_ref_hook() {
-    let mut p = ReactLaneInferencePipeline::new(epoch());
+    let mut p = ReactLaneInferencePipeline::with_config(low_obs_config(), epoch());
     let el = make_element("div");
     let manifest = make_hook_manifest("RefComp", vec![HookKind::Ref]);
     let result = p.infer_component("RefComp", &el, Some(&manifest), None);
@@ -455,7 +465,7 @@ fn pipeline_infer_with_context_hook() {
 
 #[test]
 fn pipeline_infer_multiple_hooks() {
-    let mut p = ReactLaneInferencePipeline::new(epoch());
+    let mut p = ReactLaneInferencePipeline::with_config(low_obs_config(), epoch());
     let el = make_element("div");
     let manifest = make_hook_manifest(
         "MultiHook",
@@ -748,7 +758,7 @@ fn summary_empty_pipeline() {
 
 #[test]
 fn summary_with_pure_components() {
-    let mut p = ReactLaneInferencePipeline::new(epoch());
+    let mut p = ReactLaneInferencePipeline::with_config(low_obs_config(), epoch());
     for i in 0..5 {
         let el = make_element("div");
         p.infer_component(&format!("Comp{i}"), &el, None, None);
@@ -762,7 +772,7 @@ fn summary_with_pure_components() {
 fn summary_health_threshold() {
     let config = InferenceConfig {
         min_purity_ratio: 900_000, // 90% threshold
-        ..InferenceConfig::default()
+        ..low_obs_config()
     };
     let mut p = ReactLaneInferencePipeline::with_config(config, epoch());
     // Add one pure component.
@@ -786,7 +796,7 @@ fn summary_serde_roundtrip() {
 
 #[test]
 fn summary_blocking_reason_counts() {
-    let mut p = ReactLaneInferencePipeline::new(epoch());
+    let mut p = ReactLaneInferencePipeline::with_config(low_obs_config(), epoch());
     let el = make_element("div");
     let manifest = make_hook_manifest("Eff", vec![HookKind::Effect]);
     p.infer_component("Eff", &el, Some(&manifest), None);

@@ -3869,7 +3869,7 @@ fn parse_expression(
         ));
     }
 
-    let expression = expression.trim();
+    let expression = strip_trailing_line_comment(expression.trim()).trim();
     if expression.is_empty() {
         return Err(ParseError::new(
             ParseErrorCode::UnsupportedSyntax,
@@ -4067,7 +4067,75 @@ fn parse_primary_expression(
         return Ok(Expression::Identifier(expression.to_string()));
     }
 
+    if is_unseparated_expression_sequence(expression) {
+        return Err(unsupported_expression_syntax_error(
+            "unseparated expression sequence",
+            span,
+            context,
+        ));
+    }
+
     Ok(Expression::Raw(canonicalize_whitespace(expression)))
+}
+
+fn is_unseparated_expression_sequence(expression: &str) -> bool {
+    let mut parts = expression.split_ascii_whitespace();
+    let Some(first) = parts.next() else {
+        return false;
+    };
+    if !is_identifier(first)
+        && parse_i64_numeric_literal(first).is_none()
+        && parse_f64_numeric_literal(first).is_none()
+    {
+        return false;
+    }
+
+    let mut count = 1usize;
+    for part in parts {
+        if !is_identifier(part)
+            && parse_i64_numeric_literal(part).is_none()
+            && parse_f64_numeric_literal(part).is_none()
+        {
+            return false;
+        }
+        count += 1;
+    }
+    count > 1
+}
+
+fn strip_trailing_line_comment(expression: &str) -> &str {
+    let bytes = expression.as_bytes();
+    let mut quote: Option<u8> = None;
+    let mut escaped = false;
+    let mut index = 0usize;
+
+    while index + 1 < bytes.len() {
+        let byte = bytes[index];
+        if let Some(active_quote) = quote {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == active_quote {
+                quote = None;
+            }
+            index += 1;
+            continue;
+        }
+
+        match byte {
+            b'\'' | b'"' | b'`' => quote = Some(byte),
+            b'/' if bytes[index + 1] == b'/' => {
+                if index == 0 || bytes[index.saturating_sub(1)].is_ascii_whitespace() {
+                    return &expression[..index];
+                }
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+
+    expression
 }
 
 // ---------------------------------------------------------------------------

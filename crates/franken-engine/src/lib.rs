@@ -505,9 +505,10 @@ use std::{cmp::Ordering, error::Error};
 
 use crate::ast::{ParseGoal, SourceSpan};
 use crate::baseline_interpreter::{
-    DETERMINISTIC_PROFILE_LABEL, InterpreterError, LEGACY_QUICKJS_PROFILE_LABEL,
+    DETERMINISTIC_PROFILE_LABEL, InterpreterConfig, InterpreterError, LEGACY_QUICKJS_PROFILE_LABEL,
     LEGACY_V8_PROFILE_LABEL, LaneChoice, LaneRouter, THROUGHPUT_PROFILE_LABEL,
 };
+use crate::capability::RuntimeCapability;
 use crate::hash_tiers::ContentHash;
 use crate::ir_contract::{Ir0Module, Ir3Instruction, Ir3Module};
 use crate::lowering_pipeline::{LoweringContext, LoweringPipelineError, lower_ir0_to_ir3};
@@ -1674,7 +1675,7 @@ fn eval_via_native_pipeline(prepared: &PreparedEvalSource, lane: LaneChoice) -> 
     let mut ir3 = lowering_output.ir3;
     patch_eval_completion_value(&mut ir3);
 
-    let lane_router = LaneRouter::new();
+    let lane_router = eval_lane_router_for_ir3(&ir3);
     let routed = lane_router
         .execute(&ir3, prepared.trace_id.as_str(), Some(lane))
         .map_err(map_interpreter_error)
@@ -1688,6 +1689,30 @@ fn eval_via_native_pipeline(prepared: &PreparedEvalSource, lane: LaneChoice) -> 
         })?;
 
     Ok(routed.result.value.to_string())
+}
+
+fn eval_lane_router_for_ir3(ir3: &Ir3Module) -> LaneRouter {
+    let mut granted_capabilities = std::collections::BTreeSet::from([
+        RuntimeCapability::VmDispatch,
+        RuntimeCapability::HeapAllocate,
+    ]);
+
+    for capability in &ir3.required_capabilities {
+        if let Some(runtime_capability) = RuntimeCapability::from_tag_str(&capability.0)
+            && matches!(
+                runtime_capability,
+                RuntimeCapability::Builtin | RuntimeCapability::Console | RuntimeCapability::Timer
+            )
+        {
+            granted_capabilities.insert(runtime_capability);
+        }
+    }
+
+    let mut quickjs_config = InterpreterConfig::quickjs_defaults();
+    quickjs_config.granted_capabilities = granted_capabilities.clone();
+    let mut v8_config = InterpreterConfig::v8_defaults();
+    v8_config.granted_capabilities = granted_capabilities;
+    LaneRouter::with_configs(quickjs_config, v8_config)
 }
 
 /// Patch IR3 instructions for eval completion semantics.

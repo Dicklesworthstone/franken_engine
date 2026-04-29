@@ -2,14 +2,24 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
+fn repo_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+}
+
+fn repo_path(path: &str) -> PathBuf {
+    repo_root().join(path)
+}
+
 #[test]
 fn test_parser_oracle_rejects_placeholder_backfills() {
     // Verify that parser oracle gate generates receipts instead of placeholder content
     // when artifacts are missing
 
     // Run parser oracle gate in check mode (which should not generate full artifacts)
-    let output = Command::new("scripts/run_parser_oracle_gate.sh")
+    let root = repo_root();
+    let output = Command::new(root.join("scripts/run_parser_oracle_gate.sh"))
         .arg("check")
+        .current_dir(&root)
         .output()
         .expect("Failed to run parser oracle gate script");
 
@@ -20,7 +30,7 @@ fn test_parser_oracle_rejects_placeholder_backfills() {
     }
 
     // Find the most recent run directory
-    let artifacts_dir = PathBuf::from("artifacts/parser_oracle");
+    let artifacts_dir = root.join("artifacts/parser_oracle");
     if !artifacts_dir.exists() {
         panic!("Parser oracle artifacts directory should exist after running script");
     }
@@ -190,7 +200,7 @@ fn test_parser_oracle_rejects_placeholder_backfills() {
 fn test_parser_oracle_contract_compliance() {
     // Test that the missing artifact contract is properly structured
 
-    let contract_path = PathBuf::from("docs/parser_oracle_missing_artifact_contract_v1.json");
+    let contract_path = repo_path("docs/parser_oracle_missing_artifact_contract_v1.json");
     assert!(
         contract_path.exists(),
         "Parser oracle missing artifact contract should exist"
@@ -248,7 +258,7 @@ fn test_parser_oracle_contract_compliance() {
 fn test_parser_oracle_receipt_generation_function() {
     // Test the emit_missing_artifact_receipt function behavior by examining the script
 
-    let script_path = PathBuf::from("scripts/run_parser_oracle_gate.sh");
+    let script_path = repo_path("scripts/run_parser_oracle_gate.sh");
     let script_content =
         fs::read_to_string(&script_path).expect("Should be able to read parser oracle gate script");
 
@@ -291,7 +301,7 @@ fn test_parser_oracle_exit_code_handling() {
     // Test that different exit codes result in appropriate reason_ids
 
     // This test validates the select_missing_artifact_reason_id logic
-    let script_path = PathBuf::from("scripts/run_parser_oracle_gate.sh");
+    let script_path = repo_path("scripts/run_parser_oracle_gate.sh");
     let script_content =
         fs::read_to_string(&script_path).expect("Should be able to read parser oracle gate script");
 

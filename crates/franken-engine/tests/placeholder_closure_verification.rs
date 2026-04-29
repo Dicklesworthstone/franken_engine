@@ -7,6 +7,11 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::path::PathBuf;
+
+fn repo_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+}
 
 /// Placeholder closure verification context
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -301,16 +306,16 @@ fn test_closure_verification_serialization() {
 #[test]
 fn test_contract_json_validation() {
     // Test that the JSON contract file exists and is valid
-    let contract_path = "docs/rgc_placeholder_closure_verification_v1.json";
+    let contract_path = repo_root().join("docs/rgc_placeholder_closure_verification_v1.json");
     assert!(
-        std::path::Path::new(contract_path).exists(),
+        contract_path.exists(),
         "Contract JSON file should exist at {}",
-        contract_path
+        contract_path.display()
     );
 
     // Read and validate JSON structure
     let contract_content =
-        std::fs::read_to_string(contract_path).expect("Should be able to read contract file");
+        std::fs::read_to_string(&contract_path).expect("Should be able to read contract file");
     let _: serde_json::Value =
         serde_json::from_str(&contract_content).expect("Contract file should be valid JSON");
 }
@@ -318,16 +323,16 @@ fn test_contract_json_validation() {
 #[test]
 fn test_contract_markdown_validation() {
     // Test that the markdown specification exists
-    let spec_path = "docs/RGC_PLACEHOLDER_CLOSURE_VERIFICATION_V1.md";
+    let spec_path = repo_root().join("docs/RGC_PLACEHOLDER_CLOSURE_VERIFICATION_V1.md");
     assert!(
-        std::path::Path::new(spec_path).exists(),
+        spec_path.exists(),
         "Specification markdown should exist at {}",
-        spec_path
+        spec_path.display()
     );
 
     // Read and validate basic structure
     let spec_content =
-        std::fs::read_to_string(spec_path).expect("Should be able to read specification file");
+        std::fs::read_to_string(&spec_path).expect("Should be able to read specification file");
     assert!(spec_content.contains("# Placeholder Closure Verification V1"));
     assert!(spec_content.contains("bd-2muur.8"));
     assert!(spec_content.contains("RGC-920H"));

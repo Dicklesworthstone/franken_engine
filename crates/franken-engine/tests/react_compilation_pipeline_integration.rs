@@ -7,6 +7,7 @@
 use frankenengine_engine::react_compilation_pipeline::{
     ReactCompileConfig, ReactInputLanguage, compile_react_source, generate_compilation_evidence,
 };
+use frankenengine_engine::react_jsx_lowering::{CallConvention, LoweredPropValue, PropsEntry};
 
 #[test]
 fn test_simple_jsx_compilation() {
@@ -40,9 +41,24 @@ fn test_jsx_with_expressions() {
     );
 
     let result = result.unwrap();
+    assert!(matches!(
+        result.lowering_result.element.call_convention,
+        CallConvention::Automatic { .. }
+    ));
     assert!(
-        result.generated_code.contains("React") || result.generated_code.contains("jsx"),
-        "Generated code should contain React calls"
+        result
+            .lowering_result
+            .element
+            .props
+            .entries
+            .iter()
+            .any(|entry| matches!(
+                entry,
+                PropsEntry::Named(prop)
+                    if prop.name == "children"
+                        && matches!(prop.value, LoweredPropValue::ChildrenArray { .. })
+            )),
+        "Automatic runtime should fold expression children into props"
     );
 }
 
@@ -208,10 +224,21 @@ fn test_classic_vs_automatic_runtime() {
     config.lowering_config.runtime_mode = JsxRuntimeMode::Automatic;
     let automatic_result = compile_react_source(source, ReactInputLanguage::Jsx, &config).unwrap();
 
-    // Both should succeed but generate different code
-    assert_ne!(
-        classic_result.generated_code, automatic_result.generated_code,
-        "Classic and automatic modes should generate different output"
+    assert!(matches!(
+        classic_result.lowering_result.element.call_convention,
+        CallConvention::Classic { .. }
+    ));
+    assert!(matches!(
+        automatic_result.lowering_result.element.call_convention,
+        CallConvention::Automatic { .. }
+    ));
+    assert!(
+        !classic_result.lowering_result.element.children.is_empty(),
+        "Classic runtime keeps children as positional call arguments"
+    );
+    assert!(
+        automatic_result.lowering_result.element.children.is_empty(),
+        "Automatic runtime folds children into props"
     );
 }
 

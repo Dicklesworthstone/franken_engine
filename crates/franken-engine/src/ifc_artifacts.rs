@@ -579,32 +579,38 @@ impl FlowEnvelope {
             && *sink_clearance == ClearanceClass::SealedSink
             && matches!(source, Label::Secret | Label::TopSecret)
         {
-            // Attempt to materialize the declassification obligation
             declassification_obligation =
                 self.materialize_declassification_obligation(source, sink_clearance);
 
-            // Generate advisory if authorization material is missing
             if declassification_obligation.is_none() {
-                advisories.push(FlowAuthorizationAdvisory::ExplicitAuthorizationRequired {
-                    source_label: source.clone(),
-                    sink_clearance: *sink_clearance,
-                });
+                if envelope_authorized {
+                    advisories.push(FlowAuthorizationAdvisory::ExplicitAuthorizationRequired {
+                        source_label: source.clone(),
+                        sink_clearance: *sink_clearance,
+                    });
+                } else {
+                    advisories.push(
+                        FlowAuthorizationAdvisory::DeclassificationObligationRequired {
+                            source_label: source.clone(),
+                            sink_clearance: *sink_clearance,
+                        },
+                    );
+                }
             }
-            // If authorization exists and obligation was materialized, no advisory needed
-            // - the obligation itself indicates declassification is required
         }
 
-        // Flow is authorized if envelope allows it AND either no special handling
-        // is needed OR we successfully materialized the declassification obligation
+        let requires_sealed_sink_declassification = matches!(
+            (*sink_clearance, source),
+            (ClearanceClass::SealedSink, Label::Secret | Label::TopSecret)
+        );
+
+        // Flow is immediately authorized only when the envelope allows it and
+        // no declassification handling remains. A materialized obligation is
+        // evidence for the next enforcement step, not permission to skip it.
         let flow_authorized = envelope_authorized
-            && if matches!(
-                (*sink_clearance, source),
-                (ClearanceClass::SealedSink, Label::Secret | Label::TopSecret)
-            ) {
-                declassification_obligation.is_some()
-            } else {
-                true
-            };
+            && !requires_sealed_sink_declassification
+            && declassification_obligation.is_none()
+            && advisories.is_empty();
 
         FlowAuthorizationAssessment {
             envelope_authorized,
@@ -2581,7 +2587,7 @@ mod tests {
 
         let assessment = env.assess_flow_authorization(&Label::Secret, &ClearanceClass::SealedSink);
         assert!(assessment.envelope_authorized);
-        assert!(assessment.flow_authorized);
+        assert!(!assessment.flow_authorized);
         assert!(assessment.requires_declassification());
         assert!(!assessment.has_advisories());
         let obligation = assessment
@@ -2787,7 +2793,8 @@ mod tests {
 
     #[test]
     fn flow_assessment_enforced_authorization_succeeds_with_authorization() {
-        // Test that enforced authorization succeeds when proper authorization exists
+        // Test that proper authorization materializes the obligation while the
+        // flow remains blocked until declassification enforcement consumes it.
         let env = FlowEnvelope {
             envelope_id: "env-auth-success".to_string(),
             extension_id: "ext-auth-success".to_string(),
@@ -2801,8 +2808,7 @@ mod tests {
 
         let assessment = env.assess_flow_authorization(&Label::Secret, &ClearanceClass::SealedSink);
 
-        // Flow should be authorized since we have proper authorization
-        assert!(assessment.flow_authorized);
+        assert!(!assessment.flow_authorized);
         assert!(assessment.envelope_authorized);
 
         // Should generate declassification obligation. Clone so we don't

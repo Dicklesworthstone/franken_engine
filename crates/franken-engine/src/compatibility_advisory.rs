@@ -72,14 +72,18 @@ impl AdvisoryBuilder {
             _ => "Runtime behavior divergence detected",
         };
 
-        // Add context-specific details if available
+        let mut message = base_message.to_string();
         if let Some(package_name) = self.context.get("package") {
-            format!("{} in package '{}'", base_message, package_name)
-        } else if let Some(module_path) = self.context.get("module") {
-            format!("{} for module '{}'", base_message, module_path)
-        } else {
-            base_message.to_string()
+            message.push_str(" in package '");
+            message.push_str(package_name);
+            message.push('\'');
         }
+        if let Some(module_path) = self.context.get("module") {
+            message.push_str(" for module '");
+            message.push_str(module_path);
+            message.push('\'');
+        }
+        message
     }
 
     fn generate_remediation(&self, divergence_tag: &str) -> String {
@@ -97,25 +101,23 @@ impl AdvisoryBuilder {
             _ => "Review runtime-specific documentation and test with target environments",
         };
 
-        // Add context-specific remediation hints
+        let mut remediation = base_remediation.to_string();
         if let Some(version) = self.context.get("node_version") {
-            format!("{} (Node.js {})", base_remediation, version)
-        } else if let Some(severity) = self.context.get("severity") {
-            match severity.as_str() {
-                "high" => format!(
-                    "{} - URGENT: This divergence may cause runtime failures",
-                    base_remediation
-                ),
-                "medium" => format!(
-                    "{} - MODERATE: Consider testing thoroughly",
-                    base_remediation
-                ),
-                "low" => format!("{} - LOW: Monitor for edge cases", base_remediation),
-                _ => base_remediation.to_string(),
-            }
-        } else {
-            base_remediation.to_string()
+            remediation.push_str(" (Node.js ");
+            remediation.push_str(version);
+            remediation.push(')');
         }
+        if let Some(severity) = self.context.get("severity") {
+            match severity.as_str() {
+                "high" => {
+                    remediation.push_str(" - URGENT: This divergence may cause runtime failures")
+                }
+                "medium" => remediation.push_str(" - MODERATE: Consider testing thoroughly"),
+                "low" => remediation.push_str(" - LOW: Monitor for edge cases"),
+                _ => {}
+            }
+        }
+        remediation
     }
 }
 

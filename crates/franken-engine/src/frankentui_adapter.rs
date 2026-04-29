@@ -1043,9 +1043,7 @@ impl FlowDecisionDashboardView {
             }
         }
 
-        let generated_at_unix_ms = input
-            .generated_at_unix_ms
-            .expect("serde deserialization should succeed");
+        let generated_at_unix_ms = input.generated_at_unix_ms.unwrap_or(0);
         let alert_threshold = input.blocked_flow_alert_threshold.unwrap_or(5);
         let mut alert_indicators = if input.alert_indicators.is_empty() {
             compute_flow_alert_indicators(
@@ -1067,9 +1065,7 @@ impl FlowDecisionDashboardView {
         Self {
             cluster: normalize_non_empty(input.cluster),
             zone: normalize_non_empty(input.zone),
-            security_epoch: input
-                .security_epoch
-                .expect("serde deserialization should succeed"),
+            security_epoch: input.security_epoch.unwrap_or(0),
             generated_at_unix_ms,
             label_map,
             blocked_flows,
@@ -1787,9 +1783,7 @@ impl ProofSpecializationLineageDashboardView {
             event.compilation_ref = normalize_non_empty(std::mem::take(&mut event.compilation_ref));
         }
 
-        let generated_at_unix_ms = input
-            .generated_at_unix_ms
-            .expect("serde deserialization should succeed");
+        let generated_at_unix_ms = input.generated_at_unix_ms.unwrap_or(0);
         let performance_impact = match input.performance_impact {
             Some(mut provided) => {
                 provided.specialization_coverage_millionths =
@@ -1828,9 +1822,7 @@ impl ProofSpecializationLineageDashboardView {
         Self {
             cluster: normalize_non_empty(input.cluster),
             zone: normalize_non_empty(input.zone),
-            security_epoch: input
-                .security_epoch
-                .expect("serde deserialization should succeed"),
+            security_epoch: input.security_epoch.unwrap_or(0),
             generated_at_unix_ms,
             proof_inventory,
             active_specializations,
@@ -2272,9 +2264,7 @@ impl CapabilityDeltaDashboardView {
                 normalize_non_empty(std::mem::take(&mut override_row.replay_ref));
         }
 
-        let generated_at_unix_ms = input
-            .generated_at_unix_ms
-            .expect("serde deserialization should succeed");
+        let generated_at_unix_ms = input.generated_at_unix_ms.unwrap_or(0);
         let mut batch_review_queue = if input.batch_review_queue.is_empty() {
             derive_capability_batch_review_queue(&current_capability_rows, generated_at_unix_ms)
         } else {
@@ -2331,9 +2321,7 @@ impl CapabilityDeltaDashboardView {
         Self {
             cluster: normalize_non_empty(input.cluster),
             zone: normalize_non_empty(input.zone),
-            security_epoch: input
-                .security_epoch
-                .expect("serde deserialization should succeed"),
+            security_epoch: input.security_epoch.unwrap_or(0),
             generated_at_unix_ms,
             current_capability_rows,
             proposed_minimal_rows,

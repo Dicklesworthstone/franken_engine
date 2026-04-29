@@ -1123,16 +1123,14 @@ impl ConformanceRunner {
             let category = ifc_metadata
                 .as_ref()
                 .map(|metadata| metadata.category.clone());
-            // SAFETY: Conformance test assumes asset has IFC metadata for flow analysis
             let source_labels = ifc_metadata
                 .as_ref()
                 .map(|metadata| metadata.source_labels.clone())
-                .expect("serde deserialization should succeed");
-            // SAFETY: Conformance test assumes asset has IFC metadata for flow analysis
+                .unwrap_or_default();
             let sink_clearances = ifc_metadata
                 .as_ref()
                 .map(|metadata| metadata.sink_clearances.clone())
-                .expect("serde deserialization should succeed");
+                .unwrap_or_default();
             let flow_path_type = ifc_metadata
                 .as_ref()
                 .map(|metadata| metadata.flow_path_type.clone());

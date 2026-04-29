@@ -216,7 +216,7 @@ impl GuardplaneExtensionContext {
             ],
         )
         .is_some_and(parse_boolish)
-            || self.witness_declared()
+            || self.monitoring_witness_declared()
             || self.malformed_trust_metadata_declared()
         {
             return true;
@@ -235,6 +235,10 @@ impl GuardplaneExtensionContext {
         !self.required_capabilities.is_empty()
             || !self.denied_capabilities.is_empty()
             || self.witness_confidence_millionths > 0
+    }
+
+    fn monitoring_witness_declared(&self) -> bool {
+        !self.required_capabilities.is_empty() || !self.denied_capabilities.is_empty()
     }
 
     fn malformed_trust_metadata_declared(&self) -> bool {
@@ -512,7 +516,7 @@ impl GuardplaneAdapter {
 
     fn build_evidence(&self, operation: &GuardplaneOperation, operation_index: u64) -> Evidence {
         let suspicion_millionths = operation.suspicion_millionths();
-        let trust_penalty_millionths = self.context.trust_level.risk_penalty_millionths();
+        let trust_penalty_millionths = self.effective_trust_penalty_millionths();
         let confidence_penalty_millionths = if self.context.witness_declared() {
             (WITNESS_CONFIDENCE_FLOOR_MILLIONTHS - self.context.witness_confidence_millionths)
                 .max(0)
@@ -552,7 +556,8 @@ impl GuardplaneAdapter {
         if self.context.denied_capabilities.contains(capability_label) {
             return 900_000;
         }
-        if !self.context.required_capabilities.is_empty()
+        if is_runtime_capability_label(capability_label)
+            && !self.context.required_capabilities.is_empty()
             && !self
                 .context
                 .required_capabilities
@@ -561,6 +566,19 @@ impl GuardplaneAdapter {
             return 450_000;
         }
         0
+    }
+
+    fn effective_trust_penalty_millionths(&self) -> i64 {
+        let base = self.context.trust_level.risk_penalty_millionths();
+        if !self.context.witness_declared() {
+            return base;
+        }
+
+        let confidence_credit = self
+            .context
+            .witness_confidence_millionths
+            .saturating_sub(600_000);
+        base.saturating_sub(confidence_credit)
     }
 }
 
@@ -630,6 +648,10 @@ fn parse_boolish(raw: &str) -> bool {
         raw.trim().to_ascii_lowercase().as_str(),
         "1" | "true" | "yes" | "on"
     )
+}
+
+fn is_runtime_capability_label(capability_label: &str) -> bool {
+    matches!(capability_label, "module.import")
 }
 
 fn posterior_delta(posterior: &Posterior) -> i64 {
@@ -842,6 +864,12 @@ mod tests {
         let trusted = context_with_metadata(&[("capability_witness.trust_level", "signed")]);
         assert!(!trusted.instruction_hooks_enabled());
 
+        let trusted_with_confidence = context_with_metadata(&[
+            ("capability_witness.trust_level", "signed"),
+            ("capability_witness.confidence_millionths", "995000"),
+        ]);
+        assert!(!trusted_with_confidence.instruction_hooks_enabled());
+
         let suspicious = context_with_metadata(&[("capability_witness.trust_level", "suspicious")]);
         assert!(suspicious.instruction_hooks_enabled());
 
@@ -850,6 +878,40 @@ mod tests {
             ("capability_witness.trust_level", "signed"),
         ]);
         assert!(explicit.instruction_hooks_enabled());
+    }
+
+    #[test]
+    fn missing_required_package_capability_does_not_penalize_internal_property_hook() {
+        let adapter = adapter_with_metadata(&[
+            ("guardplane.enable_instruction_hooks", "true"),
+            ("capability_witness.trust_level", "trusted"),
+            ("capability_witness.confidence_millionths", "990000"),
+            (
+                "capability_witness.required_capabilities",
+                "module.import,network.fetch",
+            ),
+        ]);
+
+        let action =
+            adapter.pre_property_access(&test_hook_context(1), &ObjectId(7), &"value".to_string());
+
+        assert_eq!(action, HookAction::Allow);
+    }
+
+    #[test]
+    fn high_confidence_provisional_witness_offsets_provisional_trust_penalty() {
+        let adapter = adapter_with_metadata(&[
+            ("guardplane.enable_instruction_hooks", "true"),
+            ("capability_witness.trust_level", "provisional"),
+            ("capability_witness.confidence_millionths", "750000"),
+            ("capability_witness.required_capabilities", "network.fetch"),
+            ("capability_witness.denied_capabilities", "system.exec"),
+        ]);
+
+        let action =
+            adapter.pre_property_access(&test_hook_context(1), &ObjectId(7), &"value".to_string());
+
+        assert_eq!(action, HookAction::Allow);
     }
 
     #[test]

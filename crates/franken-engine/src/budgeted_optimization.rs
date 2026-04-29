@@ -949,12 +949,12 @@ impl BudgetedOptimizationStack {
             .campaigns
             .get(campaign_a)
             .map(|c| c.families())
-            .expect("serde deserialization should succeed");
+            .unwrap_or_default();
         let families_b = self
             .campaigns
             .get(campaign_b)
             .map(|c| c.families())
-            .expect("serde deserialization should succeed");
+            .unwrap_or_default();
 
         let overlapping: BTreeSet<_> = families_a.intersection(&families_b).cloned().collect();
 

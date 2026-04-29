@@ -1443,6 +1443,7 @@ pub fn create_standard_ecosystem_patterns() -> Vec<EcosystemPattern> {
         .with_package(ReactPackage::ReactJsxRuntime)
         .with_entry_point("react".to_string())
         .with_entry_point("react-dom".to_string())
+        .with_entry_point("react-dom/client".to_string())
         .with_entry_point("react-dom/server".to_string())
         .with_subpath_import("react/jsx-runtime".to_string()),
     ]

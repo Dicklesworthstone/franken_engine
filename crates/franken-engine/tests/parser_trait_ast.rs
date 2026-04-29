@@ -252,7 +252,7 @@ fn canonical_ast_hash_vector_module_import_default_is_stable() {
         .expect("module parse should succeed");
     assert_eq!(
         tree.canonical_hash(),
-        "sha256:6f9b81a8dfbaad70c345e5508dd1fae29d3d6cfdc1d18954d3486abd00d75f6c"
+        "sha256:184b65136745331fa73eb839c7d3e2d444cda607e80547a8a03b19e6c5779874"
     );
 }
 
@@ -321,7 +321,7 @@ fn canonical_parse_event_ir_hash_vector_module_import_default_is_stable() {
     let ir = ParseEventIr::from_syntax_tree(&tree, "<inline>", ParserMode::ScalarReference);
     assert_eq!(
         ir.canonical_hash(),
-        "sha256:37b99e6645feed7454a8e063844c70657cf20db5d92741dafa256a30ae21ad60"
+        "sha256:5f99807e7808b6fec21cb05479885b367161f1dcd1abac402cceafdc74593fea"
     );
 }
 

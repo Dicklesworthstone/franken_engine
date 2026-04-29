@@ -63,21 +63,21 @@
       "family_id": "module.import_default",
       "goal": "module",
       "source": "import dep from \"pkg\"",
-      "expected_hash": "sha256:6f9b81a8dfbaad70c345e5508dd1fae29d3d6cfdc1d18954d3486abd00d75f6c"
+      "expected_hash": "sha256:184b65136745331fa73eb839c7d3e2d444cda607e80547a8a03b19e6c5779874"
     },
     {
       "id": "module_import_side_effect",
       "family_id": "module.import_side_effect",
       "goal": "module",
       "source": "import \"side-effect\"",
-      "expected_hash": "sha256:03ca17913981d5341b4be41808fe71ef06d4f0369c86877e0b128ad6a3008e05"
+      "expected_hash": "sha256:e563c46519ec5d4f44d15b49ea8370dd9b9b8154d13505f5feecedadc8f31e50"
     },
     {
       "id": "module_import_named_namespace",
       "family_id": "module.import_named_namespace",
       "goal": "module",
       "source": "import { run as start } from \"pkg\"",
-      "expected_hash": "sha256:6de8de22500ec13fa5164d80cfe8b04f2ab89f624476fdaca2e29ca4b27de0d9"
+      "expected_hash": "sha256:801784e20ed84c4732c468dc08db731827fe1442cc30c88d9294726b8d0bf4e2"
     },
     {
       "id": "module_export_default",

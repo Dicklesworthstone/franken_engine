@@ -172,11 +172,15 @@ fn frankenctl_compile_accepts_optional_member_and_computed_member_sources() {
 #[test]
 fn frankenctl_run_executes_optional_member_and_computed_member_sources() {
     for (specimen_id, source, expected_execution_value) in [
-        ("nullish_member", "let obj = null; obj?.value;\n", "null"),
+        (
+            "nullish_member",
+            "let obj = null; obj?.value;\n",
+            "undefined",
+        ),
         (
             "live_computed",
             "let key = \"value\"; let obj = { value: 7 }; obj?.[key];\n",
-            "value",
+            "7",
         ),
         (
             "skipped_key_side_effect",

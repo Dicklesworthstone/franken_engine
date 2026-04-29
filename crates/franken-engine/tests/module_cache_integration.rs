@@ -1074,19 +1074,16 @@ fn cache_error_serde_round_trip() {
     assert_eq!(*err, decoded);
 }
 
-/// Note: `ModuleCache` contains `BTreeMap<ModuleCacheKey, _>` which cannot
-/// round-trip through JSON because `ModuleCacheKey` is not a string key.
-/// This is a known serde limitation; use `CacheSnapshot` for serialization
-/// instead (tested above in `cache_snapshot_serde_round_trip`).
 #[test]
-fn module_cache_json_serialization_fails_due_to_non_string_key() {
+fn module_cache_json_serialization_round_trips_entry_list() {
     let mut cache = ModuleCache::new();
     insert_module(&mut cache, "mod:a", fp("sa", 1, 1), "aa", "/a.js").unwrap();
-    let result = serde_json::to_string(&cache);
-    assert!(
-        result.is_err(),
-        "BTreeMap<ModuleCacheKey, _> cannot serialize to JSON"
-    );
+    let json = serde_json::to_string(&cache).unwrap();
+    assert!(json.contains("\"entries\":["));
+    assert!(!json.contains("snapshot_fastpath"));
+
+    let decoded: ModuleCache = serde_json::from_str(&json).unwrap();
+    assert_eq!(cache.state_hash(), decoded.state_hash());
 }
 
 // ===========================================================================

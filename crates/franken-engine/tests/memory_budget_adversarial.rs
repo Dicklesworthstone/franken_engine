@@ -19,8 +19,10 @@ fn adversarial_config() -> InterpreterConfig {
     config.max_heap_objects = 100; // Very low limit for testing
     config.max_total_memory_bytes = 1024 * 16; // 16KB limit
     config.max_scope_depth = 10; // Low depth limit
-    config.granted_capabilities =
-        BTreeSet::from([RuntimeCapability::VmDispatch, RuntimeCapability::HeapAllocate]);
+    config.granted_capabilities = BTreeSet::from([
+        RuntimeCapability::VmDispatch,
+        RuntimeCapability::HeapAllocate,
+    ]);
     config
 }
 
@@ -319,7 +321,10 @@ fn test_memory_budget_boundary_conditions() {
         Ok(_) => {
             // Should succeed with exactly 5 user-visible objects.
         }
-        other => panic!("Expected success with 5 user-visible objects, got: {:?}", other),
+        other => panic!(
+            "Expected success with 5 user-visible objects, got: {:?}",
+            other
+        ),
     }
 
     // Test: Allocate one more user-visible object - should fail.

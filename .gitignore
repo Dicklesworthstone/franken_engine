@@ -64,6 +64,9 @@ storage.sqlite3
 .rch_cargo_home_*/
 .rch_*/
 
+# Manual probe build artifacts
+/scripts/manual/*.rlib
+
 # Timestamped test/CI artifacts
 /artifacts/
 

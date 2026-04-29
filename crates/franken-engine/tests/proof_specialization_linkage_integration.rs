@@ -898,9 +898,9 @@ fn proofs_valid_at_same_epoch() {
 }
 
 #[test]
-fn proofs_valid_at_later_epoch() {
+fn proofs_not_valid_at_later_epoch() {
     let rec = linkage_record("lnk-1", 5, &["p1"]);
-    assert!(rec.proofs_valid_at(epoch(100)));
+    assert!(!rec.proofs_valid_at(epoch(100)));
 }
 
 #[test]
@@ -910,13 +910,13 @@ fn proofs_not_valid_at_earlier_epoch() {
 }
 
 #[test]
-fn proofs_valid_at_with_mixed_epochs() {
+fn proofs_not_valid_at_with_mixed_epochs() {
     let mut rec = linkage_record("lnk-1", 3, &["p1"]);
     rec.proof_inputs.push(proof_input("p2", 7));
-    // Epoch 3 proof and epoch 7 proof: need epoch >= 7 for all to be valid
+    // Mixed proof epochs are never valid for a single exact security epoch.
     assert!(!rec.proofs_valid_at(epoch(5)));
-    assert!(rec.proofs_valid_at(epoch(7)));
-    assert!(rec.proofs_valid_at(epoch(10)));
+    assert!(!rec.proofs_valid_at(epoch(7)));
+    assert!(!rec.proofs_valid_at(epoch(10)));
 }
 
 // =========================================================================

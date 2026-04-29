@@ -795,14 +795,15 @@ pub fn evaluate_string_parity(
     evidence: &StringParityEvidence,
     config: &GateConfig,
 ) -> ParityVerdict {
+    // Known gaps are concrete compatibility failures. Do not hide them behind
+    // a lower-confidence "insufficient evidence" classification.
+    if evidence.known_gaps.len() > config.max_known_gaps {
+        return ParityVerdict::KnownGap;
+    }
+
     // Insufficient test count => fail open.
     if evidence.test_count < config.min_test_count {
         return ParityVerdict::FailOpen;
-    }
-
-    // Too many known gaps => KnownGap.
-    if evidence.known_gaps.len() > config.max_known_gaps {
-        return ParityVerdict::KnownGap;
     }
 
     // Full parity if fraction meets threshold and no gaps.

@@ -456,7 +456,9 @@ fn test_evaluator_benchmark_insufficient_samples() {
 
 #[test]
 fn test_evaluator_benchmark_regression() {
-    let cfg = GovernanceConfig::permissive().with_min_benchmark_samples(1);
+    let cfg = GovernanceConfig::default_config()
+        .with_required_lanes(BTreeSet::new())
+        .with_required_features(BTreeSet::new());
     let mut ev = GovernanceEvaluator::new(cfg, ep());
     let be = BenchmarkEntry::new(BenchmarkCategory::Regexp, "w2", 500, 1000, 50);
     ev.add_benchmark(be);

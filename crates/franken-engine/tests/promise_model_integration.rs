@@ -849,7 +849,7 @@ fn macrotask_next_scheduled_time_returns_minimum() {
 // ===========================================================================
 
 #[test]
-fn event_loop_drains_microtasks_before_macrotask() {
+fn event_loop_turn_keeps_microtask_checkpoint_explicit() {
     let mut el = EventLoop::new();
     el.microtasks.enqueue(Microtask::PromiseReaction {
         handler: None,
@@ -861,8 +861,11 @@ fn event_loop_drains_microtasks_before_macrotask() {
         .schedule(MacrotaskSource::Timer, ClosureHandle(0), 0, Label::Public);
 
     let result = el.turn();
-    assert_eq!(result.microtasks_drained, 1);
+    assert_eq!(result.microtasks_drained, 0);
     assert!(result.macrotask.is_some());
+    assert_eq!(el.microtasks.pending_count(), 1);
+    assert_eq!(el.drain_microtasks(), 1);
+    assert!(el.microtasks.is_empty());
 }
 
 #[test]
@@ -1607,11 +1610,12 @@ fn event_loop_interleaved_micro_and_macro_tasks() {
         label: Label::Public,
     });
 
-    // First turn: microtask drained first, then timer at 0
+    // First turn selects timer at 0; the caller owns the explicit microtask checkpoint.
     let r1 = el.turn();
-    assert_eq!(r1.microtasks_drained, 1);
+    assert_eq!(r1.microtasks_drained, 0);
     assert!(r1.macrotask.is_some());
     assert_eq!(r1.macrotask.as_ref().unwrap().handler, ClosureHandle(0));
+    assert_eq!(el.drain_microtasks(), 1);
 
     // Second turn: clock advances to 100
     let r2 = el.turn();

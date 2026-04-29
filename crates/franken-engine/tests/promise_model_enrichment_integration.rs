@@ -548,7 +548,7 @@ fn event_loop_set_timeout() {
 }
 
 #[test]
-fn event_loop_turn_drains_microtasks() {
+fn event_loop_turn_keeps_microtask_drain_explicit() {
     let mut el = EventLoop::new();
     for _ in 0..5 {
         el.microtasks.enqueue(Microtask::PromiseReaction {
@@ -559,7 +559,9 @@ fn event_loop_turn_drains_microtasks() {
         });
     }
     let result = el.turn();
-    assert_eq!(result.microtasks_drained, 5);
+    assert_eq!(result.microtasks_drained, 0);
+    assert_eq!(el.microtasks.pending_count(), 5);
+    assert_eq!(el.drain_microtasks(), 5);
     assert!(el.microtasks.is_empty());
 }
 

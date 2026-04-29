@@ -89,10 +89,7 @@ fn dependency_audit_script_emits_manifest_in_skip_remote_mode() {
         manifest["schema_version"],
         "franken-engine.external-dependency-audit.v1"
     );
-    assert_eq!(
-        manifest["standalone_build"]["status"],
-        "blocked_by_external_path_dependencies"
-    );
+    assert_eq!(manifest["standalone_build"]["status"], "ready");
     assert_eq!(
         manifest["full_integration_dependency_health"]["status"],
         "not_verified"
@@ -101,42 +98,15 @@ fn dependency_audit_script_emits_manifest_in_skip_remote_mode() {
     let dependencies = manifest["dependencies"]
         .as_array()
         .expect("dependencies should be an array");
-    assert_eq!(dependencies.len(), 3, "expected the asupersync tripod only");
-
-    for dependency_key in ["franken-kernel", "franken-decision", "franken-evidence"] {
-        let dependency = dependencies
-            .iter()
-            .find(|entry| entry["dependency_key"] == dependency_key)
-            .unwrap_or_else(|| panic!("missing dependency entry for {dependency_key}"));
-        assert!(
-            dependency["path_exists"].as_bool().unwrap_or(false),
-            "{dependency_key} path should exist on this machine"
-        );
-        assert!(
-            dependency["cargo_toml_present"].as_bool().unwrap_or(false),
-            "{dependency_key} should have Cargo.toml"
-        );
-        assert_eq!(dependency["compile_check"]["status"], "skipped");
-    }
-
-    let kernel = dependencies
-        .iter()
-        .find(|entry| entry["dependency_key"] == "franken-kernel")
-        .expect("kernel dependency present");
-    let kernel_symbols = kernel["imported_symbols"]
-        .as_array()
-        .expect("kernel imported symbols array");
     assert!(
-        kernel_symbols.iter().any(|symbol| symbol == "Cx"),
-        "kernel import surface should record Cx"
+        dependencies.is_empty(),
+        "versioned asupersync crates should not be reported as hard /dp path dependencies"
     );
     assert!(
-        kernel["approved_boundary_files"]
-            .as_array()
-            .expect("boundary file array")
-            .iter()
-            .any(|path| path == "crates/franken-engine/src/control_plane/mod.rs"),
-        "kernel dependency should point at the control-plane adapter boundary"
+        manifest["standalone_build"]["reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("no external /dp path dependencies")),
+        "standalone manifest should explain that no hard /dp path dependencies were found"
     );
 
     let commands = fs::read_to_string(out_dir.join("commands.txt")).expect("read commands");
@@ -195,12 +165,8 @@ fn dependency_isolation_contract_documents_the_asupersync_tripod() {
             dependency["feature_gate"].as_str(),
             Some("asupersync-integration")
         );
-        assert!(
-            dependency["repo_path"]
-                .as_str()
-                .is_some_and(|path| path.starts_with("/dp/asupersync/")),
-            "dependency should point at the canonical /dp/asupersync root"
-        );
+        assert_eq!(dependency["source_kind"].as_str(), Some("crates.io"));
+        assert_eq!(dependency["version_requirement"].as_str(), Some("0.3.1"));
     }
 
     assert_eq!(
@@ -290,8 +256,14 @@ fn dependency_isolation_contract_matches_workspace_feature_gate() {
             "engine Cargo.toml should route {dependency_key} through the feature gate"
         );
         assert!(
-            cargo_toml.contains(&format!("{dependency_key} = {{ path = \"/dp/asupersync/")),
-            "engine Cargo.toml should keep {dependency_key} on the canonical /dp/asupersync path"
+            cargo_toml.contains(&format!(
+                "{dependency_key} = {{ version = \"0.3.1\", optional = true }}"
+            )),
+            "engine Cargo.toml should keep {dependency_key} as an optional versioned crate"
+        );
+        assert!(
+            !cargo_toml.contains(&format!("{dependency_key} = {{ path = \"/dp/asupersync/")),
+            "engine Cargo.toml should not reintroduce hard /dp path dependencies for {dependency_key}"
         );
         assert!(
             enabled_dependencies

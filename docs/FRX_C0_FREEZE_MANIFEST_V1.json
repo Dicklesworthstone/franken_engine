@@ -2,6 +2,7 @@
   "schema_version": "frx.c0-freeze-manifest.v1",
   "milestone": "C0",
   "generated_by": "bd-mjh3.12.1",
+  "generated_at_utc": "2026-02-25T00:00:00Z",
   "artifacts": {
     "objective_function_version": "frx.objective.v1",
     "program_constitution": "docs/FRX_PROGRAM_CONSTITUTION_V1.md",

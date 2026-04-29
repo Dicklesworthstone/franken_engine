@@ -161,7 +161,12 @@ mod asupersync_contracts {
         let serialized_twice =
             serde_json::to_string(&entry).expect("serialize evidence ledger again");
         assert_eq!(serialized_once, serialized_twice);
-        assert!(serialized_once.contains("\"component\":\"dependency_contracts\""));
+        let serialized_value: serde_json::Value =
+            serde_json::from_str(&serialized_once).expect("serialized ledger is valid JSON");
+        assert_eq!(
+            serialized_value.get("c").and_then(|value| value.as_str()),
+            Some("dependency_contracts")
+        );
         let allow_position = serialized_once
             .find("\"allow\"")
             .expect("serialized evidence ledger contains allow action");
@@ -216,6 +221,11 @@ mod standalone_contracts {
         let serialized_twice =
             serde_json::to_string(&entry).expect("serialize standalone ledger again");
         assert_eq!(serialized_once, serialized_twice);
-        assert!(serialized_once.contains("\"fallback_active\":true"));
+        let serialized_value: serde_json::Value =
+            serde_json::from_str(&serialized_once).expect("serialized ledger is valid JSON");
+        assert_eq!(
+            serialized_value.get("fb").and_then(|value| value.as_bool()),
+            Some(true)
+        );
     }
 }

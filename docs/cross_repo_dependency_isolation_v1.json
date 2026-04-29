@@ -19,7 +19,8 @@
     {
       "dependency_key": "franken-kernel",
       "crate_module": "franken_kernel",
-      "repo_path": "/dp/asupersync/franken_kernel",
+      "source_kind": "crates.io",
+      "version_requirement": "0.3.1",
       "feature_gate": "asupersync-integration",
       "approved_boundary_files": [
         "crates/franken-engine/src/control_plane/mod.rs"
@@ -38,7 +39,8 @@
     {
       "dependency_key": "franken-decision",
       "crate_module": "franken_decision",
-      "repo_path": "/dp/asupersync/franken_decision",
+      "source_kind": "crates.io",
+      "version_requirement": "0.3.1",
       "feature_gate": "asupersync-integration",
       "approved_boundary_files": [
         "crates/franken-engine/src/control_plane/mod.rs",
@@ -57,7 +59,8 @@
     {
       "dependency_key": "franken-evidence",
       "crate_module": "franken_evidence",
-      "repo_path": "/dp/asupersync/franken_evidence",
+      "source_kind": "crates.io",
+      "version_requirement": "0.3.1",
       "feature_gate": "asupersync-integration",
       "approved_boundary_files": [
         "crates/franken-engine/src/control_plane/mod.rs"
@@ -80,7 +83,7 @@
       "commands": [
         "cargo check -p frankenengine-engine --all-features"
       ],
-      "description": "Verify the sibling-backed control-plane surface with the asupersync tripod present."
+      "description": "Verify the feature-gated control-plane surface with the versioned asupersync crates enabled."
     }
   },
   "verification_surfaces": {

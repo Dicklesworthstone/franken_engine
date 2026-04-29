@@ -1,20 +1,21 @@
 # Cross-Repo Dependency Isolation (`bd-6a61n.6`)
 
-Canonical contract for FrankenEngine's `/dp` sibling dependencies, standalone build
-mode, and full-integration verification posture.
+Canonical contract for FrankenEngine's optional asupersync dependencies,
+standalone build mode, and full-integration verification posture.
 
 ## Scope
 
-`frankenengine-engine` currently carries one external dependency family behind a
-feature gate:
+`frankenengine-engine` currently carries one asupersync dependency family behind
+a feature gate:
 
-- `/dp/asupersync/franken_kernel`
-- `/dp/asupersync/franken_decision`
-- `/dp/asupersync/franken_evidence`
+- `franken-kernel = "0.3.1"`
+- `franken-decision = "0.3.1"`
+- `franken-evidence = "0.3.1"`
 
-These dependencies are optional at the Cargo layer but enabled by default
-through the `asupersync-integration` feature so the repo can run in two explicit
-build modes instead of one ambiguous hybrid.
+These dependencies are optional at the Cargo layer, enabled by default through
+the `asupersync-integration` feature, and consumed as versioned crates rather
+than hard `/dp` path dependencies. That keeps the repo standalone-ready while
+preserving an explicit full-integration feature surface.
 
 ## Dependency Manifest
 
@@ -22,9 +23,9 @@ The canonical dependency manifest is:
 
 - `docs/cross_repo_dependency_isolation_v1.json`
 
-That JSON contract records the external package keys, repo paths, feature gate,
-approved boundary files, imported symbols, verification scripts, and operator
-commands.
+That JSON contract records the external package keys, registry source,
+feature gate, approved boundary files, imported symbols, verification scripts,
+and operator commands.
 
 ## Feature Gate and Build Modes
 
@@ -44,8 +45,7 @@ The supported operator build modes are:
   `cargo check -p frankenengine-engine --all-features`
 
 Standalone mode is the blocking portability gate. Full integration mode verifies
-the sibling-backed control-plane surface when the `/dp/asupersync` tripod is
-available.
+the asupersync-backed control-plane surface with the versioned tripod enabled.
 
 ## Verification Surfaces
 
@@ -54,10 +54,12 @@ Two RC-6 operator surfaces are normative:
 - `./scripts/audit_external_deps.sh`
 - `./scripts/test_standalone_build.sh ci`
 
-The audit script enumerates `/dp` path dependencies, records boundary metadata,
-and optionally uses `rch` to verify each sibling crate. The build-gate script
-records the standalone and full-integration outcomes and fails closed on local
-fallbacks. The machine-readable contract pins both surfaces to
+The audit script enumerates hard `/dp` path dependencies, records boundary
+metadata when such dependencies exist, and optionally uses `rch` to verify each
+sibling crate. A clean manifest with zero hard `/dp` dependencies is
+standalone-ready. The build-gate script records the standalone and
+full-integration outcomes and fails closed on local fallbacks. The
+machine-readable contract pins both surfaces to
 `strict_mode: "rch_only_no_local_fallback"` so remote-only verification is part
 of the evidence contract, not just a README note. These exact invocations are
 the canonical operator commands recorded in

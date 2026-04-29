@@ -34,12 +34,12 @@
     }
   ],
   "required_evidence_fields": [
+    "assumptions_hash",
+    "calibration_summary",
     "claim_id",
+    "decision_id",
     "evidence_id",
     "policy_id",
-    "trace_id",
-    "decision_id",
-    "calibration_summary",
-    "assumptions_hash"
+    "trace_id"
   ]
 }

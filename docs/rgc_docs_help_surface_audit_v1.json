@@ -72,7 +72,7 @@
     "frankenctl benchmark run --profile small --family boot-storm --out-dir ./artifacts/benchmarks",
     "frankenctl benchmark score --input ./artifacts/publication_gate_input.json --output ./artifacts/benchmark_score.json",
     "frankenctl benchmark verify --bundle ./artifacts/benchmarks --summary --output ./artifacts/benchmark_verify.json",
-    "frankenctl replay run --trace ./artifacts/replay/demo-trace.json --mode validate --out ./artifacts/replay_report.json",
+    "frankenctl replay run --trace ./artifacts/replay/demo-trace.json --compare-trace ./artifacts/replay/live-trace.json --mode validate --out ./artifacts/replay_report.json",
     "## RGC Docs and Help Surface Audit",
     "The replay wrapper resolves the latest complete audit bundle, warns on",
     "./scripts/run_rgc_docs_help_surface_audit.sh ci",

@@ -92,6 +92,7 @@
   },
   "failure_policy": {
     "mode": "fail_closed",
+    "error_code": "FE-FRX-VERIFY-LANE-FAIL-CLOSED",
     "on_insufficient_confidence": "block_promotion",
     "on_non_reproducible_counterexample": "invalidate_artifact",
     "on_formal_violation": "block_and_require_remediation"
@@ -124,6 +125,7 @@
   },
   "logging_contract": {
     "component": "frx_verification_lane",
+    "fail_closed_on_missing_fields": true,
     "required_fields": [
       "trace_id",
       "decision_id",

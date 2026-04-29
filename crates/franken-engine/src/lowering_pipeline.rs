@@ -6060,6 +6060,31 @@ fn lower_expression_to_ir1(
             });
         }
         Expression::Call { callee, arguments } => {
+            if let Some(capability) = math_builtin_call_capability(callee, binding_lookup) {
+                let arg_count = arguments.len();
+                if arg_count > u32::MAX as usize {
+                    return Err(LoweringPipelineError::TooManyArguments {
+                        count: arg_count,
+                        max: u32::MAX as usize,
+                    });
+                }
+                for arg in arguments {
+                    lower_expression_to_ir1(
+                        arg,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                    )?;
+                }
+                ops.push(Ir1Op::HostCall {
+                    capability: capability.to_string(),
+                    arg_count: arg_count as u32,
+                });
+                return Ok(());
+            }
             if let Expression::Identifier(name) = callee.as_ref()
                 && name == "require"
                 && !binding_lookup.contains_key(name.as_str())
@@ -6259,6 +6284,14 @@ fn lower_expression_to_ir1(
             property,
             computed,
         } => {
+            if math_object_property_name(object, property, *computed, binding_lookup) == Some("PI")
+            {
+                ops.push(Ir1Op::HostCall {
+                    capability: "builtin:MathPI".to_string(),
+                    arg_count: 0,
+                });
+                return Ok(());
+            }
             lower_expression_to_ir1(
                 object,
                 ops,
@@ -6997,6 +7030,75 @@ fn lower_expression_to_ir1(
         }
     }
     Ok(())
+}
+
+fn math_object_property_name<'a>(
+    object: &'a Expression,
+    property: &'a Expression,
+    computed: bool,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<&'a str> {
+    if !matches!(object, Expression::Identifier(name) if name == "Math")
+        || binding_lookup.contains_key("Math")
+    {
+        return None;
+    }
+
+    match (computed, property) {
+        (false, Expression::Identifier(name) | Expression::StringLiteral(name)) => {
+            Some(name.as_str())
+        }
+        (true, Expression::StringLiteral(name)) => Some(name.as_str()),
+        _ => None,
+    }
+}
+
+fn math_builtin_call_capability(
+    callee: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<&'static str> {
+    let Expression::Member {
+        object,
+        property,
+        computed,
+    } = callee
+    else {
+        return None;
+    };
+
+    match math_object_property_name(object, property, *computed, binding_lookup)? {
+        "abs" => Some("builtin:MathAbs"),
+        "ceil" => Some("builtin:MathCeil"),
+        "floor" => Some("builtin:MathFloor"),
+        "round" => Some("builtin:MathRound"),
+        "max" => Some("builtin:MathMax"),
+        "min" => Some("builtin:MathMin"),
+        "random" => Some("builtin:MathRandom"),
+        "pow" => Some("builtin:MathPow"),
+        "sqrt" => Some("builtin:MathSqrt"),
+        "sin" => Some("builtin:MathSin"),
+        "cos" => Some("builtin:MathCos"),
+        "log" => Some("builtin:MathLog"),
+        "exp" => Some("builtin:MathExp"),
+        "tan" => Some("builtin:MathTan"),
+        "trunc" => Some("builtin:MathTrunc"),
+        "sign" => Some("builtin:MathSign"),
+        "atan2" => Some("builtin:MathAtan2"),
+        "asin" => Some("builtin:MathAsin"),
+        "acos" => Some("builtin:MathAcos"),
+        "hypot" => Some("builtin:MathHypot"),
+        "imul" => Some("builtin:MathImul"),
+        "atan" => Some("builtin:MathAtan"),
+        "log10" => Some("builtin:MathLog10"),
+        "log2" => Some("builtin:MathLog2"),
+        "cbrt" => Some("builtin:MathCbrt"),
+        "clz32" => Some("builtin:MathClz32"),
+        "fround" => Some("builtin:MathFround"),
+        "acosh" => Some("builtin:MathAcosh"),
+        "asinh" => Some("builtin:MathAsinh"),
+        "atanh" => Some("builtin:MathAtanh"),
+        _ => None,
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

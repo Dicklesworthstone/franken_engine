@@ -347,7 +347,9 @@ fn write_input_file(input: &ReceiptVerifierCliInput) -> PathBuf {
 
 #[test]
 fn franken_verify_receipt_command_succeeds_for_valid_input() {
-    let input = build_cli_input(false);
+    let (receipt_id, request) = build_valid_request();
+    let mut input = ReceiptVerifierCliInput::default();
+    input.receipts.insert(receipt_id, request);
     let input_path = write_input_file(&input);
 
     let output = Command::new(env!("CARGO_BIN_EXE_franken-verify"))

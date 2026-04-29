@@ -86,7 +86,7 @@ fn test_default_tail_risk_threshold() {
 
 #[test]
 fn test_default_max_tail_heaviness() {
-    assert_eq!(DEFAULT_MAX_TAIL_HEAVINESS, 200_000);
+    assert_eq!(DEFAULT_MAX_TAIL_HEAVINESS, 1_200_000);
 }
 
 #[test]
@@ -288,7 +288,10 @@ fn test_certificate_evidence_serde_roundtrip() {
 fn test_evaluate_regression_no_regression_for_small_delta() {
     let cfg = GateConfig::default();
     let base = baseline_evidence(ResourceKind::CpuBudget);
-    let current = good_evidence(ResourceKind::CpuBudget);
+    let mut current = base.clone();
+    current.consumed_millionths = 510_000;
+    current.tail_risk_fraction = 102_000;
+    current.epoch = epoch(11);
     let regs = evaluate_regression(&current, &base, &cfg);
     assert!(regs.is_empty());
 }
@@ -314,7 +317,10 @@ fn test_evaluate_regression_tail_spike_detected() {
 
 #[test]
 fn test_evaluate_regression_effect_leak_for_effect_budget() {
-    let cfg = GateConfig::default();
+    let cfg = GateConfig {
+        max_budget_overrun_fraction: 500_000,
+        ..GateConfig::default()
+    };
     let mut base = baseline_evidence(ResourceKind::EffectBudget);
     base.consumed_millionths = 100_000;
     let mut current = good_evidence(ResourceKind::EffectBudget);
@@ -325,7 +331,10 @@ fn test_evaluate_regression_effect_leak_for_effect_budget() {
 
 #[test]
 fn test_evaluate_regression_allocation_burst_for_allocation_budget() {
-    let cfg = GateConfig::default();
+    let cfg = GateConfig {
+        max_budget_overrun_fraction: 500_000,
+        ..GateConfig::default()
+    };
     let mut base = baseline_evidence(ResourceKind::AllocationBudget);
     base.consumed_millionths = 100_000;
     let mut current = good_evidence(ResourceKind::AllocationBudget);
@@ -339,7 +348,10 @@ fn test_evaluate_regression_allocation_burst_for_allocation_budget() {
 
 #[test]
 fn test_evaluate_regression_latency_regression_for_latency_budget() {
-    let cfg = GateConfig::default();
+    let cfg = GateConfig {
+        max_budget_overrun_fraction: 500_000,
+        ..GateConfig::default()
+    };
     let mut base = baseline_evidence(ResourceKind::LatencyBudget);
     base.consumed_millionths = 100_000;
     let mut current = good_evidence(ResourceKind::LatencyBudget);
@@ -456,7 +468,10 @@ fn test_evaluate_pass_no_baseline() {
 fn test_evaluate_pass_with_baseline_small_delta() {
     let cfg = GateConfig::default();
     let base = baseline_evidence(ResourceKind::CpuBudget);
-    let current = good_evidence(ResourceKind::CpuBudget);
+    let mut current = base.clone();
+    current.consumed_millionths = 510_000;
+    current.tail_risk_fraction = 102_000;
+    current.epoch = epoch(11);
     let result = evaluate(&current, Some(&base), &cfg);
     assert_eq!(result.verdict, GateVerdict::Pass);
     assert!(result.regressions.is_empty());

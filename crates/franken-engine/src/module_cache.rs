@@ -231,6 +231,7 @@ pub struct CacheSnapshot {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModuleCache {
+    #[serde(with = "module_cache_entries_serde")]
     entries: BTreeMap<ModuleCacheKey, ModuleCacheEntry>,
     latest_versions: BTreeMap<String, ModuleVersionFingerprint>,
     revoked_modules: BTreeSet<String>,
@@ -238,6 +239,43 @@ pub struct ModuleCache {
     next_event_seq: u64,
     #[serde(skip, default = "module_cache_snapshot_fastpath")]
     snapshot_fastpath: SnapshotFastPath<CacheSnapshot>,
+}
+
+mod module_cache_entries_serde {
+    use std::collections::BTreeMap;
+
+    use serde::de::Error as _;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    use super::{ModuleCacheEntry, ModuleCacheKey};
+
+    pub fn serialize<S>(
+        entries: &BTreeMap<ModuleCacheKey, ModuleCacheEntry>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        entries.values().collect::<Vec<_>>().serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D>(
+        deserializer: D,
+    ) -> Result<BTreeMap<ModuleCacheKey, ModuleCacheEntry>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let entries = Vec::<ModuleCacheEntry>::deserialize(deserializer)?;
+        let mut map = BTreeMap::new();
+        for entry in entries {
+            if map.insert(entry.key.clone(), entry).is_some() {
+                return Err(D::Error::custom(
+                    "duplicate module cache entry key during deserialization",
+                ));
+            }
+        }
+        Ok(map)
+    }
 }
 
 impl ModuleCache {

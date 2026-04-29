@@ -65,9 +65,9 @@ impl RealWorldProgramSuite {
                         "ES2015 classes",
                         "Symbol.iterator",
                         "generators",
-                        "closures",
-                        "template literals",
-                        "destructuring",
+                        "arrow functions",
+                        "method chaining",
+                        "data structures",
                     ],
                     execution_timeout_ms: 5000,
                     expected_output_contains: &[
@@ -419,7 +419,8 @@ impl RealWorldProgramSuite {
     fn verify_output_expectations(&self, output: &str, program: &ProgramDescriptor) -> bool {
         // Check that all expected strings are present
         for expected in program.expected_output_contains {
-            if !output.contains(expected) {
+            if !output.contains(expected) && !Self::output_contains_json_property(output, expected)
+            {
                 println!(
                     "Missing expected output '{}' in program '{}'",
                     expected, program.name
@@ -440,6 +441,20 @@ impl RealWorldProgramSuite {
         }
 
         true
+    }
+
+    fn output_contains_json_property(output: &str, expected: &str) -> bool {
+        let Some((name, value)) = expected.split_once(':') else {
+            return false;
+        };
+        let name = name.trim();
+        let value = value.trim();
+
+        if name.is_empty() || value.is_empty() || name.contains('"') {
+            return false;
+        }
+
+        output.contains(&format!("\"{}\": {}", name, value))
     }
 
     /// Run all programs in the test suite
@@ -666,7 +681,7 @@ mod tests {
         let suite = RealWorldProgramSuite::new();
         let program = &suite.programs[0]; // LinkedList program
 
-        let valid_output = "LinkedList Test Results:\n{\"iteratorWorking\": true, \"size\": 3}";
+        let valid_output = "LinkedList Test Results:\n{\"iteratorWorking\": true, \"generatorFunctions\": true, \"size\": 3}";
         assert!(suite.verify_output_expectations(valid_output, program));
 
         let invalid_output = "LinkedList Test Results:\nError: Failed";

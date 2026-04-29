@@ -79,6 +79,7 @@ fn append_revocation(
     target_type: RevocationTargetType,
     target_bytes: [u8; 32],
 ) -> u64 {
+    chain.authorize_revocation_key(alt_signing_key().verification_key());
     let rev = make_revocation(target_type, RevocationReason::Compromised, target_bytes);
     chain.append(rev, &signing_key(), "t-enrich").unwrap()
 }
@@ -549,6 +550,7 @@ fn enrich_error_serde_all_variants() {
 #[test]
 fn enrich_revocation_all_reasons() {
     let mut chain = RevocationChain::new(ZONE);
+    chain.authorize_revocation_key(alt_signing_key().verification_key());
     for (i, reason) in [
         RevocationReason::Compromised,
         RevocationReason::Expired,
@@ -573,6 +575,7 @@ fn enrich_revocation_all_reasons() {
 #[test]
 fn enrich_revocation_all_target_types() {
     let mut chain = RevocationChain::new(ZONE);
+    chain.authorize_revocation_key(alt_signing_key().verification_key());
     for (i, tt) in [
         RevocationTargetType::Key,
         RevocationTargetType::Token,

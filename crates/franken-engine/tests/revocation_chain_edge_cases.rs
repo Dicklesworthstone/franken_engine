@@ -1043,7 +1043,8 @@ fn verify_append_rejects_wrong_prev_link() {
 
 #[test]
 fn verify_append_on_empty_chain_accepts_genesis() {
-    let chain = RevocationChain::new(TEST_ZONE);
+    let mut chain = RevocationChain::new(TEST_ZONE);
+    chain.authorize_revocation_key(revocation_signing_key().verification_key());
     let rev = make_revocation(
         RevocationTargetType::Key,
         RevocationReason::Compromised,

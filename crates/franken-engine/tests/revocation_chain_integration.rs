@@ -1246,7 +1246,8 @@ fn revocation_head_signature_domain_is_revocation() {
 
 #[test]
 fn verify_append_accepts_valid_genesis_on_empty_chain() {
-    let chain = RevocationChain::new(ZONE);
+    let mut chain = RevocationChain::new(ZONE);
+    chain.authorize_revocation_key(alt_signing_key().verification_key());
     let rev = make_revocation(
         RevocationTargetType::Key,
         RevocationReason::Compromised,

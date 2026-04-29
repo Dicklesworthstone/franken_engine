@@ -43,6 +43,12 @@ fn rev_signing_key() -> SigningKey {
     .unwrap()
 }
 
+fn verification_key_from_seed(seed: u8) -> VerificationKey {
+    SigningKey::from_bytes([seed; 32])
+        .unwrap()
+        .verification_key()
+}
+
 fn make_revocation(target_type: RevocationTargetType, target_bytes: [u8; 32]) -> Revocation {
     let sk = rev_signing_key();
     let principal = PrincipalId::from_verification_key(&sk.verification_key());
@@ -73,7 +79,8 @@ fn make_revocation(target_type: RevocationTargetType, target_bytes: [u8; 32]) ->
 }
 
 fn make_enforcer() -> RevocationEnforcer {
-    let chain = RevocationChain::new(ZONE);
+    let mut chain = RevocationChain::new(ZONE);
+    chain.authorize_revocation_key(rev_signing_key().verification_key());
     RevocationEnforcer::new(chain, 5000)
 }
 
@@ -168,7 +175,7 @@ fn enrich_high_risk_category_serde_all() {
 
 #[test]
 fn enrich_key_id_deterministic() {
-    let vk = VerificationKey::from_bytes([42; 32]).unwrap();
+    let vk = verification_key_from_seed(42);
     let id1 = key_id_from_verification_key(&vk);
     let id2 = key_id_from_verification_key(&vk);
     assert_eq!(id1, id2);
@@ -176,8 +183,8 @@ fn enrich_key_id_deterministic() {
 
 #[test]
 fn enrich_key_id_different_keys() {
-    let vk1 = VerificationKey::from_bytes([1; 32]).unwrap();
-    let vk2 = VerificationKey::from_bytes([2; 32]).unwrap();
+    let vk1 = verification_key_from_seed(1);
+    let vk2 = verification_key_from_seed(2);
     assert_ne!(
         key_id_from_verification_key(&vk1),
         key_id_from_verification_key(&vk2)
@@ -188,7 +195,7 @@ fn enrich_key_id_different_keys() {
 fn enrich_key_id_all_zeros() {
     // Zero-byte verification keys are now rejected by from_bytes; use a
     // deterministic non-zero key instead to keep the key_id length invariant.
-    let vk = VerificationKey::from_bytes([1; 32]).unwrap();
+    let vk = verification_key_from_seed(1);
     let id = key_id_from_verification_key(&vk);
     assert_eq!(id.as_bytes().len(), 32);
 }
@@ -287,7 +294,7 @@ fn enrich_token_cleared_two_checks_performed() {
     let mut enforcer = make_enforcer();
     let result = enforcer.check_token_acceptance(
         &EngineObjectId([1; 32]),
-        &VerificationKey::from_bytes([2; 32]).unwrap(),
+        &verification_key_from_seed(2),
         "t-1",
     );
     match result {
@@ -307,7 +314,7 @@ fn enrich_token_denial_direct_stops_early() {
     enforcer.drain_audit_log();
     let result = enforcer.check_token_acceptance(
         &EngineObjectId([10; 32]),
-        &VerificationKey::from_bytes([2; 32]).unwrap(),
+        &verification_key_from_seed(2),
         "t-early",
     );
     assert!(!result.is_cleared());
@@ -320,7 +327,7 @@ fn enrich_token_denial_direct_stops_early() {
 #[test]
 fn enrich_token_transitive_denial_emits_two_events() {
     let mut enforcer = make_enforcer();
-    let issuer_key = VerificationKey::from_bytes([20; 32]).unwrap();
+    let issuer_key = verification_key_from_seed(20);
     let key_id = key_id_from_verification_key(&issuer_key);
     revoke_target(&mut enforcer, RevocationTargetType::Key, *key_id.as_bytes());
     enforcer.drain_audit_log();
@@ -349,7 +356,7 @@ fn enrich_high_risk_all_categories_cleared() {
     ] {
         let result = enforcer.check_high_risk_operation(
             &EngineObjectId([30; 32]),
-            &VerificationKey::from_bytes([31; 32]).unwrap(),
+            &verification_key_from_seed(31),
             cat,
             "t-all-cat",
         );
@@ -363,7 +370,7 @@ fn enrich_high_risk_attestation_revoked_direct() {
     revoke_target(&mut enforcer, RevocationTargetType::Attestation, [40; 32]);
     let result = enforcer.check_high_risk_operation(
         &EngineObjectId([40; 32]),
-        &VerificationKey::from_bytes([41; 32]).unwrap(),
+        &verification_key_from_seed(41),
         HighRiskCategory::PolicyChange,
         "t-hr-deny",
     );
@@ -380,7 +387,7 @@ fn enrich_high_risk_attestation_revoked_direct() {
 #[test]
 fn enrich_high_risk_key_revoked_transitive() {
     let mut enforcer = make_enforcer();
-    let key = VerificationKey::from_bytes([50; 32]).unwrap();
+    let key = verification_key_from_seed(50);
     let key_id = key_id_from_verification_key(&key);
     revoke_target(&mut enforcer, RevocationTargetType::Key, *key_id.as_bytes());
     let result = enforcer.check_high_risk_operation(
@@ -407,7 +414,7 @@ fn enrich_extension_cleared() {
     let mut enforcer = make_enforcer();
     let result = enforcer.check_extension_activation(
         &EngineObjectId([60; 32]),
-        &VerificationKey::from_bytes([61; 32]).unwrap(),
+        &verification_key_from_seed(61),
         "t-ext-ok",
     );
     assert!(result.is_cleared());
@@ -419,7 +426,7 @@ fn enrich_extension_revoked_direct() {
     revoke_target(&mut enforcer, RevocationTargetType::Extension, [70; 32]);
     let result = enforcer.check_extension_activation(
         &EngineObjectId([70; 32]),
-        &VerificationKey::from_bytes([71; 32]).unwrap(),
+        &verification_key_from_seed(71),
         "t-ext-deny",
     );
     match result {
@@ -434,7 +441,7 @@ fn enrich_extension_revoked_direct() {
 #[test]
 fn enrich_extension_signing_key_revoked_transitive() {
     let mut enforcer = make_enforcer();
-    let key = VerificationKey::from_bytes([80; 32]).unwrap();
+    let key = verification_key_from_seed(80);
     let key_id = key_id_from_verification_key(&key);
     revoke_target(&mut enforcer, RevocationTargetType::Key, *key_id.as_bytes());
     let result =
@@ -463,18 +470,9 @@ fn enrich_batch_empty_cleared() {
 fn enrich_batch_all_valid() {
     let mut enforcer = make_enforcer();
     let tokens = vec![
-        (
-            EngineObjectId([1; 32]),
-            VerificationKey::from_bytes([2; 32]).unwrap(),
-        ),
-        (
-            EngineObjectId([3; 32]),
-            VerificationKey::from_bytes([4; 32]).unwrap(),
-        ),
-        (
-            EngineObjectId([5; 32]),
-            VerificationKey::from_bytes([6; 32]).unwrap(),
-        ),
+        (EngineObjectId([1; 32]), verification_key_from_seed(2)),
+        (EngineObjectId([3; 32]), verification_key_from_seed(4)),
+        (EngineObjectId([5; 32]), verification_key_from_seed(6)),
     ];
     let result = enforcer.check_token_batch(&tokens, "t-batch-ok");
     assert!(result.is_cleared());
@@ -485,14 +483,8 @@ fn enrich_batch_first_revoked() {
     let mut enforcer = make_enforcer();
     revoke_target(&mut enforcer, RevocationTargetType::Token, [1; 32]);
     let tokens = vec![
-        (
-            EngineObjectId([1; 32]),
-            VerificationKey::from_bytes([2; 32]).unwrap(),
-        ),
-        (
-            EngineObjectId([3; 32]),
-            VerificationKey::from_bytes([4; 32]).unwrap(),
-        ),
+        (EngineObjectId([1; 32]), verification_key_from_seed(2)),
+        (EngineObjectId([3; 32]), verification_key_from_seed(4)),
     ];
     let result = enforcer.check_token_batch(&tokens, "t-batch-deny");
     assert!(!result.is_cleared());
@@ -503,14 +495,8 @@ fn enrich_batch_last_revoked() {
     let mut enforcer = make_enforcer();
     revoke_target(&mut enforcer, RevocationTargetType::Token, [3; 32]);
     let tokens = vec![
-        (
-            EngineObjectId([1; 32]),
-            VerificationKey::from_bytes([2; 32]).unwrap(),
-        ),
-        (
-            EngineObjectId([3; 32]),
-            VerificationKey::from_bytes([4; 32]).unwrap(),
-        ),
+        (EngineObjectId([1; 32]), verification_key_from_seed(2)),
+        (EngineObjectId([3; 32]), verification_key_from_seed(4)),
     ];
     let result = enforcer.check_token_batch(&tokens, "t-batch-deny-last");
     assert!(!result.is_cleared());
@@ -531,12 +517,12 @@ fn enrich_stats_cleared_increments() {
     let mut enforcer = make_enforcer();
     enforcer.check_token_acceptance(
         &EngineObjectId([1; 32]),
-        &VerificationKey::from_bytes([2; 32]).unwrap(),
+        &verification_key_from_seed(2),
         "t-1",
     );
     enforcer.check_token_acceptance(
         &EngineObjectId([3; 32]),
-        &VerificationKey::from_bytes([4; 32]).unwrap(),
+        &verification_key_from_seed(4),
         "t-2",
     );
     let s = enforcer
@@ -554,7 +540,7 @@ fn enrich_stats_denied_increments() {
     revoke_target(&mut enforcer, RevocationTargetType::Token, [10; 32]);
     enforcer.check_token_acceptance(
         &EngineObjectId([10; 32]),
-        &VerificationKey::from_bytes([2; 32]).unwrap(),
+        &verification_key_from_seed(2),
         "t-deny",
     );
     let s = enforcer
@@ -570,18 +556,18 @@ fn enrich_stats_multiple_enforcement_points() {
     let mut enforcer = make_enforcer();
     enforcer.check_token_acceptance(
         &EngineObjectId([1; 32]),
-        &VerificationKey::from_bytes([2; 32]).unwrap(),
+        &verification_key_from_seed(2),
         "t-1",
     );
     enforcer.check_high_risk_operation(
         &EngineObjectId([3; 32]),
-        &VerificationKey::from_bytes([4; 32]).unwrap(),
+        &verification_key_from_seed(4),
         HighRiskCategory::PolicyChange,
         "t-2",
     );
     enforcer.check_extension_activation(
         &EngineObjectId([5; 32]),
-        &VerificationKey::from_bytes([6; 32]).unwrap(),
+        &verification_key_from_seed(6),
         "t-3",
     );
     assert_eq!(enforcer.stats().len(), 3);
@@ -597,7 +583,7 @@ fn enrich_set_tick_affects_audit_timestamp() {
     enforcer.set_tick(12345);
     enforcer.check_token_acceptance(
         &EngineObjectId([1; 32]),
-        &VerificationKey::from_bytes([2; 32]).unwrap(),
+        &verification_key_from_seed(2),
         "t-tick",
     );
     let events = enforcer.drain_audit_log();
@@ -613,7 +599,7 @@ fn enrich_drain_clears_log() {
     let mut enforcer = make_enforcer();
     enforcer.check_token_acceptance(
         &EngineObjectId([1; 32]),
-        &VerificationKey::from_bytes([2; 32]).unwrap(),
+        &verification_key_from_seed(2),
         "t-1",
     );
     let e1 = enforcer.drain_audit_log();
@@ -703,7 +689,7 @@ fn enrich_audit_events_have_correct_trace_id() {
     let mut enforcer = make_enforcer();
     enforcer.check_extension_activation(
         &EngineObjectId([1; 32]),
-        &VerificationKey::from_bytes([2; 32]).unwrap(),
+        &verification_key_from_seed(2),
         "my-trace-xyz",
     );
     let events = enforcer.drain_audit_log();
@@ -715,7 +701,7 @@ fn enrich_audit_events_have_correct_enforcement_point() {
     let mut enforcer = make_enforcer();
     enforcer.check_high_risk_operation(
         &EngineObjectId([1; 32]),
-        &VerificationKey::from_bytes([2; 32]).unwrap(),
+        &verification_key_from_seed(2),
         HighRiskCategory::KeyOperation,
         "t-pt",
     );

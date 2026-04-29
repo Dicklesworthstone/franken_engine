@@ -1,0 +1,20 @@
+=== Malformed input 0 ===
+Input: []
+Error: BufferTooShort { expected: 1, actual: 0 }
+
+=== Malformed input 1 ===
+Input: [255]
+Error: InvalidTag { tag: 255, offset: 0 }
+
+=== Malformed input 2 ===
+Input: [4, 255, 255, 255, 255]
+Error: BufferTooShort { expected: 4294967300, actual: 5 }
+
+=== Malformed input 3 ===
+Input: [1, 2, 3]
+Error: BufferTooShort { expected: 9, actual: 3 }
+
+=== Malformed input 4 ===
+Input: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+Error: InvalidTag { tag: 0, offset: 0 }
+

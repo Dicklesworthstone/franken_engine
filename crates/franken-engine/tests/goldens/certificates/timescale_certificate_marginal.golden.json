@@ -1,0 +1,38 @@
+{
+  "schema_version": "franken-engine.timescale-separation-certificate.v1",
+  "bead_id": "bd-1lsy.7.14.2",
+  "certificate_id": "cert_marginal_002",
+  "pair": {
+    "fast_controller": "realtime_monitor",
+    "slow_controller": "periodic_cleanup"
+  },
+  "ratio": {
+    "pair": {
+      "fast_controller": "realtime_monitor",
+      "slow_controller": "periodic_cleanup"
+    },
+    "ratio_millionths": 4000000,
+    "ratio_basis": "observation"
+  },
+  "verdict": "marginal",
+  "sufficient_threshold_millionths": 10000000,
+  "marginal_threshold_millionths": 3000000,
+  "fast_profile": {
+    "controller_id": "realtime_monitor",
+    "observation_interval_millionths": 50000,
+    "write_interval_millionths": 50000,
+    "sample_count": 1000,
+    "measured_epoch": 1640995300
+  },
+  "slow_profile": {
+    "controller_id": "periodic_cleanup",
+    "observation_interval_millionths": 200000,
+    "write_interval_millionths": 200000,
+    "sample_count": 200,
+    "measured_epoch": 1640995300
+  },
+  "issued_epoch": 1640995300,
+  "evidence_ids": [
+    "evidence_cert_marginal_002"
+  ]
+}

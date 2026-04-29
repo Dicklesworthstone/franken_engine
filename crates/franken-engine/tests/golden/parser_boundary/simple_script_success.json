@@ -1,0 +1,27 @@
+{
+  "input_summary": {
+    "data_length": 6,
+    "goal": "Script",
+    "source_preview": "\u0001\u0010\b\u0000\u0002",
+    "options_summary": "mode=ScalarReference, max_tokens=17, max_depth=24"
+  },
+  "parse_result": {
+    "type": "Success",
+    "tree_hash": "[HASH]",
+    "tree_goal": "Script",
+    "materialize_success": true,
+    "materialize_hash_match": true
+  },
+  "event_ir_summary": {
+    "canonical_hash": "[HASH]",
+    "event_count": 3,
+    "first_event_kind": "ParseStarted",
+    "last_event_kind": "ParseCompleted",
+    "schema_version": "franken-engine.parser-event-ir.schema.v2",
+    "contract_version": "franken-engine.parser-event-ir.contract.v2"
+  },
+  "determinism_check": {
+    "repeat_tree_hash_matches": true,
+    "repeat_event_ir_hash_matches": true
+  }
+}

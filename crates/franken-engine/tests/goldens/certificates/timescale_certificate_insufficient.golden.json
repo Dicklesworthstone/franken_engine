@@ -1,0 +1,38 @@
+{
+  "schema_version": "franken-engine.timescale-separation-certificate.v1",
+  "bead_id": "bd-1lsy.7.14.2",
+  "certificate_id": "cert_insufficient_003",
+  "pair": {
+    "fast_controller": "high_freq_trader",
+    "slow_controller": "low_freq_trader"
+  },
+  "ratio": {
+    "pair": {
+      "fast_controller": "high_freq_trader",
+      "slow_controller": "low_freq_trader"
+    },
+    "ratio_millionths": 2000000,
+    "ratio_basis": "observation"
+  },
+  "verdict": "insufficient",
+  "sufficient_threshold_millionths": 10000000,
+  "marginal_threshold_millionths": 3000000,
+  "fast_profile": {
+    "controller_id": "high_freq_trader",
+    "observation_interval_millionths": 1000,
+    "write_interval_millionths": 1000,
+    "sample_count": 1000,
+    "measured_epoch": 1640995400
+  },
+  "slow_profile": {
+    "controller_id": "low_freq_trader",
+    "observation_interval_millionths": 2000,
+    "write_interval_millionths": 2000,
+    "sample_count": 200,
+    "measured_epoch": 1640995400
+  },
+  "issued_epoch": 1640995400,
+  "evidence_ids": [
+    "evidence_cert_insufficient_003"
+  ]
+}

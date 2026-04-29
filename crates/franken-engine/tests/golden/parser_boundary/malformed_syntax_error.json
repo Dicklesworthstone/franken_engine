@@ -1,0 +1,25 @@
+{
+  "input_summary": {
+    "data_length": 20,
+    "goal": "Module",
+    "source_preview": "let v0 = v0;\nv1;\ndo { v2; } while (v2);\ntry { v3; } catch (err) { err; }\nif (v4) { \"s17\"; } else { v4; }\n",
+    "options_summary": "mode=ScalarReference, max_tokens=16, max_depth=71"
+  },
+  "parse_result": {
+    "type": "Error",
+    "diagnostic_hash": "[HASH]",
+    "parse_failed_event_present": true
+  },
+  "event_ir_summary": {
+    "canonical_hash": "[HASH]",
+    "event_count": 2,
+    "first_event_kind": "ParseStarted",
+    "last_event_kind": "ParseFailed",
+    "schema_version": "franken-engine.parser-event-ir.schema.v2",
+    "contract_version": "franken-engine.parser-event-ir.contract.v2"
+  },
+  "determinism_check": {
+    "repeat_tree_hash_matches": false,
+    "repeat_event_ir_hash_matches": false
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "schema_version": "franken-engine.timescale-separation-certificate.v1",
+  "bead_id": "bd-1lsy.7.14.2",
+  "certificate_id": "cert_sufficient_001",
+  "pair": {
+    "fast_controller": "gc_controller",
+    "slow_controller": "batch_processor"
+  },
+  "ratio": {
+    "pair": {
+      "fast_controller": "gc_controller",
+      "slow_controller": "batch_processor"
+    },
+    "ratio_millionths": 50000000,
+    "ratio_basis": "observation"
+  },
+  "verdict": "sufficient",
+  "sufficient_threshold_millionths": 10000000,
+  "marginal_threshold_millionths": 3000000,
+  "fast_profile": {
+    "controller_id": "gc_controller",
+    "observation_interval_millionths": 100000,
+    "write_interval_millionths": 100000,
+    "sample_count": 1000,
+    "measured_epoch": 1640995200
+  },
+  "slow_profile": {
+    "controller_id": "batch_processor",
+    "observation_interval_millionths": 5000000,
+    "write_interval_millionths": 5000000,
+    "sample_count": 200,
+    "measured_epoch": 1640995200
+  },
+  "issued_epoch": 1640995200,
+  "evidence_ids": [
+    "evidence_cert_sufficient_001"
+  ]
+}

@@ -505,11 +505,22 @@ fn route_fallback_after_failures() {
 #[test]
 fn route_fast_path_below_failure_threshold() {
     let mut s = make_state_with_addon("a");
-    for _ in 0..(DEFAULT_FALLBACK_THRESHOLD_FAILURES - 1) {
+    for _ in 0..(CRASH_BREACHED_THRESHOLD - 1) {
         s.record_crash("a", "crash", 100);
     }
     let config = default_routing();
     assert_eq!(s.route_call("a", &config), RouteDecision::FastPath);
+}
+
+#[test]
+fn route_fallback_at_breach_threshold_even_below_configured_fallback_threshold() {
+    let mut s = make_state_with_addon("a");
+    for _ in 0..CRASH_BREACHED_THRESHOLD {
+        s.record_crash("a", "crash", 100);
+    }
+    let config = default_routing();
+    assert!(CRASH_BREACHED_THRESHOLD < config.fallback_threshold_failures);
+    assert_eq!(s.route_call("a", &config), RouteDecision::Fallback);
 }
 
 #[test]

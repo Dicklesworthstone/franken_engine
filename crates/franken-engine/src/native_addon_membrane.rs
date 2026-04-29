@@ -1021,7 +1021,10 @@ impl MembraneState {
             .find(|(id, _)| id == addon_id)
             .map(|(_, c)| *c)
             .unwrap_or(0);
-        if failure_count >= config.fallback_threshold_failures {
+        let fail_closed_threshold = config
+            .fallback_threshold_failures
+            .min(CRASH_BREACHED_THRESHOLD);
+        if failure_count >= fail_closed_threshold {
             self.fallback_calls += 1;
             return RouteDecision::Fallback;
         }
@@ -1154,6 +1157,9 @@ pub fn evaluate_membrane(
 
     // Check for escaped handles.
     let escaped = state.count_handles_in_state(HandleState::Escaped);
+    let escaped_violation_recorded = violations
+        .iter()
+        .any(|violation| violation.kind == ViolationKind::HandleEscaped);
 
     // Check external handles policy.
     if !policy.allow_external_handles {
@@ -1175,7 +1181,10 @@ pub fn evaluate_membrane(
     // Determine verdict.
     let verdict = if state.crash_count >= CRASH_SHUTDOWN_THRESHOLD {
         MembraneVerdict::Shutdown
-    } else if escaped > 0 || state.crash_count >= CRASH_BREACHED_THRESHOLD {
+    } else if escaped > 0
+        || escaped_violation_recorded
+        || state.crash_count >= CRASH_BREACHED_THRESHOLD
+    {
         MembraneVerdict::Breached
     } else if state.active_handles > policy.max_active_handles || !violations.is_empty() {
         MembraneVerdict::Degraded
@@ -1271,12 +1280,13 @@ pub fn validate_capabilities(
     addon_id: &str,
     requested: &BTreeSet<CapabilityKind>,
 ) -> Vec<CapabilityKind> {
-    let granted = state
-        .find_registration(addon_id)
-        .map(|r| &r.capabilities)
-        .cloned()
-        .expect("serde deserialization should succeed");
-    requested.difference(&granted).copied().collect()
+    let Some(registration) = state.find_registration(addon_id) else {
+        return requested.iter().copied().collect();
+    };
+    requested
+        .difference(&registration.capabilities)
+        .copied()
+        .collect()
 }
 
 /// Revoke all active handles for a given addon.

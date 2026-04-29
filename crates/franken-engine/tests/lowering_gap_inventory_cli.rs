@@ -69,7 +69,7 @@ fn lowering_gap_inventory_cli_writes_artifact_bundle() {
     );
 
     let events = fs::read_to_string(out_dir.join("events.jsonl")).expect("read events");
-    assert_eq!(events.lines().count(), LoweringGapSiteId::ALL.len() + 2);
+    assert_eq!(events.lines().count(), LoweringGapSiteId::ALL.len() * 3 + 2);
 
     let commands = fs::read_to_string(out_dir.join("commands.txt")).expect("read commands");
     let command_lines = commands.lines().collect::<Vec<_>>();
@@ -90,8 +90,8 @@ fn lowering_gap_inventory_cli_writes_artifact_bundle() {
     );
     assert_eq!(
         command_lines[1],
-        "rch exec -- cargo run -p frankenengine-engine --bin franken_lowering_gap_inventory -- --out-dir <DIR>",
-        "commands.txt should include an rch replay line: {}",
+        "CARGO_TARGET_DIR=<TARGET_DIR> CARGO_INCREMENTAL=0 cargo run -p frankenengine-engine --bin franken_lowering_gap_inventory -- --out-dir <DIR>",
+        "commands.txt should include a cargo-native replay line: {}",
         command_lines[1]
     );
 

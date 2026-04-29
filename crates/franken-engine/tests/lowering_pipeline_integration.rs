@@ -743,13 +743,16 @@ fn ir1_to_ir2_preserves_scopes_from_ir1() {
 }
 
 #[test]
-fn ir1_to_ir2_classifies_call_as_hostcall_effect() {
-    // Build an IR1 with a Call op
+fn ir1_to_ir2_classifies_explicit_hostcall_as_hostcall_effect() {
+    // Build an IR1 with an explicit HostCall op.
     let mut ir1 = Ir1Module::new(ContentHash::compute(b"test-ir0"), "call_test.js");
     ir1.ops.push(Ir1Op::LoadLiteral {
         value: Ir1Literal::Integer(1),
     });
-    ir1.ops.push(Ir1Op::Call { arg_count: 0 });
+    ir1.ops.push(Ir1Op::HostCall {
+        capability: "hostcall.invoke".to_string(),
+        arg_count: 0,
+    });
     ir1.ops.push(Ir1Op::Return);
 
     let result = lower_ir1_to_ir2(&ir1).expect("ir1->ir2");
@@ -757,8 +760,8 @@ fn ir1_to_ir2_classifies_call_as_hostcall_effect() {
         .module
         .ops
         .iter()
-        .find(|op| matches!(op.inner, Ir1Op::Call { .. }))
-        .expect("should have call op");
+        .find(|op| matches!(op.inner, Ir1Op::HostCall { .. }))
+        .expect("should have hostcall op");
 
     assert_eq!(call_op.effect, EffectBoundary::HostcallEffect);
     assert!(call_op.required_capability.is_some());
@@ -797,7 +800,10 @@ fn ir1_to_ir2_flow_annotation_for_secret_string() {
     ir1.ops.push(Ir1Op::LoadLiteral {
         value: Ir1Literal::String("my_secret_token".to_string()),
     });
-    ir1.ops.push(Ir1Op::Call { arg_count: 1 });
+    ir1.ops.push(Ir1Op::HostCall {
+        capability: "hostcall.invoke".to_string(),
+        arg_count: 1,
+    });
     ir1.ops.push(Ir1Op::Return);
 
     let result = lower_ir1_to_ir2(&ir1).expect("ir1->ir2");
@@ -805,8 +811,8 @@ fn ir1_to_ir2_flow_annotation_for_secret_string() {
         .module
         .ops
         .iter()
-        .find(|op| matches!(op.inner, Ir1Op::Call { .. }))
-        .expect("should have call op");
+        .find(|op| matches!(op.inner, Ir1Op::HostCall { .. }))
+        .expect("should have hostcall op");
 
     let flow = call_op
         .flow
@@ -867,7 +873,10 @@ fn ir1_to_ir2_required_capabilities_collected() {
     ir1.ops.push(Ir1Op::ImportModule {
         specifier: "lodash".to_string(),
     });
-    ir1.ops.push(Ir1Op::Call { arg_count: 0 });
+    ir1.ops.push(Ir1Op::HostCall {
+        capability: "hostcall.invoke".to_string(),
+        arg_count: 0,
+    });
     ir1.ops.push(Ir1Op::Return);
 
     let result = lower_ir1_to_ir2(&ir1).expect("ir1->ir2");
@@ -981,18 +990,21 @@ fn ir2_to_ir3_import_module_emits_load_str_for_specifier() {
 }
 
 #[test]
-fn ir2_to_ir3_call_emits_call_instruction() {
+fn ir2_to_ir3_hostcall_emits_hostcall_instruction() {
     let mut ir1 = Ir1Module::new(ContentHash::compute(b"test-ir0"), "call_ir3.js");
     ir1.ops.push(Ir1Op::LoadLiteral {
         value: Ir1Literal::Integer(1),
     });
-    ir1.ops.push(Ir1Op::Call { arg_count: 0 });
+    ir1.ops.push(Ir1Op::HostCall {
+        capability: "hostcall.invoke".to_string(),
+        arg_count: 0,
+    });
     ir1.ops.push(Ir1Op::Return);
 
     let ir2 = lower_ir1_to_ir2(&ir1).expect("ir1->ir2").module;
     let result = lower_ir2_to_ir3(&ir2).expect("ir2->ir3");
 
-    // Call ops go through the HostcallEffect path
+    // Explicit hostcall ops go through the HostcallEffect path.
     let has_hostcall = result
         .module
         .instructions
@@ -1000,7 +1012,7 @@ fn ir2_to_ir3_call_emits_call_instruction() {
         .any(|instr| matches!(instr, Ir3Instruction::HostCall { .. }));
     assert!(
         has_hostcall,
-        "Call should produce a HostCall instruction in IR3"
+        "HostCall should produce a HostCall instruction in IR3"
     );
 }
 
@@ -1089,7 +1101,10 @@ fn dynamic_hostcall_inserts_ifc_runtime_guard() {
     ir1.ops.push(Ir1Op::LoadLiteral {
         value: Ir1Literal::String("secret_token".to_string()),
     });
-    ir1.ops.push(Ir1Op::Call { arg_count: 1 });
+    ir1.ops.push(Ir1Op::HostCall {
+        capability: "hostcall.invoke".to_string(),
+        arg_count: 1,
+    });
     ir1.ops.push(Ir1Op::Return);
 
     let ir2 = lower_ir1_to_ir2(&ir1).expect("ir1->ir2").module;
@@ -1161,7 +1176,10 @@ fn public_data_through_hostcall_no_guard() {
     ir1.ops.push(Ir1Op::LoadLiteral {
         value: Ir1Literal::String("hello world".to_string()),
     });
-    ir1.ops.push(Ir1Op::Call { arg_count: 1 });
+    ir1.ops.push(Ir1Op::HostCall {
+        capability: "hostcall.invoke".to_string(),
+        arg_count: 1,
+    });
     ir1.ops.push(Ir1Op::Return);
 
     let ir2 = lower_ir1_to_ir2(&ir1).expect("ir1->ir2").module;
@@ -1170,9 +1188,9 @@ fn public_data_through_hostcall_no_guard() {
     let call_op = ir2
         .ops
         .iter()
-        .find(|op| matches!(op.inner, Ir1Op::Call { .. }))
-        .expect("call op");
-    let flow = call_op.flow.as_ref().expect("call should have flow");
+        .find(|op| matches!(op.inner, Ir1Op::HostCall { .. }))
+        .expect("hostcall op");
+    let flow = call_op.flow.as_ref().expect("hostcall should have flow");
 
     // Public data flowing through hostcall.invoke (Internal clearance):
     // Public can flow to Internal, so no declassification needed
@@ -1592,7 +1610,10 @@ fn import_then_export_then_expression_complex_module() {
                 span: span(),
             }),
             Statement::Expression(ExpressionStatement {
-                expression: Expression::Raw("console.log(React)".to_string()),
+                expression: Expression::Call {
+                    callee: Box::new(Expression::Identifier("sink".to_string())),
+                    arguments: vec![Expression::Identifier("React".to_string())],
+                },
                 span: span(),
             }),
             Statement::Export(ExportDeclaration {
@@ -1609,7 +1630,7 @@ fn import_then_export_then_expression_complex_module() {
     assert!(output.ir3.constant_pool.contains(&"react".to_string()));
     assert!(output.ir3.constant_pool.contains(&"lodash".to_string()));
 
-    // Should have hostcall for the Call from Raw expression
+    // Should have hostcall for the explicit sink call.
     let has_hostcall = output
         .ir3
         .instructions
@@ -1725,7 +1746,10 @@ fn pipeline_required_capabilities_aggregate_in_ir3() {
                 span: span(),
             }),
             Statement::Expression(ExpressionStatement {
-                expression: Expression::Raw("fs.readFile()".to_string()),
+                expression: Expression::Call {
+                    callee: Box::new(Expression::Identifier("sink".to_string())),
+                    arguments: vec![Expression::Identifier("fs".to_string())],
+                },
                 span: span(),
             }),
         ],

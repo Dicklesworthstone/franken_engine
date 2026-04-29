@@ -644,12 +644,16 @@ fn deferred_probes_accumulate_staleness() {
 }
 
 #[test]
-fn scheduled_probes_reset_staleness_to_zero() {
+fn scheduled_probes_stay_stale_until_execution_is_recorded() {
     let mut sched = MonitorScheduler::new(base_config());
     sched.register_probe(health_probe("h1")).unwrap();
 
-    // Build up staleness.
-    sched.schedule(Regime::Normal); // h1 scheduled -> staleness reset to 0
+    let result = sched.schedule(Regime::Normal);
+    assert_eq!(result.probes_scheduled, 1);
+    assert_eq!(sched.probe("h1").unwrap().staleness, 1);
+    assert_eq!(sched.probe("h1").unwrap().execution_count, 0);
+
+    sched.record_execution("h1", true).unwrap();
     assert_eq!(sched.probe("h1").unwrap().staleness, 0);
     assert_eq!(sched.probe("h1").unwrap().execution_count, 1);
 }

@@ -378,17 +378,17 @@ fn error_requires_rollback_only_storage_failure() {
 // ── required_checklist_items ─────────────────────────────────────────────
 
 #[test]
-fn required_items_count_16() {
-    assert_eq!(required_checklist_items().len(), 16);
+fn required_items_count_17() {
+    assert_eq!(required_checklist_items().len(), 17);
 }
 
 #[test]
-fn required_items_security_count_6() {
+fn required_items_security_count_7() {
     let count = required_checklist_items()
         .iter()
         .filter(|item| item.category == ChecklistCategory::Security)
         .count();
-    assert_eq!(count, 6);
+    assert_eq!(count, 7);
 }
 
 #[test]

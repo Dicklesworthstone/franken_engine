@@ -780,8 +780,8 @@ fn status_display_matches_as_str() {
 // ── Required items tests ──────────────────────────────────────────────
 
 #[test]
-fn required_items_has_sixteen_entries() {
-    assert_eq!(required_checklist_items().len(), 16);
+fn required_items_has_seventeen_entries() {
+    assert_eq!(required_checklist_items().len(), 17);
 }
 
 #[test]

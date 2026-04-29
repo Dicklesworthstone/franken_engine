@@ -149,8 +149,8 @@ fn checklist_item_status_serde_round_trip() {
 // ===========================================================================
 
 #[test]
-fn required_items_has_sixteen() {
-    assert_eq!(required_checklist_items().len(), 16);
+fn required_items_has_seventeen() {
+    assert_eq!(required_checklist_items().len(), 17);
 }
 
 #[test]

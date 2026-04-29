@@ -1336,12 +1336,13 @@ pub fn write_react_package_cohort_bundle(
         policy_id: REACT_COHORT_POLICY_ID.to_string(),
     };
     let trace_ids_bytes = canonical_json_bytes(&trace_ids, &trace_ids_path)?;
-    let compat_report = EcosystemCompatibilityValidator::new(matrix.epoch)
+    let mut compat_report = EcosystemCompatibilityValidator::new(matrix.epoch)
         .validate_patterns(&create_standard_ecosystem_patterns())
         .map_err(|source| ReactCohortWriteError::CompatibilityReport {
             path: compat_report_path.display().to_string(),
             source,
         })?;
+    canonicalize_compat_report_for_bundle(&mut compat_report);
     let compat_report_bytes = canonical_json_bytes(&compat_report, &compat_report_path)?;
 
     // Compute compatibility report content hash to bind report content into manifest
@@ -1411,6 +1412,14 @@ pub fn write_react_package_cohort_bundle(
         package_count: matrix.package_count(),
         edge_case_count: matrix.edge_cases.len(),
     })
+}
+
+fn canonicalize_compat_report_for_bundle(report: &mut EcosystemCompatibilityReport) {
+    for result in &mut report.test_results {
+        result.execution_time_ms = 0;
+    }
+    report.total_execution_time_ms = 0;
+    report.report_hash = report.compute_hash();
 }
 
 fn build_cohort_events(

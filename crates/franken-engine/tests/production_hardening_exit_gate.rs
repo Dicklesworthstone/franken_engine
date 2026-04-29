@@ -25,6 +25,19 @@ fn new_gate(gate_id: impl Into<String>) -> ProductionHardeningGateExecution {
         .expect("test gate construction should have a valid system timestamp")
 }
 
+fn insert_security_artifact(
+    gate: &mut ProductionHardeningGateExecution,
+    attack_vector: &str,
+    actual_containment_ms: u64,
+) {
+    gate.evidence_artifacts.insert(
+        format!("security:{attack_vector}"),
+        format!(
+            "actual_containment_ms={actual_containment_ms};evidence_file=/evidence/security/{attack_vector}.json"
+        ),
+    );
+}
+
 #[test]
 fn test_production_hardening_gate_e2e() {
     let gate_id = format!(
@@ -690,9 +703,13 @@ fn test_containment_slo_enforcement() {
 
     let gate_id = "slo-test".to_string();
     let mut gate = new_gate(gate_id);
+    insert_security_artifact(&mut gate, "memory-corruption", 150);
+    insert_security_artifact(&mut gate, "capability-escalation", 10);
+    insert_security_artifact(&mut gate, "code-injection", 10);
+    insert_security_artifact(&mut gate, "policy-bypass", 10);
 
-    // The default security matrix includes memory-corruption with 100ms SLO,
-    // but validate_attack_containment returns 150ms, which should fail
+    // The default security matrix includes memory-corruption with a 100ms SLO,
+    // and the evidence reports 150ms containment, which should fail.
     let result = gate.execute_production_hardening_gate();
 
     // Should fail because 150ms > 100ms (memory-corruption SLO)

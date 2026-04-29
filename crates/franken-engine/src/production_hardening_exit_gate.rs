@@ -481,7 +481,14 @@ impl ProductionHardeningGateExecution {
 
             // Validate attack vector containment
             let containment_result =
-                Self::validate_attack_containment(&self.evidence_artifacts, &entry.attack_vector)?;
+                Self::validate_attack_containment(&self.evidence_artifacts, &entry.attack_vector)
+                    .map_err(|err| {
+                    entry.validation_status = ValidationStatus::Failed(err.clone());
+                    format!(
+                        "Security matrix validation failed for {}: {}",
+                        entry.attack_vector, err
+                    )
+                })?;
 
             // Check actual containment time against SLO threshold, not just stub boolean
             if containment_result.actual_containment_ms <= entry.slo_threshold_ms {

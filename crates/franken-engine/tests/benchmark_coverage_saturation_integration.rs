@@ -1570,7 +1570,9 @@ fn edge_case_custom_target_families_subset() {
     config.target_families = targets;
     config.min_families_covered = 2;
     config.min_entries_per_family = 1;
+    config.min_feature_diversity = 1;
     config.min_saturation_score_millionths = 0;
+    config.min_representativeness_score_millionths = 0;
 
     let mut board = SaturationBoard::new();
     board

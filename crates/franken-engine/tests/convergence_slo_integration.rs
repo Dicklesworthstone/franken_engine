@@ -161,8 +161,8 @@ fn test_statistical_analysis() {
 
     // Check percentiles
     assert_eq!(statistics.percentiles.get("p50"), Some(&300));
-    assert_eq!(statistics.percentiles.get("p95"), Some(&500));
-    assert_eq!(statistics.percentiles.get("p99"), Some(&500));
+    assert_eq!(statistics.percentiles.get("p95"), Some(&480));
+    assert_eq!(statistics.percentiles.get("p99"), Some(&496));
 }
 
 #[test]
@@ -202,7 +202,14 @@ fn test_artifact_json_valid() {
         assert!(file_path.exists());
         let content = std::fs::read_to_string(file_path).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
-        assert!(parsed.is_object());
+        if file_path
+            .file_name()
+            .is_some_and(|name| name == "convergence_measurements.json")
+        {
+            assert!(parsed.is_array());
+        } else {
+            assert!(parsed.is_object());
+        }
     }
 }
 

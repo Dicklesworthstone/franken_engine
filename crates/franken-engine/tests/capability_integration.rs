@@ -22,43 +22,42 @@ use frankenengine_engine::capability::{
     require_capability,
 };
 
+fn all_runtime_capabilities() -> &'static [RuntimeCapability] {
+    &RuntimeCapability::ALL
+}
+
 // ---------------------------------------------------------------------------
 // RuntimeCapability display
 // ---------------------------------------------------------------------------
 
 #[test]
 fn capability_display_all_variants() {
-    assert_eq!(RuntimeCapability::VmDispatch.to_string(), "vm_dispatch");
-    assert_eq!(RuntimeCapability::GcInvoke.to_string(), "gc_invoke");
-    assert_eq!(RuntimeCapability::IrLowering.to_string(), "ir_lowering");
-    assert_eq!(RuntimeCapability::PolicyRead.to_string(), "policy_read");
-    assert_eq!(RuntimeCapability::PolicyWrite.to_string(), "policy_write");
-    assert_eq!(RuntimeCapability::EvidenceEmit.to_string(), "evidence_emit");
-    assert_eq!(
-        RuntimeCapability::DecisionInvoke.to_string(),
-        "decision_invoke"
-    );
-    assert_eq!(
-        RuntimeCapability::NetworkEgress.to_string(),
-        "network_egress"
-    );
-    assert_eq!(
-        RuntimeCapability::LeaseManagement.to_string(),
-        "lease_management"
-    );
-    assert_eq!(
-        RuntimeCapability::IdempotencyDerive.to_string(),
-        "idempotency_derive"
-    );
-    assert_eq!(
-        RuntimeCapability::ExtensionLifecycle.to_string(),
-        "extension_lifecycle"
-    );
-    assert_eq!(RuntimeCapability::HeapAllocate.to_string(), "heap_allocate");
-    assert_eq!(RuntimeCapability::EnvRead.to_string(), "env_read");
-    assert_eq!(RuntimeCapability::ProcessSpawn.to_string(), "process_spawn");
-    assert_eq!(RuntimeCapability::FsRead.to_string(), "fs_read");
-    assert_eq!(RuntimeCapability::FsWrite.to_string(), "fs_write");
+    let expected = [
+        (RuntimeCapability::VmDispatch, "vm_dispatch"),
+        (RuntimeCapability::GcInvoke, "gc_invoke"),
+        (RuntimeCapability::IrLowering, "ir_lowering"),
+        (RuntimeCapability::PolicyRead, "policy_read"),
+        (RuntimeCapability::PolicyWrite, "policy_write"),
+        (RuntimeCapability::EvidenceEmit, "evidence_emit"),
+        (RuntimeCapability::DecisionInvoke, "decision_invoke"),
+        (RuntimeCapability::NetworkEgress, "network_egress"),
+        (RuntimeCapability::LeaseManagement, "lease_management"),
+        (RuntimeCapability::IdempotencyDerive, "idempotency_derive"),
+        (RuntimeCapability::ExtensionLifecycle, "extension_lifecycle"),
+        (RuntimeCapability::HeapAllocate, "heap_allocate"),
+        (RuntimeCapability::EnvRead, "env_read"),
+        (RuntimeCapability::ProcessSpawn, "process_spawn"),
+        (RuntimeCapability::FsRead, "fs_read"),
+        (RuntimeCapability::FsWrite, "fs_write"),
+        (RuntimeCapability::ModuleLoad, "module_load"),
+        (RuntimeCapability::Console, "console"),
+        (RuntimeCapability::Timer, "timer"),
+        (RuntimeCapability::Builtin, "builtin"),
+    ];
+    assert_eq!(expected.len(), all_runtime_capabilities().len());
+    for (capability, display) in expected {
+        assert_eq!(capability.to_string(), display);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -81,24 +80,25 @@ fn profile_kind_display() {
 #[test]
 fn full_caps_contains_all() {
     let full = CapabilityProfile::full();
-    assert_eq!(full.len(), 16);
+    assert_eq!(full.len(), all_runtime_capabilities().len());
     assert_eq!(full.kind, ProfileKind::Full);
-    assert!(full.has(RuntimeCapability::VmDispatch));
-    assert!(full.has(RuntimeCapability::PolicyWrite));
-    assert!(full.has(RuntimeCapability::NetworkEgress));
-    assert!(full.has(RuntimeCapability::FsWrite));
-    assert!(full.has(RuntimeCapability::ExtensionLifecycle));
+    for capability in all_runtime_capabilities() {
+        assert!(full.has(*capability), "full missing {capability:?}");
+    }
 }
 
 #[test]
 fn engine_core_caps() {
     let ec = CapabilityProfile::engine_core();
-    assert_eq!(ec.len(), 4);
+    assert_eq!(ec.len(), 7);
     assert_eq!(ec.kind, ProfileKind::EngineCore);
     assert!(ec.has(RuntimeCapability::VmDispatch));
     assert!(ec.has(RuntimeCapability::GcInvoke));
     assert!(ec.has(RuntimeCapability::IrLowering));
     assert!(ec.has(RuntimeCapability::HeapAllocate));
+    assert!(ec.has(RuntimeCapability::Console));
+    assert!(ec.has(RuntimeCapability::Timer));
+    assert!(ec.has(RuntimeCapability::Builtin));
     assert!(!ec.has(RuntimeCapability::PolicyWrite));
     assert!(!ec.has(RuntimeCapability::NetworkEgress));
 }
@@ -143,9 +143,12 @@ fn compute_only_caps() {
 fn capability_profile_display() {
     assert_eq!(
         CapabilityProfile::engine_core().to_string(),
-        "EngineCoreCaps[4]"
+        format!("EngineCoreCaps[{}]", CapabilityProfile::engine_core().len())
     );
-    assert_eq!(CapabilityProfile::full().to_string(), "FullCaps[16]");
+    assert_eq!(
+        CapabilityProfile::full().to_string(),
+        format!("FullCaps[{}]", all_runtime_capabilities().len())
+    );
     assert_eq!(
         CapabilityProfile::compute_only().to_string(),
         "ComputeOnlyCaps[0]"
@@ -215,7 +218,7 @@ fn intersection_result_is_compute_only_kind() {
     let full = CapabilityProfile::full();
     let ec = CapabilityProfile::engine_core();
     let inter = full.intersect(&ec);
-    assert_eq!(inter.kind, ProfileKind::ComputeOnly);
+    assert_eq!(inter.kind, ProfileKind::EngineCore);
 }
 
 // ---------------------------------------------------------------------------
@@ -306,25 +309,7 @@ fn capability_denied_is_std_error() {
 
 #[test]
 fn runtime_capability_serde_roundtrip() {
-    let caps = [
-        RuntimeCapability::VmDispatch,
-        RuntimeCapability::GcInvoke,
-        RuntimeCapability::IrLowering,
-        RuntimeCapability::PolicyRead,
-        RuntimeCapability::PolicyWrite,
-        RuntimeCapability::EvidenceEmit,
-        RuntimeCapability::DecisionInvoke,
-        RuntimeCapability::NetworkEgress,
-        RuntimeCapability::LeaseManagement,
-        RuntimeCapability::IdempotencyDerive,
-        RuntimeCapability::ExtensionLifecycle,
-        RuntimeCapability::HeapAllocate,
-        RuntimeCapability::EnvRead,
-        RuntimeCapability::ProcessSpawn,
-        RuntimeCapability::FsRead,
-        RuntimeCapability::FsWrite,
-    ];
-    for c in &caps {
+    for c in all_runtime_capabilities() {
         let json = serde_json::to_string(c).unwrap();
         let restored: RuntimeCapability = serde_json::from_str(&json).unwrap();
         assert_eq!(*c, restored);
@@ -548,28 +533,14 @@ fn runtime_capability_ord_is_deterministic() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn runtime_capability_all_sixteen_variants() {
-    let all: std::collections::BTreeSet<RuntimeCapability> = [
-        RuntimeCapability::VmDispatch,
-        RuntimeCapability::GcInvoke,
-        RuntimeCapability::IrLowering,
-        RuntimeCapability::PolicyRead,
-        RuntimeCapability::PolicyWrite,
-        RuntimeCapability::EvidenceEmit,
-        RuntimeCapability::DecisionInvoke,
-        RuntimeCapability::NetworkEgress,
-        RuntimeCapability::LeaseManagement,
-        RuntimeCapability::IdempotencyDerive,
-        RuntimeCapability::ExtensionLifecycle,
-        RuntimeCapability::HeapAllocate,
-        RuntimeCapability::EnvRead,
-        RuntimeCapability::ProcessSpawn,
-        RuntimeCapability::FsRead,
-        RuntimeCapability::FsWrite,
-    ]
-    .into_iter()
-    .collect();
-    assert_eq!(all.len(), 16);
+fn runtime_capability_all_variants_are_canonical() {
+    let all: std::collections::BTreeSet<RuntimeCapability> =
+        all_runtime_capabilities().iter().copied().collect();
+    assert_eq!(all.len(), all_runtime_capabilities().len());
+    assert_eq!(
+        all_runtime_capabilities().len(),
+        RuntimeCapability::ALL.len()
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -663,25 +634,8 @@ fn profile_kind_ordering() {
 #[test]
 fn compute_only_has_returns_false_for_all() {
     let co = CapabilityProfile::compute_only();
-    for cap in [
-        RuntimeCapability::VmDispatch,
-        RuntimeCapability::GcInvoke,
-        RuntimeCapability::IrLowering,
-        RuntimeCapability::PolicyRead,
-        RuntimeCapability::PolicyWrite,
-        RuntimeCapability::EvidenceEmit,
-        RuntimeCapability::DecisionInvoke,
-        RuntimeCapability::NetworkEgress,
-        RuntimeCapability::LeaseManagement,
-        RuntimeCapability::IdempotencyDerive,
-        RuntimeCapability::ExtensionLifecycle,
-        RuntimeCapability::HeapAllocate,
-        RuntimeCapability::EnvRead,
-        RuntimeCapability::ProcessSpawn,
-        RuntimeCapability::FsRead,
-        RuntimeCapability::FsWrite,
-    ] {
-        assert!(!co.has(cap), "compute_only should not have {:?}", cap);
+    for cap in all_runtime_capabilities() {
+        assert!(!co.has(*cap), "compute_only should not have {:?}", cap);
     }
 }
 

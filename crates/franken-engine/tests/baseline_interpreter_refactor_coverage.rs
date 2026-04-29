@@ -22,10 +22,13 @@
     clippy::manual_abs_diff
 )]
 
+use std::collections::BTreeSet;
+
 use frankenengine_engine::baseline_interpreter::{
     ConsoleLevel, ExecutionResult, InterpreterConfig, InterpreterCore, InterpreterError,
     QuickJsLane, V8Lane, Value,
 };
+use frankenengine_engine::capability::RuntimeCapability;
 use frankenengine_engine::ir_contract::{
     CapabilityTag, Ir3Instruction, Ir3Module, IrHeader, IrLevel, IrSchemaVersion, RegRange,
 };
@@ -67,6 +70,28 @@ fn test_module_with_functions(
     test_module(instructions)
 }
 
+fn refactor_coverage_config() -> InterpreterConfig {
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.granted_capabilities = BTreeSet::from([
+        RuntimeCapability::VmDispatch,
+        RuntimeCapability::HeapAllocate,
+        RuntimeCapability::Builtin,
+        RuntimeCapability::Console,
+    ]);
+    config
+}
+
+fn refactor_coverage_v8_config() -> InterpreterConfig {
+    let mut config = InterpreterConfig::v8_defaults();
+    config.granted_capabilities = BTreeSet::from([
+        RuntimeCapability::VmDispatch,
+        RuntimeCapability::HeapAllocate,
+        RuntimeCapability::Builtin,
+        RuntimeCapability::Console,
+    ]);
+    config
+}
+
 #[allow(dead_code)]
 fn qjs_run_with_config(
     module: &Ir3Module,
@@ -86,11 +111,11 @@ fn v8_run_with_config(
 }
 
 fn qjs_run(module: &Ir3Module) -> Result<ExecutionResult, InterpreterError> {
-    QuickJsLane::new().execute(module, "refactor-coverage-trace")
+    QuickJsLane::with_config(refactor_coverage_config()).execute(module, "refactor-coverage-trace")
 }
 
 fn v8_run(module: &Ir3Module) -> Result<ExecutionResult, InterpreterError> {
-    V8Lane::new().execute(module, "refactor-coverage-trace")
+    V8Lane::with_config(refactor_coverage_v8_config()).execute(module, "refactor-coverage-trace")
 }
 
 #[allow(dead_code)]
@@ -825,13 +850,10 @@ fn number_tostring_handles_zero_special_case() {
 }
 
 #[test]
-fn number_tostring_truncates_fractional_parts() {
-    // Test that fractional parts are truncated for radix conversion
-    let test_cases = vec![
-        (42.7, 16, "2a"),      // 42.7 truncates to 42
-        (99.99, 2, "1100011"), // 99.99 truncates to 99
-        (-42.3, 16, "-2a"),    // -42.3 truncates to -42
-    ];
+fn number_tostring_preserves_fractional_radix_digits() {
+    // Fractional non-decimal output is bounded, but must not silently discard
+    // the fractional component.
+    let test_cases = vec![(3.5, 2, "11.1"), (42.5, 16, "2a.8"), (-42.5, 16, "-2a.8")];
 
     for (number, radix, expected) in test_cases {
         let module = test_module_with_functions(

@@ -74,11 +74,20 @@ fn make_multi_hostcall_module(caps: &[&str]) -> Ir3Module {
 }
 
 fn config_with_caps(caps: &[&str]) -> InterpreterConfig {
+    let mut config = config_with_execution_caps();
+    config.granted_capabilities.extend(
+        caps.iter()
+            .filter_map(|c| RuntimeCapability::from_tag_str(c)),
+    );
+    config
+}
+
+fn config_with_execution_caps() -> InterpreterConfig {
     let mut config = InterpreterConfig::quickjs_defaults();
-    config.granted_capabilities = caps
-        .iter()
-        .filter_map(|c| RuntimeCapability::from_tag_str(c))
-        .collect();
+    config.granted_capabilities = BTreeSet::from([
+        RuntimeCapability::VmDispatch,
+        RuntimeCapability::HeapAllocate,
+    ]);
     config
 }
 
@@ -89,12 +98,11 @@ fn config_with_caps(caps: &[&str]) -> InterpreterConfig {
 #[test]
 fn hostcall_denied_without_granted_capability() {
     let m = make_hostcall_module("fs:read");
-    let config = InterpreterConfig::quickjs_defaults(); // no capabilities
+    let config = config_with_execution_caps();
     let lane = QuickJsLane::with_config(config);
     let err = lane.execute(&m, "trace-deny").unwrap_err();
     assert!(
-        matches!(err, InterpreterError::CapabilityDenied { .. }),
-        "expected CapabilityDenied, got: {err:?}"
+        matches!(err, InterpreterError::CapabilityDenied { capability } if capability == "fs:read")
     );
 }
 
@@ -110,7 +118,7 @@ fn hostcall_denied_with_wrong_capability() {
 #[test]
 fn hostcall_denied_extracts_capability_name() {
     let m = make_hostcall_module("net:fetch");
-    let config = InterpreterConfig::quickjs_defaults();
+    let config = config_with_execution_caps();
     let lane = QuickJsLane::with_config(config);
     let err = lane.execute(&m, "trace-name").unwrap_err();
     match err {
@@ -174,8 +182,9 @@ fn hostcall_granted_records_decision() {
 
 #[test]
 fn multiple_hostcalls_record_sequential_decisions() {
-    let m = make_multi_hostcall_module(&["cap_a", "cap_b", "cap_c"]);
-    let config = config_with_caps(&["cap_a", "cap_b", "cap_c"]);
+    let caps = ["fs:read", "net:connect", "fs:write"];
+    let m = make_multi_hostcall_module(&caps);
+    let config = config_with_caps(&caps);
     let lane = QuickJsLane::with_config(config);
     let result = lane.execute(&m, "trace-multi").unwrap();
 
@@ -186,22 +195,22 @@ fn multiple_hostcalls_record_sequential_decisions() {
     }
     assert_eq!(
         result.hostcall_decisions[0].capability,
-        CapabilityTag("cap_a".to_string())
+        CapabilityTag("fs:read".to_string())
     );
     assert_eq!(
         result.hostcall_decisions[1].capability,
-        CapabilityTag("cap_b".to_string())
+        CapabilityTag("net:connect".to_string())
     );
     assert_eq!(
         result.hostcall_decisions[2].capability,
-        CapabilityTag("cap_c".to_string())
+        CapabilityTag("fs:write".to_string())
     );
 }
 
 #[test]
 fn hostcall_decision_instruction_index_is_correct() {
-    let m = make_hostcall_module("test_cap");
-    let config = config_with_caps(&["test_cap"]);
+    let m = make_hostcall_module("fs:read");
+    let config = config_with_caps(&["fs:read"]);
     let lane = QuickJsLane::with_config(config);
     let result = lane.execute(&m, "trace-ip").unwrap();
 
@@ -235,8 +244,8 @@ fn hostcall_granted_emits_witness_events() {
 
 #[test]
 fn hostcall_denied_emits_capability_checked_witness() {
-    let m = make_hostcall_module("denied_cap");
-    let config = InterpreterConfig::quickjs_defaults();
+    let m = make_hostcall_module("fs:write");
+    let config = config_with_caps(&["fs:read"]);
     let mut core = InterpreterCore::new(config, "trace-denied-witness");
     // Execute and capture the witness events even on error
     let _err = core.execute(&m);
@@ -249,8 +258,8 @@ fn hostcall_denied_emits_capability_checked_witness() {
 
 #[test]
 fn module_with_capabilities_routes_to_quickjs_lane() {
-    let m = make_hostcall_module("sensitive_cap");
-    let config = config_with_caps(&["sensitive_cap"]);
+    let m = make_hostcall_module("fs:read");
+    let config = config_with_caps(&["fs:read"]);
     let router = LaneRouter::with_configs(config.clone(), config);
     let result = router.execute(&m, "trace-route", None).unwrap();
 
@@ -276,8 +285,8 @@ fn module_without_capabilities_does_not_force_quickjs() {
 
 #[test]
 fn forced_lane_overrides_capability_routing() {
-    let m = make_hostcall_module("some_cap");
-    let config = config_with_caps(&["some_cap"]);
+    let m = make_hostcall_module("fs:read");
+    let config = config_with_caps(&["fs:read"]);
     let router = LaneRouter::with_configs(config.clone(), config);
 
     // Force V8 lane even though module has capabilities
@@ -294,8 +303,8 @@ fn forced_lane_overrides_capability_routing() {
 
 #[test]
 fn both_lanes_deny_ungranted_capability() {
-    let m = make_hostcall_module("forbidden");
-    let config = InterpreterConfig::quickjs_defaults();
+    let m = make_hostcall_module("fs:write");
+    let config = config_with_execution_caps();
     let qjs_err = QuickJsLane::with_config(config.clone())
         .execute(&m, "trace-qjs")
         .unwrap_err();
@@ -309,8 +318,8 @@ fn both_lanes_deny_ungranted_capability() {
 
 #[test]
 fn both_lanes_grant_authorized_capability() {
-    let m = make_hostcall_module("allowed_cap");
-    let config = config_with_caps(&["allowed_cap"]);
+    let m = make_hostcall_module("fs:read");
+    let config = config_with_caps(&["fs:read"]);
 
     let qjs = QuickJsLane::with_config(config.clone())
         .execute(&m, "trace-qjs")
@@ -336,6 +345,10 @@ fn capability_profile_full_has_all_capabilities() {
     assert!(profile.has(RuntimeCapability::NetworkEgress));
     assert!(profile.has(RuntimeCapability::FsWrite));
     assert!(profile.has(RuntimeCapability::EvidenceEmit));
+    assert!(profile.has(RuntimeCapability::ModuleLoad));
+    assert!(profile.has(RuntimeCapability::Console));
+    assert!(profile.has(RuntimeCapability::Timer));
+    assert!(profile.has(RuntimeCapability::Builtin));
 }
 
 #[test]
@@ -475,28 +488,10 @@ fn hostcall_decision_record_serde_roundtrip() {
 
 #[test]
 fn runtime_capability_all_variants_serde() {
-    let caps = [
-        RuntimeCapability::VmDispatch,
-        RuntimeCapability::GcInvoke,
-        RuntimeCapability::IrLowering,
-        RuntimeCapability::HeapAllocate,
-        RuntimeCapability::PolicyRead,
-        RuntimeCapability::PolicyWrite,
-        RuntimeCapability::EvidenceEmit,
-        RuntimeCapability::DecisionInvoke,
-        RuntimeCapability::NetworkEgress,
-        RuntimeCapability::LeaseManagement,
-        RuntimeCapability::IdempotencyDerive,
-        RuntimeCapability::ExtensionLifecycle,
-        RuntimeCapability::EnvRead,
-        RuntimeCapability::ProcessSpawn,
-        RuntimeCapability::FsRead,
-        RuntimeCapability::FsWrite,
-    ];
-    for cap in &caps {
-        let json = serde_json::to_string(cap).unwrap();
+    for cap in RuntimeCapability::ALL {
+        let json = serde_json::to_string(&cap).unwrap();
         let back: RuntimeCapability = serde_json::from_str(&json).unwrap();
-        assert_eq!(*cap, back);
+        assert_eq!(cap, back);
     }
 }
 
@@ -529,14 +524,14 @@ fn interpreter_config_with_capabilities_serde_roundtrip() {
 
 #[test]
 fn partial_deny_stops_at_first_unauthorized_hostcall() {
-    let m = make_multi_hostcall_module(&["allowed", "forbidden", "also_allowed"]);
-    let config = config_with_caps(&["allowed", "also_allowed"]);
+    let m = make_multi_hostcall_module(&["fs:read", "fs:write", "net:connect"]);
+    let config = config_with_caps(&["fs:read", "net:connect"]);
     let lane = QuickJsLane::with_config(config);
     let err = lane.execute(&m, "trace-partial").unwrap_err();
 
     match err {
         InterpreterError::CapabilityDenied { capability } => {
-            assert_eq!(capability, "forbidden");
+            assert_eq!(capability, "fs:write");
         }
         other => panic!("expected CapabilityDenied, got: {other:?}"),
     }
@@ -646,11 +641,14 @@ fn intersect_full_with_engine_core_yields_engine_core_caps() {
     let ec = CapabilityProfile::engine_core();
     let inter = full.intersect(&ec);
     assert_eq!(inter.capabilities, ec.capabilities);
-    assert_eq!(inter.len(), 4);
+    assert_eq!(inter.len(), 7);
     assert!(inter.has(RuntimeCapability::VmDispatch));
     assert!(inter.has(RuntimeCapability::GcInvoke));
     assert!(inter.has(RuntimeCapability::IrLowering));
     assert!(inter.has(RuntimeCapability::HeapAllocate));
+    assert!(inter.has(RuntimeCapability::Console));
+    assert!(inter.has(RuntimeCapability::Timer));
+    assert!(inter.has(RuntimeCapability::Builtin));
 }
 
 #[test]
@@ -670,10 +668,10 @@ fn intersect_is_commutative() {
 #[test]
 fn capability_profile_display_includes_kind_and_count() {
     let ec = CapabilityProfile::engine_core();
-    assert_eq!(ec.to_string(), "EngineCoreCaps[4]");
+    assert_eq!(ec.to_string(), "EngineCoreCaps[7]");
 
     let full = CapabilityProfile::full();
-    assert_eq!(full.to_string(), "FullCaps[16]");
+    assert_eq!(full.to_string(), "FullCaps[20]");
 
     let co = CapabilityProfile::compute_only();
     assert_eq!(co.to_string(), "ComputeOnlyCaps[0]");
@@ -757,6 +755,10 @@ fn runtime_capability_display_all_variants() {
         (RuntimeCapability::ProcessSpawn, "process_spawn"),
         (RuntimeCapability::FsRead, "fs_read"),
         (RuntimeCapability::FsWrite, "fs_write"),
+        (RuntimeCapability::ModuleLoad, "module_load"),
+        (RuntimeCapability::Console, "console"),
+        (RuntimeCapability::Timer, "timer"),
+        (RuntimeCapability::Builtin, "builtin"),
     ];
     for (cap, label) in &expected {
         assert_eq!(cap.to_string(), *label, "Display mismatch for {:?}", cap);

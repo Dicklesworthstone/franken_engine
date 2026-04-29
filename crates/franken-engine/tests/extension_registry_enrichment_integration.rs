@@ -1585,7 +1585,7 @@ fn enrichment_publish_to_unowned_scope_rejected() {
 fn enrichment_publish_from_unknown_publisher_rejected() {
     let (mut reg, _, sk, _) = enrichment_setup();
     let fake_pub = EngineObjectId([55; 32]);
-    let fake_vk = VerificationKey::from_bytes([66; 32]).unwrap();
+    let fake_vk = enrichment_signing_key(66).verification_key();
     let v = PackageVersion::new(1, 0, 0);
     let m = enrichment_manifest("testorg", "ext", v, &fake_pub, &fake_vk);
     let result = enrichment_publish(&mut reg, &m, &sk);

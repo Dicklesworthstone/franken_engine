@@ -174,7 +174,6 @@ fn containment_threshold_enforcement_under_adversarial_conditions() {
             HookAction::Suspend | HookAction::Terminate(_) | HookAction::Quarantine(_)
         ) {
             escalation_triggered = true;
-            break;
         }
     }
 

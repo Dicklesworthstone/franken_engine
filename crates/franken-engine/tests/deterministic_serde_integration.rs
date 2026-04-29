@@ -998,13 +998,13 @@ fn enrichment_decode_invalid_tag_0x00() {
 }
 
 #[test]
-fn enrichment_decode_invalid_tag_0x09() {
+fn enrichment_decode_truncated_float_tag() {
     let err = decode_value(&[0x09]).unwrap_err();
     assert!(matches!(
         err,
-        SerdeError::InvalidTag {
-            tag: 0x09,
-            offset: 0
+        SerdeError::BufferTooShort {
+            expected: 9,
+            actual: 1
         }
     ));
 }

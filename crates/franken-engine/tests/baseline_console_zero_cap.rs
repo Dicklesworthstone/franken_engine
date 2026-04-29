@@ -48,6 +48,8 @@ fn zero_console_cap_drops_all_builtin_and_direct_console_levels() {
     config.granted_capabilities = BTreeSet::from([
         RuntimeCapability::VmDispatch,
         RuntimeCapability::HeapAllocate,
+        RuntimeCapability::Builtin,
+        RuntimeCapability::Console,
     ]);
     let lane = QuickJsLane::with_config(config);
 

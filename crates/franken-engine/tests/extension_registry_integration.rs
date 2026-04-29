@@ -937,7 +937,7 @@ fn error_display_all_variants() {
 fn publish_to_nonexistent_publisher_fails() {
     let (mut reg, _, sk, _) = setup();
     let fake_pub = EngineObjectId([55; 32]);
-    let fake_vk = VerificationKey::from_bytes([66; 32]).unwrap();
+    let fake_vk = signing_key(66).verification_key();
     let v = PackageVersion::new(1, 0, 0);
     let m = manifest("testorg", "ext", v, &fake_pub, &fake_vk);
     let result = publish(&mut reg, &m, &sk);
@@ -1785,13 +1785,13 @@ fn test_manifest_unsigned_bytes_differs_with_dependency() {
 }
 
 // ---------------------------------------------------------------------------
-// is_package_revoked for nonexistent returns false
+// is_package_revoked for nonexistent packages fails closed
 // ---------------------------------------------------------------------------
 
 #[test]
-fn test_is_package_revoked_nonexistent_returns_false() {
+fn test_is_package_revoked_nonexistent_returns_true() {
     let reg = ExtensionRegistry::new(DeterministicTimestamp(1));
-    assert!(!reg.is_package_revoked("no", "pkg", PackageVersion::new(1, 0, 0)));
+    assert!(reg.is_package_revoked("no", "pkg", PackageVersion::new(1, 0, 0)));
 }
 
 // ---------------------------------------------------------------------------

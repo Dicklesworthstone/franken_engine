@@ -311,8 +311,14 @@ impl CanonicalGuard {
             }
         };
 
-        // 2. Pre-parse checks.
-        if let Some(violation) = check_leading_padding(bytes) {
+        // 2. Pre-parse checks. Schema-prefixed payloads may legitimately
+        // start with any byte pattern because the first 32 bytes are a hash.
+        // Only treat leading padding as padding when the expected schema
+        // prefix is not present; otherwise schema hashes beginning with
+        // 0x00/whitespace bytes would be rejected before validation.
+        let has_expected_schema_prefix =
+            bytes.len() >= 32 && bytes[..32] == *schema_hash.as_bytes();
+        if !has_expected_schema_prefix && let Some(violation) = check_leading_padding(bytes) {
             self.rejection_count += 1;
             self.emit_event(GuardEvent {
                 event_type: GuardEventType::Rejected {

@@ -2966,6 +2966,9 @@ pub fn lower_ir2_to_ir3(
         .unwrap_or(false);
     let mut scoped_runtime_binding_ids = BTreeSet::<BindingId>::new();
     if is_commonjs {
+        if let Some(binding_id) = name_to_binding_id.get("require") {
+            scoped_runtime_binding_ids.insert(*binding_id);
+        }
         if let Some(binding_id) = name_to_binding_id.get("module") {
             scoped_runtime_binding_ids.insert(*binding_id);
         }
@@ -2986,7 +2989,7 @@ pub fn lower_ir2_to_ir3(
         scoped_runtime_binding_ids.insert(*binding_id);
     }
 
-    for op in &ir2.ops {
+    for (op_index, op) in ir2.ops.iter().enumerate() {
         if matches!(op.effect, EffectBoundary::HostcallEffect) {
             let capability = op
                 .required_capability
@@ -3026,6 +3029,21 @@ pub fn lower_ir2_to_ir3(
                             .push(Ir3Instruction::Move { dst, src: arg_reg });
                     }
                     (start, count)
+                }
+                Ir1Op::LoadLiteral { value } => {
+                    let literal_reg = alloc_register(&mut register_cursor);
+                    lower_literal_to_ir3(
+                        value,
+                        literal_reg,
+                        &mut ir3.instructions,
+                        &mut ir3.constant_pool,
+                    );
+                    let start = alloc_register(&mut register_cursor);
+                    ir3.instructions.push(Ir3Instruction::Move {
+                        dst: start,
+                        src: literal_reg,
+                    });
+                    (start, 1)
                 }
                 _ => {
                     let hostcall_arg = pop_lowering_value(&mut value_stack)?;
@@ -3217,14 +3235,16 @@ pub fn lower_ir2_to_ir3(
                 value_stack.push(dst);
             }
             Ir1Op::Return => {
-                // The main loop only processes module-level Returns
-                // (function body Returns are handled in the deferred
-                // function loop).  At module level the completion value
-                // is always in register 0 (kept up-to-date by Pop),
-                // so use register 0 regardless of value_stack state
-                // which may be stale after control flow (switch, if).
-                let _discard = value_stack.pop();
-                ir3.instructions.push(Ir3Instruction::Return { value: 0 });
+                // The final module-level return is synthetic fallthrough and
+                // must use the completion register because static stack state
+                // can be stale after branches. Earlier returns are explicit
+                // abrupt completions and consume their lowered expression.
+                let value = if op_index + 1 == ir2.ops.len() {
+                    0
+                } else {
+                    value_stack.pop().unwrap_or(0)
+                };
+                ir3.instructions.push(Ir3Instruction::Return { value });
             }
             Ir1Op::Nop | Ir1Op::Pop => {
                 let register = pop_lowering_value(&mut value_stack)?;
@@ -4308,6 +4328,16 @@ pub fn lower_ir2_to_ir3(
                     }
                 }
                 Ir1Op::StoreBinding { binding_id } => {
+                    if let Some(name) = fv_id_to_name.get(binding_id) {
+                        let src = pop_lowering_value(&mut fn_value_stack)?;
+                        let pool_idx = push_constant(&mut ir3.constant_pool, name);
+                        ir3.instructions.push(Ir3Instruction::StoreScoped {
+                            src,
+                            name_pool_index: pool_idx,
+                        });
+                        fn_value_stack.push(src);
+                        continue;
+                    }
                     let is_first_store = !fn_binding_regs.contains_key(binding_id);
                     let dst = *fn_binding_regs
                         .entry(*binding_id)
@@ -4457,6 +4487,40 @@ pub fn lower_ir2_to_ir3(
                     operator,
                 } => {
                     let src = pop_lowering_value(&mut fn_value_stack)?;
+                    if let Some(name) = fv_id_to_name.get(binding_id) {
+                        let pool_idx = push_constant(&mut ir3.constant_pool, name);
+                        if *operator == AssignmentOperator::Assign {
+                            ir3.instructions.push(Ir3Instruction::StoreScoped {
+                                src,
+                                name_pool_index: pool_idx,
+                            });
+                            fn_value_stack.push(src);
+                        } else if matches!(
+                            operator,
+                            AssignmentOperator::LogicalAndAssign
+                                | AssignmentOperator::LogicalOrAssign
+                                | AssignmentOperator::NullishCoalescingAssign
+                        ) {
+                            return Err(LoweringPipelineError::InvariantViolation {
+                                detail: "logical compound assignments must be short-circuit lowered before IR3",
+                            });
+                        } else {
+                            let lhs = alloc_register(&mut fn_reg);
+                            ir3.instructions.push(Ir3Instruction::LoadScoped {
+                                dst: lhs,
+                                name_pool_index: pool_idx,
+                            });
+                            let result = alloc_register(&mut fn_reg);
+                            let instr = lower_assign_op_to_ir3(*operator, result, lhs, src);
+                            ir3.instructions.push(instr);
+                            ir3.instructions.push(Ir3Instruction::StoreScoped {
+                                src: result,
+                                name_pool_index: pool_idx,
+                            });
+                            fn_value_stack.push(result);
+                        }
+                        continue;
+                    }
                     let dst = *fn_binding_regs
                         .entry(*binding_id)
                         .or_insert_with(|| alloc_register(&mut fn_reg));
@@ -5964,6 +6028,34 @@ fn lower_expression_to_ir1(
                         count: arg_count,
                         max: u32::MAX as usize,
                     });
+                }
+                ops.push(Ir1Op::HostCall {
+                    capability: "hostcall.invoke".to_string(),
+                    arg_count: arg_count as u32,
+                });
+                return Ok(());
+            }
+            if let Expression::Identifier(name) = callee.as_ref()
+                && name == "sink"
+                && !binding_lookup.contains_key(name.as_str())
+            {
+                let arg_count = arguments.len();
+                if arg_count > u32::MAX as usize {
+                    return Err(LoweringPipelineError::TooManyArguments {
+                        count: arg_count,
+                        max: u32::MAX as usize,
+                    });
+                }
+                for arg in arguments {
+                    lower_expression_to_ir1(
+                        arg,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                    )?;
                 }
                 ops.push(Ir1Op::HostCall {
                     capability: "hostcall.invoke".to_string(),

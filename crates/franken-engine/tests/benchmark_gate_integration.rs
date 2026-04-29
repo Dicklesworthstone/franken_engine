@@ -122,8 +122,7 @@ fn create_run_manifest(dir: &PathBuf, variation: &str) -> PathBuf {
 }
 
 fn get_binary_path() -> PathBuf {
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    manifest_dir.join("target/debug/franken_benchmark_gate")
+    PathBuf::from(env!("CARGO_BIN_EXE_franken_benchmark_gate"))
 }
 
 fn run_benchmark_gate(baseline: &PathBuf, run: &PathBuf, threshold: &str) -> std::process::Output {

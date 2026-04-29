@@ -860,20 +860,17 @@ impl ExecutionOrchestrator {
         TraceId::from_bytes(bytes)
     }
 
-    fn internal_runtime_capabilities_for_module(ir3: &Ir3Module) -> BTreeSet<RuntimeCapability> {
-        ir3.required_capabilities
-            .iter()
-            .filter_map(|capability| RuntimeCapability::from_tag_str(&capability.0))
-            .collect()
-    }
-
-    fn lane_router_for_execution(package: &ExtensionPackage, ir3: &Ir3Module) -> LaneRouter {
-        let mut granted_capabilities: BTreeSet<RuntimeCapability> = package
-            .capabilities
-            .iter()
-            .filter_map(|s| RuntimeCapability::from_tag_str(s))
-            .collect();
-        granted_capabilities.extend(Self::internal_runtime_capabilities_for_module(ir3));
+    fn lane_router_for_execution(package: &ExtensionPackage) -> LaneRouter {
+        let mut granted_capabilities = BTreeSet::from([
+            RuntimeCapability::VmDispatch,
+            RuntimeCapability::HeapAllocate,
+        ]);
+        granted_capabilities.extend(
+            package
+                .capabilities
+                .iter()
+                .filter_map(|s| RuntimeCapability::from_tag_str(s)),
+        );
 
         let mut quickjs_config = InterpreterConfig::quickjs_defaults();
         quickjs_config.granted_capabilities = granted_capabilities.clone();
@@ -908,8 +905,8 @@ impl ExecutionOrchestrator {
             hook
         });
         // Package capabilities remain user-scoped; the orchestrator adds only
-        // the internal enforcement capabilities required by the lowered module.
-        let routed = Self::lane_router_for_execution(package, ir3)
+        // the minimal VM capabilities needed to run the already-lowered module.
+        let routed = Self::lane_router_for_execution(package)
             .execute_with_hook(ir3, trace_id, self.config.force_lane, hook)
             .map_err(OrchestratorError::Interpreter)?;
         let report = guardplane_adapter
@@ -2179,31 +2176,27 @@ mod tests {
     }
 
     #[test]
-    fn internal_execution_capabilities_are_explicit_not_synthetic() {
-        let mut ir3 = Ir3Module::new(ContentHash::compute(b"module"), "module.js");
+    fn package_capabilities_are_explicit_not_synthesized_from_ir3_requirements() {
+        let source = r#""hostcall<\"net.write\">";"#;
+        let mut denied_package = package_with_source(source);
+        denied_package.capabilities = execution_capabilities();
 
-        let empty_capabilities =
-            ExecutionOrchestrator::internal_runtime_capabilities_for_module(&ir3);
-        assert!(!empty_capabilities.contains(&RuntimeCapability::VmDispatch));
-        assert!(!empty_capabilities.contains(&RuntimeCapability::HeapAllocate));
+        let denied = ExecutionOrchestrator::with_defaults()
+            .execute(&denied_package)
+            .expect_err("IR3 requirements must not synthesize package hostcall grants");
+        match denied {
+            OrchestratorError::Interpreter(InterpreterError::CapabilityDenied { capability }) => {
+                assert_eq!(capability, "net.write")
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
 
-        ir3.required_capabilities
-            .push(crate::ir_contract::CapabilityTag(
-                "module:import".to_string(),
-            ));
-        ir3.required_capabilities
-            .push(crate::ir_contract::CapabilityTag("vm_dispatch".to_string()));
-        ir3.required_capabilities
-            .push(crate::ir_contract::CapabilityTag(
-                "heap_allocate".to_string(),
-            ));
-
-        let capabilities = ExecutionOrchestrator::internal_runtime_capabilities_for_module(&ir3);
-
-        assert!(capabilities.contains(&RuntimeCapability::VmDispatch));
-        assert!(capabilities.contains(&RuntimeCapability::HeapAllocate));
-        assert!(capabilities.contains(&RuntimeCapability::ModuleLoad));
-        assert!(!capabilities.contains(&RuntimeCapability::NetworkEgress));
+        let mut allowed_package = denied_package;
+        allowed_package.capabilities.push("net.write".to_string());
+        let result = ExecutionOrchestrator::with_defaults()
+            .execute(&allowed_package)
+            .expect("declared package hostcall capability should be granted");
+        assert_eq!(result.execution_value, "undefined");
     }
 
     fn package_with_source(source: &str) -> ExtensionPackage {

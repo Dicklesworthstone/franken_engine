@@ -15672,13 +15672,13 @@ impl InterpreterCore {
         }
     }
 
-    /// Unified Number.prototype.toString implementation - spec-consistent radix handling.
+    /// Unified Number.prototype.toString implementation with bounded radix handling.
     fn number_to_string_impl(
         &self,
         number_val: f64,
         radix: i32,
     ) -> Result<String, InterpreterError> {
-        // Validate radix according to ECMAScript spec (2-36)
+        // Validate radix according to ECMAScript's accepted range (2-36).
         if radix < 2 || radix > 36 {
             return Err(InterpreterError::DivisionByZero); // Reuse error type for RangeError
         }
@@ -15706,14 +15706,11 @@ impl InterpreterCore {
             }
         }
 
-        // For non-decimal radix, only support integers (spec-compliant)
-        if number_val.fract() != 0.0 {
-            return Ok(number_val.to_string()); // Return decimal representation for fractional
-        }
-
-        // Convert integer to specified radix
+        // This runtime intentionally keeps non-decimal conversion bounded and
+        // deterministic while preserving fractional information.
         let mut result = String::new();
-        let mut num = number_val.abs() as u64;
+        let abs_value = number_val.abs();
+        let mut num = abs_value.trunc() as u64;
         let radix_u64 = radix as u64;
 
         if num == 0 {
@@ -15728,6 +15725,31 @@ impl InterpreterCore {
                 };
                 result.insert(0, ch);
                 num /= radix_u64;
+            }
+        }
+
+        let mut fractional = abs_value.fract();
+        if fractional > 0.0 {
+            result.push('.');
+            for _ in 0..64 {
+                fractional *= radix as f64;
+                let digit = fractional.trunc() as u8;
+                let ch = if digit < 10 {
+                    (b'0' + digit) as char
+                } else {
+                    (b'a' + (digit - 10)) as char
+                };
+                result.push(ch);
+                fractional -= f64::from(digit);
+                if fractional == 0.0 {
+                    break;
+                }
+            }
+            while result.ends_with('0') {
+                result.pop();
+            }
+            if result.ends_with('.') {
+                result.pop();
             }
         }
 
@@ -18420,6 +18442,26 @@ mod tests {
                 result,
                 Value::Str("42".to_string()),
                 "Number.toString builtin ID {} should default NaN radix to decimal",
+                func_index
+            );
+        }
+    }
+
+    #[test]
+    fn number_to_string_fractional_radix_preserves_fractional_part() {
+        let mut interpreter = quickjs_test_core();
+
+        for func_index in [196, 343] {
+            interpreter.registers[0] = Value::Float(Float64::new(3.5));
+            interpreter.registers[1] = Value::Int(2);
+
+            let result = interpreter
+                .call_builtin_by_id(func_index, RegRange { start: 0, count: 2 })
+                .expect("Number.toString with fractional non-decimal radix should run");
+            assert_eq!(
+                result,
+                Value::Str("11.1".to_string()),
+                "Number.toString builtin ID {} should preserve fractional radix digits",
                 func_index
             );
         }

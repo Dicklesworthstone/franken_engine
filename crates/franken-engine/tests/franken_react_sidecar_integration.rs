@@ -18,16 +18,19 @@
 )]
 
 use std::fs;
-use std::process::Command;
+use std::process::{Command, Output};
 use tempfile::TempDir;
+
+fn run_sidecar(args: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_franken-react-sidecar"))
+        .args(args)
+        .output()
+        .expect("Failed to run franken-react-sidecar")
+}
 
 #[test]
 fn sidecar_binary_exists_and_runs() {
-    // Test: franken-react-sidecar binary exists and can show help
-    let output = Command::new("cargo")
-        .args(&["run", "--bin", "franken-react-sidecar", "--", "--help"])
-        .output()
-        .expect("Failed to run franken-react-sidecar");
+    let output = run_sidecar(&["--help"]);
 
     assert!(output.status.success());
     let help_text = String::from_utf8_lossy(&output.stdout);
@@ -57,20 +60,12 @@ function App() {
 "#;
     fs::write(&source_file, react_code).expect("Failed to write source file");
 
-    // Run sidecar
-    let output = Command::new("cargo")
-        .args(&[
-            "run",
-            "--bin",
-            "franken-react-sidecar",
-            "--",
-            "--source",
-            source_file.to_str().unwrap(),
-            "--output",
-            output_dir.to_str().unwrap(),
-        ])
-        .output()
-        .expect("Failed to run franken-react-sidecar");
+    let output = run_sidecar(&[
+        "--source",
+        source_file.to_str().unwrap(),
+        "--output",
+        output_dir.to_str().unwrap(),
+    ]);
 
     assert!(
         output.status.success(),
@@ -117,21 +112,13 @@ function SimpleComponent() {
 "#;
     fs::write(&source_file, react_code).expect("Failed to write source file");
 
-    // Run with alien-artifact mode
-    let output = Command::new("cargo")
-        .args(&[
-            "run",
-            "--bin",
-            "franken-react-sidecar",
-            "--",
-            "--source",
-            source_file.to_str().unwrap(),
-            "--output",
-            output_dir.to_str().unwrap(),
-            "--alien-artifact",
-        ])
-        .output()
-        .expect("Failed to run franken-react-sidecar");
+    let output = run_sidecar(&[
+        "--source",
+        source_file.to_str().unwrap(),
+        "--output",
+        output_dir.to_str().unwrap(),
+        "--alien-artifact",
+    ]);
 
     assert!(output.status.success());
 
@@ -159,21 +146,14 @@ function TestComponent() {
     for strategy in &strategies {
         let output_dir = temp_dir.path().join(format!("output_{}", strategy));
 
-        let output = Command::new("cargo")
-            .args(&[
-                "run",
-                "--bin",
-                "franken-react-sidecar",
-                "--",
-                "--source",
-                source_file.to_str().unwrap(),
-                "--output",
-                output_dir.to_str().unwrap(),
-                "--dom-strategy",
-                strategy,
-            ])
-            .output()
-            .expect("Failed to run franken-react-sidecar");
+        let output = run_sidecar(&[
+            "--source",
+            source_file.to_str().unwrap(),
+            "--output",
+            output_dir.to_str().unwrap(),
+            "--dom-strategy",
+            strategy,
+        ]);
 
         assert!(
             output.status.success(),
@@ -209,19 +189,12 @@ function ComponentWithAttributes() {
 "#;
     fs::write(&source_file, react_code).expect("Failed to write source file");
 
-    let output = Command::new("cargo")
-        .args(&[
-            "run",
-            "--bin",
-            "franken-react-sidecar",
-            "--",
-            "--source",
-            source_file.to_str().unwrap(),
-            "--output",
-            output_dir.to_str().unwrap(),
-        ])
-        .output()
-        .expect("Failed to run franken-react-sidecar");
+    let output = run_sidecar(&[
+        "--source",
+        source_file.to_str().unwrap(),
+        "--output",
+        output_dir.to_str().unwrap(),
+    ]);
 
     assert!(output.status.success());
 
@@ -257,19 +230,12 @@ function PerformanceTestComponent() {
 "#;
     fs::write(&source_file, react_code).expect("Failed to write source file");
 
-    let output = Command::new("cargo")
-        .args(&[
-            "run",
-            "--bin",
-            "franken-react-sidecar",
-            "--",
-            "--source",
-            source_file.to_str().unwrap(),
-            "--output",
-            output_dir.to_str().unwrap(),
-        ])
-        .output()
-        .expect("Failed to run franken-react-sidecar");
+    let output = run_sidecar(&[
+        "--source",
+        source_file.to_str().unwrap(),
+        "--output",
+        output_dir.to_str().unwrap(),
+    ]);
 
     assert!(output.status.success());
 
@@ -327,19 +293,12 @@ function ComplexComponent() {
     let complex_output = temp_dir.path().join("complex_output");
     fs::write(&complex_source, complex_react_code).expect("Failed to write complex source");
 
-    let output = Command::new("cargo")
-        .args(&[
-            "run",
-            "--bin",
-            "franken-react-sidecar",
-            "--",
-            "--source",
-            complex_source.to_str().unwrap(),
-            "--output",
-            complex_output.to_str().unwrap(),
-        ])
-        .output()
-        .expect("Failed to run sidecar on complex component");
+    let output = run_sidecar(&[
+        "--source",
+        complex_source.to_str().unwrap(),
+        "--output",
+        complex_output.to_str().unwrap(),
+    ]);
 
     assert!(output.status.success());
 
@@ -371,19 +330,12 @@ fn sidecar_error_handling_invalid_source() {
     let nonexistent_file = temp_dir.path().join("nonexistent.jsx");
     let output_dir = temp_dir.path().join("output");
 
-    let output = Command::new("cargo")
-        .args(&[
-            "run",
-            "--bin",
-            "franken-react-sidecar",
-            "--",
-            "--source",
-            nonexistent_file.to_str().unwrap(),
-            "--output",
-            output_dir.to_str().unwrap(),
-        ])
-        .output()
-        .expect("Failed to run franken-react-sidecar");
+    let output = run_sidecar(&[
+        "--source",
+        nonexistent_file.to_str().unwrap(),
+        "--output",
+        output_dir.to_str().unwrap(),
+    ]);
 
     // Should fail gracefully
     assert!(!output.status.success());
@@ -410,19 +362,12 @@ function DeterministicComponent() {
     for i in 0..3 {
         let output_dir = temp_dir.path().join(format!("output_{}", i));
 
-        let output = Command::new("cargo")
-            .args(&[
-                "run",
-                "--bin",
-                "franken-react-sidecar",
-                "--",
-                "--source",
-                source_file.to_str().unwrap(),
-                "--output",
-                output_dir.to_str().unwrap(),
-            ])
-            .output()
-            .expect("Failed to run franken-react-sidecar");
+        let output = run_sidecar(&[
+            "--source",
+            source_file.to_str().unwrap(),
+            "--output",
+            output_dir.to_str().unwrap(),
+        ]);
 
         assert!(output.status.success());
 

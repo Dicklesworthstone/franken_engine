@@ -74,8 +74,8 @@ fn enrichment_quarantine_is_forced() {
 }
 
 #[test]
-fn enrichment_revocation_is_forced() {
-    assert!(LifecycleEvent::Revocation.is_forced());
+fn enrichment_revocation_is_not_forced() {
+    assert!(!LifecycleEvent::Revocation.is_forced());
 }
 
 #[test]

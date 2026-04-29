@@ -18,38 +18,24 @@ use frankenengine_engine::capability::{
     require_capability,
 };
 
+fn all_runtime_capabilities() -> &'static [RuntimeCapability] {
+    &RuntimeCapability::ALL
+}
+
 // =========================================================================
 // A. BTreeSet ordering and dedup for RuntimeCapability
 // =========================================================================
 
 #[test]
 fn enrichment_runtime_capability_btreeset_ordering_dedup() {
-    let all = [
-        RuntimeCapability::VmDispatch,
-        RuntimeCapability::GcInvoke,
-        RuntimeCapability::IrLowering,
-        RuntimeCapability::PolicyRead,
-        RuntimeCapability::PolicyWrite,
-        RuntimeCapability::EvidenceEmit,
-        RuntimeCapability::DecisionInvoke,
-        RuntimeCapability::NetworkEgress,
-        RuntimeCapability::LeaseManagement,
-        RuntimeCapability::IdempotencyDerive,
-        RuntimeCapability::ExtensionLifecycle,
-        RuntimeCapability::HeapAllocate,
-        RuntimeCapability::EnvRead,
-        RuntimeCapability::ProcessSpawn,
-        RuntimeCapability::FsRead,
-        RuntimeCapability::FsWrite,
-    ];
     let mut set = BTreeSet::new();
-    for cap in &all {
+    for cap in all_runtime_capabilities() {
         set.insert(*cap);
     }
     // Insert duplicates
     set.insert(RuntimeCapability::VmDispatch);
     set.insert(RuntimeCapability::FsWrite);
-    assert_eq!(set.len(), 16);
+    assert_eq!(set.len(), all_runtime_capabilities().len());
     let ordered: Vec<_> = set.into_iter().collect();
     for i in 1..ordered.len() {
         assert!(ordered[i - 1] < ordered[i]);
@@ -80,25 +66,7 @@ fn enrichment_profile_kind_btreeset_ordering_dedup() {
 fn enrichment_runtime_capability_hash_consistency() {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
-    let all = [
-        RuntimeCapability::VmDispatch,
-        RuntimeCapability::GcInvoke,
-        RuntimeCapability::IrLowering,
-        RuntimeCapability::PolicyRead,
-        RuntimeCapability::PolicyWrite,
-        RuntimeCapability::EvidenceEmit,
-        RuntimeCapability::DecisionInvoke,
-        RuntimeCapability::NetworkEgress,
-        RuntimeCapability::LeaseManagement,
-        RuntimeCapability::IdempotencyDerive,
-        RuntimeCapability::ExtensionLifecycle,
-        RuntimeCapability::HeapAllocate,
-        RuntimeCapability::EnvRead,
-        RuntimeCapability::ProcessSpawn,
-        RuntimeCapability::FsRead,
-        RuntimeCapability::FsWrite,
-    ];
-    for cap in &all {
+    for cap in all_runtime_capabilities() {
         let mut h1 = DefaultHasher::new();
         cap.hash(&mut h1);
         let mut h2 = DefaultHasher::new();
@@ -133,26 +101,11 @@ fn enrichment_profile_kind_hash_consistency() {
 
 #[test]
 fn enrichment_runtime_capability_display_all_distinct() {
-    let all = [
-        RuntimeCapability::VmDispatch,
-        RuntimeCapability::GcInvoke,
-        RuntimeCapability::IrLowering,
-        RuntimeCapability::PolicyRead,
-        RuntimeCapability::PolicyWrite,
-        RuntimeCapability::EvidenceEmit,
-        RuntimeCapability::DecisionInvoke,
-        RuntimeCapability::NetworkEgress,
-        RuntimeCapability::LeaseManagement,
-        RuntimeCapability::IdempotencyDerive,
-        RuntimeCapability::ExtensionLifecycle,
-        RuntimeCapability::HeapAllocate,
-        RuntimeCapability::EnvRead,
-        RuntimeCapability::ProcessSpawn,
-        RuntimeCapability::FsRead,
-        RuntimeCapability::FsWrite,
-    ];
-    let displays: BTreeSet<String> = all.iter().map(|c| c.to_string()).collect();
-    assert_eq!(displays.len(), 16);
+    let displays: BTreeSet<String> = all_runtime_capabilities()
+        .iter()
+        .map(|c| c.to_string())
+        .collect();
+    assert_eq!(displays.len(), all_runtime_capabilities().len());
 }
 
 #[test]
@@ -378,14 +331,23 @@ fn enrichment_require_all_all_missing_from_compute_only() {
 #[test]
 fn enrichment_all_profiles_display_format() {
     let profiles = [
-        (CapabilityProfile::full(), "FullCaps[16]"),
-        (CapabilityProfile::engine_core(), "EngineCoreCaps[4]"),
-        (CapabilityProfile::policy(), "PolicyCaps[4]"),
-        (CapabilityProfile::remote(), "RemoteCaps[3]"),
-        (CapabilityProfile::compute_only(), "ComputeOnlyCaps[0]"),
+        (
+            CapabilityProfile::full(),
+            format!("FullCaps[{}]", all_runtime_capabilities().len()),
+        ),
+        (
+            CapabilityProfile::engine_core(),
+            format!("EngineCoreCaps[{}]", CapabilityProfile::engine_core().len()),
+        ),
+        (CapabilityProfile::policy(), "PolicyCaps[4]".to_string()),
+        (CapabilityProfile::remote(), "RemoteCaps[3]".to_string()),
+        (
+            CapabilityProfile::compute_only(),
+            "ComputeOnlyCaps[0]".to_string(),
+        ),
     ];
     for (profile, expected) in &profiles {
-        assert_eq!(profile.to_string(), *expected);
+        assert_eq!(profile.to_string(), expected.as_str());
     }
 }
 
@@ -564,32 +526,17 @@ fn enrichment_capability_profile_serde_roundtrip_custom() {
     let json = serde_json::to_string(&profile).unwrap();
     let back: CapabilityProfile = serde_json::from_str(&json).unwrap();
     assert_eq!(profile, back);
-    assert_eq!(back.capabilities.len(), 6);
+    assert_eq!(
+        back.capabilities.len(),
+        CapabilityProfile::engine_core().len() + 2
+    );
     assert!(back.capabilities.contains(&RuntimeCapability::EvidenceEmit));
     assert!(back.capabilities.contains(&RuntimeCapability::PolicyRead));
 }
 
 #[test]
 fn enrichment_runtime_capability_serde_roundtrip_all_variants() {
-    let all = [
-        RuntimeCapability::VmDispatch,
-        RuntimeCapability::GcInvoke,
-        RuntimeCapability::IrLowering,
-        RuntimeCapability::PolicyRead,
-        RuntimeCapability::PolicyWrite,
-        RuntimeCapability::EvidenceEmit,
-        RuntimeCapability::DecisionInvoke,
-        RuntimeCapability::NetworkEgress,
-        RuntimeCapability::LeaseManagement,
-        RuntimeCapability::IdempotencyDerive,
-        RuntimeCapability::ExtensionLifecycle,
-        RuntimeCapability::HeapAllocate,
-        RuntimeCapability::EnvRead,
-        RuntimeCapability::ProcessSpawn,
-        RuntimeCapability::FsRead,
-        RuntimeCapability::FsWrite,
-    ];
-    for cap in &all {
+    for cap in all_runtime_capabilities() {
         let json = serde_json::to_string(cap).unwrap();
         let back: RuntimeCapability = serde_json::from_str(&json).unwrap();
         assert_eq!(*cap, back, "serde roundtrip failed for {cap:?}");
@@ -628,7 +575,7 @@ fn enrichment_btreeset_union_engine_core_and_policy() {
     let pol = CapabilityProfile::policy();
     let union: BTreeSet<RuntimeCapability> =
         ec.capabilities.union(&pol.capabilities).copied().collect();
-    assert_eq!(union.len(), 8);
+    assert_eq!(union.len(), ec.len() + pol.len());
     assert!(union.contains(&RuntimeCapability::VmDispatch));
     assert!(union.contains(&RuntimeCapability::GcInvoke));
     assert!(union.contains(&RuntimeCapability::IrLowering));
@@ -681,25 +628,7 @@ fn enrichment_edge_case_empty_profile_compute_only() {
     // Subsumes nothing except itself and other empty profiles.
     assert!(co.subsumes(&co));
     // require_capability always fails on empty.
-    let all_caps = [
-        RuntimeCapability::VmDispatch,
-        RuntimeCapability::GcInvoke,
-        RuntimeCapability::IrLowering,
-        RuntimeCapability::PolicyRead,
-        RuntimeCapability::PolicyWrite,
-        RuntimeCapability::EvidenceEmit,
-        RuntimeCapability::DecisionInvoke,
-        RuntimeCapability::NetworkEgress,
-        RuntimeCapability::LeaseManagement,
-        RuntimeCapability::IdempotencyDerive,
-        RuntimeCapability::ExtensionLifecycle,
-        RuntimeCapability::HeapAllocate,
-        RuntimeCapability::EnvRead,
-        RuntimeCapability::ProcessSpawn,
-        RuntimeCapability::FsRead,
-        RuntimeCapability::FsWrite,
-    ];
-    for cap in &all_caps {
+    for cap in all_runtime_capabilities() {
         assert!(
             require_capability(&co, *cap, "edge-empty").is_err(),
             "compute_only should not grant {cap}"
@@ -711,26 +640,8 @@ fn enrichment_edge_case_empty_profile_compute_only() {
 fn enrichment_edge_case_full_profile_grants_all_capabilities() {
     let full = CapabilityProfile::full();
     assert!(!full.is_empty());
-    assert_eq!(full.len(), 16);
-    let all_caps = [
-        RuntimeCapability::VmDispatch,
-        RuntimeCapability::GcInvoke,
-        RuntimeCapability::IrLowering,
-        RuntimeCapability::PolicyRead,
-        RuntimeCapability::PolicyWrite,
-        RuntimeCapability::EvidenceEmit,
-        RuntimeCapability::DecisionInvoke,
-        RuntimeCapability::NetworkEgress,
-        RuntimeCapability::LeaseManagement,
-        RuntimeCapability::IdempotencyDerive,
-        RuntimeCapability::ExtensionLifecycle,
-        RuntimeCapability::HeapAllocate,
-        RuntimeCapability::EnvRead,
-        RuntimeCapability::ProcessSpawn,
-        RuntimeCapability::FsRead,
-        RuntimeCapability::FsWrite,
-    ];
-    for cap in &all_caps {
+    assert_eq!(full.len(), all_runtime_capabilities().len());
+    for cap in all_runtime_capabilities() {
         assert!(
             require_capability(&full, *cap, "edge-full").is_ok(),
             "full should grant {cap}"
@@ -813,25 +724,7 @@ fn enrichment_clone_debug_capability_profile_all_variants() {
 
 #[test]
 fn enrichment_clone_debug_runtime_capability_all_variants() {
-    let all = [
-        RuntimeCapability::VmDispatch,
-        RuntimeCapability::GcInvoke,
-        RuntimeCapability::IrLowering,
-        RuntimeCapability::PolicyRead,
-        RuntimeCapability::PolicyWrite,
-        RuntimeCapability::EvidenceEmit,
-        RuntimeCapability::DecisionInvoke,
-        RuntimeCapability::NetworkEgress,
-        RuntimeCapability::LeaseManagement,
-        RuntimeCapability::IdempotencyDerive,
-        RuntimeCapability::ExtensionLifecycle,
-        RuntimeCapability::HeapAllocate,
-        RuntimeCapability::EnvRead,
-        RuntimeCapability::ProcessSpawn,
-        RuntimeCapability::FsRead,
-        RuntimeCapability::FsWrite,
-    ];
-    for cap in &all {
+    for cap in all_runtime_capabilities() {
         let cloned = *cap; // Copy
         assert_eq!(*cap, cloned);
         let debug_str = format!("{cap:?}");
@@ -858,17 +751,7 @@ fn enrichment_clone_debug_profile_kind_all_variants() {
 
 #[test]
 fn enrichment_clone_debug_capability_denied_all_capabilities() {
-    let all_caps = [
-        RuntimeCapability::VmDispatch,
-        RuntimeCapability::GcInvoke,
-        RuntimeCapability::IrLowering,
-        RuntimeCapability::PolicyRead,
-        RuntimeCapability::PolicyWrite,
-        RuntimeCapability::EvidenceEmit,
-        RuntimeCapability::DecisionInvoke,
-        RuntimeCapability::NetworkEgress,
-    ];
-    for cap in &all_caps {
+    for cap in all_runtime_capabilities() {
         let denied = CapabilityDenied {
             required: *cap,
             held_profile: ProfileKind::ComputeOnly,
@@ -947,17 +830,7 @@ fn enrichment_capability_profile_full_nonempty() {
 
 #[test]
 fn enrichment_runtime_capability_serde_all() {
-    let all_caps = [
-        RuntimeCapability::VmDispatch,
-        RuntimeCapability::GcInvoke,
-        RuntimeCapability::IrLowering,
-        RuntimeCapability::PolicyRead,
-        RuntimeCapability::PolicyWrite,
-        RuntimeCapability::EvidenceEmit,
-        RuntimeCapability::DecisionInvoke,
-        RuntimeCapability::NetworkEgress,
-    ];
-    for cap in &all_caps {
+    for cap in all_runtime_capabilities() {
         let json = serde_json::to_string(cap).unwrap();
         let back: RuntimeCapability = serde_json::from_str(&json).unwrap();
         assert_eq!(*cap, back);

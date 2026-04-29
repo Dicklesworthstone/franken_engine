@@ -31,7 +31,9 @@ use frankenengine_engine::engine_object_id::EngineObjectId;
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::policy_checkpoint::DeterministicTimestamp;
 use frankenengine_engine::security_epoch::SecurityEpoch;
-use frankenengine_engine::signature_preimage::{SigningKey, VerificationKey};
+use frankenengine_engine::signature_preimage::{
+    SignaturePreimage, SigningKey, VerificationKey, sign_preimage,
+};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -350,9 +352,9 @@ fn builder_with_all_bindings() {
 }
 
 #[test]
-fn builder_empty_audience_is_allowed() {
+fn builder_rejects_empty_audience() {
     let sk = make_sk(1);
-    let token = TokenBuilder::new(
+    let err = TokenBuilder::new(
         sk.clone(),
         DeterministicTimestamp(100),
         DeterministicTimestamp(1000),
@@ -361,9 +363,9 @@ fn builder_empty_audience_is_allowed() {
     )
     .add_capability(RuntimeCapability::VmDispatch)
     .build()
-    .unwrap();
+    .unwrap_err();
 
-    assert!(token.audience.is_empty());
+    assert!(matches!(err, TokenError::EmptyAudience));
 }
 
 // ---------------------------------------------------------------------------
@@ -422,6 +424,7 @@ fn builder_allows_equal_nbf_and_expiry() {
         SecurityEpoch::GENESIS,
         "zone-a",
     )
+    .add_audience(make_principal(10))
     .add_capability(RuntimeCapability::VmDispatch)
     .build()
     .unwrap();
@@ -482,6 +485,7 @@ fn different_zones_produce_different_jti() {
         SecurityEpoch::GENESIS,
         "zone-a",
     )
+    .add_audience(make_principal(10))
     .add_capability(RuntimeCapability::VmDispatch)
     .build()
     .unwrap();
@@ -493,6 +497,7 @@ fn different_zones_produce_different_jti() {
         SecurityEpoch::GENESIS,
         "zone-b",
     )
+    .add_audience(make_principal(10))
     .add_capability(RuntimeCapability::VmDispatch)
     .build()
     .unwrap();
@@ -528,6 +533,7 @@ fn different_epochs_produce_different_jti() {
         SecurityEpoch::GENESIS,
         "zone-a",
     )
+    .add_audience(make_principal(10))
     .add_capability(RuntimeCapability::VmDispatch)
     .build()
     .unwrap();
@@ -539,6 +545,7 @@ fn different_epochs_produce_different_jti() {
         SecurityEpoch::from_raw(5),
         "zone-a",
     )
+    .add_audience(make_principal(10))
     .add_capability(RuntimeCapability::VmDispatch)
     .build()
     .unwrap();
@@ -598,24 +605,17 @@ fn verify_succeeds_at_exact_expiry() {
 }
 
 #[test]
-fn verify_empty_audience_allows_any_presenter() {
+fn verify_empty_audience_rejects_any_presenter() {
     let sk = make_sk(1);
-    let token = TokenBuilder::new(
-        sk.clone(),
-        DeterministicTimestamp(100),
-        DeterministicTimestamp(1000),
-        SecurityEpoch::GENESIS,
-        "zone-a",
-    )
-    .add_capability(RuntimeCapability::VmDispatch)
-    .build()
-    .unwrap();
+    let mut token = build_basic_token(&sk);
+    token.audience = BTreeSet::new();
+    token.signature = sign_preimage(&sk, &token.preimage_bytes()).unwrap();
 
     let ctx = basic_ctx();
-    // Any random principal should be accepted.
-    verify_token(&token, &make_principal(99), &ctx).unwrap();
-    verify_token(&token, &make_principal(0), &ctx).unwrap();
-    verify_token(&token, &make_principal(255), &ctx).unwrap();
+    for principal in [make_principal(99), make_principal(0), make_principal(255)] {
+        let err = verify_token(&token, &principal, &ctx).unwrap_err();
+        assert!(matches!(err, TokenError::EmptyAudience));
+    }
 }
 
 #[test]
@@ -1348,6 +1348,7 @@ fn zero_length_window_exact_tick_verifies() {
         SecurityEpoch::GENESIS,
         "zone-a",
     )
+    .add_audience(make_principal(99))
     .add_capability(RuntimeCapability::VmDispatch)
     .build()
     .unwrap();
@@ -1366,6 +1367,7 @@ fn zero_length_window_before_fails() {
         SecurityEpoch::GENESIS,
         "zone-a",
     )
+    .add_audience(make_principal(99))
     .add_capability(RuntimeCapability::VmDispatch)
     .build()
     .unwrap();
@@ -1385,6 +1387,7 @@ fn zero_length_window_after_fails() {
         SecurityEpoch::GENESIS,
         "zone-a",
     )
+    .add_audience(make_principal(99))
     .add_capability(RuntimeCapability::VmDispatch)
     .build()
     .unwrap();

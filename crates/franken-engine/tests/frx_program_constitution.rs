@@ -534,9 +534,9 @@ fn objective_function_testable_invariants_include_ci_codes() {
     let invariants = value["testable_invariants"]
         .as_array()
         .expect("testable_invariants");
-    let invariant_strs: Vec<&str> = invariants.iter().filter_map(|v| v.as_str()).collect();
+    let invariant_ids: Vec<&str> = invariants.iter().filter_map(|v| v["id"].as_str()).collect();
     assert!(
-        invariant_strs.iter().any(|s| s.contains("FRX-CI-001")),
+        invariant_ids.iter().any(|id| id.contains("FRX-CI-001")),
         "testable_invariants must reference FRX-CI-001"
     );
 }

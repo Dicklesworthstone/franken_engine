@@ -10,8 +10,11 @@
 
 #![allow(clippy::needless_borrows_for_generic_args, clippy::too_many_arguments)]
 
+use std::collections::BTreeSet;
+
 use frankenengine_engine::ast::Statement;
 use frankenengine_engine::baseline_interpreter::Value;
+use frankenengine_engine::capability::RuntimeCapability;
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::ir_contract::Ir0Module;
 use frankenengine_engine::ir_contract::{Ir3FunctionDesc, Ir3Instruction, Ir3Module, RegRange};
@@ -39,7 +42,11 @@ fn lower_source_to_ir3(source: &str) -> Ir3Module {
 
 fn run_ir3(module: &Ir3Module) -> Value {
     use frankenengine_engine::baseline_interpreter::{InterpreterConfig, InterpreterCore};
-    let config = InterpreterConfig::quickjs_defaults();
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.granted_capabilities = BTreeSet::from([
+        RuntimeCapability::VmDispatch,
+        RuntimeCapability::HeapAllocate,
+    ]);
     let mut core = InterpreterCore::new(config, "gen-test");
     core.execute(module)
         .expect("execution should succeed")

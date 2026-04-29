@@ -512,9 +512,6 @@ fn ir3_execution_of_var_declaration() {
 
 #[test]
 fn ir3_execution_of_logical_compound_member_assignment_preserves_result_semantics() {
-    // After the lowering pipeline change (value-stack underflow → default r0),
-    // the final member-access expression result register is mis-routed, so
-    // the completion value is Undefined rather than the property value.
     let cases = [
         (
             "logical_and_member_assign_updates_truthy_property",
@@ -522,7 +519,7 @@ fn ir3_execution_of_logical_compound_member_assignment_preserves_result_semantic
             false,
             Expression::NumericLiteral(2),
             Expression::NumericLiteral(7),
-            Value::Undefined,
+            Value::Int(7),
         ),
         (
             "logical_or_member_assign_updates_computed_falsy_property",
@@ -530,7 +527,7 @@ fn ir3_execution_of_logical_compound_member_assignment_preserves_result_semantic
             true,
             Expression::NumericLiteral(0),
             Expression::NumericLiteral(7),
-            Value::Undefined,
+            Value::Int(7),
         ),
         (
             "nullish_member_assign_preserves_existing_property",

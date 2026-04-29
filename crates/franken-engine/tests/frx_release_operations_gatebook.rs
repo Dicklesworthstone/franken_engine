@@ -836,9 +836,13 @@ fn frx_09_2_claim_publication_record_requires_bundle_links_and_digest() {
 #[test]
 fn frx_09_2_stage_checklist_publication_modes_are_valid() {
     let contract = parse_contract();
-    let allowed_modes: BTreeSet<&str> = ["internal_only", "internal_and_external", "full_public"]
-        .into_iter()
-        .collect();
+    let allowed_modes: BTreeSet<&str> = [
+        "internal_preview",
+        "limited_external",
+        "public_claim_registry",
+    ]
+    .into_iter()
+    .collect();
     for checklist in &contract.stage_checklists {
         assert!(
             allowed_modes.contains(checklist.publication_mode.as_str()),

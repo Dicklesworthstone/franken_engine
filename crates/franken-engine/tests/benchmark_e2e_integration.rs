@@ -39,6 +39,8 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 #[cfg(unix)]
 use std::process::Command;
+#[cfg(unix)]
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use frankenengine_engine::benchmark_e2e::{
     BENCHMARK_COMPARISON_MANIFEST_SCHEMA_VERSION, BENCHMARK_E2E_COMPONENT,
@@ -62,6 +64,24 @@ use frankenengine_engine::runtime_comparison_gate::{BenchmarkCategory, RuntimeId
 // ---------------------------------------------------------------------------
 // Helper
 // ---------------------------------------------------------------------------
+
+#[cfg(unix)]
+static BENCHMARK_TEMP_ROOT_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+#[cfg(unix)]
+fn benchmark_temp_root(prefix: &str) -> PathBuf {
+    let sequence = BENCHMARK_TEMP_ROOT_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let timestamp_ns = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    std::env::temp_dir().join(format!(
+        "{prefix}_{}_{}_{}",
+        std::process::id(),
+        timestamp_ns,
+        sequence
+    ))
+}
 
 fn make_measurement(
     family: BenchmarkFamily,
@@ -1261,9 +1281,8 @@ fn suite_with_regression_self_comparison_not_blocked() {
         run_date: "2026-03-18".to_string(),
     };
     let baseline_result = run_benchmark_suite(&config);
-    let baselines = baseline_result.measurements.clone();
-    let result = run_benchmark_suite_with_regression(&config, &baselines);
-    for r in &result.regressions {
+    for measurement in &baseline_result.measurements {
+        let r = detect_regression(measurement, measurement, &config.thresholds);
         assert!(!r.blocked, "self-comparison should never block");
     }
 }
@@ -2299,7 +2318,7 @@ fn write_mock_runtime_with_stderr_failure_after_runs(
 #[cfg(unix)]
 #[test]
 fn benchmark_comparison_runner_executes_mock_runtimes_and_preserves_runner_contract() {
-    let root = std::env::temp_dir().join(format!("franken_bench_compare_{}", std::process::id()));
+    let root = benchmark_temp_root("franken_bench_compare");
     let _ = fs::remove_dir_all(&root);
     fs::create_dir_all(&root).unwrap();
 
@@ -2389,10 +2408,7 @@ fn benchmark_comparison_runner_executes_mock_runtimes_and_preserves_runner_contr
 #[cfg(unix)]
 #[test]
 fn benchmark_comparison_artifacts_capture_environment_and_evidence_metadata() {
-    let root = std::env::temp_dir().join(format!(
-        "franken_bench_compare_metadata_{}",
-        std::process::id()
-    ));
+    let root = benchmark_temp_root("franken_bench_compare_metadata");
     let _ = fs::remove_dir_all(&root);
     fs::create_dir_all(&root).unwrap();
 
@@ -2515,10 +2531,7 @@ fn benchmark_comparison_artifacts_capture_environment_and_evidence_metadata() {
 #[cfg(unix)]
 #[test]
 fn benchmark_comparison_mock_runtime_helpers_preserve_perl_sensitive_text() {
-    let root = std::env::temp_dir().join(format!(
-        "franken_bench_compare_special_chars_{}",
-        std::process::id()
-    ));
+    let root = benchmark_temp_root("franken_bench_compare_special_chars");
     let _ = fs::remove_dir_all(&root);
     fs::create_dir_all(&root).unwrap();
 
@@ -2561,10 +2574,7 @@ fn benchmark_comparison_mock_runtime_helpers_preserve_perl_sensitive_text() {
 #[cfg(unix)]
 #[test]
 fn benchmark_comparison_runner_records_behavioral_differences_on_output_mismatch() {
-    let root = std::env::temp_dir().join(format!(
-        "franken_bench_compare_mismatch_{}",
-        std::process::id()
-    ));
+    let root = benchmark_temp_root("franken_bench_compare_mismatch");
     let _ = fs::remove_dir_all(&root);
     fs::create_dir_all(&root).unwrap();
 
@@ -2632,10 +2642,7 @@ fn benchmark_comparison_runner_records_behavioral_differences_on_output_mismatch
 #[cfg(unix)]
 #[test]
 fn benchmark_comparison_runner_times_out_fail_closed_without_shell_timeout_wrapper() {
-    let root = std::env::temp_dir().join(format!(
-        "franken_bench_compare_timeout_{}",
-        std::process::id()
-    ));
+    let root = benchmark_temp_root("franken_bench_compare_timeout");
     let _ = fs::remove_dir_all(&root);
     fs::create_dir_all(&root).unwrap();
 
@@ -2692,8 +2699,7 @@ fn benchmark_comparison_runner_times_out_fail_closed_without_shell_timeout_wrapp
 #[cfg(unix)]
 #[test]
 fn benchmark_comparison_runner_strips_timing_footer_from_failure_stderr() {
-    let root =
-        std::env::temp_dir().join(format!("franken_bench_compare_fail_{}", std::process::id()));
+    let root = benchmark_temp_root("franken_bench_compare_fail");
     let _ = fs::remove_dir_all(&root);
     fs::create_dir_all(&root).unwrap();
 
@@ -2758,10 +2764,7 @@ fn benchmark_comparison_runner_strips_timing_footer_from_failure_stderr() {
 #[cfg(unix)]
 #[test]
 fn benchmark_comparison_runner_fails_closed_on_warmup_failures() {
-    let root = std::env::temp_dir().join(format!(
-        "franken_bench_compare_warmup_fail_{}",
-        std::process::id()
-    ));
+    let root = benchmark_temp_root("franken_bench_compare_warmup_fail");
     let _ = fs::remove_dir_all(&root);
     fs::create_dir_all(&root).unwrap();
 
@@ -2985,10 +2988,7 @@ fn benchmark_comparison_manifest_rejects_case_args_until_forwarding_is_supported
 
 #[test]
 fn benchmark_comparison_runner_rejects_unreadable_program_paths() {
-    let root = std::env::temp_dir().join(format!(
-        "franken_bench_compare_missing_prog_{}",
-        std::process::id()
-    ));
+    let root = benchmark_temp_root("franken_bench_compare_missing_prog");
     let _ = fs::remove_dir_all(&root);
     fs::create_dir_all(&root).unwrap();
 

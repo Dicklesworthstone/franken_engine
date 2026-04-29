@@ -37,7 +37,7 @@ use frankenengine_engine::engine_object_id::EngineObjectId;
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::policy_checkpoint::DeterministicTimestamp;
 use frankenengine_engine::security_epoch::SecurityEpoch;
-use frankenengine_engine::signature_preimage::{Signature, SigningKey, VerificationKey};
+use frankenengine_engine::signature_preimage::{Signature, SigningKey};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -49,6 +49,10 @@ fn make_sk(seed: u8) -> SigningKey {
 
 fn make_principal(seed: u8) -> PrincipalId {
     PrincipalId::from_bytes([seed; 32])
+}
+
+fn make_vk(seed: u8) -> frankenengine_engine::signature_preimage::VerificationKey {
+    make_sk(seed).verification_key()
 }
 
 fn make_bound_token(
@@ -306,7 +310,7 @@ fn chain_error_display_depth_exceeded() {
 
 #[test]
 fn chain_error_display_unauthorized_root() {
-    let vk = VerificationKey::from_bytes([0xAB; 32]).unwrap();
+    let vk = make_vk(0xAB);
     let err = ChainError::UnauthorizedRoot { root_issuer: vk };
     let s = err.to_string();
     assert!(s.contains("unauthorized root"));
@@ -1405,7 +1409,7 @@ fn chain_error_variants_are_distinguishable() {
             actual_depth: 10,
         },
         ChainError::UnauthorizedRoot {
-            root_issuer: VerificationKey::from_bytes([1; 32]).unwrap(),
+            root_issuer: make_vk(1),
         },
         ChainError::MissingCheckpointBinding { index: 0 },
         ChainError::MissingRevocationFreshnessBinding { index: 0 },

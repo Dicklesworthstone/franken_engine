@@ -509,7 +509,7 @@ use crate::baseline_interpreter::{
     LEGACY_V8_PROFILE_LABEL, LaneChoice, LaneRouter, THROUGHPUT_PROFILE_LABEL,
 };
 use crate::hash_tiers::ContentHash;
-use crate::ir_contract::{Ir0Module, Ir3Instruction};
+use crate::ir_contract::{Ir0Module, Ir3Instruction, Ir3Module};
 use crate::lowering_pipeline::{LoweringContext, LoweringPipelineError, lower_ir0_to_ir3};
 use crate::parser::{CanonicalEs2020Parser, ParseError, ParseErrorCode, ParserOptions};
 use crate::ts_normalization::{
@@ -1672,7 +1672,7 @@ fn eval_via_native_pipeline(prepared: &PreparedEvalSource, lane: LaneChoice) -> 
     // after expression statements. Patch the IR3 so the completion value ends
     // up in register 0 where the interpreter will read it.
     let mut ir3 = lowering_output.ir3;
-    patch_eval_completion_value(&mut ir3.instructions);
+    patch_eval_completion_value(&mut ir3);
 
     let lane_router = LaneRouter::new();
     let routed = lane_router
@@ -1698,11 +1698,31 @@ fn eval_via_native_pipeline(prepared: &PreparedEvalSource, lane: LaneChoice) -> 
 /// mode we need the last computed value to end up in register 0 so the
 /// interpreter returns it.
 ///
-/// Strategy: scan backwards to find the last instruction that writes to a
-/// register other than 0 (the Pop no-op self-Move), then the instruction
-/// before it (the actual computation), and insert a `Move { dst: 0, src }`
-/// to copy the result into register 0.
-fn patch_eval_completion_value(instructions: &mut [Ir3Instruction]) {
+/// Strategy: scan the main function backwards to find the last instruction
+/// that writes to a register other than 0, then patch only the main return to
+/// use that register. Deferred function bodies live in the same flat
+/// instruction stream, so their returns must be left intact.
+fn patch_eval_completion_value(ir3: &mut Ir3Module) {
+    let Some(main) = ir3.function_table.first() else {
+        return;
+    };
+    let Ok(main_start) = usize::try_from(main.entry) else {
+        return;
+    };
+    if main_start >= ir3.instructions.len() {
+        return;
+    }
+    let main_end = ir3
+        .function_table
+        .iter()
+        .skip(1)
+        .filter_map(|function| usize::try_from(function.entry).ok())
+        .filter(|entry| *entry > main_start)
+        .min()
+        .unwrap_or(ir3.instructions.len())
+        .min(ir3.instructions.len());
+    let instructions = &mut ir3.instructions[main_start..main_end];
+
     // Find the register holding the last expression's value by scanning
     // backwards past Pop no-ops, Return, and Halt.
     let mut completion_reg = None;
@@ -1721,7 +1741,7 @@ fn patch_eval_completion_value(instructions: &mut [Ir3Instruction]) {
     if let Some(src) = completion_reg
         && src != 0
     {
-        // Patch any Return instructions to use the completion register.
+        // Patch the main function's Return instructions only.
         for instr in instructions.iter_mut() {
             if let Ir3Instruction::Return { value } = instr {
                 *value = src;
@@ -1736,6 +1756,7 @@ fn ir3_destination_register(instr: &Ir3Instruction) -> Option<u32> {
         Ir3Instruction::LoadInt { dst, .. }
         | Ir3Instruction::LoadStr { dst, .. }
         | Ir3Instruction::LoadBool { dst, .. }
+        | Ir3Instruction::LoadFloat { dst, .. }
         | Ir3Instruction::LoadUndefined { dst }
         | Ir3Instruction::LoadNull { dst }
         | Ir3Instruction::Add { dst, .. }

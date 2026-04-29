@@ -1568,6 +1568,8 @@ fn conformance_token_rejects_empty_capabilities() {
 #[test]
 fn conformance_token_rejects_inverted_temporal_window() {
     let sk = test_signing_key(115);
+    let vk = sk.verification_key();
+    let presenter = PrincipalId::from_verification_key(&vk);
     let result = TokenBuilder::new(
         sk,
         DeterministicTimestamp(500), // nbf > expiry
@@ -1576,6 +1578,7 @@ fn conformance_token_rejects_inverted_temporal_window() {
         "zone",
     )
     .add_capability(RuntimeCapability::VmDispatch)
+    .add_audience(presenter)
     .build();
     assert!(
         matches!(result, Err(TokenError::InvertedTemporalWindow { .. })),
@@ -1604,7 +1607,7 @@ fn conformance_token_checkpoint_binding_verified() {
     .add_audience(presenter.clone())
     .bind_checkpoint(CheckpointRef {
         min_checkpoint_seq: 5,
-        checkpoint_id: cp_id,
+        checkpoint_id: cp_id.clone(),
     })
     .build()
     .expect("build");
@@ -1687,8 +1690,19 @@ fn conformance_token_multiple_capabilities() {
 #[test]
 fn conformance_token_jti_deterministic() {
     let sk = test_signing_key(119);
-    let t1 = build_test_token(&sk, "zone", &[RuntimeCapability::VmDispatch], None);
-    let t2 = build_test_token(&sk, "zone", &[RuntimeCapability::VmDispatch], None);
+    let presenter = PrincipalId::from_verification_key(&sk.verification_key());
+    let t1 = build_test_token(
+        &sk,
+        "zone",
+        &[RuntimeCapability::VmDispatch],
+        Some(&presenter),
+    );
+    let t2 = build_test_token(
+        &sk,
+        "zone",
+        &[RuntimeCapability::VmDispatch],
+        Some(&presenter),
+    );
     assert_eq!(t1.jti, t2.jti, "same inputs must produce same jti");
 }
 
@@ -1732,6 +1746,7 @@ fn conformance_delegation_single_link_valid() {
     let cp_id =
         derive_id(ObjectDomain::CheckpointArtifact, "zone", &schema, b"cp").expect("derive");
 
+    let revocation_head_hash = ContentHash::compute(b"rev");
     let token = TokenBuilder::new(
         root_sk,
         DeterministicTimestamp(0),
@@ -1743,17 +1758,19 @@ fn conformance_delegation_single_link_valid() {
     .add_audience(leaf_principal.clone())
     .bind_checkpoint(CheckpointRef {
         min_checkpoint_seq: 0,
-        checkpoint_id: cp_id,
+        checkpoint_id: cp_id.clone(),
     })
     .bind_revocation_freshness(RevocationFreshnessRef {
         min_revocation_seq: 0,
-        revocation_head_hash: ContentHash::compute(b"rev"),
+        revocation_head_hash,
     })
     .build()
     .expect("build token");
 
     let chain = DelegationChain::new(vec![token]);
-    let ctx = DelegationVerificationContext::with_authorized_root(root_vk);
+    let ctx = DelegationVerificationContext::with_authorized_root(root_vk)
+        .with_checkpoint_id(cp_id)
+        .with_revocation_head_hash(revocation_head_hash);
     let proof = chain
         .verify(
             RuntimeCapability::PolicyRead,
@@ -1778,6 +1795,7 @@ fn conformance_delegation_unauthorized_root_rejected() {
     let cp_id =
         derive_id(ObjectDomain::CheckpointArtifact, "zone", &schema, b"cp").expect("derive");
 
+    let revocation_head_hash = ContentHash::compute(b"rev");
     let token = TokenBuilder::new(
         root_sk,
         DeterministicTimestamp(0),
@@ -1789,11 +1807,11 @@ fn conformance_delegation_unauthorized_root_rejected() {
     .add_audience(leaf_principal.clone())
     .bind_checkpoint(CheckpointRef {
         min_checkpoint_seq: 0,
-        checkpoint_id: cp_id,
+        checkpoint_id: cp_id.clone(),
     })
     .bind_revocation_freshness(RevocationFreshnessRef {
         min_revocation_seq: 0,
-        revocation_head_hash: ContentHash::compute(b"rev"),
+        revocation_head_hash,
     })
     .build()
     .expect("build");
@@ -1822,6 +1840,7 @@ fn conformance_delegation_depth_exceeded_rejected() {
     let cp_id =
         derive_id(ObjectDomain::CheckpointArtifact, "zone", &schema, b"cp").expect("derive");
 
+    let revocation_head_hash = ContentHash::compute(b"rev");
     let token = TokenBuilder::new(
         sk,
         DeterministicTimestamp(0),
@@ -1837,7 +1856,7 @@ fn conformance_delegation_depth_exceeded_rejected() {
     })
     .bind_revocation_freshness(RevocationFreshnessRef {
         min_revocation_seq: 0,
-        revocation_head_hash: ContentHash::compute(b"rev"),
+        revocation_head_hash,
     })
     .build()
     .expect("build");
@@ -1869,6 +1888,7 @@ fn conformance_delegation_missing_capability_at_leaf() {
     let cp_id =
         derive_id(ObjectDomain::CheckpointArtifact, "zone", &schema, b"cp").expect("derive");
 
+    let revocation_head_hash = ContentHash::compute(b"rev");
     let token = TokenBuilder::new(
         root_sk,
         DeterministicTimestamp(0),
@@ -1880,17 +1900,19 @@ fn conformance_delegation_missing_capability_at_leaf() {
     .add_audience(leaf_principal.clone())
     .bind_checkpoint(CheckpointRef {
         min_checkpoint_seq: 0,
-        checkpoint_id: cp_id,
+        checkpoint_id: cp_id.clone(),
     })
     .bind_revocation_freshness(RevocationFreshnessRef {
         min_revocation_seq: 0,
-        revocation_head_hash: ContentHash::compute(b"rev"),
+        revocation_head_hash,
     })
     .build()
     .expect("build");
 
     let chain = DelegationChain::new(vec![token]);
-    let ctx = DelegationVerificationContext::with_authorized_root(root_vk);
+    let ctx = DelegationVerificationContext::with_authorized_root(root_vk)
+        .with_checkpoint_id(cp_id)
+        .with_revocation_head_hash(revocation_head_hash);
     let result = chain.verify(
         RuntimeCapability::PolicyWrite,
         &leaf_principal,

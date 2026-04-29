@@ -447,8 +447,10 @@ fn obligation_max_uses_enforced_after_exhaustion() {
 
     let mut pipeline = DeclassificationPipeline::default();
     let signing_key = SigningKey::from_bytes([13u8; 32]).unwrap();
+    let mut request = make_request();
+    request.trace_id = "trace-use-1".to_string();
     let receipt = pipeline
-        .process(&make_request(), &make_policy(), &low_loss(), &signing_key)
+        .process(&request, &make_policy(), &low_loss(), &signing_key)
         .expect("allow receipt");
     lattice.trust_receipt_authorizer_for_contract(
         "decision-contract-ifc",
@@ -464,16 +466,16 @@ fn obligation_max_uses_enforced_after_exhaustion() {
         Some(1)
     );
 
+    request.trace_id = "trace-use-2".to_string();
     let receipt2 = pipeline
-        .process(&make_request(), &make_policy(), &low_loss(), &signing_key)
+        .process(&request, &make_policy(), &low_loss(), &signing_key)
         .expect("second allow");
     let err = lattice
         .use_declassification_with_receipt("obl-limited", &receipt2, "trace-use-2")
         .expect_err("second use should fail");
     assert!(
-        matches!(err, FlowLatticeError::ObligationExhausted { .. })
-            || matches!(err, FlowLatticeError::FlowBlocked { .. }),
-        "expected obligation exhausted or flow blocked, got: {err:?}"
+        matches!(&err, FlowLatticeError::ObligationExhausted { obligation_id } if obligation_id == "obl-limited"),
+        "expected obligation exhausted, got: {err:?}"
     );
 }
 

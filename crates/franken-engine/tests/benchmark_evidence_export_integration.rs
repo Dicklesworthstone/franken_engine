@@ -77,7 +77,11 @@ fn test_parity_verdict(workload_id: &str, target: ParityTarget, ratio: u64) -> P
     }
 }
 
-fn create_test_bundle() -> EvidenceBundle {
+fn export_binary_command() -> Command {
+    Command::new(env!("CARGO_BIN_EXE_franken-benchmark-evidence-export"))
+}
+
+fn create_assembling_test_bundle(include_parity_verdicts: bool) -> EvidenceBundle {
     let mut bundle = EvidenceBundle::new("test-bundle-001".into(), epoch(5));
 
     // Add workload provenance
@@ -108,19 +112,24 @@ fn create_test_bundle() -> EvidenceBundle {
             .unwrap();
     }
 
-    // Add parity verdicts
-    bundle
-        .add_parity_verdict(test_parity_verdict(
-            "micro-1",
-            ParityTarget::NodeJs,
-            980_000,
-        ))
-        .unwrap();
-    bundle
-        .add_parity_verdict(test_parity_verdict("app-1", ParityTarget::Bun, 950_000))
-        .unwrap();
+    if include_parity_verdicts {
+        bundle
+            .add_parity_verdict(test_parity_verdict(
+                "micro-1",
+                ParityTarget::NodeJs,
+                980_000,
+            ))
+            .unwrap();
+        bundle
+            .add_parity_verdict(test_parity_verdict("app-1", ParityTarget::Bun, 950_000))
+            .unwrap();
+    }
 
-    // Seal the bundle
+    bundle
+}
+
+fn create_test_bundle() -> EvidenceBundle {
+    let mut bundle = create_assembling_test_bundle(true);
     bundle.seal().unwrap();
 
     bundle
@@ -220,12 +229,8 @@ fn binary_exports_bundle_to_json() {
 
     // Export via binary
     let output_path = temp_dir.path().join("output.json");
-    let status = Command::new("cargo")
+    let status = export_binary_command()
         .args(&[
-            "run",
-            "--bin",
-            "franken-benchmark-evidence-export",
-            "--",
             "-i",
             input_path.to_str().unwrap(),
             "-o",
@@ -235,7 +240,6 @@ fn binary_exports_bundle_to_json() {
             "-t",
             "bundle",
         ])
-        .current_dir("crates/franken-engine")
         .status()
         .unwrap();
 
@@ -259,12 +263,8 @@ fn binary_exports_bundle_to_toml() {
 
     // Export via binary
     let output_path = temp_dir.path().join("output.toml");
-    let status = Command::new("cargo")
+    let status = export_binary_command()
         .args(&[
-            "run",
-            "--bin",
-            "franken-benchmark-evidence-export",
-            "--",
             "-i",
             input_path.to_str().unwrap(),
             "-o",
@@ -274,7 +274,6 @@ fn binary_exports_bundle_to_toml() {
             "-t",
             "bundle",
         ])
-        .current_dir("crates/franken-engine")
         .status()
         .unwrap();
 
@@ -298,12 +297,8 @@ fn binary_exports_report_to_json() {
 
     // Export via binary
     let output_path = temp_dir.path().join("report.json");
-    let status = Command::new("cargo")
+    let status = export_binary_command()
         .args(&[
-            "run",
-            "--bin",
-            "franken-benchmark-evidence-export",
-            "--",
             "-i",
             input_path.to_str().unwrap(),
             "-o",
@@ -313,7 +308,6 @@ fn binary_exports_report_to_json() {
             "-t",
             "report",
         ])
-        .current_dir("crates/franken-engine")
         .status()
         .unwrap();
 
@@ -329,10 +323,7 @@ fn binary_exports_report_to_json() {
 #[test]
 fn binary_integrates_with_gate_manifest() {
     let temp_dir = TempDir::new().unwrap();
-    let mut bundle = create_test_bundle();
-
-    // Remove existing parity verdicts to test gate integration
-    bundle.parity_verdicts.clear();
+    let bundle = create_assembling_test_bundle(false);
 
     // Write input bundle
     let input_path = temp_dir.path().join("input.json");
@@ -350,12 +341,8 @@ fn binary_integrates_with_gate_manifest() {
 
     // Export with gate integration
     let output_path = temp_dir.path().join("output.json");
-    let status = Command::new("cargo")
+    let status = export_binary_command()
         .args(&[
-            "run",
-            "--bin",
-            "franken-benchmark-evidence-export",
-            "--",
             "-i",
             input_path.to_str().unwrap(),
             "-o",
@@ -367,7 +354,6 @@ fn binary_integrates_with_gate_manifest() {
             "--gate-integration",
             gate_path.to_str().unwrap(),
         ])
-        .current_dir("crates/franken-engine")
         .status()
         .unwrap();
 

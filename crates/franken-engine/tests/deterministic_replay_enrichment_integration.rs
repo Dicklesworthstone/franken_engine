@@ -195,7 +195,7 @@ fn enrichment_nondeterminism_source_btreeset() {
     for src in &NondeterminismSource::ALL {
         set.insert(src.clone());
     }
-    assert_eq!(set.len(), 6);
+    assert_eq!(set.len(), NondeterminismSource::ALL.len());
 }
 
 // ── Serde roundtrips ────────────────────────────────────────────────────
@@ -701,11 +701,11 @@ fn enrichment_replay_strict_returns_traced_value() {
     trace.finalise(200);
 
     let mut engine = ReplayEngine::new(trace, ReplayMode::Strict);
-    // TimerRead divergence is Benign, so strict mode proceeds but returns traced value
-    let result = engine
+    // Strict mode rejects every divergence to preserve bit-stable replay.
+    let err = engine
         .replay_next(NondeterminismSource::TimerRead, &[99])
-        .unwrap();
-    assert_eq!(result, vec![42]); // traced value, not live
+        .unwrap_err();
+    assert!(matches!(err, ReplayError::CriticalDivergence { .. }));
     assert_eq!(engine.divergence_count(), 1);
 }
 
@@ -1267,8 +1267,9 @@ fn enrichment_json_fields_incident_artifact() {
 // ── NondeterminismSource::ALL constant ──────────────────────────────────
 
 #[test]
-fn enrichment_source_all_has_six_variants() {
-    assert_eq!(NondeterminismSource::ALL.len(), 6);
+fn enrichment_source_all_has_all_variants() {
+    assert!(NondeterminismSource::ALL.contains(&NondeterminismSource::FloatingPointResult));
+    assert_eq!(NondeterminismSource::ALL.len(), 7);
 }
 
 #[test]

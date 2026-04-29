@@ -49,6 +49,10 @@ fn make_principal(seed: u8) -> PrincipalId {
     PrincipalId::from_bytes([seed; 32])
 }
 
+fn make_vk(seed: u8) -> VerificationKey {
+    make_sk(seed).verification_key()
+}
+
 fn make_bound_token(
     issuer_sk: &SigningKey,
     delegate: PrincipalId,
@@ -259,7 +263,7 @@ fn enrichment_chain_error_display_all_variants_unique() {
             actual_depth: 12,
         },
         ChainError::UnauthorizedRoot {
-            root_issuer: VerificationKey::from_bytes([0xAB; 32]).unwrap(),
+            root_issuer: make_vk(0xAB),
         },
         ChainError::MissingCheckpointBinding { index: 0 },
         ChainError::MissingRevocationFreshnessBinding { index: 1 },
@@ -314,7 +318,7 @@ fn enrichment_chain_error_debug_all_variants_unique() {
             actual_depth: 12,
         },
         ChainError::UnauthorizedRoot {
-            root_issuer: VerificationKey::from_bytes([0xAB; 32]).unwrap(),
+            root_issuer: make_vk(0xAB),
         },
         ChainError::MissingCheckpointBinding { index: 0 },
         ChainError::MissingRevocationFreshnessBinding { index: 1 },
@@ -373,7 +377,7 @@ fn enrichment_chain_error_serde_all_variants() {
             actual_depth: 12,
         },
         ChainError::UnauthorizedRoot {
-            root_issuer: VerificationKey::from_bytes([0xAB; 32]).unwrap(),
+            root_issuer: make_vk(0xAB),
         },
         ChainError::MissingCheckpointBinding { index: 0 },
         ChainError::MissingRevocationFreshnessBinding { index: 1 },
@@ -636,7 +640,7 @@ fn enrichment_principal_id_deterministic_across_calls() {
 #[test]
 fn enrichment_principal_id_all_different_seeds_unique() {
     let mut principals = BTreeSet::new();
-    for seed in 0u8..20 {
+    for seed in 1u8..=20 {
         let vk = make_sk(seed).verification_key();
         let p = principal_id_from_verification_key(&vk);
         principals.insert(p);

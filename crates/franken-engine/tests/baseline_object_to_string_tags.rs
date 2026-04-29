@@ -15,6 +15,7 @@ fn test_config() -> InterpreterConfig {
     config.granted_capabilities = BTreeSet::from([
         RuntimeCapability::VmDispatch,
         RuntimeCapability::HeapAllocate,
+        RuntimeCapability::Builtin,
     ]);
     config
 }

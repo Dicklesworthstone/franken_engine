@@ -1635,11 +1635,14 @@ fn enrichment_tampered_generated_at_fails_verification() {
 
 #[test]
 fn enrichment_sequential_publications_increment_ledger_sequence() {
-    let req = baseline_request();
+    let mut req1 = baseline_request();
+    req1.decision_id = "decision-integ-enrich-1".to_string();
+    let mut req2 = baseline_request();
+    req2.decision_id = "decision-integ-enrich-2".to_string();
     let mut l = ledger();
     let key = signing_key();
-    let p1 = publish_governance_scorecard(&req, &key, &mut l, actor()).expect("p1");
-    let p2 = publish_governance_scorecard(&req, &key, &mut l, actor()).expect("p2");
+    let p1 = publish_governance_scorecard(&req1, &key, &mut l, actor()).expect("p1");
+    let p2 = publish_governance_scorecard(&req2, &key, &mut l, actor()).expect("p2");
     assert_eq!(p2.ledger_sequence, p1.ledger_sequence + 1);
 }
 

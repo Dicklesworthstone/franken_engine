@@ -519,11 +519,11 @@ impl CapabilityNarrowingValidator {
             });
         }
 
-        // Find the most recent unmatched transition with the given boundary_label
+        // Match the earliest unmatched transition for this label so repeated
+        // labels preserve the same ordering as the recorded boundary evidence.
         if let Some(transition) = self
             .transitions
             .iter_mut()
-            .rev()
             .find(|t| t.boundary_label == boundary_label && t.child_outcome.is_none())
         {
             transition.child_outcome = Some(child_outcome);

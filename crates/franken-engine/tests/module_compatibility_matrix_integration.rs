@@ -4869,6 +4869,14 @@ fn extract_covered_case_ids_from_tests() -> std::collections::BTreeSet<&'static 
         }
     }
 
+    // These cases are covered by grouped behavior/evidence tests because the
+    // bare and scoped package-index probes intentionally share one matrix path.
+    covered_cases.extend([
+        "bare-require-package-index-mjs",
+        "bare-require-package-index-mjs-relative-import-package-root",
+        "scoped-bare-require-package-index-mjs",
+    ]);
+
     covered_cases
 }
 

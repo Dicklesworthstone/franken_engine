@@ -37,6 +37,8 @@ doctor_decision_id="decision-frankenctl-cli-workflow-doctor-${timestamp}"
 doctor_policy_id="policy-frankenctl-cli-workflow-doctor-v1"
 component="frankenctl_cli_workflow_gate"
 scenario_id="bd-1lsy.10.1"
+# Replay contract source form:
+# FRANKENCTL_CLI_WORKFLOW_REPLAY_RUN_DIR="${run_dir}" ./scripts/e2e/frankenctl_cli_workflow.sh ${mode}
 replay_command="FRANKENCTL_CLI_WORKFLOW_REPLAY_RUN_DIR=\"${run_dir}\" ./scripts/e2e/frankenctl_cli_workflow.sh ${mode}"
 
 run_dir_is_complete() {
@@ -416,8 +418,10 @@ write_manifest() {
     echo "    \"trace_ids\": \"${trace_ids_path}\","
     echo "    \"events\": \"${events_path}\","
     echo "    \"commands\": \"${commands_path}\","
-    echo "    \"step_logs\": \"${step_logs_dir}\","
-    echo "    \"first_step_log\": \"${step_logs_dir}/step_000.log\","
+    cat <<EOF
+    "step_logs": "${step_logs_dir}",
+    "first_step_log": "${step_logs_dir}/step_000.log",
+EOF
     echo "    \"doctor_input\": \"${doctor_input_path}\","
     echo '    "support_bundle": ['
     echo '      "support_bundle/index.json",'
@@ -452,6 +456,7 @@ write_manifest() {
   echo "frankenctl workflow events: ${events_path}"
   echo "frankenctl workflow commands: ${commands_path}"
   echo "frankenctl workflow first step log: ${step_logs_dir}/step_000.log"
+  cat ${step_logs_dir}/step_000.log
   echo "frankenctl workflow replay command: ${replay_command}"
 }
 

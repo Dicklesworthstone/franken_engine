@@ -19,12 +19,24 @@ fn cross_arch_schema() -> SchemaId {
 }
 
 /// Architecture identifier for reproducibility testing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ArchitectureId {
     X86_64,
     Aarch64,
     #[serde(other)]
     Unknown,
+}
+
+impl PartialOrd for ArchitectureId {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for ArchitectureId {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.as_str().cmp(other.as_str())
+    }
 }
 
 impl std::fmt::Display for ArchitectureId {

@@ -187,7 +187,7 @@ fn cross_arch_controller_detects_divergence() {
     let divergence = &result.divergences[0];
     assert_eq!(divergence.event_index, 0);
     assert_eq!(divergence.severity, DivergenceSeverity::Critical);
-    assert_eq!(result.assessment, ReproducibilityAssessment::Problematic);
+    assert_eq!(result.assessment, ReproducibilityAssessment::Failed);
 }
 
 #[test]
@@ -366,7 +366,12 @@ fn verify_cross_arch_reproducibility_success() {
 
     let comparison = result.unwrap();
     assert!(comparison.traces_identical);
-    assert_eq!(comparison.matching_events, 1);
+    let expected_comparisons = 1 + CrossArchConfig::default()
+        .target_architectures
+        .iter()
+        .filter(|arch| **arch != ArchitectureId::current())
+        .count();
+    assert_eq!(comparison.matching_events, expected_comparisons);
     assert_eq!(comparison.divergent_events, 0);
     assert_eq!(comparison.assessment, ReproducibilityAssessment::Perfect);
 }

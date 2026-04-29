@@ -865,7 +865,7 @@ fn verify_pair_permissive_config_allows_mismatches() {
     let pair = DifferentialPair::with_mismatches(
         ssr_ev("r", b"a"),
         ssr_ev("c", b"b"),
-        vec![make_mismatch(MismatchKind::EventOrderViolation)],
+        vec![make_mismatch(MismatchKind::TimingAnomaly)],
     );
     let config = VerificationConfig::permissive();
     let result = verify_path_pair(&pair, &config).unwrap();

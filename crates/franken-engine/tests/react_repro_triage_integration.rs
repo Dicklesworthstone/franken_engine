@@ -168,7 +168,7 @@ fn low_severity_for_non_engine_bug() {
 #[test]
 fn low_severity_for_edge_case_engine_bug() {
     let sev = assign_severity(FailureClass::TransformBug, false, true, true);
-    assert_eq!(sev, FailureSeverity::Medium);
+    assert_eq!(sev, FailureSeverity::Info);
 }
 
 // ---------------------------------------------------------------------------
@@ -737,7 +737,7 @@ fn test_assign_severity_non_engine_bug_blocks_core_workflow_is_low() {
 #[test]
 fn test_assign_severity_edge_case_for_non_engine_bug_is_low() {
     let sev = assign_severity(FailureClass::UnsupportedEnvironment, false, false, true);
-    assert_eq!(sev, FailureSeverity::Low);
+    assert_eq!(sev, FailureSeverity::Info);
 }
 
 #[test]

@@ -30,7 +30,7 @@ use sha2::{Digest, Sha256};
 
 use crate::hash_tiers::ContentHash;
 use crate::react_ecosystem_compatibility::{
-    EcosystemCompatibilityError, EcosystemCompatibilityValidator,
+    EcosystemCompatibilityError, EcosystemCompatibilityReport, EcosystemCompatibilityValidator,
     create_standard_ecosystem_patterns,
 };
 use crate::security_epoch::SecurityEpoch;

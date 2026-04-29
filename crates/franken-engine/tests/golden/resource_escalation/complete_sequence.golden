@@ -1,0 +1,91 @@
+{
+  "workload_id": "test-complete-sequence",
+  "bounded_budget_dimensions": [
+    "cpu_time",
+    "heap_memory"
+  ],
+  "expected_sequence": [
+    "throttle",
+    "sandbox",
+    "suspend",
+    "terminate"
+  ],
+  "events": [
+    {
+      "timestamp_ns": "[TIMESTAMP_NS]",
+      "action": {
+        "throttle": {
+          "decision": {
+            "queue": {
+              "estimated_wait_ns": 150000000,
+              "position": 3
+            }
+          },
+          "rationale": "sustained overload requires throttling"
+        }
+      },
+      "source_module": "queueing_admission_control",
+      "basis": {
+        "queue_position": 3,
+        "stage": "module_load",
+        "utilization_millionths": 880000
+      }
+    },
+    {
+      "timestamp_ns": "[TIMESTAMP_NS]",
+      "action": {
+        "sandbox": {
+          "verdict": "multiple_violations",
+          "rationale": "resource governance failure requires isolation"
+        }
+      },
+      "source_module": "resource_certificate_governance",
+      "basis": {
+        "governance_verdict": "multiple_violations",
+        "violated_dimensions": [
+          "cpu_time",
+          "heap_memory"
+        ]
+      }
+    },
+    {
+      "timestamp_ns": "[TIMESTAMP_NS]",
+      "action": {
+        "suspend": {
+          "action": "SuspendAdaptive",
+          "rationale": "budget exhaustion requires suspension"
+        }
+      },
+      "source_module": "runtime_decision_theory",
+      "basis": {
+        "budget_remaining_millionths": 0,
+        "lane_action": "suspend_adaptive"
+      }
+    },
+    {
+      "timestamp_ns": "[TIMESTAMP_NS]",
+      "action": {
+        "terminate": {
+          "reason": {
+            "persistent_exhaustion": {
+              "dimension": "cpu_time",
+              "utilization_millionths": 1250000,
+              "escalation_attempts": 3
+            }
+          },
+          "final_measurements": {
+            "cpu_time": 125000,
+            "heap_memory": 80000000
+          },
+          "rationale": "persistent exhaustion despite escalation"
+        }
+      },
+      "source_module": "resource_escalation_control",
+      "basis": {
+        "escalation_sequence_completed": true,
+        "termination_reason": "persistent_exhaustion"
+      }
+    }
+  ],
+  "content_hash": "[CONTENT_HASH]"
+}

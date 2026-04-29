@@ -1,0 +1,74 @@
+{
+  "workload_id": "test-repeated-violations",
+  "bounded_budget_dimensions": [
+    "heap_memory"
+  ],
+  "expected_sequence": [
+    "throttle",
+    "sandbox",
+    "suspend",
+    "terminate"
+  ],
+  "events": [
+    {
+      "timestamp_ns": "[TIMESTAMP_NS]",
+      "action": {
+        "throttle": {
+          "decision": {
+            "queue": {
+              "estimated_wait_ns": 150000000,
+              "position": 3
+            }
+          },
+          "rationale": "sustained overload requires throttling"
+        }
+      },
+      "source_module": "queueing_admission_control",
+      "basis": {
+        "queue_position": 3,
+        "stage": "module_load",
+        "utilization_millionths": 880000
+      }
+    },
+    {
+      "timestamp_ns": "[TIMESTAMP_NS]",
+      "action": {
+        "sandbox": {
+          "verdict": "multiple_violations",
+          "rationale": "resource governance failure requires isolation"
+        }
+      },
+      "source_module": "resource_certificate_governance",
+      "basis": {
+        "governance_verdict": "multiple_violations",
+        "violated_dimensions": [
+          "cpu_time",
+          "heap_memory"
+        ]
+      }
+    },
+    {
+      "timestamp_ns": "[TIMESTAMP_NS]",
+      "action": {
+        "terminate": {
+          "reason": {
+            "repeated_violations": {
+              "violation_count": 5,
+              "violation_span_ns": 300000000
+            }
+          },
+          "final_measurements": {
+            "heap_memory": 100000000
+          },
+          "rationale": "too many governance violations"
+        }
+      },
+      "source_module": "resource_escalation_control",
+      "basis": {
+        "termination_reason": "repeated_violations",
+        "violation_count": 5
+      }
+    }
+  ],
+  "content_hash": "[CONTENT_HASH]"
+}

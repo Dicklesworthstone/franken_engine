@@ -1,0 +1,34 @@
+{
+  "workload_id": "minimal-test",
+  "bounded_budget_dimensions": [
+    "cpu_time"
+  ],
+  "expected_sequence": [
+    "throttle",
+    "sandbox",
+    "suspend",
+    "terminate"
+  ],
+  "events": [
+    {
+      "timestamp_ns": "[TIMESTAMP_NS]",
+      "action": {
+        "suspend": {
+          "action": {
+            "Demote": {
+              "from_lane": "baseline_throughput_profile",
+              "reason": "BudgetExhausted"
+            }
+          },
+          "rationale": "direct demotion for budget exhaustion"
+        }
+      },
+      "source_module": "runtime_decision_theory",
+      "basis": {
+        "budget_remaining_millionths": 10000,
+        "lane_action": "demote"
+      }
+    }
+  ],
+  "content_hash": "[CONTENT_HASH]"
+}

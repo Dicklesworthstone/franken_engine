@@ -1,0 +1,63 @@
+{
+  "workload_id": "test-shed-decision",
+  "bounded_budget_dimensions": [
+    "cpu_time"
+  ],
+  "expected_sequence": [
+    "throttle",
+    "sandbox",
+    "suspend",
+    "terminate"
+  ],
+  "events": [
+    {
+      "timestamp_ns": "[TIMESTAMP_NS]",
+      "action": {
+        "throttle": {
+          "decision": {
+            "shed": {
+              "reason": {
+                "utilization_overload": {
+                  "current_utilization_millionths": 950000,
+                  "shed_threshold_millionths": 900000
+                }
+              }
+            }
+          },
+          "rationale": "immediate shedding required under extreme load"
+        }
+      },
+      "source_module": "queueing_admission_control",
+      "basis": {
+        "admission_decision": "shed",
+        "shed_reason": "overload",
+        "utilization_millionths": 950000
+      }
+    },
+    {
+      "timestamp_ns": "[TIMESTAMP_NS]",
+      "action": {
+        "terminate": {
+          "reason": {
+            "persistent_exhaustion": {
+              "dimension": "cpu_time",
+              "utilization_millionths": 1250000,
+              "escalation_attempts": 3
+            }
+          },
+          "final_measurements": {
+            "cpu_time": 125000,
+            "heap_memory": 80000000
+          },
+          "rationale": "persistent exhaustion despite escalation"
+        }
+      },
+      "source_module": "resource_escalation_control",
+      "basis": {
+        "escalation_sequence_completed": true,
+        "termination_reason": "persistent_exhaustion"
+      }
+    }
+  ],
+  "content_hash": "[CONTENT_HASH]"
+}

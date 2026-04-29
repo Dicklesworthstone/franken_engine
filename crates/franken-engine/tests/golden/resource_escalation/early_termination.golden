@@ -1,0 +1,56 @@
+{
+  "workload_id": "test-early-termination",
+  "bounded_budget_dimensions": [
+    "cpu_time"
+  ],
+  "expected_sequence": [
+    "throttle",
+    "sandbox",
+    "suspend",
+    "terminate"
+  ],
+  "events": [
+    {
+      "timestamp_ns": "[TIMESTAMP_NS]",
+      "action": {
+        "throttle": {
+          "decision": {
+            "queue": {
+              "estimated_wait_ns": 150000000,
+              "position": 3
+            }
+          },
+          "rationale": "sustained overload requires throttling"
+        }
+      },
+      "source_module": "queueing_admission_control",
+      "basis": {
+        "queue_position": 3,
+        "stage": "module_load",
+        "utilization_millionths": 880000
+      }
+    },
+    {
+      "timestamp_ns": "[TIMESTAMP_NS]",
+      "action": {
+        "terminate": {
+          "reason": {
+            "unresponsive": {
+              "timeout_ns": 5000000000
+            }
+          },
+          "final_measurements": {
+            "cpu_time": 50000
+          },
+          "rationale": "extension became unresponsive"
+        }
+      },
+      "source_module": "resource_escalation_control",
+      "basis": {
+        "termination_reason": "unresponsive",
+        "timeout_ns": 5000000000
+      }
+    }
+  ],
+  "content_hash": "[CONTENT_HASH]"
+}

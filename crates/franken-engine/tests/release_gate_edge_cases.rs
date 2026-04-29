@@ -1153,7 +1153,12 @@ fn exception_succeeds_with_valid_inputs() {
     gate.apply_exception(&mut result, "Critical hotfix", Some("ADR-2026-002"), None)
         .unwrap();
     assert!(result.exception_applied);
-    assert_eq!(result.verdict, Verdict::Pass);
+    assert_eq!(
+        result.verdict,
+        Verdict::PassWithException {
+            justification: "Critical hotfix".to_string()
+        }
+    );
     assert_eq!(result.exception_justification, "Critical hotfix");
 }
 
@@ -1170,7 +1175,12 @@ fn exception_succeeds_without_adr_when_not_required() {
     gate.apply_exception(&mut result, "emergency", None, None)
         .unwrap();
     assert!(result.exception_applied);
-    assert_eq!(result.verdict, Verdict::Pass);
+    assert_eq!(
+        result.verdict,
+        Verdict::PassWithException {
+            justification: "emergency".to_string()
+        }
+    );
 }
 
 #[test]
@@ -1433,7 +1443,7 @@ fn frankenlab_check_has_seven_scenarios() {
 }
 
 #[test]
-fn evidence_replay_check_items_checked_is_one() {
+fn evidence_replay_check_items_checked_matches_lifecycle_events() {
     let mut gate = ReleaseGate::new(42);
     let mut cx = mock_cx(200_000);
     let result = gate.evaluate(&mut cx);
@@ -1443,8 +1453,8 @@ fn evidence_replay_check_items_checked_is_one() {
         .find(|c| c.kind == GateCheckKind::EvidenceReplay)
         .unwrap();
     assert!(check.passed);
-    assert_eq!(check.items_checked, 1);
-    assert_eq!(check.items_passed, 1);
+    assert_eq!(check.items_checked, 31);
+    assert_eq!(check.items_passed, 31);
 }
 
 #[test]
@@ -1553,7 +1563,7 @@ fn policy_id_is_release_gate_v1() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn exception_on_passing_result_still_sets_fields() {
+fn exception_on_passing_result_is_noop() {
     let policy = ExceptionPolicy {
         allow_exceptions: true,
         requires_adr_reference: false,
@@ -1572,11 +1582,13 @@ fn exception_on_passing_result_still_sets_fields() {
         gate_events: Vec::new(),
         result_digest: "pre".to_string(),
     };
+    let original_digest = result.result_digest.clone();
     gate.apply_exception(&mut result, "preemptive", None, None)
         .unwrap();
-    assert!(result.exception_applied);
-    assert_eq!(result.exception_justification, "preemptive");
+    assert!(!result.exception_applied);
+    assert!(result.exception_justification.is_empty());
     assert_eq!(result.verdict, Verdict::Pass);
+    assert_eq!(result.result_digest, original_digest);
 }
 
 // ---------------------------------------------------------------------------
@@ -1649,7 +1661,12 @@ fn integration_exception_overrides_failure() {
     .unwrap();
     assert!(!result.is_blocked());
     assert!(result.exception_applied);
-    assert_eq!(result.verdict, Verdict::Pass);
+    assert_eq!(
+        result.verdict,
+        Verdict::PassWithException {
+            justification: "Critical hotfix P0".to_string()
+        }
+    );
 
     // Serde roundtrip after exception.
     let json = serde_json::to_string(&result).unwrap();

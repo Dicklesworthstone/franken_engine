@@ -500,7 +500,13 @@ fn enrichment_exception_succeeds_when_policy_allows() {
         .unwrap();
     assert!(result.exception_applied);
     assert_eq!(result.exception_justification, "emergency hotfix");
-    assert_eq!(result.verdict, Verdict::Pass);
+    assert_eq!(
+        result.verdict,
+        Verdict::PassWithException {
+            justification: "emergency hotfix".to_string()
+        }
+    );
+    assert!(!result.is_blocked());
     // Digest should have been recomputed
     assert_ne!(result.result_digest, "orig");
 }
@@ -845,7 +851,13 @@ fn enrichment_exception_succeeds_with_adr_when_required() {
         .unwrap();
     assert!(result.exception_applied);
     assert_eq!(result.exception_justification, "critical hotfix");
-    assert_eq!(result.verdict, Verdict::Pass);
+    assert_eq!(
+        result.verdict,
+        Verdict::PassWithException {
+            justification: "critical hotfix".to_string()
+        }
+    );
+    assert!(!result.is_blocked());
     assert_ne!(result.result_digest, "orig");
 }
 

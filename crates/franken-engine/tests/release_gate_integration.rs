@@ -451,7 +451,12 @@ fn exception_succeeds_with_valid_inputs() {
     gate.apply_exception(&mut result, "Critical CVE fix", Some("ADR-2026-002"), None)
         .unwrap();
     assert!(result.exception_applied);
-    assert_eq!(result.verdict, Verdict::Pass);
+    assert_eq!(
+        result.verdict,
+        Verdict::PassWithException {
+            justification: "Critical CVE fix".to_string()
+        }
+    );
     assert_eq!(result.exception_justification, "Critical CVE fix");
 }
 
@@ -486,7 +491,7 @@ fn exception_changes_digest() {
 }
 
 #[test]
-fn exception_on_passing_result_still_sets_flag() {
+fn exception_on_passing_result_is_noop() {
     let policy = ExceptionPolicy {
         allow_exceptions: true,
         requires_adr_reference: false,
@@ -505,10 +510,13 @@ fn exception_on_passing_result_still_sets_flag() {
         gate_events: Vec::new(),
         result_digest: "orig".to_string(),
     };
+    let original_digest = result.result_digest.clone();
     gate.apply_exception(&mut result, "cosmetic override", None, None)
         .unwrap();
-    assert!(result.exception_applied);
+    assert!(!result.exception_applied);
+    assert!(result.exception_justification.is_empty());
     assert_eq!(result.verdict, Verdict::Pass);
+    assert_eq!(result.result_digest, original_digest);
 }
 
 // ===========================================================================
@@ -1133,7 +1141,12 @@ fn lifecycle_evaluate_then_exception_override() {
     gate.apply_exception(&mut result, "Emergency deploy", Some("ADR-2026-E1"), None)
         .unwrap();
     assert!(result.exception_applied);
-    assert_eq!(result.verdict, Verdict::Pass);
+    assert_eq!(
+        result.verdict,
+        Verdict::PassWithException {
+            justification: "Emergency deploy".to_string()
+        }
+    );
     assert!(!result.is_blocked());
 
     // Generate failure report on the now-passing result.
@@ -1518,14 +1531,18 @@ fn enrichment_exception_multiple_applications_idempotent() {
     let digest_after_first = result.result_digest.clone();
     gate.apply_exception(&mut result, "second", None, None)
         .unwrap();
-    // After first apply verdict is Pass; second apply is a no-op (already passing).
+    // After first apply the result is release-allowed; second apply is a no-op.
     assert_eq!(result.exception_justification, "first");
     assert!(result.exception_applied);
-    // Digest may differ because justification differs in exception_applied state
-    assert_eq!(result.verdict, Verdict::Pass);
-    // Both digests should be valid hex
+    assert_eq!(
+        result.verdict,
+        Verdict::PassWithException {
+            justification: "first".to_string()
+        }
+    );
+    assert_eq!(result.result_digest, digest_after_first);
+    // Digest should be valid hex
     assert_eq!(digest_after_first.len(), 16);
-    assert_eq!(result.result_digest.len(), 16);
 }
 
 #[test]
@@ -1552,7 +1569,12 @@ fn enrichment_exception_with_adr_ref_sets_pass() {
     };
     gate.apply_exception(&mut result, "critical deploy", Some("ADR-2026-099"), None)
         .unwrap();
-    assert_eq!(result.verdict, Verdict::Pass);
+    assert_eq!(
+        result.verdict,
+        Verdict::PassWithException {
+            justification: "critical deploy".to_string()
+        }
+    );
     assert!(!result.is_blocked());
 }
 
@@ -1642,7 +1664,7 @@ fn enrichment_frankenlab_scenario_check_items_equals_seven() {
 }
 
 #[test]
-fn enrichment_evidence_replay_check_items_one() {
+fn enrichment_evidence_replay_check_items_match_lifecycle_events() {
     let mut gate = ReleaseGate::new(42);
     let mut cx = mock_cx(200_000);
     let result = gate.evaluate(&mut cx);
@@ -1651,8 +1673,8 @@ fn enrichment_evidence_replay_check_items_one() {
         .iter()
         .find(|c| c.kind == GateCheckKind::EvidenceReplay)
         .unwrap();
-    assert_eq!(check.items_checked, 1);
-    assert_eq!(check.items_passed, 1);
+    assert_eq!(check.items_checked, 31);
+    assert_eq!(check.items_passed, 31);
 }
 
 #[test]

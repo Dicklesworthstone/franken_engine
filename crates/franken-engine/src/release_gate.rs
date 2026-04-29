@@ -151,7 +151,7 @@ pub struct ReleaseGateResult {
 impl ReleaseGateResult {
     /// Whether the gate blocked the release.
     pub fn is_blocked(&self) -> bool {
-        self.verdict != Verdict::Pass
+        matches!(self.verdict, Verdict::Fail { .. })
     }
 
     /// Produce a structured failure report summarising all failing gates.
@@ -414,8 +414,8 @@ impl ReleaseGate {
         if justification.is_empty() {
             return Err("justification required for exception".to_string());
         }
-        if result.verdict == Verdict::Pass {
-            return Ok(()); // Already passing — no exception needed.
+        if !result.is_blocked() {
+            return Ok(()); // Already release-allowed — no exception mutation needed.
         }
 
         result.exception_applied = true;

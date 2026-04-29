@@ -241,17 +241,17 @@ fn parse_module_simple() {
 }
 
 #[test]
-fn parse_script_lenient_recovery() {
-    // The parser uses error-recovery and is lenient with malformed input
+fn parse_script_malformed_input_fails_closed() {
+    // The default scalar parser is strict; recovery is handled by separate diagnostic paths.
     let result = parse_script("function { invalid }}}");
-    assert!(result.is_ok(), "parser should recover from malformed input");
+    assert!(result.is_err(), "parser should reject malformed input");
 }
 
 #[test]
-fn parse_module_lenient_recovery() {
-    // The parser uses error-recovery and is lenient with malformed input
+fn parse_module_malformed_input_fails_closed() {
+    // The default scalar parser is strict; recovery is handled by separate diagnostic paths.
     let result = parse_module("export {{{}}");
-    assert!(result.is_ok(), "parser should recover from malformed input");
+    assert!(result.is_err(), "parser should reject malformed input");
 }
 
 #[test]

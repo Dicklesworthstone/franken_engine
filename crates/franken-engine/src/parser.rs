@@ -3958,7 +3958,11 @@ fn parse_primary_expression(
         return Ok(Expression::This);
     }
     if expression == "super" {
-        return Ok(Expression::Super);
+        return Err(unsupported_expression_syntax_error(
+            "super expressions are not supported",
+            span,
+            context,
+        ));
     }
 
     if let Some(rest) = expression.strip_prefix("await")

@@ -3646,6 +3646,13 @@ pub fn lower_ir2_to_ir3(
                         val: val_reg,
                     });
                 }
+                emit_array_length_store(
+                    &mut ir3.instructions,
+                    &mut ir3.constant_pool,
+                    &mut register_cursor,
+                    dst,
+                    *count,
+                );
                 value_stack.push(dst);
             }
             Ir1Op::NewObject { count } => {
@@ -4632,6 +4639,13 @@ pub fn lower_ir2_to_ir3(
                             val: val_reg,
                         });
                     }
+                    emit_array_length_store(
+                        &mut ir3.instructions,
+                        &mut ir3.constant_pool,
+                        &mut fn_reg,
+                        dst,
+                        *count,
+                    );
                     fn_value_stack.push(dst);
                 }
                 Ir1Op::NewObject { count } => {
@@ -6085,6 +6099,45 @@ fn lower_expression_to_ir1(
                 });
                 return Ok(());
             }
+            if let Some(capability) = string_literal_builtin_call_capability(callee) {
+                let arg_count = arguments.len().saturating_add(1);
+                if arg_count > u32::MAX as usize {
+                    return Err(LoweringPipelineError::TooManyArguments {
+                        count: arg_count,
+                        max: u32::MAX as usize,
+                    });
+                }
+                let Expression::Member { object, .. } = callee.as_ref() else {
+                    return Err(LoweringPipelineError::InvariantViolation {
+                        detail: "string literal builtin capability without member callee",
+                    });
+                };
+                lower_expression_to_ir1(
+                    object,
+                    ops,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    root_scope_id,
+                    label_counter,
+                )?;
+                for arg in arguments {
+                    lower_expression_to_ir1(
+                        arg,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                    )?;
+                }
+                ops.push(Ir1Op::HostCall {
+                    capability: capability.to_string(),
+                    arg_count: arg_count as u32,
+                });
+                return Ok(());
+            }
             if let Expression::Identifier(name) = callee.as_ref()
                 && name == "require"
                 && !binding_lookup.contains_key(name.as_str())
@@ -6165,6 +6218,45 @@ fn lower_expression_to_ir1(
                 }
                 ops.push(Ir1Op::HostCall {
                     capability: "hostcall.invoke".to_string(),
+                    arg_count: arg_count as u32,
+                });
+                return Ok(());
+            }
+            if let Some(capability) = array_literal_builtin_call_capability(callee) {
+                let arg_count = arguments.len().saturating_add(1);
+                if arg_count > u32::MAX as usize {
+                    return Err(LoweringPipelineError::TooManyArguments {
+                        count: arg_count,
+                        max: u32::MAX as usize,
+                    });
+                }
+                let Expression::Member { object, .. } = callee.as_ref() else {
+                    return Err(LoweringPipelineError::InvariantViolation {
+                        detail: "array literal builtin capability without member callee",
+                    });
+                };
+                lower_expression_to_ir1(
+                    object,
+                    ops,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    root_scope_id,
+                    label_counter,
+                )?;
+                for arg in arguments {
+                    lower_expression_to_ir1(
+                        arg,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                    )?;
+                }
+                ops.push(Ir1Op::HostCall {
+                    capability: capability.to_string(),
                     arg_count: arg_count as u32,
                 });
                 return Ok(());
@@ -7101,6 +7193,46 @@ fn math_builtin_call_capability(
     }
 }
 
+fn array_literal_builtin_call_capability(callee: &Expression) -> Option<&'static str> {
+    let Expression::Member {
+        object,
+        property,
+        computed,
+    } = callee
+    else {
+        return None;
+    };
+    if *computed || !matches!(object.as_ref(), Expression::ArrayLiteral(_)) {
+        return None;
+    }
+    match property.as_ref() {
+        Expression::Identifier(name) | Expression::StringLiteral(name) if name == "some" => {
+            Some("builtin:ArrayPrototypeSome")
+        }
+        _ => None,
+    }
+}
+
+fn string_literal_builtin_call_capability(callee: &Expression) -> Option<&'static str> {
+    let Expression::Member {
+        object,
+        property,
+        computed,
+    } = callee
+    else {
+        return None;
+    };
+    if *computed || !matches!(object.as_ref(), Expression::StringLiteral(_)) {
+        return None;
+    }
+    match property.as_ref() {
+        Expression::Identifier(name) | Expression::StringLiteral(name) if name == "charAt" => {
+            Some("builtin:StringPrototypeCharAt")
+        }
+        _ => None,
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn lower_member_property_key_to_ir1(
     property: &Expression,
@@ -7399,6 +7531,31 @@ fn extract_hostcall_capability(raw: &str) -> Option<String> {
     }
 
     None
+}
+
+fn emit_array_length_store(
+    instructions: &mut Vec<Ir3Instruction>,
+    constant_pool: &mut Vec<String>,
+    register_cursor: &mut Reg,
+    array_reg: Reg,
+    length: u32,
+) {
+    let key_reg = alloc_register(register_cursor);
+    let key_pool_index = push_constant(constant_pool, "length");
+    instructions.push(Ir3Instruction::LoadStr {
+        dst: key_reg,
+        pool_index: key_pool_index,
+    });
+    let length_reg = alloc_register(register_cursor);
+    instructions.push(Ir3Instruction::LoadInt {
+        dst: length_reg,
+        value: i64::from(length),
+    });
+    instructions.push(Ir3Instruction::SetProperty {
+        obj: array_reg,
+        key: key_reg,
+        val: length_reg,
+    });
 }
 
 fn lower_literal_to_ir3(

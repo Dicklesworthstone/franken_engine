@@ -310,6 +310,8 @@ pub enum BuiltinFunctionKind {
     ConsoleError,
     ConsoleWarn,
     ConsoleInfo,
+    StringCharAt,
+    StringCharCodeAt,
 }
 
 /// First-class builtin callable value with the module provenance needed for
@@ -345,6 +347,22 @@ impl BuiltinFunction {
             kind: BuiltinFunctionKind::IteratorSelf,
             module_specifier: String::new(),
             iterator_handle: Some(iterator_handle),
+        }
+    }
+
+    fn string_char_at() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::StringCharAt,
+            module_specifier: String::new(),
+            iterator_handle: None,
+        }
+    }
+
+    fn string_char_code_at() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::StringCharCodeAt,
+            module_specifier: String::new(),
+            iterator_handle: None,
         }
     }
 
@@ -389,6 +407,8 @@ impl BuiltinFunction {
             BuiltinFunctionKind::ConsoleError => "error",
             BuiltinFunctionKind::ConsoleWarn => "warn",
             BuiltinFunctionKind::ConsoleInfo => "info",
+            BuiltinFunctionKind::StringCharAt => "charAt",
+            BuiltinFunctionKind::StringCharCodeAt => "charCodeAt",
         }
     }
 }
@@ -2706,6 +2726,7 @@ impl InterpreterCore {
         module: &Ir3Module,
         builtin: &BuiltinFunction,
         args: RegRange,
+        receiver: Option<Value>,
     ) -> Result<Value, InterpreterError> {
         match builtin.kind {
             BuiltinFunctionKind::Require => {
@@ -2750,6 +2771,24 @@ impl InterpreterCore {
                             got: "missing iterator handle".to_string(),
                         })?;
                 Ok(Value::Iterator(iterator_handle))
+            }
+            BuiltinFunctionKind::StringCharAt => {
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let index = if args.count > 0 {
+                    Some(self.read_reg(args.start)?)
+                } else {
+                    None
+                };
+                Self::string_prototype_char_at_value(receiver, index)
+            }
+            BuiltinFunctionKind::StringCharCodeAt => {
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let index = if args.count > 0 {
+                    Some(self.read_reg(args.start)?)
+                } else {
+                    None
+                };
+                Self::string_prototype_char_code_at_value(receiver, index)
             }
             BuiltinFunctionKind::ConsoleLog => self.dispatch_console_hostcall("console:log", args),
             BuiltinFunctionKind::ConsoleError => {
@@ -3896,7 +3935,7 @@ impl InterpreterCore {
                     }
 
                     if let Value::BuiltinFunction(builtin) = &callee_val {
-                        let result = self.dispatch_builtin_function(module, builtin, args)?;
+                        let result = self.dispatch_builtin_function(module, builtin, args, None)?;
                         self.write_reg(dst, result)?;
                         self.ip += 1;
                         continue;
@@ -4256,7 +4295,12 @@ impl InterpreterCore {
                     let callee_val = self.read_reg(callee)?;
 
                     if let Value::BuiltinFunction(builtin) = &callee_val {
-                        let result = self.dispatch_builtin_function(module, builtin, args)?;
+                        let result = self.dispatch_builtin_function(
+                            module,
+                            builtin,
+                            args,
+                            Some(receiver_val),
+                        )?;
                         self.write_reg(dst, result)?;
                         self.ip += 1;
                         continue;
@@ -4670,6 +4714,10 @@ impl InterpreterCore {
                             let prop = self.iterator_property_value(iterator_handle, &key_str);
                             self.write_reg(dst, prop)?;
                         }
+                        Value::Str(s) => {
+                            let prop = Self::string_property_value(&s, &key_str);
+                            self.write_reg(dst, prop)?;
+                        }
                         _ => {
                             return Err(InterpreterError::TypeError {
                                 expected: "object".to_string(),
@@ -4748,7 +4796,13 @@ impl InterpreterCore {
                                 })
                             })
                             .unwrap_or(0);
+                        let next_len = next_idx.saturating_add(1);
                         self.set_object_property(arr_id, next_idx.to_string(), elem_val)?;
+                        self.set_object_property(
+                            arr_id,
+                            "length".to_string(),
+                            Value::Int(i64::from(next_len)),
+                        )?;
                     }
                     self.ip += 1;
                 }
@@ -4788,6 +4842,11 @@ impl InterpreterCore {
                                 self.set_object_property(arr_id, next_idx.to_string(), elem)?;
                                 next_idx += 1;
                             }
+                            self.set_object_property(
+                                arr_id,
+                                "length".to_string(),
+                                Value::Int(i64::from(next_idx)),
+                            )?;
                         }
                     }
                     self.ip += 1;
@@ -6240,6 +6299,17 @@ impl InterpreterCore {
         }
     }
 
+    fn string_property_value(receiver: &str, key: &str) -> Value {
+        match key {
+            "length" => {
+                Value::Int(i64::try_from(receiver.encode_utf16().count()).unwrap_or(i64::MAX))
+            }
+            "charAt" => Value::BuiltinFunction(BuiltinFunction::string_char_at()),
+            "charCodeAt" => Value::BuiltinFunction(BuiltinFunction::string_char_code_at()),
+            _ => Value::Undefined,
+        }
+    }
+
     fn close_iterator(
         &mut self,
         iterator: Value,
@@ -7309,6 +7379,38 @@ impl InterpreterCore {
         }
     }
 
+    fn string_prototype_char_at_value(
+        receiver: Value,
+        index: Option<Value>,
+    ) -> Result<Value, InterpreterError> {
+        let string_val = Self::require_object_coercible_to_string(&receiver)?;
+        let index = index.as_ref().and_then(Self::coerce_to_number).unwrap_or(0);
+        if index < 0 {
+            return Ok(Value::Str(String::new()));
+        }
+
+        let Some(unit) = string_val.encode_utf16().nth(index as usize) else {
+            return Ok(Value::Str(String::new()));
+        };
+        Ok(Value::Str(String::from_utf16_lossy(&[unit])))
+    }
+
+    fn string_prototype_char_code_at_value(
+        receiver: Value,
+        index: Option<Value>,
+    ) -> Result<Value, InterpreterError> {
+        let string_val = Self::require_object_coercible_to_string(&receiver)?;
+        let index = index.as_ref().and_then(Self::coerce_to_number).unwrap_or(0);
+        if index < 0 {
+            return Ok(Value::Float(Float64::new(f64::NAN)));
+        }
+
+        match string_val.encode_utf16().nth(index as usize) {
+            Some(unit) => Ok(Value::Int(i64::from(unit))),
+            None => Ok(Value::Float(Float64::new(f64::NAN))),
+        }
+    }
+
     /// Validates Array method callback arguments for fail-closed implementations
     /// Returns Ok(()) if validation passes, otherwise returns appropriate TypeError
     fn validate_array_callback_args(
@@ -7701,6 +7803,7 @@ impl InterpreterCore {
                         Value::Iterator(iterator_handle) => {
                             self.iterator_property_value(iterator_handle, &key_string)
                         }
+                        Value::Str(s) => Self::string_property_value(&s, &key_string),
                         other => {
                             return Err(InterpreterError::TypeError {
                                 expected: "object".to_string(),
@@ -7907,6 +8010,7 @@ impl InterpreterCore {
                         Value::Iterator(iterator_handle) => {
                             self.iterator_property_value(iterator_handle, &key_string)
                         }
+                        Value::Str(s) => Self::string_property_value(&s, &key_string),
                         other => {
                             return Err(InterpreterError::TypeError {
                                 expected: "object".to_string(),
@@ -9584,8 +9688,8 @@ impl InterpreterCore {
                     let arg = self.read_reg(args.start)?;
                     match arg {
                         Value::Int(n) => Ok(Value::Int(n)), // Integer is already rounded
-                        Value::Float(f) => {
-                            let input = f.inner();
+                        other => {
+                            let input = Self::coerce_to_float(&other).unwrap_or(f64::NAN);
                             // Implement JavaScript Math.round semantics:
                             // Round towards positive infinity for ties (0.5 cases)
                             let val = if input.is_nan() || input.is_infinite() {
@@ -9602,7 +9706,6 @@ impl InterpreterCore {
                                 Ok(Value::Float(Float64::new(val)))
                             }
                         }
-                        _ => Ok(Value::Float(Float64::new(f64::NAN))),
                     }
                 } else {
                     Ok(Value::Float(Float64::new(f64::NAN)))
@@ -11215,62 +11318,80 @@ impl InterpreterCore {
             }
             // Removed duplicate StringPrototypeSearch - implementation at line ~13482 has better JS fallbacks
             "builtin:ArrayPrototypeSome" => {
-                // Array.prototype.some(callback[, thisArg]) implementation (simplified)
-                if args.count == 0 {
-                    return Ok(Value::Bool(false));
-                }
+                // Array.prototype.some(callback[, thisArg]).
+                //
+                // Lowered method wrappers dispatch builtin hostcalls with only
+                // user arguments in the register range; the receiver is held
+                // in the active call frame's `this`.
+                let (this_val, callback, this_arg) = if args.count >= 2 {
+                    (
+                        self.read_reg(args.start)?,
+                        self.read_reg(args.start + 1)?,
+                        if args.count > 2 {
+                            self.read_reg(args.start + 2)?
+                        } else {
+                            Value::Undefined
+                        },
+                    )
+                } else if args.count == 1 {
+                    let frame_this = self
+                        .call_stack
+                        .last()
+                        .map_or(Value::Undefined, |frame| frame.this_value.clone());
+                    if matches!(frame_this, Value::Object(_)) {
+                        (frame_this, self.read_reg(args.start)?, Value::Undefined)
+                    } else {
+                        return Err(InterpreterError::TypeError {
+                            expected: "callback function".to_string(),
+                            got: "missing callback argument".to_string(),
+                        });
+                    }
+                } else {
+                    return Err(InterpreterError::TypeError {
+                        expected: "callback function".to_string(),
+                        got: "missing callback argument".to_string(),
+                    });
+                };
 
-                let this_val = self.read_reg(args.start)?;
                 let array_id = match this_val {
                     Value::Object(id) => id,
-                    _ => return Ok(Value::Bool(false)), // Non-arrays return false
-                };
-
-                let _callback = self.read_reg(args.start + 1)?;
-                let _this_arg = if args.count > 2 {
-                    Some(self.read_reg(args.start + 2)?)
-                } else {
-                    None
-                };
-
-                // Get the array object from heap
-                if let Some(array_obj) = self.heap.get(array_id.0 as usize) {
-                    // Get array length
-                    let length = array_obj
-                        .properties
-                        .get("length")
-                        .and_then(|v| match v {
-                            Value::Int(i) => Some(*i as usize),
-                            Value::Float(f) => Some(f.inner() as usize),
-                            _ => None,
-                        })
-                        .unwrap_or(0);
-
-                    // Check if any element exists (simplified - just check if array has elements)
-                    // TODO: In full implementation, would call callback and test condition
-                    for i in 0..length {
-                        if array_obj.properties.contains_key(&i.to_string()) {
-                            // Simplified logic - return true if any element exists and is truthy
-                            if let Some(value) = array_obj.properties.get(&i.to_string()) {
-                                let is_truthy = match value {
-                                    Value::Bool(false) | Value::Null | Value::Undefined => false,
-                                    Value::Int(0) => false,
-                                    Value::Float(f) if f.inner() == 0.0 || f.inner().is_nan() => {
-                                        false
-                                    }
-                                    Value::Str(s) if s.is_empty() => false,
-                                    _ => true,
-                                };
-                                if is_truthy {
-                                    return Ok(Value::Bool(true));
-                                }
-                            }
-                        }
+                    other => {
+                        return Err(InterpreterError::TypeError {
+                            expected: "array object".to_string(),
+                            got: other.type_name().to_string(),
+                        });
                     }
-                    Ok(Value::Bool(false))
-                } else {
-                    Ok(Value::Bool(false))
+                };
+                if !matches!(callback, Value::Function(_) | Value::Closure(_)) {
+                    return Err(InterpreterError::TypeError {
+                        expected: "function".to_string(),
+                        got: callback.type_name().to_string(),
+                    });
                 }
+
+                let length = self.array_like_length(array_id)?;
+                for i in 0..length {
+                    let Some(element) = self
+                        .heap
+                        .get(array_id.0 as usize)
+                        .and_then(|array_obj| array_obj.properties.get(&i.to_string()))
+                        .cloned()
+                    else {
+                        continue;
+                    };
+
+                    let predicate_result = self.invoke_inline_method_call(
+                        module,
+                        callback.clone(),
+                        this_arg.clone(),
+                        vec![element, Value::Int(i as i64), Value::Object(array_id)],
+                    )?;
+                    if predicate_result.is_truthy() {
+                        return Ok(Value::Bool(true));
+                    }
+                }
+
+                Ok(Value::Bool(false))
             }
             "builtin:MathSign" => {
                 // Math.sign(x) implementation - returns sign of a number
@@ -11985,41 +12106,17 @@ impl InterpreterCore {
             }
 
             "builtin:StringPrototypeCharCodeAt" => {
-                // String.prototype.charCodeAt(index) implementation
-                let this_val = self.read_reg(args.start)?;
-                let string_val = match this_val {
-                    Value::Str(s) => s,
-                    _ => {
-                        // Try to convert to string
-                        match this_val {
-                            Value::Int(n) => n.to_string(),
-                            Value::Float(f) => f.inner().to_string(),
-                            Value::Bool(b) => b.to_string(),
-                            Value::Null => "null".to_string(),
-                            Value::Undefined => "undefined".to_string(),
-                            _ => return Ok(Value::Float(f64::NAN.into())),
-                        }
-                    }
+                let receiver = if args.count > 0 {
+                    self.read_reg(args.start)?
+                } else {
+                    Value::Undefined
                 };
-
                 let index = if args.count >= 2 {
-                    match self.read_reg(args.start + 1)? {
-                        Value::Int(idx) => idx as usize,
-                        Value::Float(idx) => idx.inner() as usize,
-                        _ => 0,
-                    }
+                    Some(self.read_reg(args.start + 1)?)
                 } else {
-                    0
+                    None
                 };
-
-                // Get character at index
-                let chars: Vec<char> = string_val.chars().collect();
-                if index < chars.len() {
-                    let char_code = chars[index] as u32;
-                    Ok(Value::Int(char_code as i64))
-                } else {
-                    Ok(Value::Float(f64::NAN.into()))
-                }
+                Self::string_prototype_char_code_at_value(receiver, index)
             }
 
             "builtin:StringFromCharCode" => {
@@ -14792,36 +14889,17 @@ impl InterpreterCore {
 
             // Removed duplicate NumberIsFinite - implementation at line ~8630 has correct argument handling
             "builtin:StringPrototypeCharAt" => {
-                // String.prototype.charAt() implementation - returns character at index
-                let this_val = self.read_reg(args.start)?;
-                let str_text = match this_val {
-                    Value::Str(s) => s,
-                    Value::Null => "null".to_string(),
-                    Value::Undefined => "undefined".to_string(),
-                    Value::Bool(b) => b.to_string(),
-                    Value::Int(n) => n.to_string(),
-                    Value::Float(f) => f.to_string(),
-                    Value::Object(_) => "[object Object]".to_string(),
-                    _ => String::new(),
-                };
-
-                let index = if args.count >= 2 {
-                    let index_val = self.read_reg(args.start + 1)?;
-                    match index_val {
-                        Value::Int(n) => n.max(0) as usize,
-                        Value::Float(f) => f.inner().max(0.0) as usize,
-                        _ => 0,
-                    }
+                let receiver = if args.count > 0 {
+                    self.read_reg(args.start)?
                 } else {
-                    0
+                    Value::Undefined
                 };
-
-                let result = str_text
-                    .chars()
-                    .nth(index)
-                    .map(|c| c.to_string())
-                    .unwrap_or_default();
-                Ok(Value::Str(result))
+                let index = if args.count >= 2 {
+                    Some(self.read_reg(args.start + 1)?)
+                } else {
+                    None
+                };
+                Self::string_prototype_char_at_value(receiver, index)
             }
 
             "builtin:ArrayPrototypeEvery" => {

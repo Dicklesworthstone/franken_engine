@@ -14,6 +14,7 @@
 
 use std::collections::BTreeSet;
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -45,17 +46,50 @@ fn latest_run_dir(root: &Path) -> PathBuf {
     dirs.pop().expect("expected one phase-a run directory")
 }
 
+fn blocked_dependency_command(artifacts_root: &Path) -> Command {
+    let fake_bin = temp_dir("phase_a_fake_br_bin");
+    fs::create_dir_all(&fake_bin).expect("create fake br bin dir");
+    let fake_br = fake_bin.join("br");
+    fs::write(
+        &fake_br,
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" == "show" ]]; then
+  dep="${2:-unknown}"
+  printf '[{"id":"%s","status":"open","title":"fixture unresolved dependency"}]\n' "$dep"
+  exit 0
+fi
+echo "unsupported fake br invocation: $*" >&2
+exit 64
+"#,
+    )
+    .expect("write fake br");
+    let mut perms = fs::metadata(&fake_br).expect("stat fake br").permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(&fake_br, perms).expect("chmod fake br");
+
+    let existing_path = std::env::var_os("PATH").unwrap_or_default();
+    let mut path = fake_bin.into_os_string();
+    path.push(":");
+    path.push(existing_path);
+
+    let mut command = Command::new("bash");
+    command
+        .arg("./scripts/run_phase_a_exit_gate.sh")
+        .arg("check")
+        .current_dir(repo_root())
+        .env("PHASE_A_GATE_SKIP_SUBGATES", "1")
+        .env("PHASE_A_GATE_ARTIFACT_ROOT", artifacts_root)
+        .env("PATH", path);
+    command
+}
+
 #[test]
 fn phase_a_gate_blocked_mode_emits_standard_artifact_triad() {
     let artifacts_root = temp_dir("phase_a_exit_gate_contract");
     fs::create_dir_all(&artifacts_root).expect("create artifact root");
 
-    let output = Command::new("bash")
-        .arg("./scripts/run_phase_a_exit_gate.sh")
-        .arg("check")
-        .current_dir(repo_root())
-        .env("PHASE_A_GATE_SKIP_SUBGATES", "1")
-        .env("PHASE_A_GATE_ARTIFACT_ROOT", &artifacts_root)
+    let output = blocked_dependency_command(&artifacts_root)
         .output()
         .expect("phase-a gate script should execute");
 
@@ -290,12 +324,7 @@ fn phase_a_gate_blocked_mode_manifest_has_expected_schema() {
     let artifacts_root = temp_dir("phase_a_schema_check");
     fs::create_dir_all(&artifacts_root).expect("create artifact root");
 
-    let _output = Command::new("bash")
-        .arg("./scripts/run_phase_a_exit_gate.sh")
-        .arg("check")
-        .current_dir(repo_root())
-        .env("PHASE_A_GATE_SKIP_SUBGATES", "1")
-        .env("PHASE_A_GATE_ARTIFACT_ROOT", &artifacts_root)
+    let _output = blocked_dependency_command(&artifacts_root)
         .output()
         .expect("phase-a gate should execute");
 
@@ -316,12 +345,7 @@ fn phase_a_gate_blocked_mode_manifest_contains_dependency_list() {
     let artifacts_root = temp_dir("phase_a_deps_check");
     fs::create_dir_all(&artifacts_root).expect("create artifact root");
 
-    let _output = Command::new("bash")
-        .arg("./scripts/run_phase_a_exit_gate.sh")
-        .arg("check")
-        .current_dir(repo_root())
-        .env("PHASE_A_GATE_SKIP_SUBGATES", "1")
-        .env("PHASE_A_GATE_ARTIFACT_ROOT", &artifacts_root)
+    let _output = blocked_dependency_command(&artifacts_root)
         .output()
         .expect("phase-a gate should execute");
 
@@ -1050,12 +1074,7 @@ fn phase_a_gate_blocked_stderr_lists_unmet_dependencies() {
     let artifacts_root = temp_dir("phase_a_stderr_deps");
     fs::create_dir_all(&artifacts_root).expect("create artifact root");
 
-    let output = Command::new("bash")
-        .arg("./scripts/run_phase_a_exit_gate.sh")
-        .arg("check")
-        .current_dir(repo_root())
-        .env("PHASE_A_GATE_SKIP_SUBGATES", "1")
-        .env("PHASE_A_GATE_ARTIFACT_ROOT", &artifacts_root)
+    let output = blocked_dependency_command(&artifacts_root)
         .output()
         .expect("phase-a gate should execute");
 

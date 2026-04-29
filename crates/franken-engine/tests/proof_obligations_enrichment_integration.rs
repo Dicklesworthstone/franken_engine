@@ -392,12 +392,12 @@ fn report_gate_fails_on_fatal_violation() {
 }
 
 #[test]
-fn report_gate_fails_on_any_violation() {
+fn report_gate_counts_warning_violation_without_blocking() {
     let evals = vec![ObligationEvaluation {
         obligation_id: ObligationId("o1".into()),
         template_id: "t1".into(),
         category: ObligationCategory::Safety,
-        severity: ObligationSeverity::Warning, // non-fatal
+        severity: ObligationSeverity::Warning,
         status: ObligationStatus::Violated,
         epoch: epoch(1),
         observed_value: None,
@@ -405,7 +405,8 @@ fn report_gate_fails_on_any_violation() {
         reason: "failed".into(),
     }];
     let report = ObligationReport::from_evaluations(epoch(1), evals);
-    assert!(!report.gate_pass);
+    assert!(report.gate_pass);
+    assert_eq!(report.violated_count, 1);
 }
 
 #[test]

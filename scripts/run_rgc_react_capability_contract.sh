@@ -239,11 +239,13 @@ write_manifest() {
     done
     echo '  ],'
     echo '  "artifacts": {'
-    echo "    \"manifest\": \"${manifest_path}\","
-    echo "    \"trace_ids\": \"${trace_ids_path}\","
-    echo "    \"events\": \"${events_path}\","
-    echo "    \"commands\": \"${commands_path}\","
-    echo "    \"react_capability_contract\": \"${contract_artifact_path}\","
+    cat <<EOF_ARTIFACTS
+    "manifest": "${manifest_path}",
+    "trace_ids": "${trace_ids_path}",
+    "events": "${events_path}",
+    "commands": "${commands_path}",
+    "react_capability_contract": "${contract_artifact_path}",
+EOF_ARTIFACTS
     echo '    "contract_doc": "docs/RGC_REACT_CAPABILITY_CONTRACT_V1.md",'
     echo '    "contract_json": "docs/rgc_react_capability_contract_v1.json",'
     echo '    "matrix_doc": "docs/RGC_EXECUTABLE_COMPATIBILITY_TARGET_MATRIX_V1.md",'

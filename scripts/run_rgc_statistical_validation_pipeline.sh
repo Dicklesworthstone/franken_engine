@@ -285,16 +285,18 @@ write_manifest() {
       echo "    \"$(parser_frontier_json_escape "${step_logs[$idx]}")\"${comma}"
     done
     echo '  ],'
-    echo '  "artifacts": {'
-    echo "    \"manifest\": \"${manifest_path}\"," 
-    echo "    \"events\": \"${events_path}\"," 
-    echo "    \"commands\": \"${commands_path}\"," 
-    echo "    \"trace_ids\": \"${trace_ids_path}\"," 
-    echo "    \"summary\": \"${summary_path}\"," 
-    echo "    \"env\": \"${env_path}\"," 
-    echo "    \"repro_lock\": \"${repro_lock_path}\"," 
-    echo "    \"step_logs\": \"${step_logs_dir}\"," 
-    echo "    \"stats_verdict_report\": \"${stats_report_path}\"," 
+    cat <<EOF_ARTIFACTS
+  "artifacts": {
+    "manifest": "${manifest_path}",
+    "events": "${events_path}",
+    "commands": "${commands_path}",
+    "trace_ids": "${trace_ids_path}",
+    "summary": "${summary_path}",
+    "env": "${env_path}",
+    "repro_lock": "${repro_lock_path}",
+    "step_logs": "${step_logs_dir}",
+    "stats_verdict_report": "${stats_report_path}",
+EOF_ARTIFACTS
     echo '    "contract_doc": "docs/RGC_STATISTICAL_VALIDATION_PIPELINE_V1.md",'
     echo '    "contract_json": "docs/rgc_statistical_validation_pipeline_v1.json",'
     echo '    "gate_tests": ['

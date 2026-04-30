@@ -589,7 +589,7 @@ fn rgc_912b_live_support_contract_is_dependency_bound_and_deterministic() {
     );
     assert_eq!(first["passed"], Value::Bool(false));
     assert_eq!(first["entries_analyzed"], json!(3));
-    assert_eq!(first["blocker_count"], json!(2));
+    assert_eq!(first["blocker_count"], json!(3));
     assert_eq!(first["advisory_count"], json!(1));
     assert_eq!(
         first["repro_index_schema_version"],

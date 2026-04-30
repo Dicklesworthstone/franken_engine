@@ -510,8 +510,8 @@ fn rgc_305_machine_stable_fields_are_replay_deterministic() {
     let vector = parse_vectors()
         .vectors
         .into_iter()
-        .find(|vector| vector.scenario_id == "rgc-305-runtime-division-by-zero")
-        .expect("missing runtime division vector");
+        .find(|vector| vector.scenario_id == "rgc-305-runtime-non-callable-callee")
+        .expect("missing runtime non-callable callee vector");
 
     let boundaries = parse_boundaries(&vector.boundaries);
     let first = collect_snapshot(

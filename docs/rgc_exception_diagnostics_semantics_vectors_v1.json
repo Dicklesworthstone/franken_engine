@@ -36,11 +36,11 @@
       "requires_replay": true
     },
     {
-      "scenario_id": "rgc-305-runtime-division-by-zero",
+      "scenario_id": "rgc-305-runtime-non-callable-callee",
       "semantics_class": "diagnostic_metadata_stability",
       "severity": "high",
       "deterministic_seed": 4503,
-      "input_source": "1 / 0",
+      "input_source": "1()",
       "boundaries": ["hostcall"],
       "expected_error_class": "runtime",
       "expected_error_code": "eval.runtime.fault",

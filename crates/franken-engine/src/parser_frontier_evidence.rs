@@ -354,12 +354,13 @@ pub fn frontier_corpus() -> Vec<FrontierSpecimen> {
             description: "Optional chaining is now supported".to_string(),
         },
         FrontierSpecimen {
-            specimen_id: "tagged_template_rejects".to_string(),
+            specimen_id: "tagged_template_accepted".to_string(),
             family: ParserFrontierFamily::TaggedTemplate,
             source: "const result = tag`hello ${name}`;".to_string(),
             parse_goal: ParseGoal::Script,
-            expected_outcome: ExpectedParseOutcome::Rejected,
-            description: "Tagged template not yet supported, rejects fail-closed".to_string(),
+            expected_outcome: ExpectedParseOutcome::Accepted,
+            description: "Tagged template parses as a call with a template literal argument"
+                .to_string(),
         },
     ]
 }

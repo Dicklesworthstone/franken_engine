@@ -5205,8 +5205,8 @@ fn try_parse_postfix(
     }
 
     // Tagged template (scaffold form): `tag`...`` or `obj.tag`...``.
-    // The current AST does not have a dedicated tagged-template variant,
-    // so we preserve deterministic structure as a call with one template arg.
+    // The current AST does not have a dedicated tagged-template variant, so
+    // preserve deterministic structure as a call with one template argument.
     if bytes[bytes.len() - 1] == b'`'
         && let Some(template_start) = find_top_level_template_start(expr)
         && template_start > 0
@@ -5214,11 +5214,19 @@ fn try_parse_postfix(
         let callee_src = expr[..template_start].trim();
         let template_src = expr[template_start..].trim();
         if !callee_src.is_empty() && template_src.starts_with('`') && template_src.ends_with('`') {
-            return Some(Err(unsupported_expression_syntax_error(
-                "tagged template expressions are not supported",
-                span,
-                context,
-            )));
+            let callee = match parse_expression(callee_src, span, context, recursion_depth + 1) {
+                Ok(e) => e,
+                Err(e) => return Some(Err(e)),
+            };
+            let template =
+                match parse_template_literal(template_src, span, context, recursion_depth + 1) {
+                    Ok(e) => e,
+                    Err(e) => return Some(Err(e)),
+                };
+            return Some(Ok(Expression::Call {
+                callee: Box::new(callee),
+                arguments: vec![template],
+            }));
         }
     }
 
@@ -12608,31 +12616,31 @@ mod tests {
     }
 
     #[test]
-    fn tagged_template_expression_is_rejected_as_unsupported() {
-        let parser = CanonicalEs2020Parser;
-        let err = parser
-            .parse("render`hello ${name}`", ParseGoal::Script)
-            .expect_err("tagged template expressions should be rejected");
-        assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
-        assert!(
-            err.message.contains("tagged template"),
-            "error message should mention tagged templates: {}",
-            err.message
-        );
+    fn tagged_template_expression_is_call_with_template_argument() {
+        let tree = parse_script("render`hello ${name}`");
+        match first_expr(&tree) {
+            Expression::Call { callee, arguments } => {
+                assert!(
+                    matches!(callee.as_ref(), Expression::Identifier(name) if name == "render")
+                );
+                assert_eq!(arguments.len(), 1);
+                assert!(matches!(&arguments[0], Expression::TemplateLiteral { .. }));
+            }
+            other => panic!("expected tagged template call, got {other:?}"),
+        }
     }
 
     #[test]
-    fn tagged_template_member_expression_is_rejected_as_unsupported() {
-        let parser = CanonicalEs2020Parser;
-        let err = parser
-            .parse("view.render`ok`", ParseGoal::Script)
-            .expect_err("tagged template member expressions should be rejected");
-        assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
-        assert!(
-            err.message.contains("tagged template"),
-            "error message should mention tagged templates: {}",
-            err.message
-        );
+    fn tagged_template_member_expression_is_call_with_template_argument() {
+        let tree = parse_script("view.render`ok`");
+        match first_expr(&tree) {
+            Expression::Call { callee, arguments } => {
+                assert!(matches!(callee.as_ref(), Expression::Member { .. }));
+                assert_eq!(arguments.len(), 1);
+                assert!(matches!(&arguments[0], Expression::TemplateLiteral { .. }));
+            }
+            other => panic!("expected tagged member template call, got {other:?}"),
+        }
     }
 
     #[test]

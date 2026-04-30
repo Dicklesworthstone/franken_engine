@@ -1369,7 +1369,21 @@ fn integration_safe_mode_all_five_activate_recover() {
     assert!(!mgr.extensions_refused());
     assert!(!mgr.high_impact_blocked());
     assert_eq!(drained.len(), 2);
-    assert_eq!(mgr.events().len(), 10); // 5 activate + 5 recover
+    assert_eq!(mgr.events().len(), 15); // 5 activate + 5 two-phase recoveries
+    assert_eq!(
+        mgr.events()
+            .iter()
+            .filter(|event| event.phase == "activate")
+            .count(),
+        5
+    );
+    assert_eq!(
+        mgr.events()
+            .iter()
+            .filter(|event| event.phase == "recover")
+            .count(),
+        10
+    );
 }
 
 #[test]

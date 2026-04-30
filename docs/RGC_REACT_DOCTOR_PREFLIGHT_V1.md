@@ -106,9 +106,8 @@ latest complete artifact bundle (`run_manifest.json`, `trace_ids.json`,
 warns and falls back to the latest complete directory; if no complete bundle
 exists, it fails non-zero instead of presenting a partial run as trustworthy.
 If the rerun itself fails, the wrapper explicitly states whether the printed
-bundle came from the current failed invocation or from an older complete
-directory, so operators do not mistake stale evidence for the failed run's
-output.
+bundle came from the current failed invocation or from an older complete directory,
+so operators do not mistake stale evidence for the failed run's output.
 
 To replay a specific preserved bundle without rerunning the lane, point the
 wrapper at an exact complete run directory:

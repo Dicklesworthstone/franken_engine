@@ -6,6 +6,10 @@
 - Plan references: 10.14 item 4, success criterion 13
 - Related beads: `bd-3azm`, `bd-1ps3`, `bd-89l2`, `bd-30vf`
 
+## Status
+
+Accepted. This ADR is active for all new control-plane SQLite persistence work.
+
 ## Context
 
 FrankenEngine follows a sibling-repo reuse-first policy and avoids parallel local
@@ -35,6 +39,7 @@ In scope (must use `/dp/frankensqlite`):
 - policy cache
 - witness stores
 - lineage logs
+- PLAS and capability policy persistence that stores durable control-plane state
 - other durable control-plane SQLite persistence paths
 
 Out of scope:

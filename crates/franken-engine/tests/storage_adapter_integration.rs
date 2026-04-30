@@ -209,7 +209,7 @@ impl FrankensqliteBackend for MockBackend {
         if self.fail_batch {
             return Err("batch failure".into());
         }
-        let mut staged = self.stores.remove(&store).unwrap();
+        let mut staged = self.stores.remove(&store).unwrap_or_default();
         let mut out = Vec::with_capacity(entries.len());
         for entry in entries {
             out.push(staged.put(

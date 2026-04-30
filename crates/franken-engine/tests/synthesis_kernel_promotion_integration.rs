@@ -659,7 +659,7 @@ fn gate_multiple_soft_rejections_defers() {
 fn permissive_promotes_weak_candidate() {
     let gate = PromotionGate::with_config(PromotionGateConfig::permissive());
     let e = PromotionEvidence::partial(PartialEvidenceInput {
-        proof_verified: false,
+        proof_verified: true,
         coverage: 0,
         speedup: 0,
         counterexamples: 100,

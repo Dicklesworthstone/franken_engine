@@ -82,6 +82,7 @@ fn make_hot_profile_without_guards(
 }
 
 fn make_simple_superblock(function_id: &str, entry_offset: u32) -> Superblock {
+    let side_exit = SideExit::new(entry_offset, 0, SideExitReason::TypeMismatch);
     let entries = vec![
         SuperblockEntry {
             position: 0,
@@ -110,9 +111,9 @@ fn make_simple_superblock(function_id: &str, entry_offset: u32) -> Superblock {
             GuardKind::TypeCheck {
                 expected_type: "int".into(),
             },
-            "exit-test-0001".into(),
+            side_exit.exit_id.clone(),
         )],
-        side_exits: vec![SideExit::new(entry_offset, 0, SideExitReason::TypeMismatch)],
+        side_exits: vec![side_exit],
         tail_duplication_count: 0,
         formation_epoch: 1,
     }
@@ -1114,7 +1115,10 @@ fn test_form_all_superblocks_empty_profile() {
 fn test_form_all_superblocks_with_hot_profile() {
     let offsets: Vec<(u32, &str)> = (0..6u32).map(|i| (i * 4, "sub")).collect();
     let profile = make_hot_profile("fn_all_hot", &offsets);
-    let policy = SuperblockPolicy::default();
+    let policy = SuperblockPolicy {
+        min_level: QuickeningLevel::Quickened,
+        ..SuperblockPolicy::default()
+    };
     let records = form_all_superblocks(&profile, &policy, 2);
     assert!(!records.is_empty());
     // At least one should be formed

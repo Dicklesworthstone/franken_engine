@@ -215,7 +215,7 @@ fn enrichment_safety_case_row_rollout_allowed_when_all_pass() {
     let row = SeqlockSafetyCaseRow {
         candidate_id: "cand-1".to_string(),
         surface_name: "metadata_snapshot".to_string(),
-        inventory_disposition: serde_json::from_str("\"Accept\"").unwrap(),
+        inventory_disposition: serde_json::from_str("\"accept\"").unwrap(),
         starvation_verdict: GuardEvidenceVerdict::Pass,
         model_check_verdict: GuardEvidenceVerdict::Pass,
         rollout_allowed: true,
@@ -231,7 +231,7 @@ fn enrichment_safety_case_row_rollout_blocked_when_missing() {
     let row = SeqlockSafetyCaseRow {
         candidate_id: "cand-2".to_string(),
         surface_name: "policy_snapshot".to_string(),
-        inventory_disposition: serde_json::from_str("\"Accept\"").unwrap(),
+        inventory_disposition: serde_json::from_str("\"accept\"").unwrap(),
         starvation_verdict: GuardEvidenceVerdict::Pass,
         model_check_verdict: GuardEvidenceVerdict::Missing,
         rollout_allowed: false,
@@ -247,7 +247,7 @@ fn enrichment_safety_case_row_serde_roundtrip() {
     let row = SeqlockSafetyCaseRow {
         candidate_id: "cand-1".to_string(),
         surface_name: "test_surface".to_string(),
-        inventory_disposition: serde_json::from_str("\"Accept\"").unwrap(),
+        inventory_disposition: serde_json::from_str("\"accept\"").unwrap(),
         starvation_verdict: GuardEvidenceVerdict::Pass,
         model_check_verdict: GuardEvidenceVerdict::Missing,
         rollout_allowed: false,

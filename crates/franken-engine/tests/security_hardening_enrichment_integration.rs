@@ -25,6 +25,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use frankenengine_engine::baseline_interpreter::{InterpreterConfig, InterpreterCore, Value};
+use frankenengine_engine::capability::RuntimeCapability;
 use frankenengine_engine::extension_registry::{
     ArtifactEntry, BuildDescriptor, CapabilityDeclaration, ExtensionManifest, ExtensionRegistry,
     PackageQuery, PackageVersion, RegistryError,
@@ -172,6 +173,15 @@ fn test_module(instructions: Vec<Ir3Instruction>) -> Ir3Module {
         specialization: None,
         required_capabilities: Vec::new(),
     }
+}
+
+fn vm_dispatch_config() -> InterpreterConfig {
+    let mut config = InterpreterConfig::quickjs_defaults();
+    config.granted_capabilities.extend([
+        RuntimeCapability::VmDispatch,
+        RuntimeCapability::HeapAllocate,
+    ]);
+    config
 }
 
 // ===========================================================================
@@ -685,7 +695,7 @@ fn ts_normalization_adjacent_strings_and_annotations() {
 #[test]
 fn interpreter_halt_instruction_completes() {
     let module = test_module(vec![Ir3Instruction::Halt]);
-    let mut interp = InterpreterCore::new(InterpreterConfig::quickjs_defaults(), "halt-test");
+    let mut interp = InterpreterCore::new(vm_dispatch_config(), "halt-test");
     let result = interp.execute(&module);
     assert!(result.is_ok());
 }
@@ -696,7 +706,7 @@ fn interpreter_load_int_and_halt() {
         Ir3Instruction::LoadInt { dst: 0, value: 42 },
         Ir3Instruction::Halt,
     ]);
-    let mut interp = InterpreterCore::new(InterpreterConfig::quickjs_defaults(), "load-int-test");
+    let mut interp = InterpreterCore::new(vm_dispatch_config(), "load-int-test");
     let result = interp.execute(&module);
     assert!(result.is_ok());
 }
@@ -720,7 +730,7 @@ fn interpreter_add_two_ints() {
         },
         Ir3Instruction::Halt,
     ]);
-    let mut interp = InterpreterCore::new(InterpreterConfig::quickjs_defaults(), "add-test");
+    let mut interp = InterpreterCore::new(vm_dispatch_config(), "add-test");
     let result = interp.execute(&module).unwrap();
     assert_eq!(result.value, Value::Int(30_000_000));
 }
@@ -745,7 +755,7 @@ fn interpreter_add_bool_coerces_to_number() {
         },
         Ir3Instruction::Halt,
     ]);
-    let mut interp = InterpreterCore::new(InterpreterConfig::quickjs_defaults(), "bool-coerce");
+    let mut interp = InterpreterCore::new(vm_dispatch_config(), "bool-coerce");
     let result = interp.execute(&module).unwrap();
     // true coerces to 1 (JS spec: Number(true) === 1), not 1_000_000.
     // So 1 + 1_000_000 = 1_000_001.
@@ -768,7 +778,7 @@ fn interpreter_add_null_coerces_to_zero() {
         },
         Ir3Instruction::Halt,
     ]);
-    let mut interp = InterpreterCore::new(InterpreterConfig::quickjs_defaults(), "null-coerce");
+    let mut interp = InterpreterCore::new(vm_dispatch_config(), "null-coerce");
     let result = interp.execute(&module).unwrap();
     // null coerces to 0, so 0 + 5_000_000 = 5_000_000
     assert_eq!(result.value, Value::Int(5_000_000));
@@ -793,7 +803,7 @@ fn interpreter_sub_bool_coercion() {
         },
         Ir3Instruction::Halt,
     ]);
-    let mut interp = InterpreterCore::new(InterpreterConfig::quickjs_defaults(), "sub-bool");
+    let mut interp = InterpreterCore::new(vm_dispatch_config(), "sub-bool");
     let result = interp.execute(&module).unwrap();
     assert_eq!(result.value, Value::Int(-3_000_000));
 }

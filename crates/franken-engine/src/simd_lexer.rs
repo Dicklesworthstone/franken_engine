@@ -1112,6 +1112,7 @@ pub fn build_token_witness_log(
     policy_id: &str,
     replay_command: &str,
 ) -> LexerTokenWitnessLog {
+    let input_hash = sha256_prefixed(input.as_bytes());
     LexerTokenWitnessLog {
         schema_version: LexerSchemaVersion::V1,
         trace_id: trace_id.to_string(),
@@ -1122,9 +1123,13 @@ pub fn build_token_witness_log(
         feature_gate: config.feature_gate,
         swar_disable_reason: output.swar_disable_reason.clone(),
         arch_profile: ArchCapabilityProfile::detect(),
-        input_hash: sha256_prefixed(input.as_bytes()),
+        input_hash: input_hash.clone(),
         token_count: output.token_count,
-        token_witness_hash: compute_token_witness_hash(&output.tokens, output.token_count),
+        token_witness_hash: compute_token_witness_hash(
+            &input_hash,
+            &output.tokens,
+            output.token_count,
+        ),
         replay_command: replay_command.to_string(),
     }
 }
@@ -1441,9 +1446,10 @@ fn token_kind_tag(kind: TokenKind) -> u8 {
     }
 }
 
-fn compute_token_witness_hash(tokens: &[Token], token_count: u64) -> String {
+fn compute_token_witness_hash(input_hash: &str, tokens: &[Token], token_count: u64) -> String {
     let mut hasher = Sha256::new();
     hasher.update(b"franken-engine.simd-lexer.token-witness.v1");
+    hasher.update(input_hash.as_bytes());
     hasher.update(token_count.to_le_bytes());
     for token in tokens {
         hasher.update([token_kind_tag(token.kind)]);

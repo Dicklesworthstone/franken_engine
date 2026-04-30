@@ -50,6 +50,16 @@ fn test_preimage() -> Vec<u8> {
     b"test preimage data for signing".to_vec()
 }
 
+fn test_verification_key(seed: u8) -> VerificationKey {
+    let mut bytes = [0u8; 32];
+    for (i, b) in bytes.iter_mut().enumerate() {
+        *b = seed
+            .wrapping_add((i as u8).wrapping_mul(17))
+            .wrapping_add(1);
+    }
+    SigningKey::from_bytes(bytes).unwrap().verification_key()
+}
+
 // ===========================================================================
 // Constants
 // ===========================================================================
@@ -116,7 +126,7 @@ fn enrichment_different_signing_keys_different_verification_keys() {
 
 #[test]
 fn enrichment_verification_key_from_bytes_roundtrip() {
-    let bytes = [99u8; 32];
+    let bytes = *test_verification_key(99).as_bytes();
     let vk = VerificationKey::from_bytes(bytes).unwrap();
     assert_eq!(*vk.as_bytes(), bytes);
 }
@@ -264,7 +274,7 @@ fn enrichment_different_data_different_hash() {
 #[test]
 fn enrichment_error_display_verification_failed() {
     let err = SignatureError::VerificationFailed {
-        signer: VerificationKey::from_bytes([1u8; 32]).unwrap(),
+        signer: test_verification_key(1),
         reason: "bad signature".to_string(),
     };
     let display = err.to_string();
@@ -293,7 +303,7 @@ fn enrichment_error_display_preimage_error() {
 fn enrichment_error_display_all_unique() {
     let errors = [
         SignatureError::VerificationFailed {
-            signer: VerificationKey::from_bytes([1u8; 32]).unwrap(),
+            signer: test_verification_key(1),
             reason: "r".to_string(),
         },
         SignatureError::NonCanonicalObject {
@@ -313,7 +323,7 @@ fn enrichment_error_display_all_unique() {
 fn enrichment_error_serde_roundtrip() {
     let errors = [
         SignatureError::VerificationFailed {
-            signer: VerificationKey::from_bytes([1u8; 32]).unwrap(),
+            signer: test_verification_key(1),
             reason: "r".to_string(),
         },
         SignatureError::NonCanonicalObject {
@@ -374,13 +384,13 @@ fn enrichment_context_event_counts_empty_initially() {
 fn enrichment_event_type_display_all_unique() {
     let types = [
         SignatureEventType::Signed {
-            signer: VerificationKey::from_bytes([1u8; 32]).unwrap(),
+            signer: test_verification_key(1),
         },
         SignatureEventType::Verified {
-            signer: VerificationKey::from_bytes([2u8; 32]).unwrap(),
+            signer: test_verification_key(2),
         },
         SignatureEventType::VerificationFailed {
-            signer: VerificationKey::from_bytes([3u8; 32]).unwrap(),
+            signer: test_verification_key(3),
             reason: "r".to_string(),
         },
         SignatureEventType::CanonicalityCheckFailed {
@@ -395,13 +405,13 @@ fn enrichment_event_type_display_all_unique() {
 fn enrichment_event_type_serde_roundtrip() {
     let types = [
         SignatureEventType::Signed {
-            signer: VerificationKey::from_bytes([10u8; 32]).unwrap(),
+            signer: test_verification_key(10),
         },
         SignatureEventType::Verified {
-            signer: VerificationKey::from_bytes([20u8; 32]).unwrap(),
+            signer: test_verification_key(20),
         },
         SignatureEventType::VerificationFailed {
-            signer: VerificationKey::from_bytes([30u8; 32]).unwrap(),
+            signer: test_verification_key(30),
             reason: "bad".to_string(),
         },
         SignatureEventType::CanonicalityCheckFailed {

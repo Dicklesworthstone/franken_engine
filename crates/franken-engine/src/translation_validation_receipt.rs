@@ -1272,8 +1272,8 @@ impl ValidationReceiptEmitter {
     /// - If the optimization is quarantined, returns `Quarantined`.
     /// - If the verdict is `Proven`, returns `Approved` with a signed receipt.
     /// - If the verdict is `Disproven` or `Inconclusive`, returns `Rejected`
-    ///   with both a receipt and a failure record.  May quarantine the
-    ///   optimization if configured to do so.
+    ///   with both a receipt and a failure record. Disproven optimizations may
+    ///   be quarantined if configured; inconclusive runs remain retryable.
     pub fn emit(&mut self, input: EmitInput) -> EmitResult {
         // Check quarantine
         if self.is_quarantined(&input.optimization_id) {
@@ -1352,7 +1352,7 @@ impl ValidationReceiptEmitter {
                         .applied_rules
                         .first()
                         .map(|r| r.pack_id.clone())
-                        .expect("serde deserialization should succeed"),
+                        .unwrap_or_default(),
                     input
                         .applied_rules
                         .first()
@@ -1406,7 +1406,7 @@ impl ValidationReceiptEmitter {
                         .applied_rules
                         .first()
                         .map(|r| r.pack_id.clone())
-                        .expect("serde deserialization should succeed"),
+                        .unwrap_or_default(),
                     input
                         .applied_rules
                         .first()
@@ -1422,7 +1422,7 @@ impl ValidationReceiptEmitter {
                         limit_ticks: *budget_limit_ticks,
                     },
                     None,
-                    self.config.quarantine_on_first_failure,
+                    false,
                     self.current_epoch,
                     self.current_ticks,
                 );

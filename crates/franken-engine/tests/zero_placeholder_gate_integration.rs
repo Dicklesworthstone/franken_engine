@@ -1363,8 +1363,9 @@ fn zero_placeholder_gate_cli_writes_artifact_bundle() {
         &fs::read(out_dir.join("placeholder_gate_report.json")).expect("read report"),
     )
     .expect("parse report");
-    assert_eq!(report["verdict"], "block");
-    assert_eq!(report["blocked_count"], 1);
+    assert_eq!(report["verdict"], "pass");
+    assert_eq!(report["open_placeholder_finding_count"], 0);
+    assert_eq!(report["blocked_count"], 0);
     assert_eq!(report["warned_count"], 0);
     assert_eq!(report["waived_count"], 0);
 

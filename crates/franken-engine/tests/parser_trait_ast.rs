@@ -1351,15 +1351,22 @@ fn parser_emits_template_literal_empty() {
 }
 
 #[test]
-fn parser_tagged_meta_frontier_rejects_tagged_template_expressions() {
+fn parser_tagged_meta_frontier_accepts_tagged_template_expressions() {
     let parser = CanonicalEs2020Parser;
     let source = "render`hello ${name}`";
-    let err = parser
+    let tree = parser
         .parse(source, ParseGoal::Script)
-        .expect_err("tagged template should fail");
-    assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
-    assert_eq!(err.message, "tagged template expressions are not supported");
-    assert_eq!(err.span, Some(single_line_source_span(source)));
+        .expect("tagged template should parse");
+    let Statement::Expression(statement) = &tree.body[0] else {
+        panic!("expected expression statement");
+    };
+    let Expression::Call { callee, arguments } = &statement.expression else {
+        panic!("expected tagged template to parse as Call");
+    };
+    assert!(matches!(callee.as_ref(), Expression::Identifier(name) if name == "render"));
+    assert_eq!(arguments.len(), 1);
+    assert!(matches!(&arguments[0], Expression::TemplateLiteral { .. }));
+    assert_eq!(statement.span, single_line_source_span(source));
 }
 
 #[test]

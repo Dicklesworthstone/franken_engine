@@ -4415,9 +4415,11 @@ mod tests {
             run_id: "test-reg-1".to_string(),
             run_date: "2026-01-01".to_string(),
         };
-        // Use same config to get a baseline
-        let baseline_result = run_benchmark_suite(&config);
-        let result = run_benchmark_suite_with_regression(&config, &baseline_result.measurements);
+        // Use a deterministic matching baseline instead of comparing two live
+        // benchmark runs; wall-clock jitter can otherwise turn this into a
+        // machine-load test.
+        let baseline = vec![make_measurement(1.0, 1_000_000_000, 1_000_000_000)];
+        let result = run_benchmark_suite_with_regression(&config, &baseline);
         // Matching baseline → regression result produced
         assert_eq!(result.regressions.len(), 1);
         assert_eq!(result.regressions[0].family, BenchmarkFamily::BootStorm);

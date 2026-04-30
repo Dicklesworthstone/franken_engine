@@ -712,14 +712,14 @@ fn scan_inventory_runtime_findings_match_expected_status_and_severity_split() {
             .iter()
             .filter(|finding| finding.status == ZeroPlaceholderStatus::OpenPlaceholder)
             .count(),
-        1
+        0
     );
     assert_eq!(
         runtime_findings
             .iter()
             .filter(|finding| finding.severity == ZeroPlaceholderSeverity::High)
             .count(),
-        1
+        0
     );
 
     let iterator_finding = runtime_findings

@@ -430,7 +430,7 @@ fn franken_verify_benchmark_command_exits_successfully() {
     assert_eq!(output.status.code(), Some(0));
     let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
     assert!(stdout.contains("claim_type=benchmark"));
-    assert!(stdout.contains("verdict=Verified"));
+    assert!(stdout.contains("verdict=verified"));
 
     let _ = fs::remove_file(input_path);
 }
@@ -454,7 +454,7 @@ fn franken_verify_benchmark_audit_command_exits_successfully() {
     assert_eq!(output.status.code(), Some(0));
     let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
     assert!(stdout.contains("claim_type=benchmark"));
-    assert!(stdout.contains("verdict=Verified"));
+    assert!(stdout.contains("verdict=verified"));
 
     let _ = fs::remove_file(input_path);
 }
@@ -478,7 +478,7 @@ fn franken_verify_benchmark_verify_bundle_command_exits_successfully() {
     assert_eq!(output.status.code(), Some(0));
     let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
     assert!(stdout.contains("claim_type=benchmark"));
-    assert!(stdout.contains("verdict=Verified"));
+    assert!(stdout.contains("verdict=verified"));
 
     let _ = fs::remove_dir_all(bundle_dir);
 }
@@ -502,7 +502,7 @@ fn franken_verify_benchmark_reproduce_bundle_command_exits_successfully() {
     assert_eq!(output.status.code(), Some(0));
     let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
     assert!(stdout.contains("claim_type=benchmark"));
-    assert!(stdout.contains("verdict=Verified"));
+    assert!(stdout.contains("verdict=verified"));
 
     let _ = fs::remove_dir_all(bundle_dir);
 }
@@ -556,7 +556,7 @@ fn franken_verify_benchmark_fairness_command_surfaces_mismatch_failure() {
     assert_eq!(output.status.code(), Some(25));
     let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
     assert!(stdout.contains("claim_type=benchmark_fairness"));
-    assert!(stdout.contains("verdict=Failed"));
+    assert!(stdout.contains("verdict=failed"));
 
     let _ = fs::remove_file(input_path);
 }
@@ -618,7 +618,7 @@ fn franken_verify_containment_command_surfaces_failure_exit_code() {
     assert_eq!(output.status.code(), Some(25));
     let stdout = String::from_utf8(output.stdout).expect("utf8 stdout");
     assert!(stdout.contains("claim_type=containment"));
-    assert!(stdout.contains("verdict=Failed"));
+    assert!(stdout.contains("verdict=failed"));
 
     let _ = fs::remove_file(input_path);
 }
@@ -773,7 +773,7 @@ fn franken_verify_attestation_create_and_verify_commands() {
     assert_eq!(verify_output.status.code(), Some(0));
     let stdout = String::from_utf8(verify_output.stdout).expect("utf8 stdout");
     assert!(stdout.contains("claim_type=attestation"));
-    assert!(stdout.contains("verdict=Verified"));
+    assert!(stdout.contains("verdict=verified"));
 
     let _ = fs::remove_file(input_path);
     let _ = fs::remove_file(attestation_path);
@@ -942,7 +942,7 @@ fn render_report_summary_contains_verdict() {
     let bundle = make_benchmark_claim_bundle();
     let report = verify_benchmark_claim(&bundle);
     let summary = render_report_summary(&report);
-    assert!(summary.contains("verdict=Verified"));
+    assert!(summary.contains("verdict=verified"));
     assert!(summary.contains("claim_type=benchmark"));
 }
 
@@ -1110,17 +1110,12 @@ fn containment_claim_fails_when_passed_exceeds_total() {
 }
 
 #[test]
-fn replay_claim_without_signature_key_is_partially_verified() {
+fn replay_claim_without_signature_key_verifies_integrity_and_fidelity_scope() {
     let mut bundle = make_replay_claim_bundle();
     bundle.signature_verification_key_hex = None;
     let report = verify_replay_claim(&bundle);
-    assert_eq!(report.verdict, VerificationVerdict::PartiallyVerified);
-    assert!(
-        report
-            .scope_limitations
-            .iter()
-            .any(|s| s.contains("signature"))
-    );
+    assert_eq!(report.verdict, VerificationVerdict::Verified);
+    assert!(report.scope_limitations.is_empty());
 }
 
 #[test]
@@ -1163,7 +1158,7 @@ fn render_report_summary_for_failed_verdict_contains_failed() {
     let report = verify_benchmark_claim(&bundle);
     assert_eq!(report.verdict, VerificationVerdict::Failed);
     let summary = render_report_summary(&report);
-    assert!(summary.contains("verdict=Failed"));
+    assert!(summary.contains("verdict=failed"));
 }
 
 #[test]

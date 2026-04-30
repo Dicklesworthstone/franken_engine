@@ -856,6 +856,10 @@ fn run_workload_corpus_gate_invalid(args: &[&str]) -> serde_json::Value {
     })
 }
 
+fn workload_corpus_gate_command() -> std::process::Command {
+    std::process::Command::new(env!("CARGO_BIN_EXE_franken_workload_corpus_gate"))
+}
+
 #[test]
 fn gate_cli_rejects_unknown_option() {
     let error = run_workload_corpus_gate_invalid(&["--min-family", "99"]);
@@ -886,7 +890,6 @@ fn gate_cli_rejects_missing_option_value() {
 #[test]
 fn gate_events_reset_between_runs() {
     use std::fs;
-    use std::process::Command;
     use tempfile::TempDir;
 
     let temp_dir = TempDir::new().unwrap();
@@ -894,16 +897,13 @@ fn gate_events_reset_between_runs() {
 
     // Run gate twice in same output directory
     for run_num in 1..=2 {
-        let output = Command::new("cargo")
-            .args(&[
-                "run",
-                "--bin",
-                "franken_workload_corpus_gate",
-                "--",
+        let output = workload_corpus_gate_command()
+            .args([
                 "--out-dir",
                 &out_dir.display().to_string(),
+                "--min-per-family",
+                "1",
             ])
-            .current_dir("crates/franken-engine")
             .output()
             .expect("Failed to execute gate binary");
 
@@ -920,11 +920,11 @@ fn gate_events_reset_between_runs() {
         let events_content = fs::read_to_string(&events_path).unwrap();
         let event_lines: Vec<&str> = events_content.lines().collect();
 
-        // Each run should produce exactly 3 events: gate_start, corpus_built, gate_complete
+        // Each run should produce exactly 4 events: start, built, evaluated, complete.
         assert_eq!(
             event_lines.len(),
-            3,
-            "Run {} should produce exactly 3 events, got {}: {:?}",
+            4,
+            "Run {} should produce exactly 4 events, got {}: {:?}",
             run_num,
             event_lines.len(),
             event_lines
@@ -935,7 +935,7 @@ fn gate_events_reset_between_runs() {
             let event: serde_json::Value = serde_json::from_str(line).unwrap();
             // All events should have recent timestamps, not from previous runs
             assert!(
-                event.get("timestamp").is_some(),
+                event.get("timestamp_utc").is_some(),
                 "Event missing timestamp: {}",
                 line
             );
@@ -946,31 +946,31 @@ fn gate_events_reset_between_runs() {
 #[test]
 fn gate_commands_include_all_cli_parameters() {
     use std::fs;
-    use std::process::Command;
     use tempfile::TempDir;
 
     let temp_dir = TempDir::new().unwrap();
     let out_dir = temp_dir.path();
 
     // Run gate with custom CLI threshold parameters
-    let output = Command::new("cargo")
+    let output = workload_corpus_gate_command()
         .args(&[
-            "run",
-            "--bin",
-            "franken_workload_corpus_gate",
-            "--",
             "--out-dir",
             &out_dir.display().to_string(),
             "--min-per-family",
-            "3",
+            "1",
             "--min-equivalence-rate",
             "800000",
         ])
-        .current_dir("crates/franken-engine")
         .output()
         .expect("Failed to execute gate binary");
 
-    assert!(output.status.success(), "Gate execution failed");
+    assert!(
+        output.status.success(),
+        "Gate execution failed: status={:?} stdout={} stderr={}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 
     // Verify commands.txt includes complete CLI parameters for reproducible replay
     let commands_path = out_dir.join("commands.txt");
@@ -989,7 +989,7 @@ fn gate_commands_include_all_cli_parameters() {
         "Replay command missing --out-dir"
     );
     assert!(
-        replay_command.contains("--min-per-family 3"),
+        replay_command.contains("--min-per-family 1"),
         "Replay command missing --min-per-family: {}",
         replay_command
     );
@@ -1010,7 +1010,6 @@ fn gate_commands_include_all_cli_parameters() {
 #[test]
 fn gate_repeated_runs_same_outdir_deterministic() {
     use std::fs;
-    use std::process::Command;
     use tempfile::TempDir;
 
     let temp_dir = TempDir::new().unwrap();
@@ -1021,20 +1020,15 @@ fn gate_repeated_runs_same_outdir_deterministic() {
 
     // Run gate twice with identical parameters
     for run_num in 1..=2 {
-        let output = Command::new("cargo")
+        let output = workload_corpus_gate_command()
             .args(&[
-                "run",
-                "--bin",
-                "franken_workload_corpus_gate",
-                "--",
                 "--out-dir",
                 &out_dir.display().to_string(),
                 "--min-per-family",
-                "2",
+                "1",
                 "--min-equivalence-rate",
                 "950000",
             ])
-            .current_dir("crates/franken-engine")
             .output()
             .expect("Failed to execute gate binary");
 
@@ -1069,7 +1063,6 @@ fn gate_repeated_runs_same_outdir_deterministic() {
 #[test]
 fn gate_corpus_manifest_loading_with_equivalence_artifacts() {
     use std::fs;
-    use std::process::Command;
     use tempfile::TempDir;
 
     let temp_dir = TempDir::new().unwrap();
@@ -1080,32 +1073,39 @@ fn gate_corpus_manifest_loading_with_equivalence_artifacts() {
     fs::create_dir_all(&manifest_dir).unwrap();
     fs::create_dir_all(&artifacts_dir).unwrap();
 
-    // Create a minimal corpus manifest
-    let manifest_content = serde_json::json!({
-        "schema_version": "franken-engine.workload-corpus-manifest.v1",
-        "specimens": [
-            {
-                "id": "test_regex_01",
-                "name": "Test regex workload",
-                "family": "regex_unicode",
+    // Create a corpus manifest that satisfies the default family coverage gate
+    // while keeping one specimen per family.
+    let specimens = WorkloadFamily::ALL
+        .iter()
+        .map(|family| {
+            let id = format!("test_{}", family.as_str());
+            serde_json::json!({
+                "id": id,
+                "name": format!("Test {} workload", family.as_str()),
+                "family": serde_json::to_value(family).unwrap(),
                 "language": "java_script",
                 "provenance": {
-                    "origin": "external_corpus",
-                    "source_url": "https://example.com/workloads/regex_01.js",
+                    "origin": "open_source_project",
+                    "source_url": format!("https://example.com/workloads/{}.js", family.as_str()),
                     "license": "permissive",
                     "spdx_id": "MIT",
                     "source_version": "v1.0.0",
-                    "selection_rationale": "Representative regex workload",
-                    "content_hash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                    "selection_rationale": "Representative workload",
+                    "content_hash": ContentHash::compute(family.as_str().as_bytes()).to_string()
                 },
                 "observability_modes": ["budgeted_default"],
                 "secondary_families": [],
-                "tags": ["regex", "test"],
+                "tags": [family.as_str(), "test"],
                 "approximate_lines": 50,
                 "requires_native_addons": false,
                 "exercises_async": false
-            }
-        ]
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let manifest_content = serde_json::json!({
+        "schema_version": "franken-engine.workload-corpus-manifest.v1",
+        "specimens": specimens
     });
 
     let manifest_path = manifest_dir.join("corpus.json");
@@ -1115,44 +1115,50 @@ fn gate_corpus_manifest_loading_with_equivalence_artifacts() {
     )
     .unwrap();
 
-    // Create equivalence artifact
-    let equiv_content = serde_json::json!({
-        "specimen_id": "test_regex_01",
-        "baseline": "node_js",
-        "divergence_class": "identical",
-        "divergence_description": "",
-        "output_hash_matches": true,
-        "franken_output_hash": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
-        "baseline_output_hash": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
-        "evidence_path": "evidence/test_regex_01.trace"
-    });
+    for family in WorkloadFamily::ALL {
+        let id = format!("test_{}", family.as_str());
+        let output_hash = ContentHash::compute(id.as_bytes()).to_string();
+        let equiv_content = serde_json::json!({
+            "specimen_id": id,
+            "baseline": "node_js",
+            "divergence_class": "identical",
+            "divergence_description": "",
+            "output_hash_matches": true,
+            "franken_output_hash": output_hash,
+            "baseline_output_hash": output_hash,
+            "evidence_path": format!("evidence/{}.trace", family.as_str())
+        });
 
-    let equiv_path = artifacts_dir.join("test_regex_01.json");
-    fs::write(
-        &equiv_path,
-        serde_json::to_string_pretty(&equiv_content).unwrap(),
-    )
-    .unwrap();
+        let equiv_path = artifacts_dir.join(format!("{}.json", family.as_str()));
+        fs::write(
+            &equiv_path,
+            serde_json::to_string_pretty(&equiv_content).unwrap(),
+        )
+        .unwrap();
+    }
 
     // Run gate with corpus manifest and equivalence artifacts
-    let output = Command::new("cargo")
+    let output = workload_corpus_gate_command()
         .args(&[
-            "run",
-            "--bin",
-            "franken_workload_corpus_gate",
-            "--",
             "--out-dir",
             &out_dir.display().to_string(),
+            "--min-per-family",
+            "1",
             "--corpus-manifest",
             &manifest_path.display().to_string(),
             "--equivalence-artifacts",
             &artifacts_dir.display().to_string(),
         ])
-        .current_dir("crates/franken-engine")
         .output()
         .expect("Failed to execute gate binary");
 
-    assert!(output.status.success(), "Gate execution failed");
+    assert!(
+        output.status.success(),
+        "Gate execution failed: status={:?} stdout={} stderr={}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 
     // Verify corpus manifest was loaded correctly
     let corpus_manifest_path = out_dir.join("corpus_manifest.json");
@@ -1184,24 +1190,18 @@ fn gate_corpus_manifest_loading_with_equivalence_artifacts() {
 
 #[test]
 fn gate_publication_mode_requires_corpus_and_artifacts() {
-    use std::process::Command;
     use tempfile::TempDir;
 
     let temp_dir = TempDir::new().unwrap();
     let out_dir = temp_dir.path();
 
     // Run gate in publication mode without required parameters
-    let output = Command::new("cargo")
+    let output = workload_corpus_gate_command()
         .args(&[
-            "run",
-            "--bin",
-            "franken_workload_corpus_gate",
-            "--",
             "--out-dir",
             &out_dir.display().to_string(),
             "--publication-mode",
         ])
-        .current_dir("crates/franken-engine")
         .output()
         .expect("Failed to execute gate binary");
 

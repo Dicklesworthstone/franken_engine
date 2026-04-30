@@ -389,6 +389,8 @@ struct AnalyzerState {
     in_switch: bool,
     /// Whether the module contains top-level await expressions.
     has_top_level_await: bool,
+    /// Whether `await` is valid in the current syntactic context.
+    await_allowed: bool,
 }
 
 impl AnalyzerState {
@@ -407,6 +409,7 @@ impl AnalyzerState {
             in_loop: false,
             in_switch: false,
             has_top_level_await: false,
+            await_allowed: is_module,
         }
     }
 
@@ -868,10 +871,12 @@ fn analyze_statement(
             let prev_in_loop = state.in_loop;
             let prev_in_switch = state.in_switch;
             let prev_const_bindings = state.const_bindings.clone();
+            let prev_await_allowed = state.await_allowed;
             state.in_function = true;
             state.in_loop = false;
             state.in_switch = false;
             state.const_bindings = BTreeSet::new();
+            state.await_allowed = func.is_async;
             for child in &func.body.body {
                 analyze_statement(
                     state,
@@ -886,6 +891,7 @@ fn analyze_statement(
             state.in_loop = prev_in_loop;
             state.in_switch = prev_in_switch;
             state.const_bindings = prev_const_bindings;
+            state.await_allowed = prev_await_allowed;
             let func_scope = ScopeNode {
                 scope_id: func_scope_id,
                 parent: Some(scope_id),
@@ -1294,13 +1300,13 @@ fn check_destructuring_duplicates(
 fn walk_expression(state: &mut AnalyzerState, expr: &Expression, span: &SourceSpan) {
     match expr {
         Expression::Await(inner) => {
-            if !state.is_module {
+            if !state.await_allowed {
                 state.push_error(
                     StaticErrorKind::AwaitOutsideAsync,
                     "await is only valid in async functions or module top-level",
                     span.clone(),
                 );
-            } else {
+            } else if state.is_module && !state.in_function {
                 // In module context, mark that this module uses top-level await
                 state.has_top_level_await = true;
             }
@@ -1395,7 +1401,7 @@ fn walk_expression(state: &mut AnalyzerState, expr: &Expression, span: &SourceSp
         Expression::ArrowFunction {
             params,
             body,
-            is_async: _,
+            is_async,
         } => {
             // Check for duplicate parameter names in strict mode (module code)
             if state.is_module {
@@ -1417,19 +1423,21 @@ fn walk_expression(state: &mut AnalyzerState, expr: &Expression, span: &SourceSp
             for param in params {
                 check_destructuring_duplicates(state, &param.pattern, &param.span);
             }
+            let prev_in_function = state.in_function;
+            let prev_in_loop = state.in_loop;
+            let prev_in_switch = state.in_switch;
+            let prev_await_allowed = state.await_allowed;
+            state.in_function = true;
+            state.in_loop = false;
+            state.in_switch = false;
+            state.await_allowed = *is_async;
             match body {
                 crate::ast::ArrowBody::Expression(inner) => {
                     walk_expression(state, inner, span);
                 }
                 crate::ast::ArrowBody::Block(block) => {
                     // Arrow block body creates a function scope context
-                    let prev_in_function = state.in_function;
-                    let prev_in_loop = state.in_loop;
-                    let prev_in_switch = state.in_switch;
                     let prev_const = state.const_bindings.clone();
-                    state.in_function = true;
-                    state.in_loop = false;
-                    state.in_switch = false;
                     state.const_bindings = BTreeSet::new();
                     let arrow_scope_id = state.alloc_scope_id(0);
                     let mut arrow_bindings: Vec<ResolvedBinding> = Vec::new();
@@ -1445,9 +1453,6 @@ fn walk_expression(state: &mut AnalyzerState, expr: &Expression, span: &SourceSp
                             &mut arrow_var,
                         );
                     }
-                    state.in_function = prev_in_function;
-                    state.in_loop = prev_in_loop;
-                    state.in_switch = prev_in_switch;
                     state.const_bindings = prev_const;
                     let arrow_scope = ScopeNode {
                         scope_id: arrow_scope_id,
@@ -1459,6 +1464,10 @@ fn walk_expression(state: &mut AnalyzerState, expr: &Expression, span: &SourceSp
                     state.bindings.extend(arrow_bindings);
                 }
             }
+            state.in_function = prev_in_function;
+            state.in_loop = prev_in_loop;
+            state.in_switch = prev_in_switch;
+            state.await_allowed = prev_await_allowed;
         }
         Expression::New { callee, arguments } => {
             walk_expression(state, callee, span);

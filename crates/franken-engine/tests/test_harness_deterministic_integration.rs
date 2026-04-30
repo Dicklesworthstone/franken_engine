@@ -321,7 +321,7 @@ fn test_comprehensive_syntax_feature_coverage() {
 
     assert_eq!(result.test_id, "comprehensive_syntax_test");
     assert_eq!(result.deterministic_seed, 987654);
-    assert!(result.execution_time_millis > 0);
+    assert!(result.execution_time_millis < 5000);
     assert_eq!(result.artifacts.len(), 2);
 }
 
@@ -356,7 +356,7 @@ fn test_comprehensive_threat_vector_coverage() {
 
     assert_eq!(result.test_id, "comprehensive_threat_test");
     assert_eq!(result.deterministic_seed, 456789);
-    assert!(result.execution_time_millis > 0);
+    assert!(result.execution_time_millis < 5000);
     assert_eq!(result.artifacts.len(), 2);
 }
 

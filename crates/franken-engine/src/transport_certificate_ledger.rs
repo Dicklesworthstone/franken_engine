@@ -620,12 +620,11 @@ impl ResidualLedger {
             .iter()
             .map(|c| c.transported_contribution_millionths)
             .sum();
-        // Source components must sum to the declared total.
-        // Transported components + unexplained remainder must equal the declared
-        // transported total (the remainder accounts for the gap).
+        // Header totals describe the accounted component ledger. The
+        // unexplained remainder is tracked separately as certificate-level
+        // transport residual.
         sum_source == self.total_source_millionths
-            && sum_transported.saturating_add(self.unexplained_remainder_millionths)
-                == self.total_transported_millionths
+            && sum_transported == self.total_transported_millionths
     }
 
     /// Look up a component by name.

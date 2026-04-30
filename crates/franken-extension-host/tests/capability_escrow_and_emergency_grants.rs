@@ -40,8 +40,9 @@ fn base_manifest(capabilities: &[Capability]) -> ExtensionManifest {
     };
 
     manifest.content_hash = compute_content_hash(&manifest).expect("content hash");
-    manifest.publisher_signature =
-        Some(signing_key.sign(&manifest.content_hash).to_bytes().to_vec());
+    let mut signed_payload = b"franken-extension-host-signed-manifest-v1:".to_vec();
+    signed_payload.extend_from_slice(&manifest.content_hash);
+    manifest.publisher_signature = Some(signing_key.sign(&signed_payload).to_bytes().to_vec());
     manifest
 }
 

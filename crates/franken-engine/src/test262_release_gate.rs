@@ -155,14 +155,6 @@ impl Test262Profile {
     }
 
     pub fn classify(&self, test_id: &str) -> ProfileDecision {
-        let included = self
-            .includes
-            .iter()
-            .any(|rule| wildcard_match(rule.pattern.as_str(), test_id));
-        if !included {
-            return ProfileDecision::NotSelected;
-        }
-
         if let Some(rule) = self
             .excludes
             .iter()
@@ -171,6 +163,14 @@ impl Test262Profile {
             return ProfileDecision::Excluded {
                 rationale: rule.rationale.clone(),
             };
+        }
+
+        let included = self
+            .includes
+            .iter()
+            .any(|rule| wildcard_match(rule.pattern.as_str(), test_id));
+        if !included {
+            return ProfileDecision::NotSelected;
         }
 
         ProfileDecision::Included

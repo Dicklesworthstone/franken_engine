@@ -823,7 +823,7 @@ impl TranslationValidationGate {
         self.tracked
             .get(optimization_id)
             .map(|t| t.promotions.iter().collect())
-            .expect("serde deserialization should succeed")
+            .unwrap_or_default()
     }
 }
 

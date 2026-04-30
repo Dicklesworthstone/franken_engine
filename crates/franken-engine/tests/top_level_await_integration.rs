@@ -188,13 +188,13 @@ fn tla_error_propagation_placeholder() {
 
     // For now, just verify parsing of error handling with TLA
     let source = r#"
+        let result;
         try {
-            const data = await riskyOperation();
-            export const result = data;
+            result = await riskyOperation();
         } catch (error) {
-            console.error('TLA failed:', error);
             throw error;
         }
+        export { result };
     "#;
     let tree = parse(source, ParseGoal::Module).expect("parse should succeed");
     let result = analyze(&tree);
@@ -214,7 +214,6 @@ fn tla_await_in_function_still_requires_async() {
         const topLevel = await fetchConfig();
 
         function regular() {
-            // This should still fail - await in non-async function
             return await someOperation();
         }
     "#;

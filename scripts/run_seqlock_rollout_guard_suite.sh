@@ -392,8 +392,8 @@ write_manifest() {
     echo "    \"cat ${events_path}\","
     echo "    \"cat ${manifest_path}\","
     echo "    \"ls -1 ${step_logs_dir}\","
-    echo "    \"${replay_invocation}\","
-    echo "    \"${suite_invocation}\""
+    echo '    "'"${replay_invocation}"'",'
+    echo '    "'"${suite_invocation}"'"'
     echo '  ]'
     echo "}"
   } >"${manifest_path}"

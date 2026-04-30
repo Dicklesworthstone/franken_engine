@@ -95,19 +95,34 @@ capture_subgate_artifacts() {
 }
 
 check_dependencies() {
-  local dep status title
+  local dep status title dependency_index_path dependency_json
+  local -a list_args=()
 
   unmet_dependencies=()
   dependency_snapshots=()
 
   for dep in "${dependency_ids[@]}"; do
-    if ! br show "$dep" --json >"${logs_dir}/${dep}.json" 2>/dev/null; then
+    list_args+=(--id "$dep")
+  done
+
+  dependency_index_path="${logs_dir}/dependency_statuses.json"
+  if ! br list --all --limit 0 --json "${list_args[@]}" >"$dependency_index_path" 2>/dev/null; then
+    for dep in "${dependency_ids[@]}"; do
+      unmet_dependencies+=("${dep}=unknown")
+      dependency_snapshots+=("${dep}|unknown|lookup_failed")
+    done
+    return 0
+  fi
+
+  for dep in "${dependency_ids[@]}"; do
+    dependency_json="$(jq -c --arg dep "$dep" 'map(select(.id == $dep)) | .[0] // empty' "$dependency_index_path")"
+    if [[ -z "$dependency_json" ]]; then
       status="unknown"
       title="lookup_failed"
       unmet_dependencies+=("${dep}=unknown")
     else
-      status="$(jq -r '.[0].status // "unknown"' "${logs_dir}/${dep}.json")"
-      title="$(jq -r '.[0].title // ""' "${logs_dir}/${dep}.json")"
+      status="$(jq -r '.status // "unknown"' <<<"$dependency_json")"
+      title="$(jq -r '.title // ""' <<<"$dependency_json")"
       if [[ "$status" != "closed" ]]; then
         unmet_dependencies+=("${dep}=${status}")
       fi

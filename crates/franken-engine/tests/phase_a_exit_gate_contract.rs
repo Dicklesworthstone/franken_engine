@@ -54,6 +54,27 @@ fn blocked_dependency_command(artifacts_root: &Path) -> Command {
         &fake_br,
         r#"#!/usr/bin/env bash
 set -euo pipefail
+if [[ "${1:-}" == "list" ]]; then
+  shift
+  deps=()
+  while [[ "$#" -gt 0 ]]; do
+    case "${1:-}" in
+      --id)
+        shift
+        deps+=("${1:-unknown}")
+        ;;
+    esac
+    shift || true
+  done
+  printf '['
+  sep=''
+  for dep in "${deps[@]}"; do
+    printf '%s{"id":"%s","status":"open","title":"fixture unresolved dependency"}' "$sep" "$dep"
+    sep=','
+  done
+  printf ']\n'
+  exit 0
+fi
 if [[ "${1:-}" == "show" ]]; then
   dep="${2:-unknown}"
   printf '[{"id":"%s","status":"open","title":"fixture unresolved dependency"}]\n' "$dep"

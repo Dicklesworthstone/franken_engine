@@ -1,0 +1,6 @@
+Error Message Catalog
+====================
+
+InvalidInput: Parameter 'count' must be positive
+ParseError: Expected number at position 42
+ValidationFailed: Schema version mismatch: expected v1, got v2

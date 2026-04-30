@@ -1,0 +1,10 @@
+FrankenEngine Golden Artifact Demo
+==================================
+
+Value 0: 0x2a (42)
+Value 1: 0x64 (100)
+Value 2: 0xff (255)
+Value 3: 0x3e8 (1000)
+
+Hex dump:
+01 02 ff ab cd 

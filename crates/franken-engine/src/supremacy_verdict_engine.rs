@@ -328,9 +328,9 @@ pub struct SequentialTestState {
     /// Number of observations ingested.
     pub n_observations: u64,
     /// Running sum of treatment values.
-    pub sum_treatment: u64,
+    pub sum_treatment: u128,
     /// Running sum of baseline values.
-    pub sum_baseline: u64,
+    pub sum_baseline: u128,
     /// Running sum of squared treatment values (for variance).
     pub sum_sq_treatment: u128,
     /// Running sum of squared baseline values (for variance).
@@ -373,18 +373,23 @@ impl SequentialTestState {
 
     /// Ingest a new observation and update the running LLR.
     pub fn update(&mut self, treatment_ns: u64, baseline_ns: u64) {
-        self.n_observations += 1;
-        self.sum_treatment += treatment_ns;
-        self.sum_baseline += baseline_ns;
-        self.sum_sq_treatment += (treatment_ns as u128) * (treatment_ns as u128);
-        self.sum_sq_baseline += (baseline_ns as u128) * (baseline_ns as u128);
+        self.n_observations = self.n_observations.saturating_add(1);
+        self.sum_treatment = self.sum_treatment.saturating_add(treatment_ns as u128);
+        self.sum_baseline = self.sum_baseline.saturating_add(baseline_ns as u128);
+        self.sum_sq_treatment = self
+            .sum_sq_treatment
+            .saturating_add((treatment_ns as u128) * (treatment_ns as u128));
+        self.sum_sq_baseline = self
+            .sum_sq_baseline
+            .saturating_add((baseline_ns as u128) * (baseline_ns as u128));
 
         // Increment to LLR: if treatment < baseline, that's evidence of superiority.
         // Use the ratio (baseline - treatment) / max(baseline, 1) as a proxy.
         if baseline_ns > 0 {
-            let diff = baseline_ns as i64 - treatment_ns as i64;
-            let increment = diff * (MILLIONTHS as i64) / (baseline_ns as i64);
-            self.cumulative_llr += increment;
+            let diff = baseline_ns as i128 - treatment_ns as i128;
+            let increment = diff.saturating_mul(MILLIONTHS as i128) / (baseline_ns as i128);
+            let increment = increment.clamp(i64::MIN as i128, i64::MAX as i128) as i64;
+            self.cumulative_llr = self.cumulative_llr.saturating_add(increment);
         }
     }
 
@@ -408,7 +413,7 @@ impl SequentialTestState {
         if self.n_observations == 0 {
             return 0;
         }
-        self.sum_treatment * MILLIONTHS / self.n_observations
+        scaled_mean_millionths(self.sum_treatment, self.n_observations)
     }
 
     /// Mean baseline value (millionths).
@@ -416,7 +421,7 @@ impl SequentialTestState {
         if self.n_observations == 0 {
             return 0;
         }
-        self.sum_baseline * MILLIONTHS / self.n_observations
+        scaled_mean_millionths(self.sum_baseline, self.n_observations)
     }
 
     /// Estimated effect size (Cohen's d) in millionths.
@@ -427,21 +432,21 @@ impl SequentialTestState {
             return 0;
         }
         let n = self.n_observations as u128;
-        let mean_t = self.sum_treatment as u128 / n;
-        let mean_b = self.sum_baseline as u128 / n;
+        let mean_t = self.sum_treatment / n;
+        let mean_b = self.sum_baseline / n;
 
         // Variance = E[X²] - (E[X])²
-        let var_t = self.sum_sq_treatment / n - mean_t * mean_t;
-        let var_b = self.sum_sq_baseline / n - mean_b * mean_b;
+        let var_t = (self.sum_sq_treatment / n).saturating_sub(mean_t * mean_t);
+        let var_b = (self.sum_sq_baseline / n).saturating_sub(mean_b * mean_b);
         let pooled_var = (var_t + var_b) / 2;
 
         if pooled_var == 0 {
-            return if mean_b > mean_t { MILLIONTHS } else { 0 };
+            return mean_improvement_millionths(mean_t, mean_b);
         }
 
         let pooled_sd = isqrt(pooled_var);
         if pooled_sd == 0 {
-            return if mean_b > mean_t { MILLIONTHS } else { 0 };
+            return mean_improvement_millionths(mean_t, mean_b);
         }
 
         let diff = if mean_b >= mean_t {
@@ -450,7 +455,7 @@ impl SequentialTestState {
             return 0; // Treatment is worse — no positive effect
         };
 
-        let d = diff * (MILLIONTHS as u128) / pooled_sd;
+        let d = diff.saturating_mul(MILLIONTHS as u128) / pooled_sd;
         // Cap at a reasonable maximum
         if d > (10 * MILLIONTHS as u128) {
             10 * MILLIONTHS
@@ -465,13 +470,13 @@ impl SequentialTestState {
             return 0;
         }
         let n = self.n_observations as u128;
-        let mean = self.sum_treatment as u128 / n;
+        let mean = self.sum_treatment / n;
         if mean == 0 {
             return 0;
         }
-        let var = self.sum_sq_treatment / n - mean * mean;
+        let var = (self.sum_sq_treatment / n).saturating_sub(mean * mean);
         let sd = isqrt(var);
-        (sd * (MILLIONTHS as u128) / mean) as u64
+        u128_to_u64_saturating(sd.saturating_mul(MILLIONTHS as u128) / mean)
     }
 }
 
@@ -731,9 +736,7 @@ pub fn evaluate_supremacy(
         .filter(|cv| cv.verdict == SupremacyVerdict::Confirmed)
         .count() as u64;
     let total_cells = cell_verdicts.len() as u64;
-    let confirmed_fraction = (confirmed_count * MILLIONTHS)
-        .checked_div(total_cells)
-        .unwrap_or(0);
+    let confirmed_fraction = ratio_millionths(confirmed_count as u128, total_cells as u128);
 
     let total_violations: usize = cell_verdicts.iter().map(|cv| cv.violations.len()).sum();
 
@@ -810,7 +813,7 @@ fn evaluate_cell(
         // Memory regression check
         if obs.memory_delta_bytes > 0 && obs.baseline_ns > 0 {
             let regression_frac =
-                (obs.memory_delta_bytes as u64) * MILLIONTHS / obs.baseline_ns.max(1);
+                ratio_millionths(obs.memory_delta_bytes as u128, obs.baseline_ns as u128);
             if regression_frac > config.max_memory_regression {
                 memory_regressions += 1;
             }
@@ -818,8 +821,10 @@ fn evaluate_cell(
 
         // Tail-latency regression check
         if obs.tail_p99_ns > obs.baseline_tail_p99_ns && obs.baseline_tail_p99_ns > 0 {
-            let regression_frac = (obs.tail_p99_ns - obs.baseline_tail_p99_ns) * MILLIONTHS
-                / obs.baseline_tail_p99_ns;
+            let regression_frac = ratio_millionths(
+                (obs.tail_p99_ns - obs.baseline_tail_p99_ns) as u128,
+                obs.baseline_tail_p99_ns as u128,
+            );
             if regression_frac > config.max_tail_regression {
                 tail_regressions += 1;
             }
@@ -836,7 +841,7 @@ fn evaluate_cell(
     }
 
     // Build side-constraint violations
-    let crash_rate = (crash_count * MILLIONTHS).checked_div(n).unwrap_or(0);
+    let crash_rate = ratio_millionths(crash_count as u128, n as u128);
     if crash_rate > config.max_crash_rate {
         violations.push(SideConstraintViolation {
             kind: SideConstraintKind::CrashRate,
@@ -851,7 +856,7 @@ fn evaluate_cell(
     }
 
     if memory_regressions > 0 {
-        let frac = memory_regressions * MILLIONTHS / n.max(1);
+        let frac = ratio_millionths(memory_regressions as u128, n as u128);
         if frac > config.max_memory_regression {
             violations.push(SideConstraintViolation {
                 kind: SideConstraintKind::MemoryRegression,
@@ -864,7 +869,7 @@ fn evaluate_cell(
     }
 
     if tail_regressions > 0 {
-        let frac = tail_regressions * MILLIONTHS / n.max(1);
+        let frac = ratio_millionths(tail_regressions as u128, n as u128);
         if frac > config.max_tail_regression {
             violations.push(SideConstraintViolation {
                 kind: SideConstraintKind::TailLatencyRegression,
@@ -901,11 +906,7 @@ fn evaluate_cell(
     let mean_improvement_ratio = if sprt.mean_baseline_millionths() > 0 {
         let mean_t = sprt.mean_treatment_millionths();
         let mean_b = sprt.mean_baseline_millionths();
-        if mean_b > mean_t {
-            (mean_b - mean_t) * MILLIONTHS / mean_b
-        } else {
-            0
-        }
+        mean_improvement_millionths(mean_t as u128, mean_b as u128)
     } else {
         0
     };
@@ -1002,6 +1003,42 @@ fn compute_verdict_hash(
 /// Integer square root for `u128`.
 fn isqrt(n: u128) -> u128 {
     n.isqrt()
+}
+
+fn ratio_millionths(numerator: u128, denominator: u128) -> u64 {
+    if denominator == 0 {
+        return 0;
+    }
+    u128_to_u64_saturating(numerator.saturating_mul(MILLIONTHS as u128) / denominator)
+}
+
+fn scaled_mean_millionths(sum: u128, n: u64) -> u64 {
+    if n == 0 {
+        return 0;
+    }
+    let n = n as u128;
+    let whole = sum / n;
+    let remainder = sum % n;
+    let scaled = whole
+        .saturating_mul(MILLIONTHS as u128)
+        .saturating_add(remainder.saturating_mul(MILLIONTHS as u128) / n);
+    u128_to_u64_saturating(scaled)
+}
+
+fn mean_improvement_millionths(mean_treatment: u128, mean_baseline: u128) -> u64 {
+    if mean_baseline > mean_treatment {
+        ratio_millionths(mean_baseline - mean_treatment, mean_baseline)
+    } else {
+        0
+    }
+}
+
+fn u128_to_u64_saturating(value: u128) -> u64 {
+    if value > u64::MAX as u128 {
+        u64::MAX
+    } else {
+        value as u64
+    }
 }
 
 /// Generate a human-readable summary of a verdict report.

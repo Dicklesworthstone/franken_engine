@@ -369,7 +369,7 @@ fn test_sprt_mean_treatment() {
     state.update(100, 200);
     state.update(300, 400);
     let mean = state.mean_treatment_millionths();
-    assert_eq!(mean, 200 * 1_000_000 / 2);
+    assert_eq!(mean, 400 * 1_000_000 / 2);
 }
 
 #[test]
@@ -378,7 +378,7 @@ fn test_sprt_mean_baseline() {
     state.update(100, 200);
     state.update(300, 400);
     let mean = state.mean_baseline_millionths();
-    assert_eq!(mean, 300 * 1_000_000 / 2);
+    assert_eq!(mean, 600 * 1_000_000 / 2);
 }
 
 // ---------------------------------------------------------------------------

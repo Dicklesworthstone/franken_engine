@@ -392,7 +392,9 @@ impl AssumptionLedger {
         if self.assumptions.contains_key(&assumption.id) {
             return Err(LedgerError::DuplicateAssumption(assumption.id));
         }
-        self.chain_hash = simple_hash(&format!("{}_{}", self.chain_hash, assumption.id));
+        let assumption_material =
+            serde_json::to_string(&assumption).expect("assumption serialization should succeed");
+        self.chain_hash = simple_hash(&format!("{}_{}", self.chain_hash, assumption_material));
         self.assumptions.insert(assumption.id.clone(), assumption);
         Ok(())
     }
@@ -1997,6 +1999,40 @@ mod tests {
             .expect("serde deserialization should succeed");
         l2.record_assumption(make_assumption("a2", ViolationSeverity::Warning))
             .expect("serde deserialization should succeed");
+        assert_ne!(l1.chain_hash(), l2.chain_hash());
+    }
+
+    #[test]
+    fn ledger_chain_hash_differs_for_different_decision_ids() {
+        let mut a1 = make_assumption("a1", ViolationSeverity::Warning);
+        let mut a2 = a1.clone();
+        a1.decision_id = "decision-a".into();
+        a2.decision_id = "decision-b".into();
+
+        let mut l1 = default_ledger();
+        let mut l2 = default_ledger();
+        l1.record_assumption(a1)
+            .expect("serde deserialization should succeed");
+        l2.record_assumption(a2)
+            .expect("serde deserialization should succeed");
+
+        assert_ne!(l1.chain_hash(), l2.chain_hash());
+    }
+
+    #[test]
+    fn ledger_chain_hash_differs_for_different_epochs() {
+        let mut a1 = make_assumption("a1", ViolationSeverity::Warning);
+        let mut a2 = a1.clone();
+        a1.epoch = 1;
+        a2.epoch = 2;
+
+        let mut l1 = default_ledger();
+        let mut l2 = default_ledger();
+        l1.record_assumption(a1)
+            .expect("serde deserialization should succeed");
+        l2.record_assumption(a2)
+            .expect("serde deserialization should succeed");
+
         assert_ne!(l1.chain_hash(), l2.chain_hash());
     }
 

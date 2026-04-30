@@ -1138,13 +1138,8 @@ fn evidence_with_only_informational_divergences_passes_gate() {
             &corpus,
             &|_| {
                 Ok(CellOutput {
-                    return_value: "42".to_string(),
-                    side_effects: vec![],
-                    exceptions: vec![],
-                    evidence_entries: vec![],
-                    capabilities_exercised: vec![SlotCapability::ReadSource],
-                    duration_us: 100,
                     memory_bytes: 2048, // much more memory
+                    ..matching_output("42")
                 })
             },
             &|_| Ok(matching_output("42")),

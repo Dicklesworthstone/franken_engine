@@ -536,6 +536,32 @@ mod tests {
     }
 
     #[test]
+    fn arrow_function_harness_fails_on_expected_output_mismatch() {
+        let harness = ArrowFunctionHarness { tests: Vec::new() };
+        let test = ArrowFunctionTest {
+            id: "regression-output-mismatch".to_string(),
+            description: "Expected output mismatch must fail conformance".to_string(),
+            es2020_section: "14.2.1".to_string(),
+            requirement_level: RequirementLevel::Must,
+            category: ArrowFunctionCategory::BasicSyntax,
+            source: "console.log(1);".to_string(),
+            expected_result: ExpectedResult::Success {
+                output: "2\n".to_string(),
+            },
+        };
+
+        let result = harness.execute_test(&test, SecurityEpoch::from_raw(1));
+
+        match result {
+            ArrowFunctionResult::Fail { reason } => {
+                assert!(reason.contains("Output mismatch"));
+                assert!(reason.contains("regression-output-mismatch"));
+            }
+            other => panic!("expected output mismatch to fail, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn must_requirements_are_present() {
         let harness = ArrowFunctionHarness::new();
 

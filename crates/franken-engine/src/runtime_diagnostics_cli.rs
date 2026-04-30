@@ -2286,6 +2286,16 @@ pub fn render_rollout_decision_artifact_summary(output: &RolloutDecisionArtifact
         }
     }
 
+    if !output.merged_signals.is_empty() {
+        lines.push("merged_signal_details:".to_string());
+        for signal in &output.merged_signals {
+            lines.push(format!(
+                "  - source={} signal_id={} severity={} summary={}",
+                signal.source, signal.signal_id, signal.severity, signal.summary
+            ));
+        }
+    }
+
     lines.push("reproducible_commands:".to_string());
     for command in &output.reproducible_commands {
         lines.push(format!("  - {command}"));

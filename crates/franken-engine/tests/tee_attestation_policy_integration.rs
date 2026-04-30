@@ -698,12 +698,16 @@ fn store_rejects_policy_epoch_regression() {
 }
 
 #[test]
-fn store_allows_same_epoch_reload() {
+fn store_rejects_same_epoch_reload() {
     let mut store = loaded_store(5);
-    store
+    let err = store
         .load_policy(sample_policy(5), "trace-same", "decision-same")
-        .expect("same epoch should be ok");
-    assert!(!store.receipt_emission_halted());
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        TeeAttestationPolicyError::PolicyEpochRegression { .. }
+    ));
+    assert!(store.receipt_emission_halted());
 }
 
 #[test]

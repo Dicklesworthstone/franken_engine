@@ -1237,15 +1237,18 @@ fn override_artifact_verify_expired_epoch_rejected() {
 }
 
 #[test]
-fn override_artifact_verify_at_exact_expiry_passes() {
+fn override_artifact_verify_at_exact_expiry_fails_closed() {
     let key = make_signing_key();
     let verifier = key.verification_key();
     let input = make_override_input("r", 1);
     let artifact = SignedTrustRootOverrideArtifact::create_signed(&key, input).unwrap();
-    // expires at epoch 6, verify at epoch 6 (at expiry is OK: > not >=)
-    artifact
+    let err = artifact
         .verify(&verifier, SecurityEpoch::from_raw(6))
-        .unwrap();
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        TeeAttestationPolicyError::OverrideExpired { .. }
+    ));
 }
 
 #[test]
@@ -1338,12 +1341,17 @@ fn store_load_policy_epoch_regression_halts() {
 }
 
 #[test]
-fn store_load_policy_same_epoch_succeeds() {
+fn store_load_policy_same_epoch_fails_closed() {
     let mut store = TeeAttestationPolicyStore::default();
     store.load_policy(sample_policy(5), "t-1", "d-1").unwrap();
-    // Same epoch is not a regression
-    store.load_policy(sample_policy(5), "t-2", "d-2").unwrap();
-    assert!(!store.receipt_emission_halted());
+    let err = store
+        .load_policy(sample_policy(5), "t-2", "d-2")
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        TeeAttestationPolicyError::PolicyEpochRegression { .. }
+    ));
+    assert!(store.receipt_emission_halted());
 }
 
 #[test]

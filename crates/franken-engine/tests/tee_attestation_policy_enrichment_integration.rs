@@ -1491,10 +1491,16 @@ fn enrichment_store_load_policy_epoch_regression_rejected() {
 }
 
 #[test]
-fn enrichment_store_load_policy_same_epoch_allowed() {
+fn enrichment_store_load_policy_same_epoch_rejected() {
     let mut store = loaded_store(10);
-    let result = store.load_policy(sample_policy(10), "trace-same", "decision-same");
-    assert!(result.is_ok());
+    let err = store
+        .load_policy(sample_policy(10), "trace-same", "decision-same")
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        TeeAttestationPolicyError::PolicyEpochRegression { .. }
+    ));
+    assert!(store.receipt_emission_halted());
 }
 
 #[test]

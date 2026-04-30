@@ -2,9 +2,21 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
+fn repo_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+}
+
+fn script_path(name: &str) -> PathBuf {
+    repo_root().join("scripts").join(name)
+}
+
+fn gates_toml() -> PathBuf {
+    script_path("gates.toml")
+}
+
 #[test]
 fn test_gates_toml_structure() {
-    let config_path = PathBuf::from("scripts/gates.toml");
+    let config_path = gates_toml();
     assert!(config_path.exists(), "gates.toml should exist");
 
     let content = fs::read_to_string(&config_path).unwrap();
@@ -36,7 +48,7 @@ fn test_gates_toml_structure() {
 
 #[test]
 fn test_run_gate_script_exists() {
-    let script_path = PathBuf::from("scripts/run_gate.sh");
+    let script_path = script_path("run_gate.sh");
     assert!(script_path.exists(), "run_gate.sh should exist");
 
     // Check it's executable
@@ -55,7 +67,7 @@ fn test_run_gate_script_exists() {
 
 #[test]
 fn test_replay_gate_script_exists() {
-    let script_path = PathBuf::from("scripts/replay_gate.sh");
+    let script_path = script_path("replay_gate.sh");
     assert!(script_path.exists(), "replay_gate.sh should exist");
 
     // Check it's executable
@@ -86,7 +98,7 @@ fn test_gate_consolidation_coverage() {
     assert_eq!(script_patterns.len(), 4);
 
     // Verify the total script count matches expectation
-    let config_path = PathBuf::from("scripts/gates.toml");
+    let config_path = gates_toml();
     let content = fs::read_to_string(&config_path).unwrap();
     assert!(content.contains("total_scripts_to_replace = 388"));
 }
@@ -95,7 +107,8 @@ fn test_gate_consolidation_coverage() {
 fn test_run_gate_script_syntax() {
     // Test that the script has valid bash syntax
     let output = Command::new("bash")
-        .args(["-n", "scripts/run_gate.sh"])
+        .arg("-n")
+        .arg(script_path("run_gate.sh"))
         .output()
         .expect("Failed to run bash syntax check");
 
@@ -110,7 +123,8 @@ fn test_run_gate_script_syntax() {
 fn test_replay_gate_script_syntax() {
     // Test that the script has valid bash syntax
     let output = Command::new("bash")
-        .args(["-n", "scripts/replay_gate.sh"])
+        .arg("-n")
+        .arg(script_path("replay_gate.sh"))
         .output()
         .expect("Failed to run bash syntax check");
 
@@ -124,7 +138,8 @@ fn test_replay_gate_script_syntax() {
 #[test]
 fn test_run_gate_usage_help() {
     // Test that the script shows usage when called without arguments
-    let output = Command::new("scripts/run_gate.sh")
+    let output = Command::new(script_path("run_gate.sh"))
+        .current_dir(repo_root())
         .output()
         .expect("Failed to run run_gate.sh");
 
@@ -138,7 +153,8 @@ fn test_run_gate_usage_help() {
 #[test]
 fn test_replay_gate_usage_help() {
     // Test that the script shows usage when called without arguments
-    let output = Command::new("scripts/replay_gate.sh")
+    let output = Command::new(script_path("replay_gate.sh"))
+        .current_dir(repo_root())
         .output()
         .expect("Failed to run replay_gate.sh");
 
@@ -152,7 +168,7 @@ fn test_replay_gate_usage_help() {
 #[test]
 fn test_gate_configuration_parsing() {
     // Test that we can extract gate configurations from TOML
-    let config_path = PathBuf::from("scripts/gates.toml");
+    let config_path = gates_toml();
     let content = fs::read_to_string(&config_path).unwrap();
 
     // Check that adversarial_campaign_gate has expected fields
@@ -173,7 +189,7 @@ fn test_gate_configuration_parsing() {
 #[test]
 fn test_artifact_structure_requirements() {
     // Verify that the expected artifact structure is documented
-    let config_path = PathBuf::from("scripts/gates.toml");
+    let config_path = gates_toml();
     let content = fs::read_to_string(&config_path).unwrap();
 
     // Check outputs section defines expected files
@@ -187,7 +203,7 @@ fn test_artifact_structure_requirements() {
 
 #[test]
 fn test_global_defaults_configuration() {
-    let config_path = PathBuf::from("scripts/gates.toml");
+    let config_path = gates_toml();
     let content = fs::read_to_string(&config_path).unwrap();
 
     // Verify global defaults are properly configured
@@ -200,7 +216,7 @@ fn test_global_defaults_configuration() {
 
 #[test]
 fn test_gate_count_accuracy() {
-    let config_path = PathBuf::from("scripts/gates.toml");
+    let config_path = gates_toml();
     let content = fs::read_to_string(&config_path).unwrap();
 
     // Count actual gates defined
@@ -223,14 +239,14 @@ fn test_gate_count_accuracy() {
 
 #[test]
 fn test_environment_bootstrap_support() {
-    let config_path = PathBuf::from("scripts/gates.toml");
+    let config_path = gates_toml();
     let content = fs::read_to_string(&config_path).unwrap();
 
     // Some gates should have environment bootstrap scripts
     assert!(content.contains("env_bootstrap = \"scripts/e2e/parser_deterministic_env.sh\""));
 
     // The bootstrap script should exist
-    let _bootstrap_path = PathBuf::from("scripts/e2e/parser_deterministic_env.sh");
+    let _bootstrap_path = repo_root().join("scripts/e2e/parser_deterministic_env.sh");
     // Note: We don't assert existence here since we're focusing on configuration structure
 }
 

@@ -719,12 +719,12 @@ fn promotion_status_demoted_is_delegate() {
 }
 
 #[test]
-fn promotion_status_candidate_is_neither() {
+fn promotion_status_candidate_is_delegate_backed() {
     let status = PromotionStatus::PromotionCandidate {
         candidate_digest: "cand-d".into(),
     };
     assert!(!status.is_native());
-    assert!(!status.is_delegate());
+    assert!(status.is_delegate());
 }
 
 // ===========================================================================

@@ -68,6 +68,14 @@ artifact_root = "artifacts/composable_gate_framework"
 cargo_command = "cargo test -p frankenengine-engine --lib composable_gate_framework"
 needs_rch = true
 
+[gates.claim_to_proof_matrix_gate]
+name = "claim_to_proof_matrix_gate"
+description = "Claim-language source-span and proof artifact gate"
+artifact_root = "artifacts/claim_to_proof_matrix_gate"
+command = "./scripts/run_claim_to_proof_matrix_gate.sh ci"
+needs_rch = false
+generates_manifest = true
+
 # Sample of other gates - in practice this would include all ~53 gates
 [gates.security_epoch_gate]
 name = "security_epoch_gate"

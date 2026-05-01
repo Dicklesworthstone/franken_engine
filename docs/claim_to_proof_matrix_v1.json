@@ -1,0 +1,310 @@
+{
+  "schema_version": "franken-engine.claim-to-proof-matrix.v1",
+  "policy_id": "runtime-charter-claim-language-v1",
+  "owning_bead": "bd-1qkrc",
+  "generated_by": "manual-ga-proof-audit",
+  "max_observed_freshness_days": 30,
+  "state_order": ["hypothesis", "target", "observed"],
+  "claims": [
+    {
+      "claim_id": "FE-CLAIM-001",
+      "claim_scope": "runtime",
+      "claim_text": "FrankenEngine is a native Rust runtime for adversarial extension workloads with deterministic replay, cryptographic decision receipts, and fleet-scale containment.",
+      "source_path": "README.md",
+      "source_span": {
+        "start_line": 16,
+        "end_line": 16,
+        "must_contain": "Native Rust runtime for adversarial extension workloads"
+      },
+      "allowed_state": "observed",
+      "actual_wording_state": "observed",
+      "artifact_path": "docs/audit/ga_success_criteria_gap_analysis.md",
+      "verification_command": "CARGO_TARGET_DIR=/data/projects/franken_engine/target_<agent> CARGO_INCREMENTAL=0 RUSTFLAGS=\"-C linker=cc\" cargo check -p frankenengine-engine --tests",
+      "freshness_days": 1,
+      "decision": "allow_observed",
+      "reason": "Native runtime source and focused compile evidence were checked during the GA proof audit; full release gates remain separate.",
+      "owning_bead": "bd-1qkrc",
+      "downgrade_text": "Native Rust runtime target with deterministic replay and evidence-led containment under active verification."
+    },
+    {
+      "claim_id": "FE-CLAIM-002",
+      "claim_scope": "security",
+      "claim_text": "Probabilistic guardplane with expected-loss actioning.",
+      "source_path": "README.md",
+      "source_span": {
+        "start_line": 38,
+        "end_line": 45,
+        "must_contain": "probabilistic guardplane with expected-loss actioning"
+      },
+      "allowed_state": "target",
+      "actual_wording_state": "target",
+      "artifact_path": null,
+      "verification_command": "TBD: run a live guardplane decision artifact generator and verifier once bd-1ypps closes",
+      "freshness_days": null,
+      "decision": "downgrade_until_live_proof",
+      "reason": "Runtime modules exist, but a fresh live posterior/action artifact is not linked here yet.",
+      "owning_bead": "bd-1ypps",
+      "downgrade_text": "Target: probabilistic guardplane with expected-loss actioning; observed proof pending linked decision artifacts."
+    },
+    {
+      "claim_id": "FE-CLAIM-003",
+      "claim_scope": "replay",
+      "claim_text": "Deterministic replay for high-severity decisions with counterfactual policy simulation.",
+      "source_path": "README.md",
+      "source_span": {
+        "start_line": 46,
+        "end_line": 46,
+        "must_contain": "counterfactual policy simulation"
+      },
+      "allowed_state": "target",
+      "actual_wording_state": "target",
+      "artifact_path": null,
+      "verification_command": "TBD: run replay coverage gate once bd-2488a closes",
+      "freshness_days": null,
+      "decision": "downgrade_until_live_proof",
+      "reason": "Replay code and examples exist, but complete security-critical replay coverage is tracked separately.",
+      "owning_bead": "bd-2488a",
+      "downgrade_text": "Target: deterministic replay and counterfactual simulation for high-severity decisions; full coverage proof pending."
+    },
+    {
+      "claim_id": "FE-CLAIM-004",
+      "claim_scope": "security",
+      "claim_text": "Signed decision receipts with transparency-log proofs and optional TEE attestation bindings.",
+      "source_path": "README.md",
+      "source_span": {
+        "start_line": 47,
+        "end_line": 47,
+        "must_contain": "optional TEE attestation bindings"
+      },
+      "allowed_state": "hypothesis",
+      "actual_wording_state": "hypothesis",
+      "artifact_path": null,
+      "verification_command": "TBD: split receipt-signing, transparency-log, and TEE proof commands before release",
+      "freshness_days": null,
+      "decision": "downgrade_until_live_proof",
+      "reason": "Receipt support is real, but transparency-log and TEE bindings need separate live proof handles.",
+      "owning_bead": "bd-1qkrc",
+      "downgrade_text": "Hypothesis: cryptographic governance may include transparency-log proofs and optional TEE bindings after proof artifacts land."
+    },
+    {
+      "claim_id": "FE-CLAIM-005",
+      "claim_scope": "operations",
+      "claim_text": "Fleet immune system with quarantine and revocation propagation plus bounded convergence SLOs.",
+      "source_path": "README.md",
+      "source_span": {
+        "start_line": 48,
+        "end_line": 48,
+        "must_contain": "bounded convergence SLOs"
+      },
+      "allowed_state": "target",
+      "actual_wording_state": "target",
+      "artifact_path": null,
+      "verification_command": "TBD: run quarantine propagation live proof once bd-1py8v closes",
+      "freshness_days": null,
+      "decision": "downgrade_until_live_proof",
+      "reason": "Quarantine modules and fixtures exist; live propagation/convergence evidence is tracked separately.",
+      "owning_bead": "bd-1py8v",
+      "downgrade_text": "Target: quarantine and revocation propagation with bounded convergence evidence."
+    },
+    {
+      "claim_id": "FE-CLAIM-006",
+      "claim_scope": "security",
+      "claim_text": "Capability-typed execution with ambient-authority rejection.",
+      "source_path": "README.md",
+      "source_span": {
+        "start_line": 49,
+        "end_line": 49,
+        "must_contain": "ambient-authority rejection"
+      },
+      "allowed_state": "target",
+      "actual_wording_state": "target",
+      "artifact_path": null,
+      "verification_command": "TBD: run ambient-authority rejection live proof once bd-1bao8 closes",
+      "freshness_days": null,
+      "decision": "downgrade_until_live_proof",
+      "reason": "Capability code exists, but broad product wording needs live package/runtime proof.",
+      "owning_bead": "bd-1bao8",
+      "downgrade_text": "Target: capability-typed execution with ambient-authority rejection; live proof pending."
+    },
+    {
+      "claim_id": "FE-CLAIM-007",
+      "claim_scope": "operations",
+      "claim_text": "The shipped frankenctl CLI provides core execution surfaces and selective operator tooling.",
+      "source_path": "README.md",
+      "source_span": {
+        "start_line": 55,
+        "end_line": 92,
+        "must_contain": "The README CLI contract is covered by a user-facing smoke workflow"
+      },
+      "allowed_state": "observed",
+      "actual_wording_state": "observed",
+      "artifact_path": "scripts/e2e/readme_cli_workflow_smoke.sh",
+      "verification_command": "FRANKENCTL_BIN=target/debug/frankenctl ./scripts/e2e/readme_cli_workflow_smoke.sh",
+      "freshness_days": 1,
+      "decision": "allow_observed",
+      "reason": "README points at an executable smoke workflow and artifact contract for the documented CLI path.",
+      "owning_bead": "bd-3tsah",
+      "downgrade_text": "Target: frankenctl CLI surfaces with smoke workflow pending current run artifacts."
+    },
+    {
+      "claim_id": "FE-CLAIM-008",
+      "claim_scope": "operations",
+      "claim_text": "Unsupported surfaces and support contract language are explicitly documented.",
+      "source_path": "README.md",
+      "source_span": {
+        "start_line": 922,
+        "end_line": 955,
+        "must_contain": "Unsupported surface usage voids reproduction assistance"
+      },
+      "allowed_state": "observed",
+      "actual_wording_state": "observed",
+      "artifact_path": "README.md",
+      "verification_command": "./scripts/run_claim_to_proof_matrix_gate.sh ci",
+      "freshness_days": 1,
+      "decision": "allow_observed",
+      "reason": "The support boundary is a documentation policy claim and the source span is validated by this gate.",
+      "owning_bead": "bd-1qkrc",
+      "downgrade_text": "Target: unsupported surface policy pending README source-span validation."
+    },
+    {
+      "claim_id": "FE-CLAIM-009",
+      "claim_scope": "evidence",
+      "claim_text": "Every published performance and security claim ships with reproducible artifact bundles.",
+      "source_path": "README.md",
+      "source_span": {
+        "start_line": 51,
+        "end_line": 51,
+        "must_contain": "Every published performance and security claim"
+      },
+      "allowed_state": "target",
+      "actual_wording_state": "target",
+      "artifact_path": "docs/RUNTIME_CHARTER.md",
+      "verification_command": "./scripts/run_claim_to_proof_matrix_gate.sh ci",
+      "freshness_days": null,
+      "decision": "downgrade_until_live_proof",
+      "reason": "The policy exists, and this gate is the enforcement start; full publication coverage remains an ongoing target.",
+      "owning_bead": "bd-1qkrc",
+      "downgrade_text": "Target: published performance and security claims must ship with reproducible artifact bundles."
+    },
+    {
+      "claim_id": "FE-CLAIM-010",
+      "claim_scope": "performance",
+      "claim_text": ">= 3x weighted-geometric-mean throughput versus Node and Bun under the benchmark denominator contract.",
+      "source_path": "PLAN_TO_CREATE_FRANKEN_ENGINE.md",
+      "source_span": {
+        "start_line": 56,
+        "end_line": 58,
+        "must_contain": ">= 3x"
+      },
+      "allowed_state": "target",
+      "actual_wording_state": "target",
+      "artifact_path": null,
+      "verification_command": "TBD: run disruptive-floor throughput gate once bd-y6v8s closes",
+      "freshness_days": null,
+      "decision": "downgrade_until_live_proof",
+      "reason": "The metric is a non-optional target; fresh denominator-matched Node/Bun artifacts are not linked here yet.",
+      "owning_bead": "bd-y6v8s",
+      "downgrade_text": "Target: >= 3x throughput versus Node and Bun under the declared benchmark denominator contract."
+    },
+    {
+      "claim_id": "FE-CLAIM-011",
+      "claim_scope": "security",
+      "claim_text": ">= 10x reduction in successful red-team host compromise rate versus Node/Bun defaults.",
+      "source_path": "PLAN_TO_CREATE_FRANKEN_ENGINE.md",
+      "source_span": {
+        "start_line": 58,
+        "end_line": 58,
+        "must_contain": ">= 10x reduction"
+      },
+      "allowed_state": "target",
+      "actual_wording_state": "target",
+      "artifact_path": null,
+      "verification_command": "TBD: run red-team compromise-rate gate once bd-1vwza closes",
+      "freshness_days": null,
+      "decision": "downgrade_until_live_proof",
+      "reason": "The red-team metric is a target until a fresh scenario bundle and baseline comparison are linked.",
+      "owning_bead": "bd-1vwza",
+      "downgrade_text": "Target: >= 10x host-compromise reduction versus declared Node/Bun baseline scenarios."
+    },
+    {
+      "claim_id": "FE-CLAIM-012",
+      "claim_scope": "security",
+      "claim_text": "<= 250ms median time from high-risk signal crossing to containment action.",
+      "source_path": "PLAN_TO_CREATE_FRANKEN_ENGINE.md",
+      "source_span": {
+        "start_line": 59,
+        "end_line": 60,
+        "must_contain": "<= 250ms"
+      },
+      "allowed_state": "target",
+      "actual_wording_state": "target",
+      "artifact_path": null,
+      "verification_command": "TBD: run containment-latency gate once bd-38mby closes",
+      "freshness_days": null,
+      "decision": "downgrade_until_live_proof",
+      "reason": "Containment timing must be computed from signal/action timestamps before observed wording is allowed.",
+      "owning_bead": "bd-38mby",
+      "downgrade_text": "Target: <= 250ms median containment latency under declared workload conditions."
+    },
+    {
+      "claim_id": "FE-CLAIM-013",
+      "claim_scope": "replay",
+      "claim_text": "100% deterministic replay coverage for security-critical allow/deny/escalation decisions.",
+      "source_path": "PLAN_TO_CREATE_FRANKEN_ENGINE.md",
+      "source_span": {
+        "start_line": 60,
+        "end_line": 60,
+        "must_contain": "100% deterministic replay coverage"
+      },
+      "allowed_state": "target",
+      "actual_wording_state": "target",
+      "artifact_path": null,
+      "verification_command": "TBD: run replay coverage metric gate once bd-2488a closes",
+      "freshness_days": null,
+      "decision": "downgrade_until_live_proof",
+      "reason": "Coverage must enumerate security-critical decision classes before observed wording is valid.",
+      "owning_bead": "bd-2488a",
+      "downgrade_text": "Target: 100% deterministic replay coverage for declared security-critical decisions."
+    },
+    {
+      "claim_id": "FE-CLAIM-014",
+      "claim_scope": "capability",
+      "claim_text": "At least three production features that are impossible by default in standard Node/Bun deployments.",
+      "source_path": "PLAN_TO_CREATE_FRANKEN_ENGINE.md",
+      "source_span": {
+        "start_line": 61,
+        "end_line": 61,
+        "must_contain": "At least `3` production features"
+      },
+      "allowed_state": "target",
+      "actual_wording_state": "target",
+      "artifact_path": null,
+      "verification_command": "TBD: run impossible-by-default proof index once bd-3mp80, bd-dpfvh, bd-1py8v, and bd-1bao8 close",
+      "freshness_days": null,
+      "decision": "downgrade_until_live_proof",
+      "reason": "Production status and proof handles must be named per feature before observed wording is valid.",
+      "owning_bead": "bd-1qkrc",
+      "downgrade_text": "Target: at least three impossible-by-default production features with per-feature proof artifacts."
+    },
+    {
+      "claim_id": "FE-CLAIM-015",
+      "claim_scope": "ifc",
+      "claim_text": "Deterministic information-flow confinement with signed declassification receipts and replay-verifiable data-provenance artifacts.",
+      "source_path": "PLAN_TO_CREATE_FRANKEN_ENGINE.md",
+      "source_span": {
+        "start_line": 94,
+        "end_line": 94,
+        "must_contain": "signed declassification receipts"
+      },
+      "allowed_state": "target",
+      "actual_wording_state": "target",
+      "artifact_path": null,
+      "verification_command": "TBD: run IFC/declassification live source-to-sink proof once bd-dpfvh closes",
+      "freshness_days": null,
+      "decision": "downgrade_until_live_proof",
+      "reason": "IFC examples and fixtures exist; live source-to-sink proof artifacts are tracked separately.",
+      "owning_bead": "bd-dpfvh",
+      "downgrade_text": "Target: deterministic information-flow confinement with signed declassification receipts."
+    }
+  ]
+}

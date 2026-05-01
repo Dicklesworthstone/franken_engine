@@ -113,6 +113,8 @@ FrankenEngine reuses stronger sibling substrates instead of rebuilding them: asu
 
 Runtime governance and native-only execution boundaries are defined in [`docs/RUNTIME_CHARTER.md`](./docs/RUNTIME_CHARTER.md).
 
+The live claim-language ledger is [`docs/CLAIM_TO_PROOF_MATRIX_V1.md`](./docs/CLAIM_TO_PROOF_MATRIX_V1.md), backed by [`docs/claim_to_proof_matrix_v1.json`](./docs/claim_to_proof_matrix_v1.json) and checked with `./scripts/run_claim_to_proof_matrix_gate.sh ci`.
+
 Donor-harvesting governance boundaries (semantic extraction allowlist + architectural denylist) are defined in [`docs/DONOR_EXTRACTION_SCOPE.md`](./docs/DONOR_EXTRACTION_SCOPE.md).
 
 Semantic compatibility source-of-truth entries for donor-observable behavior are defined in [`docs/SEMANTIC_DONOR_SPEC.md`](./docs/SEMANTIC_DONOR_SPEC.md).

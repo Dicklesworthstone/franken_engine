@@ -29,29 +29,48 @@ echo "Source data hash: ${source_hash}"
 echo "Artifact directory: ${artifact_dir}"
 echo ""
 
-# Test 1: Denied flow (confidential to public without declassification)
-echo "Testing denied flow (confidential->public without declassification)..."
+# Run live IFC declassification example through FrankenEngine runtime
+echo "Running live IFC declassification scenarios through FrankenEngine runtime..."
 
-denied_stdout="${artifact_dir}/denied_flow_stdout.log"
-denied_stderr="${artifact_dir}/denied_flow_stderr.log"
-denied_exit_code=0
+ifc_stdout="${artifact_dir}/live_ifc_stdout.log"
+ifc_stderr="${artifact_dir}/live_ifc_stderr.log"
+ifc_exit_code=0
 
-# For demonstration purposes, we'll use node to run these
-# In the real implementation, this would use frankenctl with IFC enforcement
-node "${script_dir}/denied_flow.js" > "${denied_stdout}" 2> "${denied_stderr}" || denied_exit_code=$?
+# Use the actual FrankenEngine live IFC example instead of node simulation
+cd "${repo_root}"
+CARGO_TARGET_DIR="${target_dir}" cargo run --example live_ifc_declassification_example --no-default-features > "${ifc_stdout}" 2> "${ifc_stderr}" || ifc_exit_code=$?
 
-echo "✓ Denied flow test completed (exit code: ${denied_exit_code})"
+if [[ $ifc_exit_code -eq 0 ]]; then
+    echo "✓ Live IFC declassification example completed successfully"
 
-# Test 2: Allowed flow (with proper declassification)
-echo "Testing allowed flow (confidential->public with declassification)..."
+    # Copy artifacts from live example output to expected directory
+    live_artifacts_dir="/tmp/ifc_declassification_example"
+    if [[ -d "${live_artifacts_dir}" ]]; then
+        echo "Copying live example artifacts..."
+        cp "${live_artifacts_dir}"/*.json "${artifact_dir}/" 2>/dev/null || true
+        cp "${live_artifacts_dir}"/*.jsonl "${artifact_dir}/" 2>/dev/null || true
+        cp "${live_artifacts_dir}"/*.txt "${artifact_dir}/" 2>/dev/null || true
+        cp "${live_artifacts_dir}"/*.md "${artifact_dir}/" 2>/dev/null || true
+    fi
 
-allowed_stdout="${artifact_dir}/allowed_flow_stdout.log"
-allowed_stderr="${artifact_dir}/allowed_flow_stderr.log"
-allowed_exit_code=0
+    # Parse the output to extract scenario results
+    if grep -q "Live IFC declassification example completed successfully" "${ifc_stdout}"; then
+        echo "✓ Both IFC flow scenarios completed: allowed and denied flows verified"
+    else
+        echo "❌ IFC flow scenarios did not complete as expected"
+        ifc_exit_code=1
+    fi
 
-node "${script_dir}/allowed_flow.js" > "${allowed_stdout}" 2> "${allowed_stderr}" || allowed_exit_code=$?
-
-echo "✓ Allowed flow test completed (exit code: ${allowed_exit_code})"
+    # Verify proof artifacts were generated
+    if [[ -f "${artifact_dir}/manifest.json" && -f "${artifact_dir}/report.json" ]]; then
+        echo "✓ Live proof artifacts generated successfully"
+    else
+        echo "❌ Expected proof artifacts not found"
+        ifc_exit_code=1
+    fi
+else
+    echo "❌ Live IFC declassification example failed (exit code: ${ifc_exit_code})"
+fi
 
 # Generate Policy Input
 echo "Generating policy input artifact..."

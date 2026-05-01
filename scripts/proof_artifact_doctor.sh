@@ -12,16 +12,20 @@ source "${root_dir}/scripts/lib/proof_artifact_contract.sh"
 
 bundle_dir="${1:-}"
 mode="${2:-check}"
+default_max_events_size_bytes=10485760
+max_events_size_bytes="${3:-${PROOF_ARTIFACT_DOCTOR_MAX_EVENTS_BYTES:-$default_max_events_size_bytes}}"
 
 usage() {
     cat <<EOF
-Usage: $0 <bundle_directory> [mode]
+Usage: $0 <bundle_directory> [mode] [max_events_size_bytes]
 
 Validates a proof artifact bundle against the cd3d2b4d contract.
 
 Arguments:
-  bundle_directory  Path to proof artifact bundle to validate
-  mode             Validation mode: 'check' (default) or 'repair'
+  bundle_directory       Path to proof artifact bundle to validate
+  mode                   Validation mode: 'check' (default) or 'repair'
+  max_events_size_bytes  Optional events.jsonl warning threshold in bytes
+                         (default: 10485760, or PROOF_ARTIFACT_DOCTOR_MAX_EVENTS_BYTES)
 
 The bundle directory must contain:
   - manifest.json (required)
@@ -32,6 +36,7 @@ The bundle directory must contain:
 
 Example:
   $0 artifacts/proof_suite/20260501T123456Z check
+  $0 artifacts/proof_suite/20260501T123456Z check 52428800
 EOF
 }
 
@@ -46,9 +51,16 @@ if [[ ! -d "$bundle_dir" ]]; then
     exit 1
 fi
 
+if [[ ! "$max_events_size_bytes" =~ ^[0-9]+$ ]] || [[ "$max_events_size_bytes" -le 0 ]]; then
+    echo "Error: max_events_size_bytes must be a positive integer, got: $max_events_size_bytes" >&2
+    usage >&2
+    exit 1
+fi
+
 echo "🩺 Proof Artifact Bundle Doctor"
 echo "   Bundle: $bundle_dir"
 echo "   Mode: $mode"
+echo "   Events size warning threshold: ${max_events_size_bytes} bytes"
 echo ""
 
 # Track validation results
@@ -232,8 +244,8 @@ fi
 # Validate file size constraints
 if [[ -f "$events_path" ]]; then
     events_size=$(stat -f%z "$events_path" 2>/dev/null || stat -c%s "$events_path" 2>/dev/null || echo 0)
-    if [[ $events_size -gt 10485760 ]]; then # 10MB
-        check_result "Events file size" "warn" "events.jsonl is large (${events_size} bytes), consider splitting"
+    if [[ $events_size -gt $max_events_size_bytes ]]; then
+        check_result "Events file size" "warn" "events.jsonl is large (${events_size} bytes > ${max_events_size_bytes} byte threshold), consider splitting or raising the configured threshold"
     else
         check_result "Events file size" "pass"
     fi
@@ -296,6 +308,7 @@ jq -n \
   --arg bundle_dir "$bundle_dir" \
   --arg mode "$mode" \
   --arg verdict "$verdict" \
+  --argjson max_events_size_bytes "$max_events_size_bytes" \
   --argjson checks_performed "$checks" \
   --argjson errors_found "$errors" \
   --argjson warnings_found "$warnings" \
@@ -304,6 +317,9 @@ jq -n \
     bundle_dir: $bundle_dir,
     mode: $mode,
     verdict: $verdict,
+    limits: {
+      max_events_size_bytes: $max_events_size_bytes
+    },
     summary: {
       checks_performed: $checks_performed,
       errors_found: $errors_found,

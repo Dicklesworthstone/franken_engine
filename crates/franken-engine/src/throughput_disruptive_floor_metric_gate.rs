@@ -6,7 +6,6 @@
 //! artifact consumed by `disruptive_floor_metric_gate`.
 
 use serde::{Deserialize, Serialize};
-use std::time::{Duration, Instant};
 use subtle::ConstantTimeEq;
 
 use crate::disruptive_floor_metric_gate::{DisruptiveMetricId, MetricArtifact};
@@ -18,6 +17,66 @@ pub const THROUGHPUT_SCALE_OPS_PER_SECOND: u64 = 1000;
 pub const DEFAULT_FLOOR_RATIO_MILLIONTHS: u64 = 950_000; // 0.95 minimum ratio
 pub const DEFAULT_MAX_FRESHNESS_DAYS: u64 = 14; // Default maximum age for evidence
 pub const DEFAULT_MAX_BENCHMARK_DURATION_MS: u64 = 3600_000; // 1 hour maximum
+
+/// Detect fake SHA256 hash patterns that indicate placeholder/test data rather than real measurements
+pub fn is_fake_hash(hash: &str) -> bool {
+    if !hash.starts_with("sha256:") {
+        return false;
+    }
+
+    let hex_part = &hash[7..]; // Skip "sha256:" prefix
+    if hex_part.len() != 64 {
+        return false; // Not a valid SHA256 hex length
+    }
+
+    // Sequential hex pattern (0123456789abcdef...)
+    let sequential_pattern = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    if hex_part == sequential_pattern {
+        return true;
+    }
+
+    // All zeros
+    if hex_part == "0".repeat(64) {
+        return true;
+    }
+
+    // All the same character repeated
+    if hex_part
+        .chars()
+        .all(|c| c == hex_part.chars().next().unwrap_or('x'))
+    {
+        return true;
+    }
+
+    // Common placeholder patterns
+    let placeholder_patterns = [
+        "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+        "cafebabecafebabecafebabecafebabecafebabecafebabecafebabecafebabe",
+        "feedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedface",
+    ];
+
+    placeholder_patterns
+        .iter()
+        .any(|&pattern| hex_part == pattern)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ThroughputMeasurementStatus {
+    Verified,   // Real measurement with proper evidence and live baselines
+    Targeted,   // Uses placeholder baselines or lacks complete evidence
+    Unmeasured, // No measurement attempted
+}
+
+impl ThroughputMeasurementStatus {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Verified => "verified",
+            Self::Targeted => "targeted",
+            Self::Unmeasured => "unmeasured",
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -65,6 +124,10 @@ pub struct ThroughputEvidence {
     pub verification_command: String,
     pub benchmark_start_monotonic_ns: u64, // Monotonic timestamp for timing attack protection
     pub benchmark_window_seed: [u8; 32],   // Verifier-chosen seed for window pinning
+    pub measurement_status: ThroughputMeasurementStatus,
+    pub evidence_bead_id: Option<String>,
+    pub evidence_commit_hash: Option<String>,
+    pub evidence_test_name: Option<String>,
 }
 
 impl ThroughputEvidence {
@@ -108,13 +171,11 @@ fn constant_time_greater_or_equal(a: &[u8], b: &[u8]) -> bool {
 
         // If we haven't determined greater/less yet (equal == 1)
         let byte_greater = (a_byte > b_byte) as u8;
-        let byte_less = (a_byte < b_byte) as u8;
-
         // Update greater flag only if we're still equal
         greater |= equal & byte_greater;
 
         // Update equal flag - remains 1 only if all bytes so far are equal
-        equal &= (a_byte.ct_eq(&b_byte).unwrap_u8());
+        equal &= a_byte.ct_eq(&b_byte).unwrap_u8();
     }
 
     // Result is greater || equal (i.e., >=)
@@ -175,6 +236,62 @@ pub fn generate_secure_timestamp() -> String {
     // TODO: In production, this should use a signed timestamp from a trusted time authority
     // or include additional entropy to prevent timestamp manipulation attacks
     now.to_rfc3339()
+}
+
+/// Validate evidence requirements for throughput measurement claims
+pub fn validate_measurement_evidence(evidence: &ThroughputEvidence) -> bool {
+    match evidence.measurement_status {
+        ThroughputMeasurementStatus::Verified => {
+            // Requires all evidence fields for verified measurements
+            evidence
+                .evidence_bead_id
+                .as_ref()
+                .map_or(false, |s| !s.trim().is_empty())
+                && evidence
+                    .evidence_commit_hash
+                    .as_ref()
+                    .map_or(false, |s| !s.trim().is_empty())
+                && evidence
+                    .evidence_test_name
+                    .as_ref()
+                    .map_or(false, |s| !s.trim().is_empty())
+                && !evidence.runtime_denominator.is_placeholder_baseline() // Must use real baselines
+        }
+        ThroughputMeasurementStatus::Targeted | ThroughputMeasurementStatus::Unmeasured => {
+            // Targeted/unmeasured don't require evidence (but may have partial evidence)
+            true
+        }
+    }
+}
+
+/// Detect suspicious patterns in throughput measurements that suggest fake data
+pub fn has_fake_measurement_data(evidence: &ThroughputEvidence) -> bool {
+    // Check for fake hash patterns in output
+    if is_fake_hash(&evidence.output_hash) {
+        return true;
+    }
+
+    // Check for suspiciously round numbers that suggest placeholder data
+    let suspicious_ops_values = [1000, 2500, 3200, 5000, 10000]; // Common fake values
+    if suspicious_ops_values.contains(&evidence.frankenengine_ops_per_second)
+        || suspicious_ops_values.contains(&evidence.denominator_ops_per_second)
+    {
+        return true;
+    }
+
+    // Check for perfect ratios that are unlikely in real measurements
+    if evidence.throughput_ratio_millionths % 100_000 == 0 {
+        // Ratios that are exact multiples of 0.1 (100k millionths) are suspicious
+        return true;
+    }
+
+    // Check for unrealistic success rates
+    if evidence.success_rate_millionths == 1_000_000 && evidence.error_count > 0 {
+        // Claims 100% success but has errors
+        return true;
+    }
+
+    false
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -273,6 +390,23 @@ fn geometric_mean(values: &[u64]) -> Result<u64, String> {
 pub fn evaluate_throughput_metric(
     input: &ThroughputMetricInput,
 ) -> Result<ThroughputMetricReport, String> {
+    // Validate evidence for fake data patterns and insufficient evidence
+    for (i, evidence) in input.evidence.iter().enumerate() {
+        if has_fake_measurement_data(evidence) {
+            return Err(format!(
+                "Evidence {} contains fake measurement data patterns",
+                i
+            ));
+        }
+
+        if !validate_measurement_evidence(evidence) {
+            return Err(format!(
+                "Evidence {} has insufficient evidence for claimed measurement status",
+                i
+            ));
+        }
+    }
+
     let weighted_ratio = compute_weighted_throughput_ratio(&input.evidence)?;
 
     let passing_count = input
@@ -336,12 +470,48 @@ pub fn evaluate_throughput_metric(
     // Validate benchmark window pinning
     validate_benchmark_window_pinning(&input.evidence, &input.benchmark_window_seed)?;
 
-    let (overall_outcome, baseline_warning) = if uses_placeholder_baselines {
+    // Check if all evidence is verified (not targeted or unmeasured)
+    let all_evidence_verified = input
+        .evidence
+        .iter()
+        .all(|e| e.measurement_status == ThroughputMeasurementStatus::Verified);
+
+    let (overall_outcome, baseline_warning) = if uses_placeholder_baselines
+        || !all_evidence_verified
+    {
+        let mut reasons = Vec::new();
+
+        if uses_placeholder_baselines {
+            reasons.push(format!(
+                "placeholder baselines (Node: {}, Bun: {})",
+                RuntimeDenominator::Node.baseline_ops_per_second(),
+                RuntimeDenominator::Bun.baseline_ops_per_second()
+            ));
+        }
+
+        let targeted_count = input
+            .evidence
+            .iter()
+            .filter(|e| e.measurement_status == ThroughputMeasurementStatus::Targeted)
+            .count();
+
+        let unmeasured_count = input
+            .evidence
+            .iter()
+            .filter(|e| e.measurement_status == ThroughputMeasurementStatus::Unmeasured)
+            .count();
+
+        if targeted_count > 0 {
+            reasons.push(format!("{} targeted measurements", targeted_count));
+        }
+
+        if unmeasured_count > 0 {
+            reasons.push(format!("{} unmeasured scenarios", unmeasured_count));
+        }
+
         let warning = format!(
-            "TARGETED performance claim: Uses placeholder baselines (Node: {}, Bun: {}) instead of live measurement. \
-            Real ≥3x throughput claim requires fresh Node/Bun benchmark comparison.",
-            RuntimeDenominator::Node.baseline_ops_per_second(),
-            RuntimeDenominator::Bun.baseline_ops_per_second()
+            "TARGETED performance claim: {}. Real ≥3x throughput claim requires verified measurements with live baseline comparison and complete evidence chain (bead_id + commit_hash + test_name).",
+            reasons.join(", ")
         );
         ("targeted", Some(warning))
     } else {
@@ -444,10 +614,15 @@ mod tests {
             success_rate_millionths: 1_000_000,
             scenario_path: "test.json".to_string(),
             output_path: "output.json".to_string(),
-            output_hash: "abc123".to_string(),
+            output_hash: "sha256:a4b2c8d6e9f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7"
+                .to_string(),
             verification_command: "verify.sh".to_string(),
             benchmark_start_monotonic_ns: 1000000000,
             benchmark_window_seed: [1u8; 32],
+            measurement_status: ThroughputMeasurementStatus::Targeted,
+            evidence_bead_id: None,
+            evidence_commit_hash: None,
+            evidence_test_name: None,
         };
 
         assert!(evidence.meets_floor_threshold(950_000)); // 0.95 threshold
@@ -487,10 +662,15 @@ mod tests {
             success_rate_millionths: 1_000_000,
             scenario_path: "node_test.json".to_string(),
             output_path: "node_output.json".to_string(),
-            output_hash: "abc123".to_string(),
+            output_hash: "sha256:a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2"
+                .to_string(),
             verification_command: "verify_node.sh".to_string(),
             benchmark_start_monotonic_ns: 1000000000,
             benchmark_window_seed: [1u8; 32],
+            measurement_status: ThroughputMeasurementStatus::Targeted,
+            evidence_bead_id: None,
+            evidence_commit_hash: None,
+            evidence_test_name: None,
         };
 
         let bun_evidence = ThroughputEvidence {
@@ -505,10 +685,15 @@ mod tests {
             success_rate_millionths: 1_000_000,
             scenario_path: "bun_test.json".to_string(),
             output_path: "bun_output.json".to_string(),
-            output_hash: "def456".to_string(),
+            output_hash: "sha256:d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2"
+                .to_string(),
             verification_command: "verify_bun.sh".to_string(),
             benchmark_start_monotonic_ns: 1000000000,
             benchmark_window_seed: [1u8; 32],
+            measurement_status: ThroughputMeasurementStatus::Targeted,
+            evidence_bead_id: None,
+            evidence_commit_hash: None,
+            evidence_test_name: None,
         };
 
         let evidence = vec![node_evidence, bun_evidence];
@@ -537,19 +722,25 @@ mod tests {
             evidence: vec![ThroughputEvidence {
                 scenario_id: "passing_test".to_string(),
                 runtime_denominator: RuntimeDenominator::Node,
-                frankenengine_ops_per_second: 2500,
-                denominator_ops_per_second: 2500,
-                throughput_ratio_millionths: 1_000_000,
+                frankenengine_ops_per_second: 2534, // Non-round number to avoid fake data detection
+                denominator_ops_per_second: 2487,   // Non-round number to avoid fake data detection
+                throughput_ratio_millionths: 1_018_923, // Non-perfect ratio
                 benchmark_duration_ms: 10_000,
-                request_count: 25_000,
+                request_count: 25_340,
                 error_count: 0,
-                success_rate_millionths: 1_000_000,
+                success_rate_millionths: 999_000, // Not perfect success rate
                 scenario_path: "passing.json".to_string(),
                 output_path: "passing_output.json".to_string(),
-                output_hash: "pass123".to_string(),
+                output_hash:
+                    "sha256:a4b2c8d6e9f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7"
+                        .to_string(),
                 verification_command: "verify_pass.sh".to_string(),
                 benchmark_start_monotonic_ns: 1000000000,
                 benchmark_window_seed: [2u8; 32],
+                measurement_status: ThroughputMeasurementStatus::Targeted,
+                evidence_bead_id: None,
+                evidence_commit_hash: None,
+                evidence_test_name: None,
             }],
             code_revision: "abc123def".to_string(),
             generated_at_utc: "2026-05-01T00:00:00Z".to_string(),
@@ -560,7 +751,7 @@ mod tests {
 
         let report = evaluate_throughput_metric(&input).unwrap();
         assert_eq!(report.overall_outcome, "targeted");
-        assert_eq!(report.weighted_ratio_millionths, 1_000_000);
+        assert_eq!(report.weighted_ratio_millionths, 1_018_923);
         assert_eq!(report.evidence_count, 1);
         assert_eq!(report.passing_evidence_count, 1);
         assert_eq!(report.node_evidence_count, 1);
@@ -660,37 +851,47 @@ mod tests {
         let evidence_pass = ThroughputEvidence {
             scenario_id: "timing_test_pass".to_string(),
             runtime_denominator: RuntimeDenominator::Node,
-            frankenengine_ops_per_second: 2600,
-            denominator_ops_per_second: 2500,
-            throughput_ratio_millionths: 1_040_000, // Just above 0.95 threshold
+            frankenengine_ops_per_second: 2634,
+            denominator_ops_per_second: 2531,
+            throughput_ratio_millionths: 1_040_717, // Just above 0.95 threshold
             benchmark_duration_ms: 10_000,
-            request_count: 26_000,
+            request_count: 26_340,
             error_count: 0,
-            success_rate_millionths: 1_000_000,
+            success_rate_millionths: 999_000,
             scenario_path: "timing_pass.json".to_string(),
             output_path: "timing_pass_output.json".to_string(),
-            output_hash: "timing123".to_string(),
+            output_hash: "sha256:a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2"
+                .to_string(),
             verification_command: "verify_timing_pass.sh".to_string(),
             benchmark_start_monotonic_ns: 1000000000,
             benchmark_window_seed: [4u8; 32],
+            measurement_status: ThroughputMeasurementStatus::Targeted,
+            evidence_bead_id: None,
+            evidence_commit_hash: None,
+            evidence_test_name: None,
         };
 
         let evidence_fail = ThroughputEvidence {
             scenario_id: "timing_test_fail".to_string(),
             runtime_denominator: RuntimeDenominator::Node,
-            frankenengine_ops_per_second: 2300,
-            denominator_ops_per_second: 2500,
-            throughput_ratio_millionths: 920_000, // Below 0.95 threshold
+            frankenengine_ops_per_second: 2341,
+            denominator_ops_per_second: 2543,
+            throughput_ratio_millionths: 920_568, // Below 0.95 threshold
             benchmark_duration_ms: 10_000,
-            request_count: 23_000,
+            request_count: 23_410,
             error_count: 0,
-            success_rate_millionths: 1_000_000,
+            success_rate_millionths: 998_000,
             scenario_path: "timing_fail.json".to_string(),
             output_path: "timing_fail_output.json".to_string(),
-            output_hash: "timing456".to_string(),
+            output_hash: "sha256:b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3"
+                .to_string(),
             verification_command: "verify_timing_fail.sh".to_string(),
             benchmark_start_monotonic_ns: 1000000000,
             benchmark_window_seed: [4u8; 32],
+            measurement_status: ThroughputMeasurementStatus::Targeted,
+            evidence_bead_id: None,
+            evidence_commit_hash: None,
+            evidence_test_name: None,
         };
 
         // Both should use constant-time comparison internally
@@ -707,13 +908,18 @@ mod tests {
             benchmark_duration_ms: 10_000,
             request_count: 23_750,
             error_count: 0,
-            success_rate_millionths: 1_000_000,
+            success_rate_millionths: 997_000,
             scenario_path: "timing_exact.json".to_string(),
             output_path: "timing_exact_output.json".to_string(),
-            output_hash: "timing789".to_string(),
+            output_hash: "sha256:c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4"
+                .to_string(),
             verification_command: "verify_timing_exact.sh".to_string(),
             benchmark_start_monotonic_ns: 1000000000,
             benchmark_window_seed: [4u8; 32],
+            measurement_status: ThroughputMeasurementStatus::Targeted,
+            evidence_bead_id: None,
+            evidence_commit_hash: None,
+            evidence_test_name: None,
         };
 
         assert!(evidence_exact.meets_floor_threshold(950_000));
@@ -721,15 +927,15 @@ mod tests {
 
     #[test]
     fn test_validate_monotonic_timestamp() {
-        let current_ns = 2_000_000_000u64; // 2 seconds
+        let current_ns = 20_000_000_000u64; // 20 seconds
         let max_duration_ns = 10_000_000_000u64; // 10 seconds
 
         // Valid case: benchmark started before current time
-        let start_ns = 1_000_000_000u64; // 1 second
+        let start_ns = 15_000_000_000u64; // 15 seconds
         assert!(validate_monotonic_timestamp(start_ns, current_ns, max_duration_ns).is_ok());
 
         // Invalid case: benchmark start in future (clock manipulation)
-        let future_start_ns = 3_000_000_000u64; // 3 seconds
+        let future_start_ns = 21_000_000_000u64; // 21 seconds
         assert!(
             validate_monotonic_timestamp(future_start_ns, current_ns, max_duration_ns).is_err()
         );
@@ -756,36 +962,48 @@ mod tests {
             ThroughputEvidence {
                 scenario_id: "window_test_1".to_string(),
                 runtime_denominator: RuntimeDenominator::Node,
-                frankenengine_ops_per_second: 2500,
-                denominator_ops_per_second: 2500,
-                throughput_ratio_millionths: 1_000_000,
+                frankenengine_ops_per_second: 2534,
+                denominator_ops_per_second: 2487,
+                throughput_ratio_millionths: 1_018_923,
                 benchmark_duration_ms: 10_000,
-                request_count: 25_000,
+                request_count: 25_340,
                 error_count: 0,
-                success_rate_millionths: 1_000_000,
+                success_rate_millionths: 999_000,
                 scenario_path: "window1.json".to_string(),
                 output_path: "window1_output.json".to_string(),
-                output_hash: "window123".to_string(),
+                output_hash:
+                    "sha256:d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5"
+                        .to_string(),
                 verification_command: "verify_window1.sh".to_string(),
                 benchmark_start_monotonic_ns: 1000000000,
                 benchmark_window_seed: seed,
+                measurement_status: ThroughputMeasurementStatus::Targeted,
+                evidence_bead_id: None,
+                evidence_commit_hash: None,
+                evidence_test_name: None,
             },
             ThroughputEvidence {
                 scenario_id: "window_test_2".to_string(),
                 runtime_denominator: RuntimeDenominator::Bun,
-                frankenengine_ops_per_second: 3200,
-                denominator_ops_per_second: 3200,
-                throughput_ratio_millionths: 1_000_000,
+                frankenengine_ops_per_second: 3241,
+                denominator_ops_per_second: 3178,
+                throughput_ratio_millionths: 1_019_825,
                 benchmark_duration_ms: 10_000,
-                request_count: 32_000,
+                request_count: 32_410,
                 error_count: 0,
-                success_rate_millionths: 1_000_000,
+                success_rate_millionths: 998_000,
                 scenario_path: "window2.json".to_string(),
                 output_path: "window2_output.json".to_string(),
-                output_hash: "window456".to_string(),
+                output_hash:
+                    "sha256:e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6"
+                        .to_string(),
                 verification_command: "verify_window2.sh".to_string(),
                 benchmark_start_monotonic_ns: 1000000000,
                 benchmark_window_seed: seed,
+                measurement_status: ThroughputMeasurementStatus::Targeted,
+                evidence_bead_id: None,
+                evidence_commit_hash: None,
+                evidence_test_name: None,
             },
         ];
 
@@ -799,6 +1017,245 @@ mod tests {
 
         // Edge case: empty evidence
         assert!(validate_benchmark_window_pinning(&[], &seed).is_err());
+    }
+
+    #[test]
+    fn test_fake_hash_detection() {
+        assert!(is_fake_hash(
+            "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        ));
+        assert!(is_fake_hash(
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+        ));
+        assert!(is_fake_hash(
+            "sha256:deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+        ));
+        assert!(!is_fake_hash(
+            "sha256:a4b2c8d6e9f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7"
+        ));
+        assert!(!is_fake_hash("not-sha256:0123456789abcdef"));
+        assert!(!is_fake_hash("sha256:short"));
+    }
+
+    #[test]
+    fn test_fake_measurement_data_detection() {
+        let mut evidence = ThroughputEvidence {
+            scenario_id: "test-scenario".to_string(),
+            runtime_denominator: RuntimeDenominator::Node,
+            frankenengine_ops_per_second: 2500, // Suspicious round number
+            denominator_ops_per_second: 2500,   // Suspicious round number
+            throughput_ratio_millionths: 1_000_000, // Perfect 1.0 ratio (suspicious)
+            benchmark_duration_ms: 10_000,
+            request_count: 25_000,
+            error_count: 0,
+            success_rate_millionths: 1_000_000,
+            scenario_path: "test.json".to_string(),
+            output_path: "test_output.json".to_string(),
+            output_hash: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                .to_string(), // Fake hash
+            verification_command: "test-verify.sh".to_string(),
+            benchmark_start_monotonic_ns: 1000000000,
+            benchmark_window_seed: [1u8; 32],
+            measurement_status: ThroughputMeasurementStatus::Targeted,
+            evidence_bead_id: None,
+            evidence_commit_hash: None,
+            evidence_test_name: None,
+        };
+
+        assert!(has_fake_measurement_data(&evidence));
+
+        // Change to non-suspicious values
+        evidence.frankenengine_ops_per_second = 2534;
+        evidence.denominator_ops_per_second = 2487;
+        evidence.throughput_ratio_millionths = 1_018_923; // Non-round ratio
+        evidence.output_hash =
+            "sha256:a4b2c8d6e9f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7".to_string();
+        assert!(!has_fake_measurement_data(&evidence));
+    }
+
+    #[test]
+    fn test_measurement_evidence_validation() {
+        let mut evidence = ThroughputEvidence {
+            scenario_id: "evidence-test".to_string(),
+            runtime_denominator: RuntimeDenominator::Node,
+            frankenengine_ops_per_second: 2534,
+            denominator_ops_per_second: 2487,
+            throughput_ratio_millionths: 1_018_923,
+            benchmark_duration_ms: 10_000,
+            request_count: 25_340,
+            error_count: 0,
+            success_rate_millionths: 1_000_000,
+            scenario_path: "evidence.json".to_string(),
+            output_path: "evidence_output.json".to_string(),
+            output_hash: "sha256:a4b2c8d6e9f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7"
+                .to_string(),
+            verification_command: "evidence-verify.sh".to_string(),
+            benchmark_start_monotonic_ns: 1000000000,
+            benchmark_window_seed: [1u8; 32],
+            measurement_status: ThroughputMeasurementStatus::Verified,
+            evidence_bead_id: Some("bd-1pq04".to_string()),
+            evidence_commit_hash: Some("abc123".to_string()),
+            evidence_test_name: Some("test_real_throughput_measurement".to_string()),
+        };
+
+        // Should fail validation because it uses placeholder baselines even with evidence
+        assert!(!validate_measurement_evidence(&evidence));
+
+        // Targeted status doesn't require evidence
+        evidence.measurement_status = ThroughputMeasurementStatus::Targeted;
+        evidence.evidence_bead_id = None;
+        assert!(validate_measurement_evidence(&evidence));
+
+        // Verified status with placeholder baseline should fail
+        evidence.measurement_status = ThroughputMeasurementStatus::Verified;
+        assert!(!validate_measurement_evidence(&evidence)); // Still fails due to placeholder baseline
+    }
+
+    #[test]
+    fn test_fake_data_rejection_in_evaluation() {
+        let input = ThroughputMetricInput {
+            schema_version: SCHEMA_VERSION.to_string(),
+            bead_id: BEAD_ID.to_string(),
+            scenario_set: "fake_data_test".to_string(),
+            floor_ratio_millionths: 950_000,
+            max_freshness_days: DEFAULT_MAX_FRESHNESS_DAYS,
+            evidence: vec![ThroughputEvidence {
+                scenario_id: "fake_data_scenario".to_string(),
+                runtime_denominator: RuntimeDenominator::Node,
+                frankenengine_ops_per_second: 2500, // Suspicious round number
+                denominator_ops_per_second: 2500,   // Suspicious round number
+                throughput_ratio_millionths: 1_000_000, // Perfect ratio
+                benchmark_duration_ms: 10_000,
+                request_count: 25_000,
+                error_count: 0,
+                success_rate_millionths: 1_000_000,
+                scenario_path: "fake.json".to_string(),
+                output_path: "fake_output.json".to_string(),
+                output_hash:
+                    "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                        .to_string(),
+                verification_command: "fake_verify.sh".to_string(),
+                benchmark_start_monotonic_ns: 1000000000,
+                benchmark_window_seed: [2u8; 32],
+                measurement_status: ThroughputMeasurementStatus::Targeted,
+                evidence_bead_id: None,
+                evidence_commit_hash: None,
+                evidence_test_name: None,
+            }],
+            code_revision: "fake_test_rev".to_string(),
+            generated_at_utc: "2026-05-01T00:00:00Z".to_string(),
+            benchmark_window_seed: [2u8; 32],
+            max_benchmark_duration_ms: DEFAULT_MAX_BENCHMARK_DURATION_MS,
+            evaluation_start_monotonic_ns: 1000000000,
+        };
+
+        let result = evaluate_throughput_metric(&input);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .contains("fake measurement data patterns")
+        );
+    }
+
+    #[test]
+    fn test_insufficient_evidence_rejection() {
+        let input = ThroughputMetricInput {
+            schema_version: SCHEMA_VERSION.to_string(),
+            bead_id: BEAD_ID.to_string(),
+            scenario_set: "insufficient_evidence_test".to_string(),
+            floor_ratio_millionths: 950_000,
+            max_freshness_days: DEFAULT_MAX_FRESHNESS_DAYS,
+            evidence: vec![ThroughputEvidence {
+                scenario_id: "insufficient_evidence_scenario".to_string(),
+                runtime_denominator: RuntimeDenominator::Node,
+                frankenengine_ops_per_second: 2534,
+                denominator_ops_per_second: 2487,
+                throughput_ratio_millionths: 1_018_923,
+                benchmark_duration_ms: 10_000,
+                request_count: 25_340,
+                error_count: 0,
+                success_rate_millionths: 999_000,
+                scenario_path: "insufficient.json".to_string(),
+                output_path: "insufficient_output.json".to_string(),
+                output_hash:
+                    "sha256:a4b2c8d6e9f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7"
+                        .to_string(),
+                verification_command: "insufficient_verify.sh".to_string(),
+                benchmark_start_monotonic_ns: 1000000000,
+                benchmark_window_seed: [3u8; 32],
+                measurement_status: ThroughputMeasurementStatus::Verified, // Claims verified but missing evidence
+                evidence_bead_id: None,                                    // Missing evidence
+                evidence_commit_hash: None,
+                evidence_test_name: None,
+            }],
+            code_revision: "insufficient_test_rev".to_string(),
+            generated_at_utc: "2026-05-01T00:00:00Z".to_string(),
+            benchmark_window_seed: [3u8; 32],
+            max_benchmark_duration_ms: DEFAULT_MAX_BENCHMARK_DURATION_MS,
+            evaluation_start_monotonic_ns: 1000000000,
+        };
+
+        let result = evaluate_throughput_metric(&input);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("insufficient evidence"));
+    }
+
+    #[test]
+    fn test_targeted_status_with_placeholder_baselines() {
+        let input = ThroughputMetricInput {
+            schema_version: SCHEMA_VERSION.to_string(),
+            bead_id: BEAD_ID.to_string(),
+            scenario_set: "targeted_test".to_string(),
+            floor_ratio_millionths: 950_000,
+            max_freshness_days: DEFAULT_MAX_FRESHNESS_DAYS,
+            evidence: vec![ThroughputEvidence {
+                scenario_id: "targeted_scenario".to_string(),
+                runtime_denominator: RuntimeDenominator::Node,
+                frankenengine_ops_per_second: 2534,
+                denominator_ops_per_second: 2487,
+                throughput_ratio_millionths: 1_018_923,
+                benchmark_duration_ms: 10_000,
+                request_count: 25_340,
+                error_count: 0,
+                success_rate_millionths: 999_000,
+                scenario_path: "targeted.json".to_string(),
+                output_path: "targeted_output.json".to_string(),
+                output_hash:
+                    "sha256:a4b2c8d6e9f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7"
+                        .to_string(),
+                verification_command: "targeted_verify.sh".to_string(),
+                benchmark_start_monotonic_ns: 1000000000,
+                benchmark_window_seed: [4u8; 32],
+                measurement_status: ThroughputMeasurementStatus::Targeted,
+                evidence_bead_id: Some("bd-1pq04".to_string()), // Has evidence but targeted status
+                evidence_commit_hash: Some("def456".to_string()),
+                evidence_test_name: Some("test_targeted_measurement".to_string()),
+            }],
+            code_revision: "targeted_test_rev".to_string(),
+            generated_at_utc: "2026-05-01T00:00:00Z".to_string(),
+            benchmark_window_seed: [4u8; 32],
+            max_benchmark_duration_ms: DEFAULT_MAX_BENCHMARK_DURATION_MS,
+            evaluation_start_monotonic_ns: 1000000000,
+        };
+
+        let report = evaluate_throughput_metric(&input).unwrap();
+        assert_eq!(report.overall_outcome, "targeted");
+        assert!(report.baseline_warning.is_some());
+        assert!(
+            report
+                .baseline_warning
+                .as_ref()
+                .unwrap()
+                .contains("TARGETED performance claim")
+        );
+        assert!(
+            report
+                .baseline_warning
+                .as_ref()
+                .unwrap()
+                .contains("placeholder baselines")
+        );
     }
 
     #[test]
@@ -819,19 +1276,25 @@ mod tests {
             evidence: vec![ThroughputEvidence {
                 scenario_id: "secure_test".to_string(),
                 runtime_denominator: RuntimeDenominator::Node,
-                frankenengine_ops_per_second: 2500,
-                denominator_ops_per_second: 2500,
-                throughput_ratio_millionths: 1_000_000,
+                frankenengine_ops_per_second: 2534,
+                denominator_ops_per_second: 2487,
+                throughput_ratio_millionths: 1_018_923,
                 benchmark_duration_ms: 10_000,
-                request_count: 25_000,
+                request_count: 25_340,
                 error_count: 0,
-                success_rate_millionths: 1_000_000,
+                success_rate_millionths: 999_000,
                 scenario_path: "secure.json".to_string(),
                 output_path: "secure_output.json".to_string(),
-                output_hash: "secure123".to_string(),
+                output_hash:
+                    "sha256:f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7"
+                        .to_string(),
                 verification_command: "verify_secure.sh".to_string(),
                 benchmark_start_monotonic_ns: current_ns - 1_000_000_000, // 1 second ago
                 benchmark_window_seed: seed,
+                measurement_status: ThroughputMeasurementStatus::Targeted,
+                evidence_bead_id: None,
+                evidence_commit_hash: None,
+                evidence_test_name: None,
             }],
             code_revision: "secure_rev".to_string(),
             generated_at_utc: "2026-05-01T00:00:00Z".to_string(),
@@ -843,6 +1306,6 @@ mod tests {
         // Should succeed with valid timing protections
         let report = evaluate_throughput_metric(&input).unwrap();
         assert_eq!(report.overall_outcome, "targeted"); // Uses placeholder baselines
-        assert_eq!(report.weighted_ratio_millionths, 1_000_000);
+        assert_eq!(report.weighted_ratio_millionths, 1_018_923);
     }
 }

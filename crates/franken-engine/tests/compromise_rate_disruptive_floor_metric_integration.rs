@@ -51,6 +51,9 @@ fn test_compromise_rate_metric_analysis() {
     assert_eq!(report.schema_version, SCHEMA_VERSION);
     assert_eq!(report.bead_id, BEAD_ID);
     assert!(report.overall_outcome == "pass" || report.overall_outcome == "fail");
+    // Fixture contains fictional scenarios, should be targeted
+    assert_eq!(report.data_quality, "targeted");
+    assert!(report.uncertainty_notes.contains("⚠️ WARNING"));
     assert_eq!(report.evidence_count, input.evidence.len() as u64);
     assert!(report.weighted_reduction_ratio_millionths > 0);
     assert_eq!(report.threshold_factor, DEFAULT_REDUCTION_THRESHOLD_FACTOR);

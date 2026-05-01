@@ -53,9 +53,9 @@ Build a de novo Rust-native runtime family that does not merely replace Node/Bun
 This project’s explicit objective is to make FrankenEngine + franken_node the first practical runtime stack with default-on, probabilistic, active defense against untrusted extension supply-chain attacks, a posture not provided by standard Node/Bun default architectures.
 This will be achieved through creative, radically innovative application of `$extreme-software-optimization`, `$alien-artifact-coding`, and `$alien-graveyard`.
 
-Category-defining disruptive floor (non-optional):
-- `>= 3x` weighted-geometric-mean throughput on Extension-Heavy Benchmark Suite v1.0 (Section `14` denominator contract) versus both baseline Node and Bun configurations at equivalent behavior.
-- `>= 10x` reduction in successful red-team host compromise rate versus baseline Node/Bun default posture.
+Category-defining disruptive floor (non-optional targets):
+- `>= 3x` weighted-geometric-mean throughput on Extension-Heavy Benchmark Suite v1.0 (Section `14` denominator contract) versus both baseline Node and Bun configurations at equivalent behavior. **Target pending live measurement integration.**
+- `>= 10x` reduction in successful red-team host compromise rate versus baseline Node/Bun default posture. **Target pending live red-team scenario implementation.**
 - `<= 250ms` median time from high-risk signal crossing to containment action.
 - `100%` deterministic replay coverage for security-critical allow/deny/escalation decisions.
 - At least `3` production features that are impossible by default in standard Node/Bun deployments (for example posterior-explained policy actions, signed policy checkpoints with rollback resistance, autonomous quarantine mesh).
@@ -456,7 +456,7 @@ Exit gate:
 
 Exit gate:
 - attack simulation harness demonstrates containment without host compromise
-- red-team campaign demonstrates `>= 10x` compromise-rate reduction versus baseline Node/Bun default posture
+- red-team campaign demonstrates `>= 10x` compromise-rate reduction versus baseline Node/Bun default posture *(target pending real scenario implementation)*
 - median detection-to-containment time meets `<= 250ms`
 - deterministic `frankenlab` scenario suite passes for unload/quarantine/revocation/cancel-drain-finalize paths
 - delegate-cell adversarial harness demonstrates containment and replay parity with extension-cell paths
@@ -1295,7 +1295,7 @@ FrankenEngine is considered successful when:
 - compatibility and reliability meet release gates
 - ES2020 runtime conformance is demonstrably complete per the declared `test262` normative gate and waiver policy
 - extension-heavy benchmark suites show `>= 3x` weighted-geometric-mean throughput versus Node baseline and `>= 3x` versus Bun baseline under Section `14` denominator and equivalence rules
-- red-team programs show `>= 10x` reduction in successful host compromise versus baseline Node/Bun default posture
+- red-team programs show `>= 10x` reduction in successful host compromise versus baseline Node/Bun default posture *(target pending real scenario implementation)*
 - high-risk detections reach containment in `<= 250ms` median time under defined load envelopes
 - deterministic replay coverage is `100%` for high-severity decisions and incidents, with deterministic re-execution defined over fixed artifacts (`code`, `policy`, `model snapshot`, `randomness transcript`)
 - control-plane identifiers and capability context are canonicalized through asupersync-derived types (no competing local forks)
@@ -1350,11 +1350,11 @@ Behavior-equivalence requirements:
 - Equivalent error-class semantics for negative/exceptional cases.
 - No work dropping, relaxed durability, or disabled policy checks to inflate throughput.
 
-### 14.2 `>= 3x` Claim Denominator (Normative)
+### 14.2 `>= 3x` Claim Denominator (Target Specification)
 For each baseline runtime `B in {Node, Bun}`:
 - Compute per-case speedup `r_i = throughput_franken_engine_i / throughput_B_i`.
 - Compute suite score `S_B = exp(sum_i w_i * ln(r_i))`, with non-zero weights summing to `1` and equal weighting across family/profile cells by default.
-- A public `>= 3x` claim is valid only if:
+- A public `>= 3x` claim becomes observed (rather than targeted) only if:
   - `S_Node >= 3.0`
   - `S_Bun >= 3.0`
   - all cases used in both scores pass behavior-equivalence gates.

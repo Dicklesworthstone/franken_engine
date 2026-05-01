@@ -8,9 +8,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::disruptive_floor_metric_gate::{
-    DEFAULT_MAX_FRESHNESS_DAYS, DisruptiveMetricId, MetricArtifact,
+    DisruptiveMetricId, MetricArtifact,
 };
-use crate::proof_artifact::validate_sha256;
 
 pub const SCHEMA_VERSION: &str = "franken-engine.throughput-disruptive-floor-metric-gate.v1";
 pub const COMPONENT: &str = "throughput_disruptive_floor_metric_gate";
@@ -39,6 +38,11 @@ impl RuntimeDenominator {
             Self::Node => 2500, // Placeholder baseline: Node.js ops/sec
             Self::Bun => 3200,  // Placeholder baseline: Bun ops/sec
         }
+    }
+
+    pub const fn is_placeholder_baseline(self) -> bool {
+        // All current baselines are placeholder until real measurement integration
+        true
     }
 }
 
@@ -92,7 +96,7 @@ pub struct ThroughputMetricInput {
 pub struct ThroughputMetricReport {
     pub schema_version: String,
     pub bead_id: String,
-    pub overall_outcome: String,        // "pass" | "fail"
+    pub overall_outcome: String,        // "pass" | "fail" | "targeted"
     pub weighted_ratio_millionths: u64, // Geometric mean across denominators
     pub evidence_count: u64,
     pub passing_evidence_count: u64,
@@ -102,6 +106,8 @@ pub struct ThroughputMetricReport {
     pub bun_avg_ratio_millionths: u64,
     pub verification_commands: Vec<String>,
     pub generated_at_utc: String,
+    pub uses_placeholder_baselines: bool,
+    pub baseline_warning: Option<String>,
 }
 
 pub fn compute_weighted_throughput_ratio(evidence: &[ThroughputEvidence]) -> Result<u64, String> {
@@ -207,10 +213,23 @@ pub fn evaluate_throughput_metric(
             / bun_evidence.len() as u64
     };
 
-    let overall_outcome = if weighted_ratio >= input.floor_ratio_millionths {
-        "pass"
+    // Check for placeholder baseline usage
+    let uses_placeholder_node = !node_evidence.is_empty() && RuntimeDenominator::Node.is_placeholder_baseline();
+    let uses_placeholder_bun = !bun_evidence.is_empty() && RuntimeDenominator::Bun.is_placeholder_baseline();
+    let uses_placeholder_baselines = uses_placeholder_node || uses_placeholder_bun;
+
+    let (overall_outcome, baseline_warning) = if uses_placeholder_baselines {
+        let warning = format!(
+            "TARGETED performance claim: Uses placeholder baselines (Node: {}, Bun: {}) instead of live measurement. \
+            Real ≥3x throughput claim requires fresh Node/Bun benchmark comparison.",
+            RuntimeDenominator::Node.baseline_ops_per_second(),
+            RuntimeDenominator::Bun.baseline_ops_per_second()
+        );
+        ("targeted", Some(warning))
+    } else if weighted_ratio >= input.floor_ratio_millionths {
+        ("pass", None)
     } else {
-        "fail"
+        ("fail", None)
     };
 
     let verification_commands: Vec<String> = input
@@ -232,6 +251,8 @@ pub fn evaluate_throughput_metric(
         bun_avg_ratio_millionths: bun_avg_ratio,
         verification_commands,
         generated_at_utc: chrono::Utc::now().to_rfc3339(),
+        uses_placeholder_baselines,
+        baseline_warning,
     })
 }
 
@@ -402,12 +423,15 @@ mod tests {
         };
 
         let report = evaluate_throughput_metric(&input).unwrap();
-        assert_eq!(report.overall_outcome, "pass");
+        assert_eq!(report.overall_outcome, "targeted");
         assert_eq!(report.weighted_ratio_millionths, 1_000_000);
         assert_eq!(report.evidence_count, 1);
         assert_eq!(report.passing_evidence_count, 1);
         assert_eq!(report.node_evidence_count, 1);
         assert_eq!(report.bun_evidence_count, 0);
+        assert!(report.uses_placeholder_baselines);
+        assert!(report.baseline_warning.is_some());
+        assert!(report.baseline_warning.as_ref().unwrap().contains("TARGETED performance claim"));
     }
 
     #[test]
@@ -426,7 +450,7 @@ mod tests {
         let report = ThroughputMetricReport {
             schema_version: SCHEMA_VERSION.to_string(),
             bead_id: BEAD_ID.to_string(),
-            overall_outcome: "pass".to_string(),
+            overall_outcome: "targeted".to_string(),
             weighted_ratio_millionths: 1_100_000,
             evidence_count: 2,
             passing_evidence_count: 2,
@@ -436,6 +460,8 @@ mod tests {
             bun_avg_ratio_millionths: 1_000_000,
             verification_commands: vec!["verify.sh".to_string()],
             generated_at_utc: "2026-05-01T00:00:00Z".to_string(),
+            uses_placeholder_baselines: true,
+            baseline_warning: Some("TARGETED performance claim".to_string()),
         };
 
         let artifact =

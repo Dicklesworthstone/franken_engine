@@ -41,6 +41,27 @@ impl RuntimeDenominator {
     }
 }
 
+/// Detect if evidence contains fictional/placeholder scenarios
+pub fn contains_fictional_scenarios(evidence: &[CompromiseRateEvidence]) -> bool {
+    for e in evidence {
+        // Check for fictional paths commonly used in test fixtures
+        if e.scenario_path.starts_with("/test/scenarios/")
+            || e.output_path.starts_with("/test/output/")
+            || e.verification_command.contains("verify_compromise_results.sh")
+            || e.verification_command.contains("verify_malware_results.sh")
+            || e.verification_command.contains("verify_prototype_results.sh")
+            || e.verification_command.contains("verify_supply_chain_results.sh")
+            || e.reproducibility_command.contains("run_phishing_campaign.sh")
+            || e.reproducibility_command.contains("inject_malware.sh")
+            || e.reproducibility_command.contains("pollute_prototypes.sh")
+            || e.reproducibility_command.contains("deploy_malicious_packages.sh")
+        {
+            return true;
+        }
+    }
+    false
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CompromiseRateEvidence {
     pub scenario_id: String,
@@ -150,6 +171,7 @@ pub struct CompromiseRateMetricReport {
     pub schema_version: String,
     pub bead_id: String,
     pub overall_outcome: String,                  // "pass" | "fail"
+    pub data_quality: String,                     // "targeted" | "observed"
     pub weighted_reduction_ratio_millionths: u64, // Geometric mean across denominators
     pub evidence_count: u64,
     pub passing_evidence_count: u64,
@@ -288,6 +310,14 @@ pub fn analyze_compromise_rate_metric_input(
         .filter(|e| e.meets_reduction_threshold(input.reduction_threshold_factor))
         .count() as u64;
 
+    // Check if evidence contains fictional scenarios
+    let has_fictional_data = contains_fictional_scenarios(&input.evidence);
+    let data_quality = if has_fictional_data {
+        "targeted"
+    } else {
+        "observed"
+    };
+
     // Determine overall outcome
     let required_reduction_millionths = input.reduction_threshold_factor * 1_000_000;
     let overall_outcome = if weighted_reduction_ratio >= required_reduction_millionths {
@@ -296,20 +326,30 @@ pub fn analyze_compromise_rate_metric_input(
         "fail"
     };
 
-    let uncertainty_notes = format!(
-        "Baseline measurements TODO: live integration. Geometric mean across {} scenarios.",
-        input.evidence.len()
-    );
+    let uncertainty_notes = if has_fictional_data {
+        format!(
+            "⚠️ WARNING: Contains placeholder/fictional red-team scenarios with non-existent paths. \
+            Baseline measurements require live integration. Geometric mean across {} scenarios. \
+            Status: TARGETED until real red-team scenarios implemented.",
+            input.evidence.len()
+        )
+    } else {
+        format!(
+            "Baseline measurements from live red-team integration. Geometric mean across {} scenarios.",
+            input.evidence.len()
+        )
+    };
 
     let coverage_notes = format!(
-        "Coverage: {} Node, {} Bun scenarios. Threshold: {}x reduction.",
-        node_count, bun_count, input.reduction_threshold_factor
+        "Coverage: {} Node, {} Bun scenarios. Threshold: {}x reduction. Data quality: {}",
+        node_count, bun_count, input.reduction_threshold_factor, data_quality
     );
 
     Ok(CompromiseRateMetricReport {
         schema_version: SCHEMA_VERSION.to_string(),
         bead_id: input.bead_id.clone(),
         overall_outcome: overall_outcome.to_string(),
+        data_quality: data_quality.to_string(),
         weighted_reduction_ratio_millionths: weighted_reduction_ratio,
         evidence_count: input.evidence.len() as u64,
         passing_evidence_count: passing_count,
@@ -526,6 +566,7 @@ mod tests {
 
         let report = analyze_compromise_rate_metric_input(&input).unwrap();
         assert_eq!(report.overall_outcome, "pass");
+        assert_eq!(report.data_quality, "observed");
         assert_eq!(report.evidence_count, 1);
         assert_eq!(report.passing_evidence_count, 1);
         assert!(report.weighted_reduction_ratio_millionths >= 10_000_000);
@@ -562,6 +603,7 @@ mod tests {
 
         let report = analyze_compromise_rate_metric_input(&input).unwrap();
         assert_eq!(report.overall_outcome, "fail");
+        assert_eq!(report.data_quality, "observed");
         assert_eq!(report.passing_evidence_count, 0);
     }
 
@@ -595,5 +637,83 @@ mod tests {
         };
 
         assert!(analyze_compromise_rate_metric_input(&input).is_err());
+    }
+
+    #[test]
+    fn test_fictional_scenario_detection() {
+        // Test with fictional scenario paths (like those in test fixtures)
+        let fictional_evidence = CompromiseRateEvidence::new(
+            "phishing_email_campaign_node".to_string(),
+            RuntimeDenominator::Node,
+            "node_default_security".to_string(),
+            "frankenengine_hardened".to_string(),
+            1000,
+            850,
+            85,
+            "/test/scenarios/phishing_email_node".to_string(), // Fictional path
+            "/test/output/phishing_node_results.json".to_string(), // Fictional path
+            "sha256:abc123".to_string(),
+            "verify_compromise_results.sh --node".to_string(), // Fictional script
+            "host_compromise_within_24h".to_string(),
+            "run_phishing_campaign.sh --runtime node".to_string(), // Fictional script
+        );
+
+        assert!(contains_fictional_scenarios(&[fictional_evidence.clone()]));
+
+        let input = CompromiseRateMetricInput {
+            schema_version: SCHEMA_VERSION.to_string(),
+            bead_id: BEAD_ID.to_string(),
+            scenario_set: "red_team_compromise_evaluation_v1".to_string(),
+            reduction_threshold_factor: 10,
+            max_freshness_days: DEFAULT_MAX_FRESHNESS_DAYS,
+            evidence: vec![fictional_evidence],
+            code_revision: "abc123".to_string(),
+            generated_at_utc: "2026-05-01T05:00:00Z".to_string(),
+        };
+
+        let report = analyze_compromise_rate_metric_input(&input).unwrap();
+        assert_eq!(report.data_quality, "targeted");
+        assert!(report.uncertainty_notes.contains("⚠️ WARNING"));
+        assert!(report.uncertainty_notes.contains("placeholder/fictional"));
+        assert!(report.coverage_notes.contains("Data quality: targeted"));
+    }
+
+    #[test]
+    fn test_real_scenario_detection() {
+        // Test with realistic (non-fictional) scenario paths
+        let real_evidence = CompromiseRateEvidence::new(
+            "live_scenario_001".to_string(),
+            RuntimeDenominator::Node,
+            "node_standard_config".to_string(),
+            "frankenengine_security_enabled".to_string(),
+            100,
+            75,
+            5,
+            "/data/red_team/scenarios/cve_2023_001/config.json".to_string(), // Real-looking path
+            "/data/red_team/results/scenario_001_results.json".to_string(), // Real-looking path
+            "sha256:realoutputhash123".to_string(),
+            "validate_scenario_results --scenario cve_2023_001".to_string(), // Real-looking command
+            "privilege_escalation_success".to_string(),
+            "execute_cve_exploit --target node --iterations 100".to_string(), // Real-looking command
+        );
+
+        assert!(!contains_fictional_scenarios(&[real_evidence.clone()]));
+
+        let input = CompromiseRateMetricInput {
+            schema_version: SCHEMA_VERSION.to_string(),
+            bead_id: BEAD_ID.to_string(),
+            scenario_set: "live_red_team_evaluation".to_string(),
+            reduction_threshold_factor: 10,
+            max_freshness_days: DEFAULT_MAX_FRESHNESS_DAYS,
+            evidence: vec![real_evidence],
+            code_revision: "abc123".to_string(),
+            generated_at_utc: "2026-05-01T05:00:00Z".to_string(),
+        };
+
+        let report = analyze_compromise_rate_metric_input(&input).unwrap();
+        assert_eq!(report.data_quality, "observed");
+        assert!(!report.uncertainty_notes.contains("⚠️ WARNING"));
+        assert!(!report.uncertainty_notes.contains("placeholder/fictional"));
+        assert!(report.coverage_notes.contains("Data quality: observed"));
     }
 }

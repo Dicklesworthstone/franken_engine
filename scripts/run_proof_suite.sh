@@ -120,7 +120,16 @@ for gate_spec in "${PROOF_GATES[@]}"; do
         gate_exit_code=0
         gate_status="pass"
         passed_gates=$((passed_gates + 1))
-        echo "   ✅ PASSED"
+
+        # Check for TARGETED status in throughput gate output
+        if [[ "$gate_name" == "throughput_disruptive_floor" ]] && echo "$gate_output" | grep -q "TARGETED performance claim"; then
+            echo "   ⚠️  TARGETED (using placeholder baselines)"
+            gate_status="targeted"
+            gate_error="Throughput claim is TARGETED - uses placeholder Node/Bun baselines instead of live measurement"
+            echo "   Warning: ≥3x throughput claim relies on placeholder baselines, not live Node/Bun measurement"
+        else
+            echo "   ✅ PASSED"
+        fi
     else
         gate_exit_code=$?
         gate_status="fail"

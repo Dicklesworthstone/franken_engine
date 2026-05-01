@@ -21,7 +21,8 @@ Native Rust runtime for adversarial extension workloads, with deterministic repl
 ```bash
 git clone https://github.com/Dicklesworthstone/franken_engine.git
 cd franken_engine
-cargo build --workspace --release
+cargo build --release -p frankenengine-engine --bin frankenctl
+./target/release/frankenctl version
 ```
 
 <p><em>This repository currently ships Rust workspace crates and source-built utility binaries, not a packaged installer or prebuilt release binaries.</em></p>
@@ -58,34 +59,37 @@ operator tooling. **Shipped surfaces**: `version`, `compile`, `run`, `doctor`,
 `orchestrate`, and `runtime`. See [Unsupported Surfaces](#unsupported-surfaces) 
 for production guidance.
 
-The `frankenctl` examples below document the operator contract:
+The `frankenctl` examples below document the first-run operator contract from a source checkout:
 
 ```bash
-# 1) Verify the CLI binary and schema version
-frankenctl version
+# 1) Build the source CLI binary used below
+cargo build --release -p frankenengine-engine --bin frankenctl
 
-# 2) Create a tiny source file and artifact directory
+# 2) Verify the CLI binary and schema version  
+./target/release/frankenctl version
+
+# 3) Create a tiny source file and artifact directory
 mkdir -p ./artifacts
 printf 'const answer = 40 + 2;\n' > ./demo.js
 
-# 3) Compile source to a versioned artifact
-frankenctl compile --input ./demo.js --out ./artifacts/demo.compile.json --goal script
+# 4) Compile source to a versioned artifact
+./target/release/frankenctl compile --input ./demo.js --out ./artifacts/demo.compile.json --goal script
 
-# 4) Verify the compile artifact contract
-frankenctl verify compile-artifact --input ./artifacts/demo.compile.json
+# 5) Verify the compile artifact contract
+./target/release/frankenctl verify compile-artifact --input ./artifacts/demo.compile.json
 
-# 5) Execute the same source through the orchestrator
-frankenctl run --input ./demo.js --extension-id demo-ext --out ./artifacts/demo.run.json
+# 6) Execute the same source through the orchestrator  
+./target/release/frankenctl run --input ./demo.js --extension-id demo-ext --out ./artifacts/demo.run.json
 
-# 6) Replay a captured nondeterminism trace
-#    (steps 1-5 emit compile/run reports, not replay traces)
-frankenctl replay run --trace ./examples/05_replay_demo/sample_trace.json --mode strict --out ./artifacts/replay_report.json
+# 7) Replay a captured nondeterminism trace (requires the checked-in sample trace)
+#    Note: steps 1-6 emit compile/run reports, not replay traces
+./target/release/frankenctl replay run --trace ./examples/05_replay_demo/sample_trace.json --mode strict --out ./artifacts/replay_report.json
 ```
 
 The README CLI contract is covered by a user-facing smoke workflow:
 
 ```bash
-FRANKENCTL_BIN=target/debug/frankenctl ./scripts/e2e/readme_cli_workflow_smoke.sh
+FRANKENCTL_BIN=./target/release/frankenctl ./scripts/e2e/readme_cli_workflow_smoke.sh
 ```
 
 Each run writes a signed artifact manifest, structured events, command
@@ -717,7 +721,7 @@ The matrix also pins npm-style `pkg.js` / `@scope/pkg.js` extension-probe packag
 ```bash
 git clone https://github.com/Dicklesworthstone/franken_engine.git
 cd franken_engine
-cargo build --release --workspace
+cargo build --release -p frankenengine-engine --bin frankenctl
 ```
 
 The workspace currently includes these crates:
@@ -755,49 +759,65 @@ printf 'const answer = 40 + 2;\n' > ./demo.js
 
 2. **Compile to a deterministic artifact**
 ```bash
-frankenctl compile --input ./demo.js --out ./artifacts/demo.compile.json --goal script
-frankenctl verify compile-artifact --input ./artifacts/demo.compile.json
+./target/release/frankenctl compile --input ./demo.js --out ./artifacts/demo.compile.json --goal script
+./target/release/frankenctl verify compile-artifact --input ./artifacts/demo.compile.json
 ```
 
 3. **Run the source and persist the execution report**
 ```bash
-frankenctl run --input ./demo.js --extension-id demo-ext --out ./artifacts/demo.run.json
+./target/release/frankenctl run --input ./demo.js --extension-id demo-ext --out ./artifacts/demo.run.json
 ```
 
-4. **Summarize a captured runtime snapshot**
+4. **Verify the basic workflow end-to-end**
+```bash
+FRANKENCTL_BIN=./target/release/frankenctl ./scripts/e2e/readme_cli_workflow_smoke.sh
+```
+
+This workflow creates artifacts under `artifacts/readme_cli_workflow_smoke/<timestamp>/` with signed manifests, structured events, and command transcripts.
+
+## Advanced Verification
+
+Once you've completed the basic quick start and have run some of the proof-suite gates, you can explore advanced verification workflows that depend on captured artifacts:
+
+1. **Analyze captured runtime diagnostics** *(requires runtime_input.json from previous runs)*
 ```bash
 frankenctl doctor --input ./artifacts/runtime_input.json --summary --out-dir ./artifacts/doctor
 ```
 
-5. **Verify receipt bundles and benchmark publication inputs**
+2. **Verify receipt bundles** *(requires verifier artifacts from gate runs)*
 ```bash
 frankenctl verify receipt --input ./artifacts/verifier_input.json --receipt-id rcpt_01J... --summary
 frankenctl benchmark score --input ./artifacts/publication_gate_input.json --output ./artifacts/benchmark_score.json
 ```
 
-6. **Run benchmark and replay workflows when you have the required artifacts**
+3. **Run benchmark and replay workflows** *(requires benchmark artifacts and replay traces)*
 ```bash
 frankenctl benchmark run --profile small --family boot-storm --out-dir ./artifacts/benchmarks
 frankenctl benchmark verify --bundle ./artifacts/benchmarks --summary --output ./artifacts/benchmark_verify.json
 frankenctl replay run --trace ./artifacts/replay/demo-trace.json --compare-trace ./artifacts/replay/live-trace.json --mode validate --out ./artifacts/replay_report.json
 ```
 
+4. **Replay captured nondeterminism traces** *(requires sample traces from examples or gate runs)*
+```bash
+frankenctl replay run --trace ./examples/05_replay_demo/sample_trace.json --mode strict --out ./artifacts/replay_report.json
+```
+
 ## Command Reference
 
 The command table below documents the `frankenctl` contract and available command surfaces.
 
-| Command | Purpose | Example |
-|---|---|---|
-| `frankenctl version` | Print CLI schema and binary version | `frankenctl version` |
-| `frankenctl compile` | Parse and lower source into a versioned compile artifact | `frankenctl compile --input ./demo.js --out ./artifacts/demo.compile.json --goal script` |
-| `frankenctl run` | Execute source through the orchestrator and emit an execution report | `frankenctl run --input ./demo.js --extension-id demo-ext --out ./artifacts/demo.run.json` |
-| `frankenctl doctor` | Summarize runtime diagnostics input and emit operator artifacts | `frankenctl doctor --input ./artifacts/runtime_input.json --summary --out-dir ./artifacts/doctor` |
-| `frankenctl verify compile-artifact` | Validate compile artifact integrity and schema invariants | `frankenctl verify compile-artifact --input ./artifacts/demo.compile.json` |
-| `frankenctl verify receipt` | Verify a receipt bundle against a specific receipt ID | `frankenctl verify receipt --input ./artifacts/verifier_input.json --receipt-id rcpt_01J... --summary` |
-| `frankenctl benchmark run` | Run bundled benchmark families and emit evidence artifacts | `frankenctl benchmark run --profile small --family boot-storm --out-dir ./artifacts/benchmarks` |
-| `frankenctl benchmark score` | Score a publication-gate input against Node/Bun comparisons | `frankenctl benchmark score --input ./artifacts/publication_gate_input.json --output ./artifacts/benchmark_score.json` |
-| `frankenctl benchmark verify` | Verify a benchmark claim bundle and render a verdict report | `frankenctl benchmark verify --bundle ./artifacts/benchmarks --summary --output ./artifacts/benchmark_verify.json` |
-| `frankenctl replay run` | Replay a captured nondeterminism trace; `validate` mode compares it against `--compare-trace` | `frankenctl replay run --trace ./artifacts/replay/demo-trace.json --compare-trace ./artifacts/replay/live-trace.json --mode validate --out ./artifacts/replay_report.json` |
+| Command | Purpose | Example | Prerequisites |
+|---|---|---|---|
+| `frankenctl version` | Print CLI schema and binary version | `frankenctl version` | None |
+| `frankenctl compile` | Parse and lower source into a versioned compile artifact | `frankenctl compile --input ./demo.js --out ./artifacts/demo.compile.json --goal script` | Source file only |
+| `frankenctl run` | Execute source through the orchestrator and emit an execution report | `frankenctl run --input ./demo.js --extension-id demo-ext --out ./artifacts/demo.run.json` | Source file only |
+| `frankenctl verify compile-artifact` | Validate compile artifact integrity and schema invariants | `frankenctl verify compile-artifact --input ./artifacts/demo.compile.json` | Compile artifact |
+| `frankenctl doctor` | Summarize runtime diagnostics input and emit operator artifacts | `frankenctl doctor --input ./artifacts/runtime_input.json --summary --out-dir ./artifacts/doctor` | Runtime artifacts |
+| `frankenctl verify receipt` | Verify a receipt bundle against a specific receipt ID | `frankenctl verify receipt --input ./artifacts/verifier_input.json --receipt-id rcpt_01J...` | Receipt artifacts |
+| `frankenctl benchmark run` | Run bundled benchmark families and emit evidence artifacts | `frankenctl benchmark run --profile small --family boot-storm --out-dir ./artifacts/benchmarks` | None |
+| `frankenctl benchmark score` | Score a publication-gate input against Node/Bun comparisons | `frankenctl benchmark score --input ./artifacts/publication_gate_input.json --output ./artifacts/benchmark_score.json` | Publication artifacts |
+| `frankenctl benchmark verify` | Verify a benchmark claim bundle and render a verdict report | `frankenctl benchmark verify --bundle ./artifacts/benchmarks --summary --output ./artifacts/benchmark_verify.json` | Benchmark artifacts |
+| `frankenctl replay run` | Replay a captured nondeterminism trace; `validate` mode compares against `--compare-trace` | `frankenctl replay run --trace ./examples/05_replay_demo/sample_trace.json --mode strict --out ./artifacts/replay_report.json` | Replay traces |
 
 ## Operator Documentation
 

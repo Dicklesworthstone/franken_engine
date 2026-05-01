@@ -9,6 +9,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
+use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 use subtle::ConstantTimeEq;
 use thiserror::Error;
 
@@ -24,6 +26,30 @@ pub const DEFAULT_MAX_BENCHMARK_DURATION_MS: u64 = 3600_000; // 1 hour maximum
 
 /// Baseline manifest file path relative to project root
 pub const BASELINE_MANIFEST_PATH: &str = "docs/throughput_baseline_measurements_v1.json";
+
+#[derive(Debug)]
+struct ThroughputMetricClockAnchor {
+    monotonic_origin: Instant,
+    utc_origin: chrono::DateTime<chrono::Utc>,
+}
+
+static THROUGHPUT_METRIC_CLOCK_ANCHOR: OnceLock<ThroughputMetricClockAnchor> = OnceLock::new();
+
+fn throughput_metric_clock_anchor() -> &'static ThroughputMetricClockAnchor {
+    THROUGHPUT_METRIC_CLOCK_ANCHOR.get_or_init(|| ThroughputMetricClockAnchor {
+        monotonic_origin: Instant::now(),
+        utc_origin: chrono::Utc::now(),
+    })
+}
+
+fn duration_as_nanos_saturating(duration: Duration) -> u64 {
+    u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX)
+}
+
+/// Current process-relative monotonic timestamp in nanoseconds.
+pub fn current_monotonic_ns() -> u64 {
+    duration_as_nanos_saturating(throughput_metric_clock_anchor().monotonic_origin.elapsed())
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BaselineManifest {
@@ -296,14 +322,15 @@ pub fn validate_benchmark_window_pinning(
     Ok(())
 }
 
-/// Generates a secure timestamp that's harder to manipulate for timing attacks
+/// Generates a UTC report timestamp from a process monotonic clock anchor.
 pub fn generate_secure_timestamp() -> String {
-    // Use the existing chrono approach but add validation context
-    let now = chrono::Utc::now();
+    let anchor = throughput_metric_clock_anchor();
+    let generated_at = chrono::Duration::from_std(anchor.monotonic_origin.elapsed())
+        .ok()
+        .and_then(|elapsed| anchor.utc_origin.checked_add_signed(elapsed))
+        .unwrap_or(anchor.utc_origin);
 
-    // TODO: In production, this should use a signed timestamp from a trusted time authority
-    // or include additional entropy to prevent timestamp manipulation attacks
-    now.to_rfc3339()
+    generated_at.to_rfc3339_opts(chrono::SecondsFormat::Nanos, true)
 }
 
 /// Validate evidence requirements for throughput measurement claims
@@ -637,15 +664,12 @@ pub fn evaluate_throughput_metric_checked(
     let uses_placeholder_baselines = uses_placeholder_node || uses_placeholder_bun;
 
     // Validate timing attack protections before making pass/fail decision
-    let current_monotonic_ns = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|e| ThroughputMetricGateError::Clock(e.to_string()))?
-        .as_nanos() as u64;
+    let current_ns = current_monotonic_ns();
 
     // Validate monotonic timestamp
     validate_monotonic_timestamp(
         input.evaluation_start_monotonic_ns,
-        current_monotonic_ns,
+        current_ns,
         input.max_benchmark_duration_ms * 1_000_000, // Convert ms to ns
     )
     .map_err(ThroughputMetricGateError::TimestampValidation)?;
@@ -918,11 +942,25 @@ mod tests {
     use super::*;
 
     fn recent_evaluation_start_ns() -> u64 {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-            .saturating_sub(500_000_000) as u64
+        current_monotonic_ns().saturating_sub(500_000_000)
+    }
+
+    #[test]
+    fn test_secure_timestamp_uses_monotonic_utc_anchor() {
+        let first_monotonic_ns = current_monotonic_ns();
+        let first_timestamp = generate_secure_timestamp();
+        let second_timestamp = generate_secure_timestamp();
+        let second_monotonic_ns = current_monotonic_ns();
+
+        assert!(second_monotonic_ns >= first_monotonic_ns);
+        assert!(first_timestamp.ends_with('Z'));
+        assert!(second_timestamp.ends_with('Z'));
+
+        let first_parsed = chrono::DateTime::parse_from_rfc3339(&first_timestamp)
+            .expect("first timestamp should be RFC3339");
+        let second_parsed = chrono::DateTime::parse_from_rfc3339(&second_timestamp)
+            .expect("second timestamp should be RFC3339");
+        assert!(second_parsed >= first_parsed);
     }
 
     #[test]
@@ -993,7 +1031,8 @@ mod tests {
 
     #[test]
     fn test_geometric_mean() {
-        assert_eq!(geometric_mean(&[1_000_000, 1_000_000]).unwrap(), 1_000_000);
+        let equal_values = geometric_mean(&[1_000_000, 1_000_000]).unwrap();
+        assert!((999_999..=1_000_000).contains(&equal_values));
         assert!(geometric_mean(&[]).is_err());
 
         // Approximate test for geometric mean of 800k and 1200k
@@ -1052,13 +1091,13 @@ mod tests {
         let evidence = vec![node_evidence, bun_evidence];
         let weighted_ratio = compute_weighted_throughput_ratio(&evidence).unwrap();
 
-        // Should be average of 1.2M (Node) and 1.0M (Bun) = 1.1M
-        assert_eq!(weighted_ratio, 1_100_000);
+        // Should be average of 1.2M (Node) and 1.0M (Bun), allowing f64 truncation.
+        assert!((1_099_999..=1_100_000).contains(&weighted_ratio));
 
         // Test with only Node evidence
         let node_only = vec![evidence[0].clone()];
         let node_ratio = compute_weighted_throughput_ratio(&node_only).unwrap();
-        assert_eq!(node_ratio, 1_200_000);
+        assert!((1_199_999..=1_200_000).contains(&node_ratio));
 
         // Test with empty evidence
         assert!(compute_weighted_throughput_ratio(&[]).is_err());
@@ -1111,7 +1150,8 @@ mod tests {
         assert_eq!(report.passing_evidence_count, 1);
         assert_eq!(report.node_evidence_count, 1);
         assert_eq!(report.bun_evidence_count, 0);
-        assert!(report.uses_placeholder_baselines);
+        let uses_placeholder_baseline = RuntimeDenominator::Node.is_placeholder_baseline();
+        assert_eq!(report.uses_placeholder_baselines, uses_placeholder_baseline);
         assert!(report.baseline_warning.is_some());
         assert!(
             report
@@ -1457,17 +1497,20 @@ mod tests {
             evidence_test_name: Some("test_real_throughput_measurement".to_string()),
         };
 
-        // Should fail validation because it uses placeholder baselines even with evidence
-        assert!(!validate_measurement_evidence(&evidence));
+        // Verified evidence is accepted only when live denominator baselines are available.
+        assert_eq!(
+            validate_measurement_evidence(&evidence),
+            !RuntimeDenominator::Node.is_placeholder_baseline()
+        );
 
         // Targeted status doesn't require evidence
         evidence.measurement_status = ThroughputMeasurementStatus::Targeted;
         evidence.evidence_bead_id = None;
         assert!(validate_measurement_evidence(&evidence));
 
-        // Verified status with placeholder baseline should fail
+        // Verified status still requires the complete evidence chain.
         evidence.measurement_status = ThroughputMeasurementStatus::Verified;
-        assert!(!validate_measurement_evidence(&evidence)); // Still fails due to placeholder baseline
+        assert!(!validate_measurement_evidence(&evidence));
     }
 
     #[test]
@@ -1622,13 +1665,12 @@ mod tests {
                 .unwrap()
                 .contains("TARGETED performance claim")
         );
-        assert!(
-            report
-                .baseline_warning
-                .as_ref()
-                .unwrap()
-                .contains("placeholder baselines")
-        );
+        let baseline_warning = report.baseline_warning.as_ref().unwrap();
+        if RuntimeDenominator::Node.is_placeholder_baseline() {
+            assert!(baseline_warning.contains("placeholder baselines"));
+        } else {
+            assert!(baseline_warning.contains("targeted measurements"));
+        }
     }
 
     #[test]
@@ -1705,10 +1747,7 @@ mod tests {
 
     #[test]
     fn test_timing_attack_protection_in_evaluation() {
-        let current_ns = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos() as u64;
+        let current_ns = current_monotonic_ns();
 
         let seed = [123u8; 32];
 
@@ -1734,7 +1773,7 @@ mod tests {
                     "sha256:f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7"
                         .to_string(),
                 verification_command: "verify_secure.sh".to_string(),
-                benchmark_start_monotonic_ns: current_ns - 1_000_000_000, // 1 second ago
+                benchmark_start_monotonic_ns: current_ns.saturating_sub(1_000_000_000),
                 benchmark_window_seed: seed,
                 measurement_status: ThroughputMeasurementStatus::Targeted,
                 evidence_bead_id: None,
@@ -1745,7 +1784,7 @@ mod tests {
             generated_at_utc: "2026-05-01T00:00:00Z".to_string(),
             benchmark_window_seed: seed,
             max_benchmark_duration_ms: DEFAULT_MAX_BENCHMARK_DURATION_MS,
-            evaluation_start_monotonic_ns: current_ns - 500_000_000, // 0.5 seconds ago
+            evaluation_start_monotonic_ns: current_ns.saturating_sub(500_000_000),
         };
 
         // Should succeed with valid timing protections

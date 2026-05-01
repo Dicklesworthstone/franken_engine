@@ -317,6 +317,7 @@ pub mod profiling;
 pub mod promise_model;
 pub mod promotion_gate_runner;
 pub mod proof_backed_compression;
+pub mod proof_artifact;
 pub mod proof_ingestion;
 pub mod proof_obligations;
 pub mod proof_release_gate;

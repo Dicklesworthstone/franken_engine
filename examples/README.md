@@ -20,7 +20,7 @@ from PLAN section 3.2 to the shipped example directories in this repository.
 | 3 | Checkpoints | `20_signed_checkpoints` | `./examples/20_signed_checkpoints/verify.sh` |
 | 4 | Quarantine | `07_quarantine_mesh` | `./examples/07_quarantine_mesh/demo.sh` |
 | 5 | Proof-carrying adaptive optimization | `15_proof_carrying_optimization` | `./examples/15_proof_carrying_optimization/verify.sh` |
-| 6 | Capability-typed execution | `06_capability_typed` | `./examples/06_capability_typed/verify.sh` |
+| 6 | Capability-typed rejection boundary | `06_capability_typed` | `./examples/06_capability_typed/verify.sh` |
 | 7 | Deterministic resource exhaustion semantics | `13_resource_budget_demo` | `./examples/13_resource_budget_demo/verify.sh` |
 | 8 | Revocation-first execution gates | `14_revocation_first_gate` | `./examples/14_revocation_first_gate/verify.sh` |
 | 9 | Distributed anti-entropy trust reconciliation | `-` | No dedicated example directory is currently shipped. |

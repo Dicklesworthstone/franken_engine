@@ -1,6 +1,6 @@
-# Capability-Typed Demo
+# Capability-Typed Rejection Boundary Demo
 
-This example contrasts two execution shapes on the current shipped `frankenctl run` path.
+This example verifies the rejection boundary on the current shipped `frankenctl run` path. It does not claim to verify a granted `fs_read` success path.
 
 - [`pure_compute.js`](./pure_compute.js) stays inside pure computation and evaluates successfully.
 - [`requires_capability.js`](./requires_capability.js) reaches for host authority through `require("fs")`, which the current runtime rejects fail-closed with a capability error before any file read happens.
@@ -33,6 +33,7 @@ The error surface currently includes `eval.capability.denied` and `module:requir
 
 - `pure_compute.js` is the ambient-authority-free baseline: deterministic arithmetic with no host dependency.
 - `requires_capability.js` is the capability-shaped boundary case: the source tries to cross into host authority, and the runtime blocks it rather than silently granting ambient access.
+- The checked proof surface is rejection-only: the verifier asserts that ambient `require("fs")` is denied on the shipped CLI path.
 
 ## Future Work
 

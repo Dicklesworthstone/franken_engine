@@ -26,6 +26,7 @@ pub const REQUIRED_OBSERVED_FEATURES: u64 = 3;
 #[serde(rename_all = "snake_case")]
 pub enum ProductionFeatureState {
     Observed,
+    Provisional, // Claims implementation but lacks proper evidence
     Target,
     Hypothesis,
 }
@@ -34,6 +35,7 @@ impl ProductionFeatureState {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Observed => "observed",
+            Self::Provisional => "provisional",
             Self::Target => "target",
             Self::Hypothesis => "hypothesis",
         }
@@ -65,6 +67,10 @@ pub struct FeatureArtifactHandle {
     pub user_facing_workflow: String,
     pub proof_manifest_id: String,
     pub redaction_status: String,
+    // Evidence requirements for production features
+    pub evidence_bead_id: Option<String>, // Closed bead ID that implemented this feature
+    pub evidence_commit_hash: Option<String>, // Commit hash with implementation
+    pub evidence_test_name: Option<String>, // Test name proving functionality
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -209,6 +215,13 @@ pub fn evaluate_production_feature_catalog(
         }
         if feature.state != ProductionFeatureState::Observed {
             unsupported_candidate_feature_ids.push(feature.feature_id.clone());
+        }
+        // Mark provisional features as requiring attention
+        if feature.state == ProductionFeatureState::Provisional {
+            unsupported_candidate_feature_ids.push(format!(
+                "{} (PROVISIONAL - lacks evidence)",
+                feature.feature_id
+            ));
         }
         evaluations.push(evaluation);
     }
@@ -359,7 +372,9 @@ fn evaluate_feature(
         return empty.with_reason("missing_downgrade_text");
     }
 
-    if feature.state != ProductionFeatureState::Observed {
+    if feature.state != ProductionFeatureState::Observed
+        && feature.state != ProductionFeatureState::Provisional
+    {
         return empty;
     }
     if feature.artifact_handles.is_empty() {
@@ -374,6 +389,22 @@ fn evaluate_feature(
         .iter()
         .find_map(validate_artifact_handle);
     if let Some(reason) = invalid_artifact {
+        // If it's an evidence validation failure and marked as Observed,
+        // suggest downgrading to Provisional
+        if matches!(
+            reason,
+            "fake_artifact_hash_detected"
+                | "missing_evidence_requirements"
+                | "invalid_evidence_bead_id_format"
+                | "invalid_evidence_commit_hash_format"
+                | "missing_evidence_test_name"
+        ) && feature.state == ProductionFeatureState::Observed
+        {
+            return empty.with_reason(&format!(
+                "{}: feature should be marked PROVISIONAL until proper evidence is provided",
+                reason
+            ));
+        }
         return empty.with_reason(reason);
     }
 
@@ -405,7 +436,90 @@ impl FeatureEvaluation {
     }
 }
 
+/// Validates evidence requirements for production features against fake data
+fn validate_evidence_requirements(artifact: &FeatureArtifactHandle) -> Option<&'static str> {
+    // Reject known fake hash patterns
+    if is_fake_hash(&artifact.sha256) {
+        return Some("fake_artifact_hash_detected");
+    }
+
+    // For live proof artifacts claiming production readiness, require evidence
+    if artifact.proof_kind.is_live() {
+        if let (Some(bead_id), Some(commit_hash), Some(test_name)) = (
+            &artifact.evidence_bead_id,
+            &artifact.evidence_commit_hash,
+            &artifact.evidence_test_name,
+        ) {
+            // Validate bead ID format (should be bd-xxxxx)
+            if !bead_id.starts_with("bd-") || bead_id.len() < 6 {
+                return Some("invalid_evidence_bead_id_format");
+            }
+
+            // Validate commit hash format (should be 7-40 hex chars)
+            if commit_hash.len() < 7
+                || commit_hash.len() > 40
+                || !commit_hash.chars().all(|c| c.is_ascii_hexdigit())
+            {
+                return Some("invalid_evidence_commit_hash_format");
+            }
+
+            // Validate test name is not empty
+            if test_name.trim().is_empty() {
+                return Some("missing_evidence_test_name");
+            }
+        } else {
+            return Some("missing_evidence_requirements");
+        }
+    }
+
+    None
+}
+
+/// Detects fake SHA256 hash patterns commonly used in placeholder code
+fn is_fake_hash(hash: &str) -> bool {
+    if !hash.starts_with("sha256:") || hash.len() != 71 {
+        return false; // Invalid format, will be caught by existing validation
+    }
+
+    let hex_part = &hash[7..];
+
+    // Common fake patterns
+    let fake_patterns = [
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", // sequential hex
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", // all a's
+        "1111111111111111111111111111111111111111111111111111111111111111", // all 1's
+        "0000000000000000000000000000000000000000000000000000000000000000", // all 0's
+        "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff", // all f's
+        "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef", // deadbeef pattern
+    ];
+
+    // Check if it matches known fake patterns
+    if fake_patterns.contains(&hex_part) {
+        return true;
+    }
+
+    // Check for repetitive patterns (same 4-char sequence repeated)
+    if hex_part.len() == 64 {
+        let chunk = &hex_part[0..4];
+        if hex_part
+            .chars()
+            .collect::<Vec<_>>()
+            .chunks(4)
+            .all(|c| c.iter().collect::<String>() == chunk)
+        {
+            return true;
+        }
+    }
+
+    false
+}
+
 fn validate_artifact_handle(artifact: &FeatureArtifactHandle) -> Option<&'static str> {
+    // Check evidence requirements first to catch fake data
+    if let Some(evidence_error) = validate_evidence_requirements(artifact) {
+        return Some(evidence_error);
+    }
+
     if artifact.path.trim().is_empty() {
         return Some("missing_artifact_path");
     }
@@ -506,13 +620,16 @@ fn observed_feature(
     bead: impl Into<String>,
 ) -> ProductionFeatureCatalogEntry {
     let feature_id = feature_id.into();
+    // NOTE: This function creates PROVISIONAL features since the representative
+    // data lacks real evidence. In production, features should only be marked
+    // as Observed with proper bead IDs, commit hashes, and test evidence.
     ProductionFeatureCatalogEntry {
         feature_id: feature_id.clone(),
         user_facing_name: name.into(),
         impossible_by_default_rationale: format!(
             "{feature_id} is impossible by default versus Node and Bun because it requires signed, replayable runtime proof before release wording can claim production behavior."
         ),
-        state: ProductionFeatureState::Observed,
+        state: ProductionFeatureState::Provisional, // Downgraded from Observed due to fake data
         artifact_handles: vec![FeatureArtifactHandle {
             path: format!("artifacts/production_feature_catalog/{feature_id}/manifest.json"),
             sha256: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
@@ -525,11 +642,15 @@ fn observed_feature(
             user_facing_workflow: format!("frankenctl proof verify --feature {feature_id}"),
             proof_manifest_id: format!("{PROOF_MANIFEST_SCHEMA_VERSION}:{feature_id}"),
             redaction_status: "redacted".to_string(),
+            // Evidence fields left empty - this is what makes it PROVISIONAL
+            evidence_bead_id: None,
+            evidence_commit_hash: None,
+            evidence_test_name: None,
         }],
         freshness_days: 0,
         owning_bead: bead.into(),
         downgrade_text: format!(
-            "Keep {feature_id} as a target until a fresh live proof artifact passes."
+            "PROVISIONAL: {feature_id} requires real evidence (bead ID + commit hash + test name) before marking as Observed."
         ),
     }
 }
@@ -557,11 +678,57 @@ fn target_feature(
             user_facing_workflow: String::new(),
             proof_manifest_id: String::new(),
             redaction_status: "redacted".to_string(),
+            // Target/Hypothesis features don't need evidence yet
+            evidence_bead_id: None,
+            evidence_commit_hash: None,
+            evidence_test_name: None,
         }],
         freshness_days: DEFAULT_MAX_FRESHNESS_DAYS,
         owning_bead: "bd-target".to_string(),
         downgrade_text: format!(
             "Keep {feature_id} as target/hypothesis until live proof artifacts exist."
+        ),
+    }
+}
+
+/// Creates a properly evidenced observed feature for testing (non-fake data)
+#[cfg(test)]
+fn observed_feature_with_evidence(
+    feature_id: impl Into<String>,
+    name: impl Into<String>,
+    bead: impl Into<String>,
+    commit_hash: impl Into<String>,
+    test_name: impl Into<String>,
+    artifact_hash: impl Into<String>,
+) -> ProductionFeatureCatalogEntry {
+    let feature_id = feature_id.into();
+    ProductionFeatureCatalogEntry {
+        feature_id: feature_id.clone(),
+        user_facing_name: name.into(),
+        impossible_by_default_rationale: format!(
+            "{feature_id} is impossible by default versus Node and Bun because it requires signed, replayable runtime proof before release wording can claim production behavior."
+        ),
+        state: ProductionFeatureState::Observed,
+        artifact_handles: vec![FeatureArtifactHandle {
+            path: format!("artifacts/production_feature_catalog/{feature_id}/manifest.json"),
+            sha256: artifact_hash.into(),
+            role: "live_proof_manifest".to_string(),
+            proof_kind: FeatureProofKind::LiveProofArtifact,
+            verification_command: format!(
+                "API_TOKEN=secret scripts/run_{feature_id}_proof.sh --verify"
+            ),
+            user_facing_workflow: format!("frankenctl proof verify --feature {feature_id}"),
+            proof_manifest_id: format!("{PROOF_MANIFEST_SCHEMA_VERSION}:{feature_id}"),
+            redaction_status: "redacted".to_string(),
+            // Real evidence requirements
+            evidence_bead_id: Some(bead.into()),
+            evidence_commit_hash: Some(commit_hash.into()),
+            evidence_test_name: Some(test_name.into()),
+        }],
+        freshness_days: 0,
+        owning_bead: bead.into(),
+        downgrade_text: format!(
+            "Keep {feature_id} as a target until a fresh live proof artifact passes."
         ),
     }
 }
@@ -768,5 +935,191 @@ mod tests {
                 .iter()
                 .any(|event| event.verification_command.contains("API_TOKEN=<redacted>"))
         );
+    }
+
+    #[test]
+    fn fake_artifact_hash_detected_and_rejected() {
+        let mut input = ProductionFeatureCatalogInput::representative_fixture("rev-under-test");
+
+        // The representative fixture already has fake hashes, which should be detected
+        let report = evaluate_production_feature_catalog(&input);
+
+        // Since features use fake data, they should be marked as provisional
+        assert_eq!(
+            report.decision,
+            ProductionFeatureCatalogDecision::FailClosed
+        );
+
+        // Check that fake hash detection is working
+        assert!(
+            report
+                .events
+                .iter()
+                .any(|event| event.reason.contains("fake_artifact_hash_detected")
+                    || event.reason.contains("missing_evidence_requirements")),
+            "Expected fake hash or missing evidence detection, got: {:?}",
+            report.events.iter().map(|e| &e.reason).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn observed_feature_with_proper_evidence_passes() {
+        let valid_feature = observed_feature_with_evidence(
+            "real_feature",
+            "Real Feature",
+            "bd-12345",
+            "a1b2c3d4",
+            "test_real_feature_works",
+            "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", // SHA256 of empty string
+        );
+
+        let input = ProductionFeatureCatalogInput {
+            schema_version: SCHEMA_VERSION.to_string(),
+            code_revision: "real-revision".to_string(),
+            max_freshness_days: DEFAULT_MAX_FRESHNESS_DAYS,
+            features: vec![
+                valid_feature,
+                // Add two more valid features to meet the minimum requirement
+                observed_feature_with_evidence(
+                    "real_feature_2",
+                    "Real Feature 2",
+                    "bd-67890",
+                    "e5f6g7h8",
+                    "test_real_feature_2_works",
+                    "sha256:f7c3c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b866", // Different valid hash
+                ),
+                observed_feature_with_evidence(
+                    "real_feature_3",
+                    "Real Feature 3",
+                    "bd-abcde",
+                    "i9j0k1l2",
+                    "test_real_feature_3_works",
+                    "sha256:a1c3c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b877", // Different valid hash
+                ),
+            ],
+        };
+
+        let report = evaluate_production_feature_catalog(&input);
+
+        assert_eq!(report.decision, ProductionFeatureCatalogDecision::Pass);
+        assert_eq!(report.observed_feature_count, 3);
+        assert!(
+            report
+                .events
+                .iter()
+                .all(|event| event.reason == "fresh_live_proof_artifact_observed"),
+            "All features should pass with proper evidence"
+        );
+    }
+
+    #[test]
+    fn missing_evidence_requirements_marks_feature_provisional() {
+        let mut feature = observed_feature_with_evidence(
+            "incomplete_feature",
+            "Incomplete Feature",
+            "bd-99999",
+            "commit123",
+            "test_works",
+            "sha256:1234567890123456789012345678901234567890123456789012345678901234", // Valid but not fake
+        );
+
+        // Remove evidence to simulate missing requirements
+        feature.artifact_handles[0].evidence_bead_id = None;
+        feature.artifact_handles[0].evidence_commit_hash = None;
+        feature.artifact_handles[0].evidence_test_name = None;
+
+        let input = ProductionFeatureCatalogInput {
+            schema_version: SCHEMA_VERSION.to_string(),
+            code_revision: "test-revision".to_string(),
+            max_freshness_days: DEFAULT_MAX_FRESHNESS_DAYS,
+            features: vec![feature],
+        };
+
+        let report = evaluate_production_feature_catalog(&input);
+
+        assert_eq!(
+            report.decision,
+            ProductionFeatureCatalogDecision::FailClosed
+        );
+        assert!(
+            report.events[0]
+                .reason
+                .contains("missing_evidence_requirements"),
+            "Expected missing evidence error, got: {}",
+            report.events[0].reason
+        );
+    }
+
+    #[test]
+    fn invalid_evidence_format_rejected() {
+        let mut feature = observed_feature_with_evidence(
+            "bad_evidence_feature",
+            "Bad Evidence Feature",
+            "invalid-bead", // Invalid bead ID format
+            "xyz",          // Invalid commit hash format
+            "",             // Empty test name
+            "sha256:1234567890123456789012345678901234567890123456789012345678901234",
+        );
+
+        let input = ProductionFeatureCatalogInput {
+            schema_version: SCHEMA_VERSION.to_string(),
+            code_revision: "test-revision".to_string(),
+            max_freshness_days: DEFAULT_MAX_FRESHNESS_DAYS,
+            features: vec![feature],
+        };
+
+        let report = evaluate_production_feature_catalog(&input);
+
+        assert_eq!(
+            report.decision,
+            ProductionFeatureCatalogDecision::FailClosed
+        );
+        assert!(
+            report.events[0]
+                .reason
+                .contains("invalid_evidence_bead_id_format")
+                || report.events[0]
+                    .reason
+                    .contains("invalid_evidence_commit_hash_format")
+                || report.events[0]
+                    .reason
+                    .contains("missing_evidence_test_name"),
+            "Expected evidence format validation error, got: {}",
+            report.events[0].reason
+        );
+    }
+
+    #[test]
+    fn is_fake_hash_detection_comprehensive() {
+        let fake_hashes = [
+            "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+            "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+            "sha256:deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+        ];
+
+        for fake_hash in &fake_hashes {
+            assert!(
+                is_fake_hash(fake_hash),
+                "Should detect {} as fake hash",
+                fake_hash
+            );
+        }
+
+        // Real hashes should not be detected as fake
+        let real_hashes = [
+            "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "sha256:2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae",
+        ];
+
+        for real_hash in &real_hashes {
+            assert!(
+                !is_fake_hash(real_hash),
+                "Should not detect {} as fake hash",
+                real_hash
+            );
+        }
     }
 }

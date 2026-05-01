@@ -17,7 +17,7 @@ pub const COMPONENT: &str = "replay_coverage_metric_gate";
 pub const BEAD_ID: &str = "bd-2488a";
 pub const COVERAGE_SCALE_MILLIONTHS: u64 = 1_000_000;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SecurityDecisionKind {
     Allow,

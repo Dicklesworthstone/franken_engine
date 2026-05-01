@@ -704,6 +704,7 @@ fn observed_feature_with_evidence(
     artifact_hash: impl Into<String>,
 ) -> ProductionFeatureCatalogEntry {
     let feature_id = feature_id.into();
+    let bead = bead.into();
     ProductionFeatureCatalogEntry {
         feature_id: feature_id.clone(),
         user_facing_name: name.into(),
@@ -723,12 +724,12 @@ fn observed_feature_with_evidence(
             proof_manifest_id: format!("{PROOF_MANIFEST_SCHEMA_VERSION}:{feature_id}"),
             redaction_status: "redacted".to_string(),
             // Real evidence requirements
-            evidence_bead_id: Some(bead.into()),
+            evidence_bead_id: Some(bead.clone()),
             evidence_commit_hash: Some(commit_hash.into()),
             evidence_test_name: Some(test_name.into()),
         }],
         freshness_days: 0,
-        owning_bead: bead.into(),
+        owning_bead: bead,
         downgrade_text: format!(
             "Keep {feature_id} as a target until a fresh live proof artifact passes."
         ),

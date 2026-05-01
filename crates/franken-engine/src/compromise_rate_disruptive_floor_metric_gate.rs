@@ -7,9 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::disruptive_floor_metric_gate::{
-    DEFAULT_MAX_FRESHNESS_DAYS, DisruptiveMetricId, MetricArtifact,
-};
+use crate::disruptive_floor_metric_gate::{DisruptiveMetricId, MetricArtifact};
 use crate::proof_artifact::validate_sha256;
 
 pub const SCHEMA_VERSION: &str = "franken-engine.compromise-rate-disruptive-floor-metric-gate.v1";
@@ -616,6 +614,7 @@ pub fn generate_compromise_rate_metric_artifact(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::disruptive_floor_metric_gate::DEFAULT_MAX_FRESHNESS_DAYS;
 
     #[test]
     fn test_calculate_compromise_rate_millionths() {

@@ -17,6 +17,26 @@ Provides concrete evidence of FrankenEngine's IFC/declassification system:
 - [`allowed_flow.js`](./allowed_flow.js) - Performs confidential→public flow with proper declassification (should succeed)
 - [`verify.sh`](./verify.sh) - Comprehensive verification script that captures both flows with full evidence
 
+## Fixture Boundary
+
+The checked-in source file is a deterministic fixture for replayable proof artifacts. It is not a production classifier.
+
+Production integrations should feed the IFC runtime a classification envelope from a policy-backed source adapter before any sink write is attempted:
+
+```json
+{
+  "source_uri": "otel://service/api-gateway/latency-window",
+  "content_sha256": "sha256:<hash-of-current-payload>",
+  "label": "confidential",
+  "label_authority": "policy://franken-ifc-policy-v1",
+  "classification_reason": "service telemetry contains tenant and capacity signals",
+  "decision_contract_id": "franken-ifc-decision-contract",
+  "freshness_window_ms": 300000
+}
+```
+
+The adapter is responsible for deriving `label` and `classification_reason` from live metadata such as tenant scope, incident state, source system, and policy epoch. This example keeps those values fixed only so the denied and allowed flows produce stable artifacts for replay.
+
 ## IFC Label Lattice
 
 ```

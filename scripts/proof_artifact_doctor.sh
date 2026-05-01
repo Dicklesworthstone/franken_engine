@@ -174,14 +174,43 @@ if [[ -f "$events_path" ]]; then
 
         event_line_count=$((event_line_count + 1))
 
+        # Check line size (64KB limit)
+        if [[ ${#line} -gt 65536 ]]; then
+            invalid_events=$((invalid_events + 1))
+            continue
+        fi
+
+        # Basic JSON validity check
         if ! jq empty <<< "$line" >/dev/null 2>&1; then
+            invalid_events=$((invalid_events + 1))
+            continue
+        fi
+
+        # Check for excessive JSON depth (simplified check)
+        depth_count=$(echo "$line" | tr -cd '{}[]' | wc -c)
+        if [[ $depth_count -gt 64 ]]; then
+            invalid_events=$((invalid_events + 1))
+            continue
+        fi
+
+        # Check for NaN/Infinity in the JSON
+        if echo "$line" | grep -qE ':\s*(NaN|Infinity|-Infinity)'; then
             invalid_events=$((invalid_events + 1))
             continue
         fi
 
         # Check required event fields
         schema_version=$(jq -r '.schema_version // ""' <<< "$line")
-        if [[ "$schema_version" != "franken-engine.proof-artifact-event.v1" ]]; then
+        event_name=$(jq -r '.event_name // ""' <<< "$line")
+        severity=$(jq -r '.severity // ""' <<< "$line")
+        step_id=$(jq -r '.step_id // ""' <<< "$line")
+        decision=$(jq -r '.decision // ""' <<< "$line")
+
+        if [[ "$schema_version" != "franken-engine.proof-artifact-event.v1" ]] || \
+           [[ -z "$event_name" ]] || \
+           [[ -z "$step_id" ]] || \
+           [[ -z "$decision" ]] || \
+           [[ ! "$severity" =~ ^(info|warning|error)$ ]]; then
             invalid_events=$((invalid_events + 1))
         fi
 

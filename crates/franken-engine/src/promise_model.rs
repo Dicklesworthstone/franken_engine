@@ -15,7 +15,8 @@
 //! [`closure_model::ClosureHandle`] for reaction callbacks, and
 //! [`ifc_artifacts::Label`] for information-flow tracking.
 
-use std::collections::BTreeMap;
+use std::cmp::Ordering;
+use std::collections::{BTreeMap, BinaryHeap};
 
 use serde::{Deserialize, Serialize};
 
@@ -681,14 +682,42 @@ impl MicrotaskQueue {
 /// then by scheduled time, then by registration order.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MacrotaskQueue {
-    tasks: Vec<Macrotask>,
+    message_channel_tasks: BinaryHeap<MacrotaskHeapEntry>,
+    timer_tasks: BinaryHeap<MacrotaskHeapEntry>,
+    io_completion_tasks: BinaryHeap<MacrotaskHeapEntry>,
     next_registration_seq: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct MacrotaskHeapEntry {
+    task: Macrotask,
+}
+
+impl Ord for MacrotaskHeapEntry {
+    fn cmp(&self, other: &Self) -> Ordering {
+        other
+            .task
+            .scheduled_at
+            .cmp(&self.task.scheduled_at)
+            .then_with(|| other.task.registration_seq.cmp(&self.task.registration_seq))
+            .then_with(|| other.task.source.cmp(&self.task.source))
+            .then_with(|| other.task.handler.cmp(&self.task.handler))
+            .then_with(|| other.task.label.cmp(&self.task.label))
+    }
+}
+
+impl PartialOrd for MacrotaskHeapEntry {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
 }
 
 impl MacrotaskQueue {
     pub fn new() -> Self {
         Self {
-            tasks: Vec::new(),
+            message_channel_tasks: BinaryHeap::new(),
+            timer_tasks: BinaryHeap::new(),
+            io_completion_tasks: BinaryHeap::new(),
             next_registration_seq: 0,
         }
     }
@@ -703,13 +732,15 @@ impl MacrotaskQueue {
     ) -> u64 {
         let seq = self.next_registration_seq;
         self.next_registration_seq += 1;
-        self.tasks.push(Macrotask {
+        let task = Macrotask {
             source,
             handler,
             scheduled_at,
             registration_seq: seq,
             label,
-        });
+        };
+        self.tasks_for_source_mut(source)
+            .push(MacrotaskHeapEntry { task });
         seq
     }
 
@@ -718,36 +749,59 @@ impl MacrotaskQueue {
     /// Priority: source type (MessageChannel > Timer > IoCompletion),
     /// then earliest `scheduled_at`, then lowest `registration_seq`.
     pub fn dequeue_ready(&mut self, current_time_ms: u64) -> Option<Macrotask> {
-        // Find the best candidate.
-        let best_idx = self
-            .tasks
-            .iter()
-            .enumerate()
-            .filter(|(_, t)| t.scheduled_at <= current_time_ms)
-            .min_by(|(_, a), (_, b)| {
-                a.source
-                    .cmp(&b.source)
-                    .then(a.scheduled_at.cmp(&b.scheduled_at))
-                    .then(a.registration_seq.cmp(&b.registration_seq))
-            })
-            .map(|(i, _)| i);
-
-        best_idx.map(|i| self.tasks.remove(i))
+        Self::pop_ready_from(&mut self.message_channel_tasks, current_time_ms)
+            .or_else(|| Self::pop_ready_from(&mut self.timer_tasks, current_time_ms))
+            .or_else(|| Self::pop_ready_from(&mut self.io_completion_tasks, current_time_ms))
     }
 
     /// Find the earliest scheduled time of any pending macrotask.
     pub fn next_scheduled_time(&self) -> Option<u64> {
-        self.tasks.iter().map(|t| t.scheduled_at).min()
+        [
+            self.message_channel_tasks.peek(),
+            self.timer_tasks.peek(),
+            self.io_completion_tasks.peek(),
+        ]
+        .into_iter()
+        .flatten()
+        .map(|entry| entry.task.scheduled_at)
+        .min()
     }
 
     /// Check if there are pending macrotasks.
     pub fn is_empty(&self) -> bool {
-        self.tasks.is_empty()
+        self.message_channel_tasks.is_empty()
+            && self.timer_tasks.is_empty()
+            && self.io_completion_tasks.is_empty()
     }
 
     /// Number of pending macrotasks.
     pub fn len(&self) -> usize {
-        self.tasks.len()
+        self.message_channel_tasks.len() + self.timer_tasks.len() + self.io_completion_tasks.len()
+    }
+
+    fn tasks_for_source_mut(
+        &mut self,
+        source: MacrotaskSource,
+    ) -> &mut BinaryHeap<MacrotaskHeapEntry> {
+        match source {
+            MacrotaskSource::MessageChannel => &mut self.message_channel_tasks,
+            MacrotaskSource::Timer => &mut self.timer_tasks,
+            MacrotaskSource::IoCompletion => &mut self.io_completion_tasks,
+        }
+    }
+
+    fn pop_ready_from(
+        tasks: &mut BinaryHeap<MacrotaskHeapEntry>,
+        current_time_ms: u64,
+    ) -> Option<Macrotask> {
+        if tasks
+            .peek()
+            .is_some_and(|entry| entry.task.scheduled_at <= current_time_ms)
+        {
+            tasks.pop().map(|entry| entry.task)
+        } else {
+            None
+        }
     }
 }
 
@@ -1630,6 +1684,25 @@ mod tests {
         queue.schedule(MacrotaskSource::Timer, ClosureHandle(0), 100, Label::Public);
         assert!(queue.dequeue_ready(99).is_none());
         assert!(queue.dequeue_ready(100).is_some());
+    }
+
+    #[test]
+    fn macrotask_future_high_priority_does_not_block_ready_timer() {
+        let mut queue = MacrotaskQueue::new();
+        queue.schedule(
+            MacrotaskSource::MessageChannel,
+            ClosureHandle(0),
+            1_000,
+            Label::Public,
+        );
+        queue.schedule(MacrotaskSource::Timer, ClosureHandle(1), 100, Label::Public);
+
+        let ready = queue
+            .dequeue_ready(100)
+            .expect("ready timer should not be blocked by future message task");
+        assert_eq!(ready.source, MacrotaskSource::Timer);
+        assert_eq!(ready.handler, ClosureHandle(1));
+        assert_eq!(queue.next_scheduled_time(), Some(1_000));
     }
 
     // ----- Event loop -----

@@ -23,6 +23,8 @@
 )]
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
+use std::path::PathBuf;
 
 use frankenengine_engine::policy_theorem_compiler::{
     AuthorityGrant, Capability, CompilationResult, CompilerError, Constraint, Counterexample,
@@ -102,6 +104,162 @@ fn signing_pair() -> (
     let sk = SigningKey::from_bytes([42u8; 32]).unwrap();
     let vk = sk.verification_key();
     (sk, vk)
+}
+
+fn policy_compiler_golden_path(test_name: &str) -> PathBuf {
+    let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    path.push("tests");
+    path.push("goldens");
+    path.push("policy_theorem_compiler");
+    path.push(format!("{test_name}.json"));
+    path
+}
+
+fn should_update_policy_goldens() -> bool {
+    std::env::var("UPDATE_GOLDENS").is_ok()
+}
+
+fn canonical_policy_result_json(result: &CompilationResult) -> String {
+    serde_json::to_string_pretty(result).expect("policy theorem result should serialize")
+}
+
+fn assert_policy_compiler_golden(result: &CompilationResult, test_name: &str) {
+    let golden_file = policy_compiler_golden_path(test_name);
+    let actual_json = canonical_policy_result_json(result);
+
+    if should_update_policy_goldens() {
+        if let Some(parent) = golden_file.parent() {
+            fs::create_dir_all(parent).expect("policy theorem golden directory should exist");
+        }
+        fs::write(&golden_file, &actual_json).expect("policy theorem golden should be writable");
+        return;
+    }
+
+    let expected_json = fs::read_to_string(&golden_file).unwrap_or_else(|_| {
+        panic!(
+            "Policy theorem compiler golden missing: {}\n\
+             Run with UPDATE_GOLDENS=1 to create it, then review and commit the fixture.",
+            golden_file.display()
+        )
+    });
+
+    if actual_json != expected_json {
+        let actual_path = golden_file.with_extension("actual.json");
+        fs::write(&actual_path, &actual_json)
+            .expect("policy theorem actual output should be writable");
+        panic!(
+            "POLICY THEOREM GOLDEN MISMATCH: {test_name}\nExpected: {}\nActual:   {}",
+            golden_file.display(),
+            actual_path.display()
+        );
+    }
+}
+
+fn complex_policy_with_constraints() -> PolicyIr {
+    let mut action_map = BTreeMap::new();
+    action_map.insert("approved".into(), "allow".into());
+    action_map.insert("unsigned".into(), "deny".into());
+
+    let mut control_node = simple_node(
+        "control-plane-base",
+        MergeOperator::Precedence,
+        vec![
+            grant("ops-controller", "fs.read", "zone-control"),
+            grant("ops-controller", "policy.read", "zone-control"),
+        ],
+    );
+    control_node.priority = 10;
+    control_node
+        .property_claims
+        .insert(FormalProperty::PrecedenceStability);
+    control_node
+        .constraints
+        .push(Constraint::Invariant("receipts must be signed".into()));
+    control_node
+        .constraints
+        .push(Constraint::Precondition("epoch must be current".into()));
+    control_node
+        .constraints
+        .push(Constraint::Postcondition("audit event emitted".into()));
+    control_node.decision_point = Some(DecisionPoint {
+        threshold: 2,
+        action_map,
+        fallback: "deny".into(),
+    });
+
+    let mut network_node = simple_node(
+        "network-base",
+        MergeOperator::Precedence,
+        vec![grant("net-worker", "net.egress", "zone-network")],
+    );
+    network_node.priority = 20;
+    network_node
+        .constraints
+        .push(Constraint::NonInterferenceClaim {
+            domain_a: "zone-control".into(),
+            domain_b: "zone-network".into(),
+        });
+
+    let delegated_node = simple_node(
+        "delegated-read-only",
+        MergeOperator::Attenuation,
+        vec![grant("tenant-worker", "fs.read", "zone-control")],
+    );
+
+    PolicyIr {
+        policy_id: PolicyId::new("golden-complex-policy"),
+        version: 7,
+        nodes: vec![control_node, network_node, delegated_node],
+        capability_universe: test_universe(),
+        verified_properties: BTreeSet::from([
+            FormalProperty::Monotonicity,
+            FormalProperty::NonInterference,
+        ]),
+        epoch: SecurityEpoch::from_raw(42),
+    }
+}
+
+fn failing_policy_with_counterexamples() -> PolicyIr {
+    let union_node = simple_node(
+        "amplifying-union",
+        MergeOperator::Union,
+        vec![grant("extension-a", "debug.shell", "zone-debug")],
+    );
+
+    let mut zero_priority = simple_node(
+        "zero-priority-precedence",
+        MergeOperator::Precedence,
+        vec![grant("extension-b", "fs.write", "zone-control")],
+    );
+    zero_priority.priority = 0;
+    zero_priority.grants[0].lifetime_epochs = 0;
+
+    let mut duplicate_priority = simple_node(
+        "duplicate-priority-precedence",
+        MergeOperator::Precedence,
+        vec![grant("extension-c", "policy.write", "zone-control")],
+    );
+    duplicate_priority.priority = 0;
+
+    let attenuation_escape = simple_node(
+        "attenuation-escape",
+        MergeOperator::Attenuation,
+        vec![grant("extension-d", "policy.write", "zone-control")],
+    );
+
+    PolicyIr {
+        policy_id: PolicyId::new("golden-failing-policy"),
+        version: 3,
+        nodes: vec![
+            union_node,
+            zero_priority,
+            duplicate_priority,
+            attenuation_escape,
+        ],
+        capability_universe: test_universe(),
+        verified_properties: BTreeSet::new(),
+        epoch: SecurityEpoch::from_raw(9),
+    }
 }
 
 // =========================================================================
@@ -526,6 +684,34 @@ fn compile_valid_policy_all_passes() {
     // Default compiler has precedence enabled => 6 passes
     assert_eq!(result.pass_results.len(), 6);
     assert_eq!(result.witnesses.len(), 6);
+}
+
+#[test]
+fn golden_compile_valid_policy_result() {
+    let compiler = PolicyTheoremCompiler::new();
+    let result = compiler.compile(&valid_policy()).unwrap();
+    assert_policy_compiler_golden(&result, "valid_policy_all_passes");
+}
+
+#[test]
+fn golden_compile_complex_constraints_result() {
+    let compiler = PolicyTheoremCompiler::new();
+    let result = compiler
+        .compile(&complex_policy_with_constraints())
+        .unwrap();
+    assert!(result.all_passed);
+    assert_policy_compiler_golden(&result, "complex_constraints_all_passes");
+}
+
+#[test]
+fn golden_compile_failure_counterexamples_result() {
+    let compiler = PolicyTheoremCompiler::new();
+    let result = compiler
+        .compile(&failing_policy_with_counterexamples())
+        .unwrap();
+    assert!(!result.all_passed);
+    assert_eq!(result.counterexamples.len(), 4);
+    assert_policy_compiler_golden(&result, "failure_counterexamples");
 }
 
 #[test]

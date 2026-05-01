@@ -46,7 +46,14 @@ impl Drop for TestTempDir {
 }
 
 fn validator_command() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_rgc_artifact_validator"))
+    // Use runtime path resolution instead of compile-time env var
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let target_dir = std::env::var("CARGO_TARGET_DIR")
+        .unwrap_or_else(|_| format!("{}/../../target", manifest_dir));
+    let binary_path = PathBuf::from(target_dir)
+        .join("debug")
+        .join("rgc_artifact_validator");
+    Command::new(binary_path)
 }
 
 fn write_file(path: &Path, content: &str) {

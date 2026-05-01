@@ -18200,6 +18200,58 @@ mod function_prototype_call_apply_tests_current {
     }
 
     #[test]
+    fn array_from_maps_string_elements_with_index() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::HostCall {
+                    capability: CapabilityTag("builtin:ArrayFrom".to_string()),
+                    args: RegRange { start: 0, count: 2 },
+                    dst: 0,
+                },
+                Ir3Instruction::Halt,
+                Ir3Instruction::Add {
+                    dst: 2,
+                    lhs: 0,
+                    rhs: 1,
+                },
+                Ir3Instruction::Return { value: 2 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 2,
+                arity: 2,
+                frame_size: 3,
+                name: Some("append_index".to_string()),
+                is_generator: false,
+            }],
+        );
+
+        let mut core = test_interpreter();
+        core.registers[0] = Value::Str("ab".to_string());
+        core.registers[1] = Value::Function(0);
+
+        let result = core.execute(&module).expect("Array.from should execute");
+        let Value::Object(array_id) = result.value else {
+            panic!(
+                "Array.from should return an array object, got {:?}",
+                result.value
+            );
+        };
+        let array = core
+            .heap
+            .get(array_id.0 as usize)
+            .expect("result array should exist");
+        assert_eq!(
+            array.properties.get("0"),
+            Some(&Value::Str("a0".to_string()))
+        );
+        assert_eq!(
+            array.properties.get("1"),
+            Some(&Value::Str("b1".to_string()))
+        );
+        assert_eq!(array.properties.get("length"), Some(&Value::Int(2)));
+    }
+
+    #[test]
     fn array_prototype_reduce_right_invokes_callback_from_right_to_left() {
         let module = test_module_with_functions(
             vec![

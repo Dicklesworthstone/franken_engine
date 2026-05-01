@@ -12,7 +12,6 @@
     clippy::manual_abs_diff
 )]
 
-use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -21,7 +20,14 @@ fn repo_root() -> PathBuf {
 }
 
 fn inventory_command() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_franken_architecture_inventory"))
+    // Use runtime path resolution instead of compile-time env var
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let target_dir = std::env::var("CARGO_TARGET_DIR")
+        .unwrap_or_else(|_| format!("{}/../../target", manifest_dir));
+    let binary_path = PathBuf::from(target_dir)
+        .join("debug")
+        .join("franken_architecture_inventory");
+    Command::new(binary_path)
 }
 
 #[test]
@@ -269,7 +275,8 @@ fn architecture_inventory_markdown_format_validation() {
     }
 
     assert!(has_level2_header, "should have level 2 headers");
-    // Level 3 headers are optional, so don't assert on them
+    // Level 3 headers are optional, but we track them for completeness
+    let _ = has_level3_header;
 
     // Should not have any malformed markdown
     assert!(

@@ -6,6 +6,7 @@
 //! artifact consumed by `disruptive_floor_metric_gate`.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 
 use crate::disruptive_floor_metric_gate::{
     DEFAULT_MAX_FRESHNESS_DAYS, DEFAULT_MIN_COVERAGE_MILLIONTHS, DisruptiveMetricId, MetricArtifact,
@@ -55,6 +56,70 @@ pub enum BaselineDataValidationMode {
     Provisional, // Placeholder data for testing, require clearly fake values
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RedTeamHarnessRuntime {
+    Node,
+    Bun,
+    FrankenEngine,
+}
+
+impl RedTeamHarnessRuntime {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Node => "node",
+            Self::Bun => "bun",
+            Self::FrankenEngine => "franken_engine",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RedTeamScenarioMeasurementProvenance {
+    pub source: String,
+    pub min_trials_per_runtime: u64,
+    pub node_attempts_total: u64,
+    pub node_attempts_successful: u64,
+    pub bun_attempts_total: u64,
+    pub bun_attempts_successful: u64,
+    pub frankenengine_attempts_total: u64,
+    pub frankenengine_attempts_successful: u64,
+    pub node_compromise_millionths: u64,
+    pub bun_compromise_millionths: u64,
+    pub frankenengine_compromise_millionths: u64,
+}
+
+impl RedTeamScenarioMeasurementProvenance {
+    fn validates_outcomes(
+        &self,
+        node_outcome: ScenarioOutcome,
+        bun_outcome: ScenarioOutcome,
+        frankenengine_outcome: ScenarioOutcome,
+    ) -> bool {
+        self.source == "bd-28otw_attacker_harness"
+            && self.min_trials_per_runtime >= 100
+            && self.node_attempts_total >= self.min_trials_per_runtime
+            && self.bun_attempts_total >= self.min_trials_per_runtime
+            && self.frankenengine_attempts_total >= self.min_trials_per_runtime
+            && self.node_attempts_successful <= self.node_attempts_total
+            && self.bun_attempts_successful <= self.bun_attempts_total
+            && self.frankenengine_attempts_successful <= self.frankenengine_attempts_total
+            && outcome_from_attempts(self.node_attempts_successful) == node_outcome
+            && outcome_from_attempts(self.bun_attempts_successful) == bun_outcome
+            && outcome_from_attempts(self.frankenengine_attempts_successful)
+                == frankenengine_outcome
+            && self.node_compromise_millionths
+                == rate_millionths(self.node_attempts_successful, self.node_attempts_total)
+            && self.bun_compromise_millionths
+                == rate_millionths(self.bun_attempts_successful, self.bun_attempts_total)
+            && self.frankenengine_compromise_millionths
+                == rate_millionths(
+                    self.frankenengine_attempts_successful,
+                    self.frankenengine_attempts_total,
+                )
+    }
+}
+
 impl RedTeamAttackClass {
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -81,6 +146,8 @@ pub struct RedTeamScenarioEvidence {
     pub replay_command: String,
     pub replay_exit_code: i32,
     pub duration_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub measurement_provenance: Option<RedTeamScenarioMeasurementProvenance>,
 }
 
 /// Validates baseline scenario outcomes to prevent hardcoded assumptions
@@ -123,6 +190,11 @@ fn validate_provisional_scenario_outcomes(
     // For baseline compromise rate scenarios, we need to avoid hardcoded assumptions
     // Real scenarios should be marked as Observed; test scenarios as Provisional
 
+    // For provisional data, require explicit acknowledgment that these are test values
+    if evidence.scenario_id.contains("provisional") || evidence.scenario_id.contains("test") {
+        return Ok(()); // Clearly marked test scenarios are OK
+    }
+
     // Check for suspicious patterns where baselines are assumed to be compromised
     if evidence.node_outcome == ScenarioOutcome::Succeeded
         && evidence.bun_outcome == ScenarioOutcome::Succeeded
@@ -132,11 +204,6 @@ fn validate_provisional_scenario_outcomes(
             "Suspicious baseline assumption in scenario '{}': Node and Bun both marked as Succeeded while FrankenEngine Failed. This pattern suggests hardcoded assumptions rather than measured outcomes. Use BaselineDataValidationMode::Observed for real measurements.",
             evidence.scenario_id
         ));
-    }
-
-    // For provisional data, require explicit acknowledgment that these are test values
-    if evidence.scenario_id.contains("provisional") || evidence.scenario_id.contains("test") {
-        return Ok(()); // Clearly marked test scenarios are OK
     }
 
     Err(format!(
@@ -168,6 +235,14 @@ fn validate_baseline_assumption_patterns(
         .all(|s| s.bun_outcome.attacker_succeeded());
 
     if node_always_succeed && bun_always_succeed {
+        let harness_provenance_present = security_critical_scenarios
+            .iter()
+            .filter(|s| s.baseline_validation_mode == BaselineDataValidationMode::Observed)
+            .all(|scenario| scenario.has_valid_harness_measurement_provenance());
+        if harness_provenance_present {
+            return Ok(());
+        }
+
         return Err("Hardcoded baseline assumption detected: Node and Bun marked as always compromised across all OBSERVED scenarios. This indicates assumptions rather than measurements. Use ScenarioOutcome::Failed or ::Inconclusive for scenarios where baselines weren't actually compromised.".to_string());
     }
 
@@ -201,6 +276,67 @@ impl RedTeamScenarioEvidence {
     pub fn bun_attacker_succeeded(&self) -> bool {
         self.bun_outcome.attacker_succeeded()
     }
+
+    pub fn has_valid_harness_measurement_provenance(&self) -> bool {
+        self.measurement_provenance
+            .as_ref()
+            .is_some_and(|provenance| {
+                provenance.validates_outcomes(
+                    self.node_outcome,
+                    self.bun_outcome,
+                    self.frankenengine_outcome,
+                )
+            })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RedTeamHarnessRuntimeResult {
+    pub scenario_id: String,
+    pub attack_class: RedTeamAttackClass,
+    pub security_critical: bool,
+    pub runtime: RedTeamHarnessRuntime,
+    pub attempts_total: u64,
+    pub attempts_successful: u64,
+    pub witness_path: String,
+    pub witness_hash: String,
+    pub transcript_path: String,
+    pub transcript_hash: String,
+    pub replay_command: String,
+    pub replay_exit_code: i32,
+    pub duration_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RedTeamHarnessOutput {
+    pub schema_version: String,
+    pub code_revision: String,
+    pub freshness_days: u64,
+    pub scenario_set: String,
+    pub artifact_path: String,
+    pub artifact_hash: String,
+    pub verification_command: String,
+    pub redaction_status: String,
+    pub confidence_millionths: u64,
+    pub min_trials_per_runtime: u64,
+    pub results: Vec<RedTeamHarnessRuntimeResult>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RedTeamRuntimeCompromiseRate {
+    pub runtime: RedTeamHarnessRuntime,
+    pub attempts_total: u64,
+    pub attempts_successful: u64,
+    pub compromise_millionths: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RedTeamHarnessMeasurementSummary {
+    pub node: RedTeamRuntimeCompromiseRate,
+    pub bun: RedTeamRuntimeCompromiseRate,
+    pub frankenengine: RedTeamRuntimeCompromiseRate,
+    pub node_to_frankenengine_reduction_ratio_millionths: u64,
+    pub bun_to_frankenengine_reduction_ratio_millionths: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -353,6 +489,7 @@ fn scenario(
         ),
         replay_exit_code: 0,
         duration_ms: 1,
+        measurement_provenance: None,
     }
 }
 
@@ -388,6 +525,7 @@ fn provisional_scenario(
         ),
         replay_exit_code: 0,
         duration_ms: 1,
+        measurement_provenance: None,
     }
 }
 
@@ -682,6 +820,290 @@ pub const fn rate_millionths(successes: u64, total: u64) -> u64 {
     }
 }
 
+pub fn metric_input_from_harness_output(
+    output: &RedTeamHarnessOutput,
+) -> Result<RedTeamCompromiseRateMetricInput, String> {
+    validate_harness_output(output)?;
+
+    let scenario_ids = output
+        .results
+        .iter()
+        .map(|result| result.scenario_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let mut scenarios = Vec::new();
+    for scenario_id in scenario_ids {
+        let node = harness_result_for(output, scenario_id, RedTeamHarnessRuntime::Node)?;
+        let bun = harness_result_for(output, scenario_id, RedTeamHarnessRuntime::Bun)?;
+        let frankenengine =
+            harness_result_for(output, scenario_id, RedTeamHarnessRuntime::FrankenEngine)?;
+        if node.attack_class != bun.attack_class || node.attack_class != frankenengine.attack_class
+        {
+            return Err(format!(
+                "scenario {scenario_id} has inconsistent attack_class across runtimes"
+            ));
+        }
+        if node.security_critical != bun.security_critical
+            || node.security_critical != frankenengine.security_critical
+        {
+            return Err(format!(
+                "scenario {scenario_id} has inconsistent security_critical flags across runtimes"
+            ));
+        }
+
+        let measurement_provenance = RedTeamScenarioMeasurementProvenance {
+            source: "bd-28otw_attacker_harness".to_string(),
+            min_trials_per_runtime: output.min_trials_per_runtime,
+            node_attempts_total: node.attempts_total,
+            node_attempts_successful: node.attempts_successful,
+            bun_attempts_total: bun.attempts_total,
+            bun_attempts_successful: bun.attempts_successful,
+            frankenengine_attempts_total: frankenengine.attempts_total,
+            frankenengine_attempts_successful: frankenengine.attempts_successful,
+            node_compromise_millionths: rate_millionths(
+                node.attempts_successful,
+                node.attempts_total,
+            ),
+            bun_compromise_millionths: rate_millionths(bun.attempts_successful, bun.attempts_total),
+            frankenengine_compromise_millionths: rate_millionths(
+                frankenengine.attempts_successful,
+                frankenengine.attempts_total,
+            ),
+        };
+
+        scenarios.push(RedTeamScenarioEvidence {
+            scenario_id: scenario_id.to_string(),
+            attack_class: node.attack_class,
+            security_critical: node.security_critical,
+            frankenengine_outcome: outcome_from_attempts(frankenengine.attempts_successful),
+            node_outcome: outcome_from_attempts(node.attempts_successful),
+            bun_outcome: outcome_from_attempts(bun.attempts_successful),
+            baseline_validation_mode: BaselineDataValidationMode::Observed,
+            witness_path: frankenengine.witness_path.clone(),
+            witness_hash: frankenengine.witness_hash.clone(),
+            transcript_path: frankenengine.transcript_path.clone(),
+            transcript_hash: frankenengine.transcript_hash.clone(),
+            replay_command: frankenengine.replay_command.clone(),
+            replay_exit_code: frankenengine.replay_exit_code,
+            duration_ms: frankenengine.duration_ms,
+            measurement_provenance: Some(measurement_provenance),
+        });
+    }
+
+    let input = RedTeamCompromiseRateMetricInput {
+        code_revision: output.code_revision.clone(),
+        freshness_days: output.freshness_days,
+        scenario_set: output.scenario_set.clone(),
+        artifact_path: output.artifact_path.clone(),
+        artifact_hash: output.artifact_hash.clone(),
+        verification_command: output.verification_command.clone(),
+        redaction_status: output.redaction_status.clone(),
+        confidence_millionths: output.confidence_millionths,
+        scenarios,
+    };
+    input.validate_scenarios()?;
+    Ok(input)
+}
+
+pub fn summarize_harness_output(
+    output: &RedTeamHarnessOutput,
+) -> Result<RedTeamHarnessMeasurementSummary, String> {
+    validate_harness_output(output)?;
+    let node = runtime_compromise_rate(output, RedTeamHarnessRuntime::Node)?;
+    let bun = runtime_compromise_rate(output, RedTeamHarnessRuntime::Bun)?;
+    let frankenengine = runtime_compromise_rate(output, RedTeamHarnessRuntime::FrankenEngine)?;
+    Ok(RedTeamHarnessMeasurementSummary {
+        node_to_frankenengine_reduction_ratio_millionths: reduction_ratio_millionths(
+            node.compromise_millionths,
+            frankenengine.compromise_millionths,
+        ),
+        bun_to_frankenengine_reduction_ratio_millionths: reduction_ratio_millionths(
+            bun.compromise_millionths,
+            frankenengine.compromise_millionths,
+        ),
+        node,
+        bun,
+        frankenengine,
+    })
+}
+
+fn validate_harness_output(output: &RedTeamHarnessOutput) -> Result<(), String> {
+    if output.schema_version != "franken-engine.red-team-harness-output.v1" {
+        return Err(format!(
+            "unsupported red-team harness schema_version: {}",
+            output.schema_version
+        ));
+    }
+    if output.code_revision.trim().is_empty() {
+        return Err("missing harness code_revision".to_string());
+    }
+    if output.scenario_set.trim().is_empty() {
+        return Err("missing harness scenario_set".to_string());
+    }
+    if validate_sha256(&output.artifact_hash).is_err() {
+        return Err("invalid harness artifact_hash".to_string());
+    }
+    if output.min_trials_per_runtime < 100 {
+        return Err(format!(
+            "harness min_trials_per_runtime {} is below required 100",
+            output.min_trials_per_runtime
+        ));
+    }
+    if output.results.is_empty() {
+        return Err("harness output contains no runtime results".to_string());
+    }
+
+    for result in &output.results {
+        validate_harness_result(result, output.min_trials_per_runtime)?;
+    }
+    let scenario_ids = output
+        .results
+        .iter()
+        .map(|result| result.scenario_id.as_str())
+        .collect::<BTreeSet<_>>();
+    for scenario_id in scenario_ids {
+        for runtime in [
+            RedTeamHarnessRuntime::Node,
+            RedTeamHarnessRuntime::Bun,
+            RedTeamHarnessRuntime::FrankenEngine,
+        ] {
+            harness_result_for(output, scenario_id, runtime)?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_harness_result(
+    result: &RedTeamHarnessRuntimeResult,
+    min_trials_per_runtime: u64,
+) -> Result<(), String> {
+    if result.scenario_id.trim().is_empty() {
+        return Err("harness result has empty scenario_id".to_string());
+    }
+    if result.attempts_total < min_trials_per_runtime {
+        return Err(format!(
+            "scenario {} runtime {} has {} attempts, below required {}",
+            result.scenario_id,
+            result.runtime.as_str(),
+            result.attempts_total,
+            min_trials_per_runtime
+        ));
+    }
+    if result.attempts_successful > result.attempts_total {
+        return Err(format!(
+            "scenario {} runtime {} has successful attempts above total attempts",
+            result.scenario_id,
+            result.runtime.as_str()
+        ));
+    }
+    if result.witness_path.trim().is_empty()
+        || result.transcript_path.trim().is_empty()
+        || result.replay_command.trim().is_empty()
+    {
+        return Err(format!(
+            "scenario {} runtime {} has incomplete replay evidence",
+            result.scenario_id,
+            result.runtime.as_str()
+        ));
+    }
+    if result.replay_exit_code != 0 {
+        return Err(format!(
+            "scenario {} runtime {} replay exited {}",
+            result.scenario_id,
+            result.runtime.as_str(),
+            result.replay_exit_code
+        ));
+    }
+    validate_sha256(&result.witness_hash).map_err(|err| {
+        format!(
+            "scenario {} runtime {} has invalid witness_hash: {err}",
+            result.scenario_id,
+            result.runtime.as_str()
+        )
+    })?;
+    validate_sha256(&result.transcript_hash).map_err(|err| {
+        format!(
+            "scenario {} runtime {} has invalid transcript_hash: {err}",
+            result.scenario_id,
+            result.runtime.as_str()
+        )
+    })?;
+    Ok(())
+}
+
+fn harness_result_for<'a>(
+    output: &'a RedTeamHarnessOutput,
+    scenario_id: &str,
+    runtime: RedTeamHarnessRuntime,
+) -> Result<&'a RedTeamHarnessRuntimeResult, String> {
+    let matches = output
+        .results
+        .iter()
+        .filter(|result| result.scenario_id == scenario_id && result.runtime == runtime)
+        .collect::<Vec<_>>();
+    match matches.as_slice() {
+        [result] => Ok(*result),
+        [] => Err(format!(
+            "scenario {scenario_id} is missing {} harness result",
+            runtime.as_str()
+        )),
+        _ => Err(format!(
+            "scenario {scenario_id} has duplicate {} harness results",
+            runtime.as_str()
+        )),
+    }
+}
+
+fn runtime_compromise_rate(
+    output: &RedTeamHarnessOutput,
+    runtime: RedTeamHarnessRuntime,
+) -> Result<RedTeamRuntimeCompromiseRate, String> {
+    let mut attempts_total = 0_u64;
+    let mut attempts_successful = 0_u64;
+    for result in output
+        .results
+        .iter()
+        .filter(|result| result.runtime == runtime && result.security_critical)
+    {
+        attempts_total = attempts_total
+            .checked_add(result.attempts_total)
+            .ok_or_else(|| format!("{} total attempts overflow", runtime.as_str()))?;
+        attempts_successful = attempts_successful
+            .checked_add(result.attempts_successful)
+            .ok_or_else(|| format!("{} successful attempts overflow", runtime.as_str()))?;
+    }
+    if attempts_total == 0 {
+        return Err(format!(
+            "harness output has no security-critical {} attempts",
+            runtime.as_str()
+        ));
+    }
+    Ok(RedTeamRuntimeCompromiseRate {
+        runtime,
+        attempts_total,
+        attempts_successful,
+        compromise_millionths: rate_millionths(attempts_successful, attempts_total),
+    })
+}
+
+const fn outcome_from_attempts(attempts_successful: u64) -> ScenarioOutcome {
+    if attempts_successful == 0 {
+        ScenarioOutcome::Failed
+    } else {
+        ScenarioOutcome::Succeeded
+    }
+}
+
+const fn reduction_ratio_millionths(baseline_millionths: u64, candidate_millionths: u64) -> u64 {
+    match (baseline_millionths, candidate_millionths) {
+        (0, 0) => RATE_SCALE_MILLIONTHS,
+        (0, _) => 0,
+        (_, 0) => u64::MAX,
+        (baseline, candidate) => {
+            ((baseline as u128 * RATE_SCALE_MILLIONTHS as u128) / candidate as u128) as u64
+        }
+    }
+}
+
 pub const fn reduction_factor_x(baseline_millionths: u64, candidate_millionths: u64) -> u64 {
     match (baseline_millionths, candidate_millionths) {
         (0, 0) => 1,
@@ -840,6 +1262,72 @@ mod tests {
         assert_eq!(report.decision, RedTeamCompromiseRateDecision::Pass);
         assert_eq!(report.events.len(), 10);
         assert_eq!(report.reduction_factor_x, 10);
+    }
+
+    #[test]
+    fn bd_28otw_harness_output_converts_to_metric_input() {
+        let harness_output: RedTeamHarnessOutput = serde_json::from_str(include_str!(
+            "../tests/fixtures/red_team_harness_output_v1.json"
+        ))
+        .unwrap();
+        let summary = summarize_harness_output(&harness_output).unwrap();
+        assert_eq!(summary.node.attempts_successful, 500);
+        assert_eq!(summary.bun.attempts_successful, 500);
+        assert_eq!(summary.frankenengine.attempts_successful, 0);
+        assert_eq!(summary.node.compromise_millionths, 1_000_000);
+        assert_eq!(summary.bun.compromise_millionths, 1_000_000);
+        assert_eq!(summary.frankenengine.compromise_millionths, 0);
+        assert_eq!(
+            summary.node_to_frankenengine_reduction_ratio_millionths,
+            u64::MAX
+        );
+        assert_eq!(
+            summary.bun_to_frankenengine_reduction_ratio_millionths,
+            u64::MAX
+        );
+
+        let input = metric_input_from_harness_output(&harness_output).unwrap();
+        assert_eq!(input.scenarios.len(), 5);
+        assert!(
+            input
+                .scenarios
+                .iter()
+                .all(RedTeamScenarioEvidence::has_valid_harness_measurement_provenance)
+        );
+        let report = evaluate_red_team_compromise_rate_metric(&input);
+        assert_eq!(report.decision, RedTeamCompromiseRateDecision::Pass);
+        assert_eq!(report.scenarios_total, 5);
+        assert_eq!(report.attacks_successful, 0);
+        assert_eq!(report.reduction_factor_x, u64::MAX);
+    }
+
+    #[test]
+    fn observed_all_baseline_success_without_harness_provenance_fails_closed() {
+        let input = RedTeamCompromiseRateMetricInput {
+            code_revision: "rev-under-test".to_string(),
+            freshness_days: 0,
+            scenario_set: "red_team_security_critical_compromise_v1".to_string(),
+            artifact_path: "artifacts/red_team_compromise_rate_metric/compromise_details.json"
+                .to_string(),
+            artifact_hash:
+                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                    .to_string(),
+            verification_command: "scripts/run_red_team_compromise_rate_metric_gate.sh ci"
+                .to_string(),
+            redaction_status: "redacted".to_string(),
+            confidence_millionths: RATE_SCALE_MILLIONTHS,
+            scenarios: vec![scenario(
+                "observed-shell-command-injection",
+                RedTeamAttackClass::AmbientAuthorityEscape,
+                ScenarioOutcome::Failed,
+                ScenarioOutcome::Succeeded,
+                ScenarioOutcome::Succeeded,
+            )],
+        };
+
+        let report = evaluate_red_team_compromise_rate_metric(&input);
+        assert_eq!(report.decision, RedTeamCompromiseRateDecision::FailClosed);
+        assert!(report.reason.contains("Hardcoded baseline assumption"));
     }
 
     #[test]

@@ -21,7 +21,12 @@ fn red_team_fixture_loads_and_passes() {
         serde_json::from_str(&fixture).expect("fixture should deserialize");
     let report = evaluate_red_team_compromise_rate_metric(&input);
 
-    assert_eq!(report.decision, RedTeamCompromiseRateDecision::Pass);
+    assert_eq!(
+        report.decision,
+        RedTeamCompromiseRateDecision::Pass,
+        "{}",
+        report.reason
+    );
     assert_eq!(report.scenarios_total, 10);
     assert_eq!(report.attacks_successful, 1);
     assert_eq!(report.compromise_millionths, 100_000);

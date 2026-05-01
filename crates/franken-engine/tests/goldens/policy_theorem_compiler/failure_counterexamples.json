@@ -1,0 +1,128 @@
+{
+  "policy_id": "golden-failing-policy",
+  "pass_results": [
+    {
+      "Failed": {
+        "property": "AttenuationLegality",
+        "policy_id": "golden-failing-policy",
+        "violating_nodes": [
+          "amplifying-union",
+          "zero-priority-precedence"
+        ],
+        "description": "undefined capabilities: debug.shell, zero-lifetime:fs.write",
+        "merge_path": []
+      }
+    },
+    {
+      "Failed": {
+        "property": "Monotonicity",
+        "policy_id": "golden-failing-policy",
+        "violating_nodes": [
+          "amplifying-union"
+        ],
+        "description": "union merge without explicit monotonicity claim can amplify authority",
+        "merge_path": []
+      }
+    },
+    {
+      "Ok": {
+        "property": "NonInterference",
+        "policy_id": "golden-failing-policy",
+        "explanation": "all non-interference claims verified: domains have disjoint subjects",
+        "nodes_examined": 4,
+        "pass_name": "non-interference"
+      }
+    },
+    {
+      "Failed": {
+        "property": "MergeDeterminism",
+        "policy_id": "golden-failing-policy",
+        "violating_nodes": [
+          "zero-priority-precedence",
+          "duplicate-priority-precedence"
+        ],
+        "description": "precedence nodes with identical priority break merge determinism",
+        "merge_path": []
+      }
+    },
+    {
+      "Failed": {
+        "property": "PrecedenceStability",
+        "policy_id": "golden-failing-policy",
+        "violating_nodes": [
+          "zero-priority-precedence",
+          "duplicate-priority-precedence"
+        ],
+        "description": "precedence nodes with zero or duplicate priorities break stability",
+        "merge_path": []
+      }
+    },
+    {
+      "Ok": {
+        "property": "AttenuationLegality",
+        "policy_id": "golden-failing-policy",
+        "explanation": "all attenuated grants are subsets of base authority",
+        "nodes_examined": 4,
+        "pass_name": "attenuation-legality"
+      }
+    }
+  ],
+  "witnesses": [
+    {
+      "property": "NonInterference",
+      "policy_id": "golden-failing-policy",
+      "explanation": "all non-interference claims verified: domains have disjoint subjects",
+      "nodes_examined": 4,
+      "pass_name": "non-interference"
+    },
+    {
+      "property": "AttenuationLegality",
+      "policy_id": "golden-failing-policy",
+      "explanation": "all attenuated grants are subsets of base authority",
+      "nodes_examined": 4,
+      "pass_name": "attenuation-legality"
+    }
+  ],
+  "counterexamples": [
+    {
+      "property": "AttenuationLegality",
+      "policy_id": "golden-failing-policy",
+      "violating_nodes": [
+        "amplifying-union",
+        "zero-priority-precedence"
+      ],
+      "description": "undefined capabilities: debug.shell, zero-lifetime:fs.write",
+      "merge_path": []
+    },
+    {
+      "property": "Monotonicity",
+      "policy_id": "golden-failing-policy",
+      "violating_nodes": [
+        "amplifying-union"
+      ],
+      "description": "union merge without explicit monotonicity claim can amplify authority",
+      "merge_path": []
+    },
+    {
+      "property": "MergeDeterminism",
+      "policy_id": "golden-failing-policy",
+      "violating_nodes": [
+        "zero-priority-precedence",
+        "duplicate-priority-precedence"
+      ],
+      "description": "precedence nodes with identical priority break merge determinism",
+      "merge_path": []
+    },
+    {
+      "property": "PrecedenceStability",
+      "policy_id": "golden-failing-policy",
+      "violating_nodes": [
+        "zero-priority-precedence",
+        "duplicate-priority-precedence"
+      ],
+      "description": "precedence nodes with zero or duplicate priorities break stability",
+      "merge_path": []
+    }
+  ],
+  "all_passed": false
+}

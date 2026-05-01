@@ -1,0 +1,105 @@
+{
+  "policy_id": "golden-complex-policy",
+  "pass_results": [
+    {
+      "Ok": {
+        "property": "AttenuationLegality",
+        "policy_id": "golden-complex-policy",
+        "explanation": "all 3 granted capabilities exist in universe of 5",
+        "nodes_examined": 3,
+        "pass_name": "type-check"
+      }
+    },
+    {
+      "Ok": {
+        "property": "Monotonicity",
+        "policy_id": "golden-complex-policy",
+        "explanation": "all merge paths preserve authority attenuation",
+        "nodes_examined": 3,
+        "pass_name": "monotonicity"
+      }
+    },
+    {
+      "Ok": {
+        "property": "NonInterference",
+        "policy_id": "golden-complex-policy",
+        "explanation": "all non-interference claims verified: domains have disjoint subjects",
+        "nodes_examined": 3,
+        "pass_name": "non-interference"
+      }
+    },
+    {
+      "Ok": {
+        "property": "MergeDeterminism",
+        "policy_id": "golden-complex-policy",
+        "explanation": "all merge operators are commutative/associative",
+        "nodes_examined": 3,
+        "pass_name": "merge-determinism"
+      }
+    },
+    {
+      "Ok": {
+        "property": "PrecedenceStability",
+        "policy_id": "golden-complex-policy",
+        "explanation": "all precedence nodes have distinct non-zero priorities",
+        "nodes_examined": 3,
+        "pass_name": "precedence-stability"
+      }
+    },
+    {
+      "Ok": {
+        "property": "AttenuationLegality",
+        "policy_id": "golden-complex-policy",
+        "explanation": "all attenuated grants are subsets of base authority",
+        "nodes_examined": 3,
+        "pass_name": "attenuation-legality"
+      }
+    }
+  ],
+  "witnesses": [
+    {
+      "property": "AttenuationLegality",
+      "policy_id": "golden-complex-policy",
+      "explanation": "all 3 granted capabilities exist in universe of 5",
+      "nodes_examined": 3,
+      "pass_name": "type-check"
+    },
+    {
+      "property": "Monotonicity",
+      "policy_id": "golden-complex-policy",
+      "explanation": "all merge paths preserve authority attenuation",
+      "nodes_examined": 3,
+      "pass_name": "monotonicity"
+    },
+    {
+      "property": "NonInterference",
+      "policy_id": "golden-complex-policy",
+      "explanation": "all non-interference claims verified: domains have disjoint subjects",
+      "nodes_examined": 3,
+      "pass_name": "non-interference"
+    },
+    {
+      "property": "MergeDeterminism",
+      "policy_id": "golden-complex-policy",
+      "explanation": "all merge operators are commutative/associative",
+      "nodes_examined": 3,
+      "pass_name": "merge-determinism"
+    },
+    {
+      "property": "PrecedenceStability",
+      "policy_id": "golden-complex-policy",
+      "explanation": "all precedence nodes have distinct non-zero priorities",
+      "nodes_examined": 3,
+      "pass_name": "precedence-stability"
+    },
+    {
+      "property": "AttenuationLegality",
+      "policy_id": "golden-complex-policy",
+      "explanation": "all attenuated grants are subsets of base authority",
+      "nodes_examined": 3,
+      "pass_name": "attenuation-legality"
+    }
+  ],
+  "counterexamples": [],
+  "all_passed": true
+}

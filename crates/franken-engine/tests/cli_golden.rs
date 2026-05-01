@@ -15,6 +15,8 @@ use std::str;
 
 use serde::{Deserialize, Serialize};
 
+mod golden_diag;
+
 /// Represents the captured output from a CLI command execution.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct CliOutput {
@@ -195,42 +197,19 @@ fn test_cli_golden(test_case: &CliTestCase) {
         panic!("Expected failure but got success for {}", test_case.name);
     }
 
-    match load_golden_output(test_case) {
-        Some(golden_output) => {
-            // Compare against existing golden
-            if current_output != golden_output {
-                // Print detailed diff for debugging
-                eprintln!("Golden test mismatch for {}", test_case.name);
-                eprintln!(
-                    "Expected exit_code: {}, got: {}",
-                    golden_output.exit_code, current_output.exit_code
-                );
-                eprintln!("Expected stdout:\n{}", golden_output.stdout);
-                eprintln!("Actual stdout:\n{}", current_output.stdout);
-                eprintln!("Expected stderr:\n{}", golden_output.stderr);
-                eprintln!("Actual stderr:\n{}", current_output.stderr);
+    // Use improved golden diagnostics
+    let diag = golden_diag::GoldenDiag::cli();
+    let fixture_path = golden_file_path(test_case.name);
+    let actual_json = serde_json::to_string_pretty(&current_output)
+        .expect("CLI output should serialize to JSON");
+    let hint = format!(
+        "CLI output: exit_code={}, stdout_lines={}, stderr_lines={}",
+        current_output.exit_code,
+        current_output.stdout.lines().count(),
+        current_output.stderr.lines().count()
+    );
 
-                panic!(
-                    "CLI output does not match golden file for {}. Run with REGENERATE_GOLDEN=1 to update.",
-                    test_case.name
-                );
-            }
-        }
-        None => {
-            // No golden file exists - create it if in regenerate mode
-            if std::env::var("REGENERATE_GOLDEN").is_ok() {
-                save_golden_output(test_case, &current_output).unwrap_or_else(|e| {
-                    panic!("Failed to save golden output for {}: {}", test_case.name, e)
-                });
-                eprintln!("Generated golden file for {}", test_case.name);
-            } else {
-                panic!(
-                    "No golden file found for {}. Run with REGENERATE_GOLDEN=1 to create it.",
-                    test_case.name
-                );
-            }
-        }
-    }
+    diag.assert_golden_match(&actual_json, &fixture_path, test_case.name, Some(&hint));
 }
 
 #[cfg(test)]

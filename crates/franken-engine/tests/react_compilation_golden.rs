@@ -19,6 +19,8 @@ use frankenengine_engine::react_jsx_lowering::{
     BuildMode, ReactLoweringConfig, ReactLoweringResult, lower_jsx_to_react,
 };
 
+mod golden_diag;
+
 /// Test case configuration for React compilation golden tests.
 #[derive(Debug, Clone)]
 struct ReactCompilationTestCase {
@@ -297,42 +299,21 @@ fn compile_to_fixture(test_case: &ReactCompilationTestCase) -> ReactCompilationF
 fn test_react_compilation_golden(test_case: &ReactCompilationTestCase) {
     let current_fixture = compile_to_fixture(test_case);
 
-    match load_golden_fixture(test_case.name) {
-        Some(golden_fixture) => {
-            let current_value = normalized_fixture_value(&current_fixture);
-            let golden_value = normalized_fixture_value(&golden_fixture);
+    // Use improved golden diagnostics with span normalization
+    let current_value = normalized_fixture_value(&current_fixture);
+    let actual_json = serde_json::to_string_pretty(&current_value)
+        .expect("React fixture should serialize to JSON");
 
-            // Compare against existing golden while ignoring non-semantic source coordinates.
-            if current_value != golden_value {
-                // Print detailed diff for debugging
-                eprintln!("Golden test mismatch for {}", test_case.name);
-                eprintln!("Current fixture: {:#}", current_value);
-                eprintln!("Expected fixture: {:#}", golden_value);
+    let diag = golden_diag::GoldenDiag::react();
+    let fixture_path = golden_file_path(test_case.name);
+    let hint = format!(
+        "React compilation: mode={:?}, dev={}, jsx_source='{}'",
+        test_case.runtime_mode,
+        test_case.is_dev,
+        test_case.jsx_source
+    );
 
-                panic!(
-                    "React compilation output does not match golden file for {}. Run with REGENERATE_GOLDEN=1 to update.",
-                    test_case.name
-                );
-            }
-        }
-        None => {
-            // No golden file exists - create it if in regenerate mode
-            if std::env::var("REGENERATE_GOLDEN").is_ok() {
-                save_golden_fixture(&current_fixture).unwrap_or_else(|e| {
-                    panic!(
-                        "Failed to save golden fixture for {}: {}",
-                        test_case.name, e
-                    )
-                });
-                eprintln!("Generated golden file for {}", test_case.name);
-            } else {
-                panic!(
-                    "No golden file found for {}. Run with REGENERATE_GOLDEN=1 to create it.",
-                    test_case.name
-                );
-            }
-        }
-    }
+    diag.assert_golden_match(&actual_json, &fixture_path, test_case.name, Some(&hint));
 }
 
 #[cfg(test)]

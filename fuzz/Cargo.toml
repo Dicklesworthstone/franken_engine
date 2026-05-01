@@ -93,4 +93,11 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "proof_artifact_json_validation"
+path = "fuzz_targets/proof_artifact_json_validation.rs"
+test = false
+doc = false
+bench = false
+
 [workspace]

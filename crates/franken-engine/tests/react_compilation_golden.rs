@@ -9,17 +9,14 @@
 #![forbid(unsafe_code)]
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
-use frankenengine_engine::ast::SourceSpan;
-use frankenengine_engine::jsx_tsx_parser::{
-    JsxAttribute, JsxAttributeValue, JsxChild, JsxElement, JsxElementName, JsxFragment,
-    JsxNode, JsxParseResult, JsxRuntimeMode, JsxText,
-};
+use frankenengine_engine::jsx_tsx_parser::{JsxNode, JsxParserConfig, JsxRuntimeMode, parse_jsx};
 use frankenengine_engine::react_jsx_lowering::{
-    lower_jsx_to_react, ReactLoweringConfig, ReactLoweringResult,
+    BuildMode, ReactLoweringConfig, ReactLoweringResult, lower_jsx_to_react,
 };
 
 /// Test case configuration for React compilation golden tests.
@@ -27,8 +24,8 @@ use frankenengine_engine::react_jsx_lowering::{
 struct ReactCompilationTestCase {
     /// Test case name for golden file
     name: &'static str,
-    /// JSX input to compile
-    jsx_input: JsxNode,
+    /// JSX source input to compile
+    jsx_source: &'static str,
     /// React runtime mode to use
     runtime_mode: JsxRuntimeMode,
     /// Whether this is a dev build
@@ -53,90 +50,17 @@ struct ReactCompilationFixture {
 impl ReactCompilationTestCase {
     const fn new(
         name: &'static str,
-        jsx_input: JsxNode,
+        jsx_source: &'static str,
         runtime_mode: JsxRuntimeMode,
         is_dev: bool,
     ) -> Self {
         Self {
             name,
-            jsx_input,
+            jsx_source,
             runtime_mode,
             is_dev,
         }
     }
-}
-
-/// Helper function to create a simple JSX element.
-fn simple_jsx_element(tag: &str, children: Vec<JsxChild>) -> JsxNode {
-    let span = SourceSpan::new(0, tag.len(), 1, 1, 1, tag.len() + 1);
-    JsxNode::Element(JsxElement {
-        name: JsxElementName::Identifier {
-            name: tag.to_string(),
-            span,
-        },
-        attributes: vec![],
-        children,
-        span,
-    })
-}
-
-/// Helper function to create JSX text.
-fn jsx_text(content: &str) -> JsxChild {
-    let span = SourceSpan::new(0, content.len(), 1, 1, 1, content.len() + 1);
-    JsxChild::Text(JsxText {
-        content: content.to_string(),
-        span,
-    })
-}
-
-/// Helper function to create JSX element with props.
-fn jsx_element_with_props(tag: &str, props: Vec<(&str, &str)>) -> JsxNode {
-    let span = SourceSpan::new(0, tag.len(), 1, 1, 1, tag.len() + 1);
-    let attributes = props
-        .into_iter()
-        .map(|(name, value)| {
-            let attr_span = SourceSpan::new(0, name.len(), 1, 1, 1, name.len() + 1);
-            let value_span = SourceSpan::new(0, value.len(), 1, 1, 1, value.len() + 1);
-            JsxAttribute {
-                name: name.to_string(),
-                value: Some(JsxAttributeValue::String {
-                    value: value.to_string(),
-                    span: value_span,
-                }),
-                span: attr_span,
-            }
-        })
-        .collect();
-
-    JsxNode::Element(JsxElement {
-        name: JsxElementName::Identifier {
-            name: tag.to_string(),
-            span,
-        },
-        attributes,
-        children: vec![],
-        span,
-    })
-}
-
-/// Helper function to create a component JSX element.
-fn jsx_component(name: &str, children: Vec<JsxChild>) -> JsxNode {
-    let span = SourceSpan::new(0, name.len(), 1, 1, 1, name.len() + 1);
-    JsxNode::Element(JsxElement {
-        name: JsxElementName::Identifier {
-            name: name.to_string(),
-            span,
-        },
-        attributes: vec![],
-        children,
-        span,
-    })
-}
-
-/// Create JSX fragment.
-fn jsx_fragment(children: Vec<JsxChild>) -> JsxNode {
-    let span = SourceSpan::new(0, 10, 1, 1, 1, 11);
-    JsxNode::Fragment(JsxFragment { children, span })
 }
 
 /// Test cases for React compilation golden tests.
@@ -145,83 +69,70 @@ fn react_compilation_test_cases() -> Vec<ReactCompilationTestCase> {
         // Simple div element - classic mode
         ReactCompilationTestCase::new(
             "simple_div_classic",
-            simple_jsx_element("div", vec![jsx_text("Hello")]),
+            "<div>Hello</div>",
             JsxRuntimeMode::Classic,
             false,
         ),
         // Simple div element - automatic mode
         ReactCompilationTestCase::new(
             "simple_div_automatic",
-            simple_jsx_element("div", vec![jsx_text("Hello")]),
+            "<div>Hello</div>",
             JsxRuntimeMode::Automatic,
             false,
         ),
         // Component with props - classic mode
         ReactCompilationTestCase::new(
             "component_with_props_classic",
-            jsx_element_with_props("button", vec![("type", "submit"), ("disabled", "true")]),
+            r#"<button type="submit" disabled="true" />"#,
             JsxRuntimeMode::Classic,
             false,
         ),
         // Component with props - automatic mode
         ReactCompilationTestCase::new(
             "component_with_props_automatic",
-            jsx_element_with_props("input", vec![("type", "text"), ("placeholder", "Enter text")]),
+            r#"<input type="text" placeholder="Enter text" />"#,
             JsxRuntimeMode::Automatic,
             false,
         ),
         // React component - classic mode
         ReactCompilationTestCase::new(
             "react_component_classic",
-            jsx_component("MyComponent", vec![jsx_text("Content")]),
+            "<MyComponent>Content</MyComponent>",
             JsxRuntimeMode::Classic,
             false,
         ),
         // React component - automatic mode
         ReactCompilationTestCase::new(
             "react_component_automatic",
-            jsx_component("UserProfile", vec![jsx_text("Profile")]),
+            "<UserProfile>Profile</UserProfile>",
             JsxRuntimeMode::Automatic,
             false,
         ),
         // Fragment - classic mode
         ReactCompilationTestCase::new(
             "fragment_classic",
-            jsx_fragment(vec![jsx_text("First"), jsx_text("Second")]),
+            "<>First Second</>",
             JsxRuntimeMode::Classic,
             false,
         ),
         // Fragment - automatic mode
         ReactCompilationTestCase::new(
             "fragment_automatic",
-            jsx_fragment(vec![jsx_text("One"), jsx_text("Two")]),
+            "<>One Two</>",
             JsxRuntimeMode::Automatic,
             false,
         ),
         // Nested elements - automatic mode
         ReactCompilationTestCase::new(
             "nested_elements_automatic",
-            simple_jsx_element(
-                "div",
-                vec![
-                    JsxChild::Element(JsxElement {
-                        name: JsxElementName::Identifier {
-                            name: "span".to_string(),
-                            span: SourceSpan::new(0, 4, 1, 1, 1, 5),
-                        },
-                        attributes: vec![],
-                        children: vec![jsx_text("Nested")],
-                        span: SourceSpan::new(0, 4, 1, 1, 1, 5),
-                    })
-                ],
-            ),
+            "<div><span>Nested</span></div>",
             JsxRuntimeMode::Automatic,
             false,
         ),
         // Dev mode - automatic
         ReactCompilationTestCase::new(
             "simple_dev_automatic",
-            simple_jsx_element("div", vec![jsx_text("Dev build")]),
+            "<div>Dev build</div>",
             JsxRuntimeMode::Automatic,
             true,
         ),
@@ -249,7 +160,9 @@ fn load_golden_fixture(test_name: &str) -> Option<ReactCompilationFixture> {
 }
 
 /// Save golden fixture to file.
-fn save_golden_fixture(fixture: &ReactCompilationFixture) -> Result<(), Box<dyn std::error::Error>> {
+fn save_golden_fixture(
+    fixture: &ReactCompilationFixture,
+) -> Result<(), Box<dyn std::error::Error>> {
     let path = golden_file_path(&fixture.test_name);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
@@ -261,20 +174,70 @@ fn save_golden_fixture(fixture: &ReactCompilationFixture) -> Result<(), Box<dyn 
     Ok(())
 }
 
+/// Convert a typed fixture into a comparison value with source coordinates stripped.
+fn normalized_fixture_value(fixture: &ReactCompilationFixture) -> Value {
+    let mut value =
+        serde_json::to_value(fixture).expect("React golden fixtures should serialize to JSON");
+    normalize_spans(&mut value);
+    value
+}
+
+fn normalize_spans(value: &mut Value) {
+    const SPAN_FIELDS: [(&str, &str); 6] = [
+        ("start_offset", "[START_OFFSET]"),
+        ("end_offset", "[END_OFFSET]"),
+        ("start_line", "[START_LINE]"),
+        ("start_column", "[START_COLUMN]"),
+        ("end_line", "[END_LINE]"),
+        ("end_column", "[END_COLUMN]"),
+    ];
+
+    match value {
+        Value::Object(map) => {
+            for (field, replacement) in SPAN_FIELDS {
+                if map.contains_key(field) {
+                    map.insert(field.to_string(), Value::String(replacement.to_string()));
+                }
+            }
+
+            for child in map.values_mut() {
+                normalize_spans(child);
+            }
+        }
+        Value::Array(items) => {
+            for child in items {
+                normalize_spans(child);
+            }
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
+    }
+}
+
 /// Compile JSX input and create golden fixture.
 fn compile_to_fixture(test_case: &ReactCompilationTestCase) -> ReactCompilationFixture {
+    let parser_config = JsxParserConfig {
+        runtime_mode: test_case.runtime_mode,
+        ..Default::default()
+    };
+    let parse_result = parse_jsx(test_case.jsx_source, &parser_config)
+        .expect("React golden test JSX source should parse");
     let config = ReactLoweringConfig {
         runtime_mode: test_case.runtime_mode,
-        is_dev: test_case.is_dev,
+        build_mode: if test_case.is_dev {
+            BuildMode::Development
+        } else {
+            BuildMode::Production
+        },
         max_depth: 100,
+        ..Default::default()
     };
 
-    let result = lower_jsx_to_react(&test_case.jsx_input, &config)
+    let result = lower_jsx_to_react(&parse_result.node, &config)
         .expect("React lowering should succeed for golden test inputs");
 
     ReactCompilationFixture {
         test_name: test_case.name.to_string(),
-        input_jsx: test_case.jsx_input.clone(),
+        input_jsx: parse_result.node,
         config,
         result,
         schema_version: "franken-engine.react-compilation-golden.v1".to_string(),
@@ -287,12 +250,15 @@ fn test_react_compilation_golden(test_case: &ReactCompilationTestCase) {
 
     match load_golden_fixture(test_case.name) {
         Some(golden_fixture) => {
-            // Compare against existing golden
-            if current_fixture != golden_fixture {
+            let current_value = normalized_fixture_value(&current_fixture);
+            let golden_value = normalized_fixture_value(&golden_fixture);
+
+            // Compare against existing golden while ignoring non-semantic source coordinates.
+            if current_value != golden_value {
                 // Print detailed diff for debugging
                 eprintln!("Golden test mismatch for {}", test_case.name);
-                eprintln!("Current result: {:#?}", current_fixture.result);
-                eprintln!("Expected result: {:#?}", golden_fixture.result);
+                eprintln!("Current fixture: {:#}", current_value);
+                eprintln!("Expected fixture: {:#}", golden_value);
 
                 panic!(
                     "React compilation output does not match golden file for {}. Run with REGENERATE_GOLDEN=1 to update.",
@@ -303,8 +269,12 @@ fn test_react_compilation_golden(test_case: &ReactCompilationTestCase) {
         None => {
             // No golden file exists - create it if in regenerate mode
             if std::env::var("REGENERATE_GOLDEN").is_ok() {
-                save_golden_fixture(&current_fixture)
-                    .unwrap_or_else(|e| panic!("Failed to save golden fixture for {}: {}", test_case.name, e));
+                save_golden_fixture(&current_fixture).unwrap_or_else(|e| {
+                    panic!(
+                        "Failed to save golden fixture for {}: {}",
+                        test_case.name, e
+                    )
+                });
                 eprintln!("Generated golden file for {}", test_case.name);
             } else {
                 panic!(
@@ -319,6 +289,57 @@ fn test_react_compilation_golden(test_case: &ReactCompilationTestCase) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_normalize_spans_strips_source_coordinates() {
+        let fixture = serde_json::json!({
+            "input_jsx": {
+                "span": {
+                    "start_offset": 8,
+                    "end_offset": 16,
+                    "start_line": 2,
+                    "start_column": 5,
+                    "end_line": 2,
+                    "end_column": 13
+                },
+                "children": [
+                    {
+                        "span": {
+                            "start_offset": 17,
+                            "end_offset": 21,
+                            "start_line": 2,
+                            "start_column": 14,
+                            "end_line": 2,
+                            "end_column": 18
+                        }
+                    }
+                ]
+            },
+            "result": {
+                "literal": "span field names inside nested output are normalized"
+            }
+        });
+
+        let mut normalized = fixture;
+        normalize_spans(&mut normalized);
+
+        assert_eq!(
+            normalized["input_jsx"]["span"]["start_offset"],
+            "[START_OFFSET]"
+        );
+        assert_eq!(
+            normalized["input_jsx"]["span"]["end_column"],
+            "[END_COLUMN]"
+        );
+        assert_eq!(
+            normalized["input_jsx"]["children"][0]["span"]["start_line"],
+            "[START_LINE]"
+        );
+        assert_eq!(
+            normalized["result"]["literal"],
+            "span field names inside nested output are normalized"
+        );
+    }
 
     #[test]
     fn test_simple_div_classic() {

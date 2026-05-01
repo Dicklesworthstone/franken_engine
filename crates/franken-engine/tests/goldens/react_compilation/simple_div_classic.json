@@ -1,0 +1,65 @@
+{
+  "test_name": "simple_div_classic",
+  "input_jsx": {
+    "Element": {
+      "name": {
+        "Identifier": {
+          "name": "div",
+          "span": {
+            "start_offset": 0,
+            "end_offset": 3,
+            "start_line": 1,
+            "start_column": 1,
+            "end_line": 1,
+            "end_column": 4
+          }
+        }
+      },
+      "attributes": [],
+      "children": [
+        {
+          "Text": {
+            "value": "Hello",
+            "span": {
+              "start_offset": 0,
+              "end_offset": 3,
+              "start_line": 1,
+              "start_column": 1,
+              "end_line": 1,
+              "end_column": 4
+            }
+          }
+        }
+      ],
+      "self_closing": false,
+      "span": {
+        "start_offset": 0,
+        "end_offset": 3,
+        "start_line": 1,
+        "start_column": 1,
+        "end_line": 1,
+        "end_column": 4
+      }
+    }
+  },
+  "config": {
+    "runtime_mode": "Classic",
+    "build_mode": "Production",
+    "source_file": null,
+    "emit_self": true,
+    "emit_source": true,
+    "classic_pragma": null,
+    "classic_fragment_pragma": null,
+    "automatic_import_source": null,
+    "max_depth": 100
+  },
+  "result": {
+    "ir1_operations": [],
+    "import_requirements": [],
+    "validation_receipt": {
+      "checked_features": [],
+      "rejected_features": []
+    }
+  },
+  "schema_version": "franken-engine.react-compilation-golden.v1"
+}

@@ -3,15 +3,11 @@
 #![forbid(unsafe_code)]
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use frankenengine_engine::ast::SourceSpan;
-use frankenengine_engine::jsx_tsx_parser::{
-    JsxAttribute, JsxAttributeValue, JsxChild, JsxElement, JsxElementName, JsxFragment,
-    JsxNode, JsxRuntimeMode,
-};
+use frankenengine_engine::jsx_tsx_parser::{JsxNode, JsxParserConfig, JsxRuntimeMode, parse_jsx};
 use frankenengine_engine::react_jsx_lowering::{
-    ReactLoweringConfig, ReactLoweringResult, BuildMode, lower_jsx_to_react,
+    BuildMode, ReactLoweringConfig, ReactLoweringResult, lower_jsx_to_react,
 };
 use serde::{Deserialize, Serialize};
 
@@ -44,452 +40,138 @@ fn main() {
     println!("Generated all React compilation golden fixtures");
 }
 
-fn save_fixture(fixture: &ReactCompilationFixture, dir: &PathBuf) {
+fn save_fixture(fixture: &ReactCompilationFixture, dir: &Path) {
     let path = dir.join(format!("{}.json", fixture.test_name));
     let content = serde_json::to_string_pretty(fixture).expect("Failed to serialize fixture");
     fs::write(path, content).expect("Failed to write fixture");
     println!("Generated: {}", fixture.test_name);
 }
 
-fn generate_simple_div_classic(dir: &PathBuf) {
-    let span = SourceSpan::new(0, 3, 1, 1, 1, 4);
-    let jsx = JsxNode::Element(JsxElement {
-        name: JsxElementName::Identifier {
-            name: "div".to_string(),
-            span,
-        },
-        attributes: vec![],
-        children: vec![JsxChild::Text {
-            value: "Hello".to_string(),
-            span,
-        }],
-        self_closing: false,
-        span,
-    });
-
-    let config = ReactLoweringConfig {
-        runtime_mode: JsxRuntimeMode::Classic,
-        build_mode: BuildMode::Production,
-        source_file: None,
-        emit_self: true,
-        emit_source: true,
-        classic_pragma: None,
-        classic_fragment_pragma: None,
-        automatic_import_source: None,
-        max_depth: 100,
+fn compile_fixture(
+    test_name: &str,
+    jsx_source: &str,
+    runtime_mode: JsxRuntimeMode,
+    build_mode: BuildMode,
+) -> ReactCompilationFixture {
+    let parser_config = JsxParserConfig {
+        runtime_mode,
+        ..Default::default()
     };
+    let parse_result =
+        parse_jsx(jsx_source, &parser_config).expect("fixture JSX source should parse");
+    let config = ReactLoweringConfig {
+        runtime_mode,
+        build_mode,
+        max_depth: 100,
+        ..Default::default()
+    };
+    let result = lower_jsx_to_react(&parse_result.node, &config).expect("Lowering should succeed");
 
-    let result = lower_jsx_to_react(&jsx, &config).expect("Lowering should succeed");
-
-    let fixture = ReactCompilationFixture {
-        test_name: "simple_div_classic".to_string(),
-        input_jsx: jsx,
+    ReactCompilationFixture {
+        test_name: test_name.to_string(),
+        input_jsx: parse_result.node,
         config,
         result,
         schema_version: "franken-engine.react-compilation-golden.v1".to_string(),
-    };
+    }
+}
 
+fn generate_simple_div_classic(dir: &Path) {
+    let fixture = compile_fixture(
+        "simple_div_classic",
+        "<div>Hello</div>",
+        JsxRuntimeMode::Classic,
+        BuildMode::Production,
+    );
     save_fixture(&fixture, dir);
 }
 
-fn generate_simple_div_automatic(dir: &PathBuf) {
-    let span = SourceSpan::new(0, 3, 1, 1, 1, 4);
-    let jsx = JsxNode::Element(JsxElement {
-        name: JsxElementName::Identifier {
-            name: "div".to_string(),
-            span,
-        },
-        attributes: vec![],
-        children: vec![JsxChild::Text {
-            value: "Hello".to_string(),
-            span,
-        }],
-        self_closing: false,
-        span,
-    });
-
-    let config = ReactLoweringConfig {
-        runtime_mode: JsxRuntimeMode::Automatic,
-        build_mode: BuildMode::Production,
-        source_file: None,
-        emit_self: true,
-        emit_source: true,
-        classic_pragma: None,
-        classic_fragment_pragma: None,
-        automatic_import_source: None,
-        max_depth: 100,
-    };
-
-    let result = lower_jsx_to_react(&jsx, &config).expect("Lowering should succeed");
-
-    let fixture = ReactCompilationFixture {
-        test_name: "simple_div_automatic".to_string(),
-        input_jsx: jsx,
-        config,
-        result,
-        schema_version: "franken-engine.react-compilation-golden.v1".to_string(),
-    };
-
+fn generate_simple_div_automatic(dir: &Path) {
+    let fixture = compile_fixture(
+        "simple_div_automatic",
+        "<div>Hello</div>",
+        JsxRuntimeMode::Automatic,
+        BuildMode::Production,
+    );
     save_fixture(&fixture, dir);
 }
 
-fn generate_component_with_props_classic(dir: &PathBuf) {
-    let span = SourceSpan::new(0, 6, 1, 1, 1, 7);
-    let jsx = JsxNode::Element(JsxElement {
-        name: JsxElementName::Identifier {
-            name: "button".to_string(),
-            span,
-        },
-        attributes: vec![
-            JsxAttribute {
-                name: "type".to_string(),
-                value: Some(JsxAttributeValue::String {
-                    value: "submit".to_string(),
-                    span,
-                }),
-                span,
-            },
-            JsxAttribute {
-                name: "disabled".to_string(),
-                value: Some(JsxAttributeValue::String {
-                    value: "true".to_string(),
-                    span,
-                }),
-                span,
-            },
-        ],
-        children: vec![],
-        self_closing: false,
-        span,
-    });
-
-    let config = ReactLoweringConfig {
-        runtime_mode: JsxRuntimeMode::Classic,
-        build_mode: BuildMode::Production,
-        source_file: None,
-        emit_self: true,
-        emit_source: true,
-        classic_pragma: None,
-        classic_fragment_pragma: None,
-        automatic_import_source: None,
-        max_depth: 100,
-    };
-
-    let result = lower_jsx_to_react(&jsx, &config).expect("Lowering should succeed");
-
-    let fixture = ReactCompilationFixture {
-        test_name: "component_with_props_classic".to_string(),
-        input_jsx: jsx,
-        config,
-        result,
-        schema_version: "franken-engine.react-compilation-golden.v1".to_string(),
-    };
-
+fn generate_component_with_props_classic(dir: &Path) {
+    let fixture = compile_fixture(
+        "component_with_props_classic",
+        r#"<button type="submit" disabled="true" />"#,
+        JsxRuntimeMode::Classic,
+        BuildMode::Production,
+    );
     save_fixture(&fixture, dir);
 }
 
-fn generate_component_with_props_automatic(dir: &PathBuf) {
-    let span = SourceSpan::new(0, 5, 1, 1, 1, 6);
-    let jsx = JsxNode::Element(JsxElement {
-        name: JsxElementName::Identifier {
-            name: "input".to_string(),
-            span,
-        },
-        attributes: vec![
-            JsxAttribute {
-                name: "type".to_string(),
-                value: Some(JsxAttributeValue::String {
-                    value: "text".to_string(),
-                    span,
-                }),
-                span,
-            },
-            JsxAttribute {
-                name: "placeholder".to_string(),
-                value: Some(JsxAttributeValue::String {
-                    value: "Enter text".to_string(),
-                    span,
-                }),
-                span,
-            },
-        ],
-        children: vec![],
-        self_closing: false,
-        span,
-    });
-
-    let config = ReactLoweringConfig {
-        runtime_mode: JsxRuntimeMode::Automatic,
-        build_mode: BuildMode::Production,
-        source_file: None,
-        emit_self: true,
-        emit_source: true,
-        classic_pragma: None,
-        classic_fragment_pragma: None,
-        automatic_import_source: None,
-        max_depth: 100,
-    };
-
-    let result = lower_jsx_to_react(&jsx, &config).expect("Lowering should succeed");
-
-    let fixture = ReactCompilationFixture {
-        test_name: "component_with_props_automatic".to_string(),
-        input_jsx: jsx,
-        config,
-        result,
-        schema_version: "franken-engine.react-compilation-golden.v1".to_string(),
-    };
-
+fn generate_component_with_props_automatic(dir: &Path) {
+    let fixture = compile_fixture(
+        "component_with_props_automatic",
+        r#"<input type="text" placeholder="Enter text" />"#,
+        JsxRuntimeMode::Automatic,
+        BuildMode::Production,
+    );
     save_fixture(&fixture, dir);
 }
 
-fn generate_react_component_classic(dir: &PathBuf) {
-    let span = SourceSpan::new(0, 11, 1, 1, 1, 12);
-    let jsx = JsxNode::Element(JsxElement {
-        name: JsxElementName::Identifier {
-            name: "MyComponent".to_string(),
-            span,
-        },
-        attributes: vec![],
-        children: vec![JsxChild::Text {
-            value: "Content".to_string(),
-            span,
-        }],
-        span,
-    });
-
-    let config = ReactLoweringConfig {
-        runtime_mode: JsxRuntimeMode::Classic,
-        build_mode: BuildMode::Production,
-        source_file: None,
-        emit_self: true,
-        emit_source: true,
-        classic_pragma: None,
-        classic_fragment_pragma: None,
-        automatic_import_source: None,
-        max_depth: 100,
-    };
-
-    let result = lower_jsx_to_react(&jsx, &config).expect("Lowering should succeed");
-
-    let fixture = ReactCompilationFixture {
-        test_name: "react_component_classic".to_string(),
-        input_jsx: jsx,
-        config,
-        result,
-        schema_version: "franken-engine.react-compilation-golden.v1".to_string(),
-    };
-
+fn generate_react_component_classic(dir: &Path) {
+    let fixture = compile_fixture(
+        "react_component_classic",
+        "<MyComponent>Content</MyComponent>",
+        JsxRuntimeMode::Classic,
+        BuildMode::Production,
+    );
     save_fixture(&fixture, dir);
 }
 
-fn generate_react_component_automatic(dir: &PathBuf) {
-    let span = SourceSpan::new(0, 11, 1, 1, 1, 12);
-    let jsx = JsxNode::Element(JsxElement {
-        name: JsxElementName::Identifier {
-            name: "UserProfile".to_string(),
-            span,
-        },
-        attributes: vec![],
-        children: vec![JsxChild::Text {
-            value: "Profile".to_string(),
-            span,
-        }],
-        span,
-    });
-
-    let config = ReactLoweringConfig {
-        runtime_mode: JsxRuntimeMode::Automatic,
-        build_mode: BuildMode::Production,
-        source_file: None,
-        emit_self: true,
-        emit_source: true,
-        classic_pragma: None,
-        classic_fragment_pragma: None,
-        automatic_import_source: None,
-        max_depth: 100,
-    };
-
-    let result = lower_jsx_to_react(&jsx, &config).expect("Lowering should succeed");
-
-    let fixture = ReactCompilationFixture {
-        test_name: "react_component_automatic".to_string(),
-        input_jsx: jsx,
-        config,
-        result,
-        schema_version: "franken-engine.react-compilation-golden.v1".to_string(),
-    };
-
+fn generate_react_component_automatic(dir: &Path) {
+    let fixture = compile_fixture(
+        "react_component_automatic",
+        "<UserProfile>Profile</UserProfile>",
+        JsxRuntimeMode::Automatic,
+        BuildMode::Production,
+    );
     save_fixture(&fixture, dir);
 }
 
-fn generate_fragment_classic(dir: &PathBuf) {
-    let span = SourceSpan::new(0, 10, 1, 1, 1, 11);
-    let jsx = JsxNode::Fragment(JsxFragment {
-        children: vec![
-            JsxChild::Text {
-                value: "First".to_string(),
-                span,
-            },
-            JsxChild::Text {
-                value: "Second".to_string(),
-                span,
-            },
-        ],
-        span,
-    });
-
-    let config = ReactLoweringConfig {
-        runtime_mode: JsxRuntimeMode::Classic,
-        build_mode: BuildMode::Production,
-        source_file: None,
-        emit_self: true,
-        emit_source: true,
-        classic_pragma: None,
-        classic_fragment_pragma: None,
-        automatic_import_source: None,
-        max_depth: 100,
-    };
-
-    let result = lower_jsx_to_react(&jsx, &config).expect("Lowering should succeed");
-
-    let fixture = ReactCompilationFixture {
-        test_name: "fragment_classic".to_string(),
-        input_jsx: jsx,
-        config,
-        result,
-        schema_version: "franken-engine.react-compilation-golden.v1".to_string(),
-    };
-
+fn generate_fragment_classic(dir: &Path) {
+    let fixture = compile_fixture(
+        "fragment_classic",
+        "<>First Second</>",
+        JsxRuntimeMode::Classic,
+        BuildMode::Production,
+    );
     save_fixture(&fixture, dir);
 }
 
-fn generate_fragment_automatic(dir: &PathBuf) {
-    let span = SourceSpan::new(0, 10, 1, 1, 1, 11);
-    let jsx = JsxNode::Fragment(JsxFragment {
-        children: vec![
-            JsxChild::Text {
-                value: "One".to_string(),
-                span,
-            },
-            JsxChild::Text {
-                value: "Two".to_string(),
-                span,
-            },
-        ],
-        span,
-    });
-
-    let config = ReactLoweringConfig {
-        runtime_mode: JsxRuntimeMode::Automatic,
-        build_mode: BuildMode::Production,
-        source_file: None,
-        emit_self: true,
-        emit_source: true,
-        classic_pragma: None,
-        classic_fragment_pragma: None,
-        automatic_import_source: None,
-        max_depth: 100,
-    };
-
-    let result = lower_jsx_to_react(&jsx, &config).expect("Lowering should succeed");
-
-    let fixture = ReactCompilationFixture {
-        test_name: "fragment_automatic".to_string(),
-        input_jsx: jsx,
-        config,
-        result,
-        schema_version: "franken-engine.react-compilation-golden.v1".to_string(),
-    };
-
+fn generate_fragment_automatic(dir: &Path) {
+    let fixture = compile_fixture(
+        "fragment_automatic",
+        "<>One Two</>",
+        JsxRuntimeMode::Automatic,
+        BuildMode::Production,
+    );
     save_fixture(&fixture, dir);
 }
 
-fn generate_nested_elements_automatic(dir: &PathBuf) {
-    let span = SourceSpan::new(0, 3, 1, 1, 1, 4);
-    let jsx = JsxNode::Element(JsxElement {
-        name: JsxElementName::Identifier {
-            name: "div".to_string(),
-            span,
-        },
-        attributes: vec![],
-        children: vec![JsxChild::Element(Box::new(JsxElement {
-            name: JsxElementName::Identifier {
-                name: "span".to_string(),
-                span,
-            },
-            attributes: vec![],
-            children: vec![JsxChild::Text {
-                value: "Nested".to_string(),
-                span,
-            }],
-            self_closing: false,
-            span,
-        }))],
-        span,
-    });
-
-    let config = ReactLoweringConfig {
-        runtime_mode: JsxRuntimeMode::Automatic,
-        build_mode: BuildMode::Production,
-        source_file: None,
-        emit_self: true,
-        emit_source: true,
-        classic_pragma: None,
-        classic_fragment_pragma: None,
-        automatic_import_source: None,
-        max_depth: 100,
-    };
-
-    let result = lower_jsx_to_react(&jsx, &config).expect("Lowering should succeed");
-
-    let fixture = ReactCompilationFixture {
-        test_name: "nested_elements_automatic".to_string(),
-        input_jsx: jsx,
-        config,
-        result,
-        schema_version: "franken-engine.react-compilation-golden.v1".to_string(),
-    };
-
+fn generate_nested_elements_automatic(dir: &Path) {
+    let fixture = compile_fixture(
+        "nested_elements_automatic",
+        "<div><span>Nested</span></div>",
+        JsxRuntimeMode::Automatic,
+        BuildMode::Production,
+    );
     save_fixture(&fixture, dir);
 }
 
-fn generate_simple_dev_automatic(dir: &PathBuf) {
-    let span = SourceSpan::new(0, 3, 1, 1, 1, 4);
-    let jsx = JsxNode::Element(JsxElement {
-        name: JsxElementName::Identifier {
-            name: "div".to_string(),
-            span,
-        },
-        attributes: vec![],
-        children: vec![JsxChild::Text {
-            value: "Dev build".to_string(),
-            span,
-        }],
-        span,
-    });
-
-    let config = ReactLoweringConfig {
-        runtime_mode: JsxRuntimeMode::Automatic,
-        build_mode: BuildMode::Development,
-        source_file: None,
-        emit_self: true,
-        emit_source: true,
-        classic_pragma: None,
-        classic_fragment_pragma: None,
-        automatic_import_source: None,
-        max_depth: 100,
-    };
-
-    let result = lower_jsx_to_react(&jsx, &config).expect("Lowering should succeed");
-
-    let fixture = ReactCompilationFixture {
-        test_name: "simple_dev_automatic".to_string(),
-        input_jsx: jsx,
-        config,
-        result,
-        schema_version: "franken-engine.react-compilation-golden.v1".to_string(),
-    };
-
+fn generate_simple_dev_automatic(dir: &Path) {
+    let fixture = compile_fixture(
+        "simple_dev_automatic",
+        "<div>Dev build</div>",
+        JsxRuntimeMode::Automatic,
+        BuildMode::Development,
+    );
     save_fixture(&fixture, dir);
 }

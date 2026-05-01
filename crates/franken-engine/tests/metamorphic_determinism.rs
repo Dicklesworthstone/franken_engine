@@ -1,4 +1,3 @@
-#![forbid(unsafe_code)]
 //! Metamorphic determinism test for FrankenEngine execution.
 //!
 //! **Metamorphic Relation**: f(x) = f(x)
@@ -27,9 +26,11 @@
 use std::collections::BTreeMap;
 use std::env;
 
+use frankenengine_engine::ast::ParseGoal;
+use frankenengine_engine::baseline_interpreter::LaneChoice;
 use frankenengine_engine::execution_orchestrator::{
     ExecutionOrchestrator, ExtensionPackage, LossMatrixPreset, OrchestratorConfig,
-    OrchestratorError, OrchestratorResult,
+    OrchestratorResult, ParserOptions,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
 
@@ -52,9 +53,15 @@ fn create_test_package(id: &str, source: &str) -> ExtensionPackage {
 /// Create a deterministic orchestrator configuration.
 fn create_deterministic_config() -> OrchestratorConfig {
     OrchestratorConfig {
-        epoch: SecurityEpoch::from_raw(1000), // Fixed epoch for determinism
-        loss_matrix_preset: LossMatrixPreset::DefaultPreset,
+        loss_matrix_preset: LossMatrixPreset::Balanced,
+        force_lane: None,
+        drain_deadline_ticks: 100,
+        cell_close_budget_ms: 5000,
         max_concurrent_sagas: 1,
+        epoch: SecurityEpoch::from_raw(1000), // Fixed epoch for determinism
+        parse_goal: ParseGoal::Script,
+        parser_options: ParserOptions::default(),
+        trace_id_prefix: "metamorphic_test".to_string(),
         policy_id: "metamorphic_test_policy".to_string(),
     }
 }
@@ -71,7 +78,9 @@ fn assert_determinism_equivalence(
     description: &str,
 ) -> Result<(), String> {
     // Use isolated target directory as required
-    env::set_var("CARGO_TARGET_DIR", "/tmp/metamorphic_determinism_test");
+    unsafe {
+        env::set_var("CARGO_TARGET_DIR", "/tmp/metamorphic_determinism_test");
+    }
 
     let config = create_deterministic_config();
     let mut orchestrator1 = ExecutionOrchestrator::new(config.clone());
@@ -199,7 +208,9 @@ fn compare_orchestrator_results(
 
 #[test]
 fn metamorphic_determinism_simple_expressions() {
-    env::set_var("CARGO_TARGET_DIR", "/tmp/metamorphic_determinism_focused");
+    unsafe {
+        unsafe { env::set_var("CARGO_TARGET_DIR", "/tmp/metamorphic_determinism_focused"); }
+    }
 
     let test_cases = [
         ("literal_number", "42"),
@@ -221,7 +232,7 @@ fn metamorphic_determinism_simple_expressions() {
 
 #[test]
 fn metamorphic_determinism_function_definitions() {
-    env::set_var("CARGO_TARGET_DIR", "/tmp/metamorphic_determinism_functions");
+    unsafe { env::set_var("CARGO_TARGET_DIR", "/tmp/metamorphic_determinism_functions"); }
 
     let test_cases = [
         ("simple_function", "function add(a, b) { return a + b; } add(1, 2);"),
@@ -242,7 +253,7 @@ fn metamorphic_determinism_function_definitions() {
 
 #[test]
 fn metamorphic_determinism_control_flow() {
-    env::set_var("CARGO_TARGET_DIR", "/tmp/metamorphic_determinism_control");
+    unsafe { env::set_var("CARGO_TARGET_DIR", "/tmp/metamorphic_determinism_control"); }
 
     let test_cases = [
         ("if_else", "let x = 5; if (x > 3) { x * 2 } else { x + 1 }"),
@@ -263,7 +274,7 @@ fn metamorphic_determinism_control_flow() {
 
 #[test]
 fn metamorphic_determinism_data_structures() {
-    env::set_var("CARGO_TARGET_DIR", "/tmp/metamorphic_determinism_data");
+    unsafe { env::set_var("CARGO_TARGET_DIR", "/tmp/metamorphic_determinism_data"); }
 
     let test_cases = [
         ("array_literal", "[1, 2, 3, 4, 5]"),
@@ -285,7 +296,7 @@ fn metamorphic_determinism_data_structures() {
 
 #[test]
 fn metamorphic_determinism_error_handling() {
-    env::set_var("CARGO_TARGET_DIR", "/tmp/metamorphic_determinism_errors");
+    unsafe { env::set_var("CARGO_TARGET_DIR", "/tmp/metamorphic_determinism_errors"); }
 
     let test_cases = [
         ("try_catch", "try { JSON.parse('{\"valid\": true}'); } catch (e) { 'error'; }"),
@@ -315,12 +326,12 @@ fn metamorphic_determinism_comprehensive_validation() {
     // This test serves as a comprehensive validation of the determinism property
     // across a diverse portfolio of JavaScript constructs
 
-    env::set_var("CARGO_TARGET_DIR", "/tmp/metamorphic_determinism_comprehensive");
+    unsafe { env::set_var("CARGO_TARGET_DIR", "/tmp/metamorphic_determinism_comprehensive"); }
 
-    println!("\n=== FrankenEngine Metamorphic Determinism Validation ===");
-    println!("Testing fundamental property: f(x) = f(x)");
-    println!("Same input → Same output (byte-identical results)");
-    println!("");
+    println!("\n=== FrankenEngine Metamorphic Determinism Validation ==="); }
+    println!("Testing fundamental property: f(x) = f(x)"); }
+    println!("Same input → Same output (byte-identical results)"); }
+    println!(""); }
 
     // Complex program combining multiple features
     let complex_source = r#"
@@ -358,10 +369,10 @@ fn metamorphic_determinism_comprehensive_validation() {
 
     match assert_determinism_equivalence(&package, "comprehensive") {
         Ok(()) => {
-            println!("✅ METAMORPHIC DETERMINISM VERIFIED");
-            println!("FrankenEngine execution is replay-stable");
-            println!("Property: Same input produces byte-identical outputs");
-            println!("Coverage: expressions, functions, control flow, data structures, error handling");
+            println!("✅ METAMORPHIC DETERMINISM VERIFIED"); }
+            println!("FrankenEngine execution is replay-stable"); }
+            println!("Property: Same input produces byte-identical outputs"); }
+            println!("Coverage: expressions, functions, control flow, data structures, error handling"); }
         },
         Err(msg) => {
             panic!("\n🚨 CRITICAL: NON-DETERMINISM DETECTED\n{}\n\nThis indicates a replay-stability bug that requires immediate investigation.", msg);

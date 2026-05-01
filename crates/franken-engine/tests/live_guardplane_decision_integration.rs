@@ -41,10 +41,11 @@ fn test_suspicious_extension_decision() {
         report.selected_action
     );
 
-    // High confidence expected for deterministic computation
+    // Confidence is derived from decision margin/posterior concentration, not a
+    // hardcoded proof score.
     assert!(
-        report.confidence_score >= 800_000,
-        "Should have high confidence, got: {}",
+        report.confidence_score > 0 && report.confidence_score <= 1_000_000,
+        "Confidence should be a valid millionths score, got: {}",
         report.confidence_score
     );
 
@@ -69,10 +70,20 @@ fn test_suspicious_extension_decision() {
     assert_eq!(manifest.bead_id, EXAMPLE_BEAD_ID);
     assert_eq!(manifest.proof_type, "guardplane_live_decision_example");
     assert_eq!(manifest.status, "completed");
-    assert_eq!(manifest.commands_executed, 1);
+    assert_eq!(manifest.commands_executed, 0);
     assert_eq!(manifest.events_recorded, 1);
     assert!(!manifest.evidence_hash.is_empty());
     assert!(!manifest.decision_hash.is_empty());
+
+    let commands_content = std::fs::read_to_string(&commands_path).expect("Should read commands");
+    assert!(
+        commands_content.contains("PROVISIONAL: synthetic example for documentation"),
+        "Synthetic command evidence should be explicitly marked provisional"
+    );
+    assert!(
+        commands_content.contains("\"exit_code\":null"),
+        "Provisional command evidence must not fabricate exit success"
+    );
 
     // Verify events structure
     let events_content = std::fs::read_to_string(&events_path).expect("Should read events");

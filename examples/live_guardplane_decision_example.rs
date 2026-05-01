@@ -23,6 +23,8 @@ use frankenengine_engine::proof_artifact::{
 
 pub const EXAMPLE_BEAD_ID: &str = "bd-1ypps";
 pub const EXAMPLE_COMPONENT: &str = "live_guardplane_decision_example";
+pub const PROVISIONAL_PROOF_COMMAND_NOTE: &str =
+    "PROVISIONAL: synthetic example for documentation; not a live proof command";
 
 /// Synthetic decision input representing a suspicious extension operation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -267,6 +269,30 @@ fn action_loss_percent(decision: &ActionDecision, action: ContainmentAction) -> 
         / 10_000.0
 }
 
+fn decision_confidence_millionths(decision: &ActionDecision, posterior: &Posterior) -> u64 {
+    let margin = decision.explanation.margin_millionths.max(0) as u64;
+    let runner_up = decision.runner_up_loss_millionths.max(1) as u64;
+    let margin_score = margin.saturating_mul(500_000) / runner_up;
+    let max_posterior = [
+        posterior.p_benign,
+        posterior.p_anomalous,
+        posterior.p_malicious,
+        posterior.p_unknown,
+    ]
+    .into_iter()
+    .max()
+    .unwrap_or(0)
+    .max(0) as u64;
+    let concentration_score = max_posterior
+        .saturating_sub(250_000)
+        .saturating_mul(500_000)
+        / 750_000;
+
+    margin_score
+        .saturating_add(concentration_score)
+        .clamp(1, 1_000_000)
+}
+
 /// Execute the guardplane decision pipeline and generate proof artifacts.
 pub fn execute_guardplane_decision_with_proof(
     input: &SyntheticDecisionInput,
@@ -286,6 +312,7 @@ pub fn execute_guardplane_decision_with_proof(
 
     // Step 3: Select optimal action
     let decision = selector.select(&posterior);
+    let confidence_millionths = decision_confidence_millionths(&decision, &posterior);
 
     // Step 4: Create proof artifacts
     let artifacts = ProofArtifactPaths::standard(output_dir)?;
@@ -312,14 +339,15 @@ pub fn execute_guardplane_decision_with_proof(
         loss_matrix_id: "security_focused_v1".to_string(),
         expected_losses: expected_losses_for_report(&decision),
         selected_action: decision.action.to_string(),
-        confidence_millionths: 850_000, // High confidence for this deterministic example
+        confidence_millionths,
         explanation: format!(
-            "{} selected with expected loss {} millionths; runner-up {} at {} millionths; margin {} millionths",
+            "{} selected with expected loss {} millionths; runner-up {} at {} millionths; margin {} millionths; confidence {} millionths computed from decision margin and posterior concentration",
             decision.action,
             decision.expected_loss_millionths,
             decision.runner_up_action,
             decision.runner_up_loss_millionths,
-            decision.explanation.margin_millionths
+            decision.explanation.margin_millionths,
+            confidence_millionths
         ),
     };
 
@@ -327,18 +355,19 @@ pub fn execute_guardplane_decision_with_proof(
     let events_content = serde_json::to_string(&decision_event)?;
     fs::write(&artifacts.events_jsonl, format!("{}\n", events_content))?;
 
-    // Write commands.txt (example command that would be executed)
+    // Write commands.txt with an explicit provisional marker instead of
+    // fabricating success for an external command that was never executed.
     let command = ProofCommand {
         command_id: "guardplane_decision_001".to_string(),
         display: format!(
-            "guardplane-decision --extension {} --operation {}",
+            "{PROVISIONAL_PROOF_COMMAND_NOTE}; in-process guardplane decision generated artifacts for extension {} operation {}",
             input.extension_id, input.operation_type
         ),
-        redacted_display: "guardplane-decision --extension [REDACTED] --operation [REDACTED]"
-            .to_string(),
+        redacted_display:
+            format!("{PROVISIONAL_PROOF_COMMAND_NOTE}; in-process guardplane decision generated artifacts for redacted extension and operation"),
         cwd: "/data/projects/franken_engine".to_string(),
-        exit_code: Some(0),
-        duration_ms: Some(15),
+        exit_code: None,
+        duration_ms: None,
     };
     fs::write(
         &artifacts.commands_txt,
@@ -373,7 +402,7 @@ pub fn execute_guardplane_decision_with_proof(
                 / (input.hostcall_evidence.len() as f64 * 10_000.0)
         ),
         recommendation: format!(
-            "Extension {} should be {} based on {} risk assessment (P(malicious)={:.1}%)",
+            "Extension {} should be {} based on {} risk assessment (P(malicious)={:.1}%). {}.",
             input.extension_id,
             decision.action,
             if posterior.p_malicious > 500_000 {
@@ -383,7 +412,8 @@ pub fn execute_guardplane_decision_with_proof(
             } else {
                 "low"
             },
-            posterior.p_malicious as f64 / 10_000.0
+            posterior.p_malicious as f64 / 10_000.0,
+            PROVISIONAL_PROOF_COMMAND_NOTE
         ),
     };
 
@@ -472,7 +502,7 @@ pub fn execute_guardplane_decision_with_proof(
         status: "completed".to_string(),
         generated_at_utc: timestamp_str,
         artifacts,
-        commands_executed: 1,
+        commands_executed: 0,
         events_recorded: 1,
         evidence_hash: evidence_hash.to_hex(),
         decision_hash: decision_hash.to_hex(),

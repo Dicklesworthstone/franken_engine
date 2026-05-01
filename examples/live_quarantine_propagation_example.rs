@@ -24,6 +24,8 @@ use frankenengine_engine::security_epoch::SecurityEpoch;
 
 pub const EXAMPLE_BEAD_ID: &str = "bd-1py8v";
 pub const EXAMPLE_COMPONENT: &str = "live_quarantine_propagation_example";
+pub const PROVISIONAL_PROOF_COMMAND_NOTE: &str =
+    "PROVISIONAL: synthetic example for documentation; not a live proof command";
 
 /// Synthetic security event that triggers quarantine.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -409,19 +411,19 @@ pub fn execute_quarantine_propagation_with_proof(
     }
     fs::write(&artifacts.events_jsonl, events_content)?;
 
-    // Write commands.txt
+    // Write commands.txt with an explicit provisional marker instead of
+    // fabricating success for an external command that was never executed.
     let command = ProofCommand {
         command_id: "quarantine_propagation_001".to_string(),
         display: format!(
-            "quarantine-propagate --extension {} --event {} --fleet-size {}",
+            "{PROVISIONAL_PROOF_COMMAND_NOTE}; in-process quarantine simulation generated artifacts for extension {} event {} fleet-size {}",
             event.extension_id, event.event_id, fleet.total_instances
         ),
         redacted_display:
-            "quarantine-propagate --extension [REDACTED] --event [REDACTED] --fleet-size [REDACTED]"
-                .to_string(),
+            format!("{PROVISIONAL_PROOF_COMMAND_NOTE}; in-process quarantine simulation generated artifacts for redacted extension, event, and fleet size"),
         cwd: "/data/projects/franken_engine".to_string(),
-        exit_code: Some(0),
-        duration_ms: Some(propagation_time.as_millis() as u64),
+        exit_code: None,
+        duration_ms: None,
     };
     fs::write(
         &artifacts.commands_txt,
@@ -456,9 +458,13 @@ pub fn execute_quarantine_propagation_with_proof(
             convergence_percentage
         ),
         next_steps: if convergence_achieved {
-            "Extension successfully quarantined fleet-wide. Monitor for containment effectiveness.".to_string()
+            format!(
+                "Extension successfully quarantined fleet-wide. Monitor for containment effectiveness. {PROVISIONAL_PROOF_COMMAND_NOTE}."
+            )
         } else {
-            "Convergence not achieved. Investigate network partitions or failed instances.".to_string()
+            format!(
+                "Convergence not achieved. Investigate network partitions or failed instances. {PROVISIONAL_PROOF_COMMAND_NOTE}."
+            )
         },
     };
 
@@ -593,7 +599,7 @@ pub fn execute_quarantine_propagation_with_proof(
         quarantine_evidence_hash: quarantine_evidence_hash.to_hex(),
         convergence_evidence_hash: convergence_evidence_hash.to_hex(),
         fleet_instances_count: fleet.total_instances as u32,
-        commands_executed: 1,
+        commands_executed: 0,
         events_recorded: events.len() as u32,
     };
 

@@ -74,7 +74,18 @@ fn test_malware_quarantine_propagation() {
     assert_eq!(manifest["proof_type"], "quarantine_propagation_convergence");
     assert_eq!(manifest["status"], "completed");
     assert_eq!(manifest["fleet_instances_count"], 5);
+    assert_eq!(manifest["commands_executed"], 0);
     assert!(manifest["events_recorded"].as_u64().unwrap() >= 3); // At least initiate, acks, converge
+
+    let commands_content = fs::read_to_string(&commands_path).expect("Should read commands");
+    assert!(
+        commands_content.contains("PROVISIONAL: synthetic example for documentation"),
+        "Synthetic command evidence should be explicitly marked provisional"
+    );
+    assert!(
+        commands_content.contains("\"exit_code\":null"),
+        "Provisional command evidence must not fabricate exit success"
+    );
 
     // Verify events structure
     let events_content = fs::read_to_string(&events_path).expect("Should read events");

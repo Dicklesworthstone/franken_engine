@@ -7259,10 +7259,7 @@ impl InterpreterCore {
     /// Execute a timer closure callback.
     ///
     /// This creates a minimal execution context to run the timer callback function.
-    fn execute_timer_closure(
-        &mut self,
-        closure: &ClosureValue,
-    ) -> Result<Value, InterpreterError> {
+    fn execute_timer_closure(&mut self, closure: &ClosureValue) -> Result<Value, InterpreterError> {
         // For now, we implement a simplified timer execution
         // In a full implementation, this would:
         // 1. Set up proper execution context with the closure's captured environment

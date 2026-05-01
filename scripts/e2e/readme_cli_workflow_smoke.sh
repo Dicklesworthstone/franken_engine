@@ -407,13 +407,14 @@ if ! command -v sha256sum >/dev/null 2>&1 && ! command -v shasum >/dev/null 2>&1
   require_tool openssl
 fi
 
-assert_readme_contains "frankenctl version"
+assert_readme_contains "cargo build --release -p frankenengine-engine --bin frankenctl"
+assert_readme_contains "./target/release/frankenctl version"
 assert_readme_contains "mkdir -p ./artifacts"
 assert_readme_contains "printf 'const answer = 40 + 2;\\n' > ./demo.js"
-assert_readme_contains "frankenctl compile --input ./demo.js --out ./artifacts/demo.compile.json --goal script"
-assert_readme_contains "frankenctl verify compile-artifact --input ./artifacts/demo.compile.json"
-assert_readme_contains "frankenctl run --input ./demo.js --extension-id demo-ext --out ./artifacts/demo.run.json"
-assert_readme_contains "frankenctl replay run --trace ./examples/05_replay_demo/sample_trace.json --mode strict --out ./artifacts/replay_report.json"
+assert_readme_contains "./target/release/frankenctl compile --input ./demo.js --out ./artifacts/demo.compile.json --goal script"
+assert_readme_contains "./target/release/frankenctl verify compile-artifact --input ./artifacts/demo.compile.json"
+assert_readme_contains "./target/release/frankenctl run --input ./demo.js --extension-id demo-ext --out ./artifacts/demo.run.json"
+assert_readme_contains "./target/release/frankenctl replay run --trace ./examples/05_replay_demo/sample_trace.json --mode strict --out ./artifacts/replay_report.json"
 
 frankenctl_bin="$(resolve_frankenctl_bin)"
 
@@ -422,7 +423,7 @@ mkdir -p "$workspace_dir" "$step_logs_dir"
 : >"$commands_path"
 
 run_step 0 version \
-  "frankenctl version" \
+  "./target/release/frankenctl version" \
   "__stdout__" \
   "$version_stdout_schema" \
   0 \
@@ -443,35 +444,35 @@ run_step 2 setup_demo_source \
   bash -c "printf 'const answer = 40 + 2;\n' > ./demo.js"
 
 run_step 3 compile \
-  "frankenctl compile --input ./demo.js --out ./artifacts/demo.compile.json --goal script" \
+  "./target/release/frankenctl compile --input ./demo.js --out ./artifacts/demo.compile.json --goal script" \
   "artifacts/demo.compile.json" \
   "$compile_artifact_schema" \
   0 \
   "$frankenctl_bin" compile --input ./demo.js --out ./artifacts/demo.compile.json --goal script
 
 run_step 4 verify_compile_artifact \
-  "frankenctl verify compile-artifact --input ./artifacts/demo.compile.json" \
+  "./target/release/frankenctl verify compile-artifact --input ./artifacts/demo.compile.json" \
   "__stdout__" \
   "$frankenctl_schema" \
   0 \
   "$frankenctl_bin" verify compile-artifact --input ./artifacts/demo.compile.json
 
 run_step 5 run \
-  "frankenctl run --input ./demo.js --extension-id demo-ext --out ./artifacts/demo.run.json" \
+  "./target/release/frankenctl run --input ./demo.js --extension-id demo-ext --out ./artifacts/demo.run.json" \
   "artifacts/demo.run.json" \
   "$frankenctl_schema" \
   0 \
   "$frankenctl_bin" run --input ./demo.js --extension-id demo-ext --out ./artifacts/demo.run.json
 
 run_step 6 prepare_replay_trace \
-  "frankenctl replay run --trace ./examples/05_replay_demo/sample_trace.json --mode strict --out ./artifacts/replay_report.json" \
+  "./target/release/frankenctl replay run --trace ./examples/05_replay_demo/sample_trace.json --mode strict --out ./artifacts/replay_report.json" \
   "examples/05_replay_demo/sample_trace.json" \
   "$fixture_schema" \
   0 \
   bash -c "mkdir -p ./examples/05_replay_demo && cp \"${root_dir}/examples/05_replay_demo/sample_trace.json\" ./examples/05_replay_demo/sample_trace.json"
 
 run_step 7 replay_run \
-  "frankenctl replay run --trace ./examples/05_replay_demo/sample_trace.json --mode strict --out ./artifacts/replay_report.json" \
+  "./target/release/frankenctl replay run --trace ./examples/05_replay_demo/sample_trace.json --mode strict --out ./artifacts/replay_report.json" \
   "artifacts/replay_report.json" \
   "$frankenctl_schema" \
   0 \

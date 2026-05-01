@@ -163,7 +163,7 @@ fn architecture_inventory_help_functionality() {
         let output = inventory_command()
             .arg(help_arg)
             .output()
-            .expect(&format!("run architecture inventory with {}", help_arg));
+            .unwrap_or_else(|_| panic!("run architecture inventory with {}", help_arg));
 
         // The binary doesn't explicitly handle help, so it treats as unknown and succeeds
         assert!(

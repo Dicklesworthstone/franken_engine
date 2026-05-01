@@ -321,6 +321,7 @@ impl RedTeamCompromiseRateMetricInput {
 }
 
 /// Creates a scenario with explicit outcomes (for real measurements)
+#[cfg(test)]
 fn scenario(
     scenario_id: impl Into<String>,
     attack_class: RedTeamAttackClass,
@@ -716,6 +717,25 @@ mod tests {
         );
         assert_eq!(report.metric_artifact.observed_value, 10);
         assert_eq!(report.metric_artifact.baseline, "node_and_bun");
+    }
+
+    #[test]
+    fn observed_scenario_helper_marks_real_measurement_mode() {
+        let scenario = scenario(
+            "observed-ambient-token-exfiltration",
+            RedTeamAttackClass::AmbientAuthorityEscape,
+            ScenarioOutcome::Failed,
+            ScenarioOutcome::Failed,
+            ScenarioOutcome::Inconclusive,
+        );
+
+        assert_eq!(
+            scenario.baseline_validation_mode,
+            BaselineDataValidationMode::Observed
+        );
+        assert!(!scenario.frankenengine_attacker_succeeded());
+        assert!(!scenario.node_attacker_succeeded());
+        assert!(!scenario.bun_attacker_succeeded());
     }
 
     #[test]

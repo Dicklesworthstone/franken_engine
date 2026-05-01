@@ -145,10 +145,8 @@ fn validate_scenario_enumeration(
     }
 
     // Validate coverage of security decision types (Allow, Deny, Escalate)
-    let security_critical_decisions: Vec<_> = decisions
-        .iter()
-        .filter(|d| d.security_critical)
-        .collect();
+    let security_critical_decisions: Vec<_> =
+        decisions.iter().filter(|d| d.security_critical).collect();
 
     if security_critical_decisions.is_empty() {
         return Err("No security-critical decisions found: coverage analysis requires security-critical scenarios".to_string());
@@ -175,7 +173,11 @@ fn validate_scenario_enumeration(
     if !missing_kinds.is_empty() {
         return Err(format!(
             "Incomplete decision kind coverage: missing {}. Security-critical replay coverage requires all decision types (Allow, Deny, Escalate) to be tested.",
-            missing_kinds.iter().map(|k| k.as_str()).collect::<Vec<_>>().join(", ")
+            missing_kinds
+                .iter()
+                .map(|k| k.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
         ));
     }
 
@@ -471,8 +473,12 @@ pub fn evaluate_replay_coverage_metric(
                 metric_id: DisruptiveMetricId::SecurityDecisionReplayCoverage,
                 threshold: DisruptiveMetricId::SecurityDecisionReplayCoverage.threshold(),
                 observed_value: 0, // Fail closed with 0% coverage
-                unit: DisruptiveMetricId::SecurityDecisionReplayCoverage.unit().to_string(),
-                baseline: DisruptiveMetricId::SecurityDecisionReplayCoverage.expected_baseline().to_string(),
+                unit: DisruptiveMetricId::SecurityDecisionReplayCoverage
+                    .unit()
+                    .to_string(),
+                baseline: DisruptiveMetricId::SecurityDecisionReplayCoverage
+                    .expected_baseline()
+                    .to_string(),
                 candidate: "franken_engine".to_string(),
                 denominator_id: "invalid_enumeration".to_string(),
                 scenario_set: input.scenario_set.clone(),

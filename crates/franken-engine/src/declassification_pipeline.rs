@@ -587,6 +587,10 @@ impl DeclassificationPipeline {
             authorized_by: vk,
             replay_linkage: request.trace_id.clone(),
             timestamp_ms: request.timestamp_ms,
+            not_before_ms: request.timestamp_ms,
+            not_after_ms: request
+                .timestamp_ms
+                .saturating_add(self.config.emergency_max_duration_ms),
             schema_version: IfcSchemaVersion::CURRENT,
             signature: Signature::from_bytes(SIGNATURE_SENTINEL),
         };

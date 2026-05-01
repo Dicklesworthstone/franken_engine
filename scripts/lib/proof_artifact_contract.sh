@@ -84,7 +84,7 @@ proof_contract_write_redaction_policy() {
     '{
       schema_version: $schema_version,
       replacement: "<redacted>",
-      env_key_fragments: ["TOKEN", "SECRET", "PASSWORD", "CREDENTIAL", "AUTH", "KEY"],
+      env_key_fragments: ["API_KEY", "ACCESS_TOKEN", "TOKEN", "_TOKEN", "SECRET", "PASSWORD", "CREDENTIAL", "AUTH", "KEY", "_KEY", "BEARER", "OAUTH"],
       literal_patterns: ["Bearer <token>"]
     }' >"$policy_path"
 }

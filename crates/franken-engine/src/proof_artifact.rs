@@ -359,7 +359,11 @@ pub fn redact_text(input: &str, policy: &RedactionPolicy) -> String {
     for token in input.split_whitespace() {
         let is_literal_marker = is_literal_marker(token, &literal_markers);
         if redact_next && !is_literal_marker {
-            redacted.push(policy.replacement.clone());
+            if let Some(redacted_token) = redact_inline_bearer(token, &policy.replacement) {
+                redacted.push(redacted_token);
+            } else {
+                redacted.push(policy.replacement.clone());
+            }
             redact_next = false;
             continue;
         }

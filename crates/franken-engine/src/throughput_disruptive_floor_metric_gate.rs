@@ -6,10 +6,11 @@
 //! artifact consumed by `disruptive_floor_metric_gate`.
 
 use serde::{Deserialize, Serialize};
-use subtle::ConstantTimeEq;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
+use subtle::ConstantTimeEq;
+use thiserror::Error;
 
 use crate::disruptive_floor_metric_gate::{DisruptiveMetricId, MetricArtifact};
 
@@ -63,7 +64,10 @@ pub fn load_baseline_manifest() -> Result<BaselineManifest, String> {
         }
     }
 
-    Err(format!("Baseline manifest not found at any of: {}", potential_paths.join(", ")))
+    Err(format!(
+        "Baseline manifest not found at any of: {}",
+        potential_paths.join(", ")
+    ))
 }
 
 /// Detect fake SHA256 hash patterns that indicate placeholder/test data rather than real measurements
@@ -221,11 +225,9 @@ impl ThroughputEvidence {
 /// Constant-time comparison to check if `a >= b` for little-endian byte arrays.
 /// Prevents timing attacks on threshold comparisons.
 fn constant_time_greater_or_equal(a: &[u8], b: &[u8]) -> bool {
-    assert_eq!(
-        a.len(),
-        b.len(),
-        "Arrays must have equal length for comparison"
-    );
+    if a.len() != b.len() {
+        return false;
+    }
 
     let mut greater = 0u8;
     let mut equal = 1u8;
@@ -375,10 +377,115 @@ pub struct ThroughputMetricInput {
     pub evaluation_start_monotonic_ns: u64, // Monotonic timestamp for evaluation start
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ThroughputMetricDecision {
+    Pass,
+    Targeted,
+    FailClosed,
+}
+
+impl ThroughputMetricDecision {
+    pub const fn as_outcome(self) -> &'static str {
+        match self {
+            Self::Pass => "pass",
+            Self::Targeted => "targeted",
+            Self::FailClosed => "fail",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ThroughputMetricStructuredEvent {
+    pub metric_id: DisruptiveMetricId,
+    pub proof_manifest_id: String,
+    pub command_id: String,
+    pub scenario_id: String,
+    pub runtime_denominator: Option<RuntimeDenominator>,
+    pub measurement_status: Option<ThroughputMeasurementStatus>,
+    pub throughput_ratio_millionths: u64,
+    pub weighted_ratio_millionths: u64,
+    pub threshold_millionths: u64,
+    pub command: String,
+    pub exit_code: i32,
+    pub decision: String,
+    pub reason: String,
+    pub remediation: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum ThroughputMetricGateError {
+    #[error("evidence {evidence_index} contains fake measurement data patterns")]
+    FakeMeasurementData {
+        evidence_index: usize,
+        scenario_id: String,
+    },
+    #[error("evidence {evidence_index} has insufficient evidence for claimed measurement status")]
+    InsufficientMeasurementEvidence {
+        evidence_index: usize,
+        scenario_id: String,
+    },
+    #[error("ratio computation failed: {0}")]
+    RatioComputation(String),
+    #[error("clock error: {0}")]
+    Clock(String),
+    #[error("timestamp validation failed: {0}")]
+    TimestampValidation(String),
+    #[error("benchmark window validation failed: {0}")]
+    BenchmarkWindowValidation(String),
+}
+
+impl ThroughputMetricGateError {
+    pub const fn reason_code(&self) -> &'static str {
+        match self {
+            Self::FakeMeasurementData { .. } => "fake_measurement_data_detected",
+            Self::InsufficientMeasurementEvidence { .. } => "insufficient_measurement_evidence",
+            Self::RatioComputation(_) => "ratio_computation_failed",
+            Self::Clock(_) => "clock_error",
+            Self::TimestampValidation(_) => "timestamp_validation_failed",
+            Self::BenchmarkWindowValidation(_) => "benchmark_window_validation_failed",
+        }
+    }
+
+    pub const fn remediation(&self) -> &'static str {
+        match self {
+            Self::FakeMeasurementData { .. } => {
+                "replace placeholder throughput evidence with fresh measured output"
+            }
+            Self::InsufficientMeasurementEvidence { .. } => {
+                "attach bead id, commit hash, and focused test evidence for verified measurements"
+            }
+            Self::RatioComputation(_) => {
+                "provide at least one valid Node or Bun denominator throughput measurement"
+            }
+            Self::Clock(_) | Self::TimestampValidation(_) => {
+                "rerun the metric gate with monotonic benchmark timestamps inside the allowed window"
+            }
+            Self::BenchmarkWindowValidation(_) => {
+                "rerun the metric gate with the verifier-selected benchmark window seed"
+            }
+        }
+    }
+
+    fn scenario_id(&self) -> Option<&str> {
+        match self {
+            Self::FakeMeasurementData { scenario_id, .. }
+            | Self::InsufficientMeasurementEvidence { scenario_id, .. } => Some(scenario_id),
+            Self::RatioComputation(_)
+            | Self::Clock(_)
+            | Self::TimestampValidation(_)
+            | Self::BenchmarkWindowValidation(_) => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ThroughputMetricReport {
     pub schema_version: String,
+    pub component: String,
     pub bead_id: String,
+    pub decision: ThroughputMetricDecision,
+    pub reason: String,
     pub overall_outcome: String,        // "pass" | "fail" | "targeted"
     pub weighted_ratio_millionths: u64, // Geometric mean across denominators
     pub evidence_count: u64,
@@ -391,6 +498,7 @@ pub struct ThroughputMetricReport {
     pub generated_at_utc: String,
     pub uses_placeholder_baselines: bool,
     pub baseline_warning: Option<String>,
+    pub events: Vec<ThroughputMetricStructuredEvent>,
 }
 
 pub fn compute_weighted_throughput_ratio(evidence: &[ThroughputEvidence]) -> Result<u64, String> {
@@ -453,27 +561,35 @@ fn geometric_mean(values: &[u64]) -> Result<u64, String> {
     Ok(geomean as u64)
 }
 
-pub fn evaluate_throughput_metric(
+pub fn evaluate_throughput_metric(input: &ThroughputMetricInput) -> ThroughputMetricReport {
+    match evaluate_throughput_metric_checked(input) {
+        Ok(report) => report,
+        Err(error) => fail_closed_throughput_report(input, error),
+    }
+}
+
+pub fn evaluate_throughput_metric_checked(
     input: &ThroughputMetricInput,
-) -> Result<ThroughputMetricReport, String> {
+) -> Result<ThroughputMetricReport, ThroughputMetricGateError> {
     // Validate evidence for fake data patterns and insufficient evidence
     for (i, evidence) in input.evidence.iter().enumerate() {
         if has_fake_measurement_data(evidence) {
-            return Err(format!(
-                "Evidence {} contains fake measurement data patterns",
-                i
-            ));
+            return Err(ThroughputMetricGateError::FakeMeasurementData {
+                evidence_index: i,
+                scenario_id: evidence.scenario_id.clone(),
+            });
         }
 
         if !validate_measurement_evidence(evidence) {
-            return Err(format!(
-                "Evidence {} has insufficient evidence for claimed measurement status",
-                i
-            ));
+            return Err(ThroughputMetricGateError::InsufficientMeasurementEvidence {
+                evidence_index: i,
+                scenario_id: evidence.scenario_id.clone(),
+            });
         }
     }
 
-    let weighted_ratio = compute_weighted_throughput_ratio(&input.evidence)?;
+    let weighted_ratio = compute_weighted_throughput_ratio(&input.evidence)
+        .map_err(ThroughputMetricGateError::RatioComputation)?;
 
     let passing_count = input
         .evidence
@@ -523,7 +639,7 @@ pub fn evaluate_throughput_metric(
     // Validate timing attack protections before making pass/fail decision
     let current_monotonic_ns = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|e| format!("Clock error: {}", e))?
+        .map_err(|e| ThroughputMetricGateError::Clock(e.to_string()))?
         .as_nanos() as u64;
 
     // Validate monotonic timestamp
@@ -531,10 +647,12 @@ pub fn evaluate_throughput_metric(
         input.evaluation_start_monotonic_ns,
         current_monotonic_ns,
         input.max_benchmark_duration_ms * 1_000_000, // Convert ms to ns
-    )?;
+    )
+    .map_err(ThroughputMetricGateError::TimestampValidation)?;
 
     // Validate benchmark window pinning
-    validate_benchmark_window_pinning(&input.evidence, &input.benchmark_window_seed)?;
+    validate_benchmark_window_pinning(&input.evidence, &input.benchmark_window_seed)
+        .map_err(ThroughputMetricGateError::BenchmarkWindowValidation)?;
 
     // Check if all evidence is verified (not targeted or unmeasured)
     let all_evidence_verified = input
@@ -542,7 +660,7 @@ pub fn evaluate_throughput_metric(
         .iter()
         .all(|e| e.measurement_status == ThroughputMeasurementStatus::Verified);
 
-    let (overall_outcome, baseline_warning) = if uses_placeholder_baselines
+    let (decision, reason, baseline_warning) = if uses_placeholder_baselines
         || !all_evidence_verified
     {
         let mut reasons = Vec::new();
@@ -579,7 +697,11 @@ pub fn evaluate_throughput_metric(
             "TARGETED performance claim: {}. Real ≥3x throughput claim requires verified measurements with live baseline comparison and complete evidence chain (bead_id + commit_hash + test_name).",
             reasons.join(", ")
         );
-        ("targeted", Some(warning))
+        (
+            ThroughputMetricDecision::Targeted,
+            "targeted_or_unverified_throughput_evidence".to_string(),
+            Some(warning),
+        )
     } else {
         // Use constant-time comparison to prevent timing attacks on pass/fail determination
         let ratio_bytes = weighted_ratio.to_le_bytes();
@@ -587,9 +709,17 @@ pub fn evaluate_throughput_metric(
         let meets_threshold = constant_time_greater_or_equal(&ratio_bytes, &threshold_bytes);
 
         if meets_threshold {
-            ("pass", None)
+            (
+                ThroughputMetricDecision::Pass,
+                "throughput_floor_verified".to_string(),
+                None,
+            )
         } else {
-            ("fail", None)
+            (
+                ThroughputMetricDecision::FailClosed,
+                "throughput_ratio_below_floor".to_string(),
+                None,
+            )
         }
     };
 
@@ -601,8 +731,11 @@ pub fn evaluate_throughput_metric(
 
     Ok(ThroughputMetricReport {
         schema_version: SCHEMA_VERSION.to_string(),
+        component: COMPONENT.to_string(),
         bead_id: input.bead_id.clone(),
-        overall_outcome: overall_outcome.to_string(),
+        decision,
+        reason: reason.clone(),
+        overall_outcome: decision.as_outcome().to_string(),
         weighted_ratio_millionths: weighted_ratio,
         evidence_count: input.evidence.len() as u64,
         passing_evidence_count: passing_count,
@@ -614,7 +747,141 @@ pub fn evaluate_throughput_metric(
         generated_at_utc: generate_secure_timestamp(),
         uses_placeholder_baselines,
         baseline_warning,
+        events: throughput_metric_events(input, weighted_ratio, decision, &reason),
     })
+}
+
+fn fail_closed_throughput_report(
+    input: &ThroughputMetricInput,
+    error: ThroughputMetricGateError,
+) -> ThroughputMetricReport {
+    let reason = format!("{}: {}", error.reason_code(), error);
+    let verification_commands = input
+        .evidence
+        .iter()
+        .map(|e| e.verification_command.clone())
+        .collect();
+    let node_evidence_count = input
+        .evidence
+        .iter()
+        .filter(|e| e.runtime_denominator == RuntimeDenominator::Node)
+        .count() as u64;
+    let bun_evidence_count = input
+        .evidence
+        .iter()
+        .filter(|e| e.runtime_denominator == RuntimeDenominator::Bun)
+        .count() as u64;
+    let uses_placeholder_baselines = input
+        .evidence
+        .iter()
+        .any(|e| e.runtime_denominator.is_placeholder_baseline());
+
+    ThroughputMetricReport {
+        schema_version: SCHEMA_VERSION.to_string(),
+        component: COMPONENT.to_string(),
+        bead_id: input.bead_id.clone(),
+        decision: ThroughputMetricDecision::FailClosed,
+        reason: reason.clone(),
+        overall_outcome: ThroughputMetricDecision::FailClosed
+            .as_outcome()
+            .to_string(),
+        weighted_ratio_millionths: 0,
+        evidence_count: input.evidence.len() as u64,
+        passing_evidence_count: 0,
+        node_evidence_count,
+        bun_evidence_count,
+        node_avg_ratio_millionths: 0,
+        bun_avg_ratio_millionths: 0,
+        verification_commands,
+        generated_at_utc: generate_secure_timestamp(),
+        uses_placeholder_baselines,
+        baseline_warning: Some(format!(
+            "FAIL_CLOSED throughput metric gate: {}. {}.",
+            reason,
+            error.remediation()
+        )),
+        events: vec![throughput_metric_error_event(input, &error, &reason)],
+    }
+}
+
+fn throughput_metric_events(
+    input: &ThroughputMetricInput,
+    weighted_ratio_millionths: u64,
+    report_decision: ThroughputMetricDecision,
+    report_reason: &str,
+) -> Vec<ThroughputMetricStructuredEvent> {
+    input
+        .evidence
+        .iter()
+        .map(|evidence| {
+            let meets_floor = evidence.meets_floor_threshold(input.floor_ratio_millionths);
+            let reason = if report_decision == ThroughputMetricDecision::Targeted {
+                "targeted_or_unverified_throughput_evidence"
+            } else if meets_floor {
+                "throughput_floor_met"
+            } else {
+                report_reason
+            };
+            ThroughputMetricStructuredEvent {
+                metric_id: DisruptiveMetricId::WeightedThroughputNodeBun,
+                proof_manifest_id: format!("{COMPONENT}:{}", input.scenario_set),
+                command_id: format!("throughput:{}", evidence.scenario_id),
+                scenario_id: evidence.scenario_id.clone(),
+                runtime_denominator: Some(evidence.runtime_denominator),
+                measurement_status: Some(evidence.measurement_status),
+                throughput_ratio_millionths: evidence.throughput_ratio_millionths,
+                weighted_ratio_millionths,
+                threshold_millionths: input.floor_ratio_millionths,
+                command: evidence.verification_command.clone(),
+                exit_code: 0,
+                decision: if meets_floor {
+                    "meets_floor".to_string()
+                } else {
+                    "below_floor".to_string()
+                },
+                reason: reason.to_string(),
+                remediation: if report_decision == ThroughputMetricDecision::Pass {
+                    "none".to_string()
+                } else {
+                    "rerun the throughput gate with verified live Node and Bun denominator evidence"
+                        .to_string()
+                },
+            }
+        })
+        .collect()
+}
+
+fn throughput_metric_error_event(
+    input: &ThroughputMetricInput,
+    error: &ThroughputMetricGateError,
+    reason: &str,
+) -> ThroughputMetricStructuredEvent {
+    let evidence = error
+        .scenario_id()
+        .and_then(|scenario_id| input.evidence.iter().find(|e| e.scenario_id == scenario_id));
+
+    ThroughputMetricStructuredEvent {
+        metric_id: DisruptiveMetricId::WeightedThroughputNodeBun,
+        proof_manifest_id: format!("{COMPONENT}:{}", input.scenario_set),
+        command_id: evidence
+            .map(|e| format!("throughput:{}", e.scenario_id))
+            .unwrap_or_else(|| "throughput:input_validation".to_string()),
+        scenario_id: evidence
+            .map(|e| e.scenario_id.clone())
+            .unwrap_or_else(|| "input_validation".to_string()),
+        runtime_denominator: evidence.map(|e| e.runtime_denominator),
+        measurement_status: evidence.map(|e| e.measurement_status),
+        throughput_ratio_millionths: evidence.map_or(0, |e| e.throughput_ratio_millionths),
+        weighted_ratio_millionths: 0,
+        threshold_millionths: input.floor_ratio_millionths,
+        command: evidence
+            .map(|e| e.verification_command.clone())
+            .unwrap_or_else(|| "evaluate_throughput_metric".to_string()),
+        exit_code: 1,
+        decision: "fail_closed".to_string(),
+        reason: reason.to_string(),
+        remediation: error.remediation().to_string(),
+    }
 }
 
 pub fn create_throughput_metric_artifact(
@@ -649,6 +916,14 @@ pub fn create_throughput_metric_artifact(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn recent_evaluation_start_ns() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+            .saturating_sub(500_000_000) as u64
+    }
 
     #[test]
     fn test_calculate_ratio_millionths() {
@@ -824,10 +1099,12 @@ mod tests {
             generated_at_utc: "2026-05-01T00:00:00Z".to_string(),
             benchmark_window_seed: [2u8; 32],
             max_benchmark_duration_ms: DEFAULT_MAX_BENCHMARK_DURATION_MS,
-            evaluation_start_monotonic_ns: 1000000000,
+            evaluation_start_monotonic_ns: recent_evaluation_start_ns(),
         };
 
-        let report = evaluate_throughput_metric(&input).unwrap();
+        let report = evaluate_throughput_metric(&input);
+        assert_eq!(report.decision, ThroughputMetricDecision::Targeted);
+        assert_eq!(report.reason, "targeted_or_unverified_throughput_evidence");
         assert_eq!(report.overall_outcome, "targeted");
         assert_eq!(report.weighted_ratio_millionths, 1_018_923);
         assert_eq!(report.evidence_count, 1);
@@ -863,7 +1140,10 @@ mod tests {
 
         let report = ThroughputMetricReport {
             schema_version: SCHEMA_VERSION.to_string(),
+            component: COMPONENT.to_string(),
             bead_id: BEAD_ID.to_string(),
+            decision: ThroughputMetricDecision::Targeted,
+            reason: "targeted_or_unverified_throughput_evidence".to_string(),
             overall_outcome: "targeted".to_string(),
             weighted_ratio_millionths: 1_100_000,
             evidence_count: 2,
@@ -876,6 +1156,7 @@ mod tests {
             generated_at_utc: "2026-05-01T00:00:00Z".to_string(),
             uses_placeholder_baselines: true,
             baseline_warning: Some("TARGETED performance claim".to_string()),
+            events: vec![],
         };
 
         let artifact =
@@ -1227,13 +1508,18 @@ mod tests {
             evaluation_start_monotonic_ns: 1000000000,
         };
 
-        let result = evaluate_throughput_metric(&input);
+        let result = evaluate_throughput_metric_checked(&input);
         assert!(result.is_err());
         assert!(
             result
                 .unwrap_err()
+                .to_string()
                 .contains("fake measurement data patterns")
         );
+        let report = evaluate_throughput_metric(&input);
+        assert_eq!(report.decision, ThroughputMetricDecision::FailClosed);
+        assert!(report.reason.contains("fake_measurement_data_detected"));
+        assert_eq!(report.events[0].decision, "fail_closed");
     }
 
     #[test]
@@ -1274,9 +1560,17 @@ mod tests {
             evaluation_start_monotonic_ns: 1000000000,
         };
 
-        let result = evaluate_throughput_metric(&input);
+        let result = evaluate_throughput_metric_checked(&input);
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("insufficient evidence"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("insufficient evidence")
+        );
+        let report = evaluate_throughput_metric(&input);
+        assert_eq!(report.decision, ThroughputMetricDecision::FailClosed);
+        assert!(report.reason.contains("insufficient_measurement_evidence"));
     }
 
     #[test]
@@ -1314,10 +1608,11 @@ mod tests {
             generated_at_utc: "2026-05-01T00:00:00Z".to_string(),
             benchmark_window_seed: [4u8; 32],
             max_benchmark_duration_ms: DEFAULT_MAX_BENCHMARK_DURATION_MS,
-            evaluation_start_monotonic_ns: 1000000000,
+            evaluation_start_monotonic_ns: recent_evaluation_start_ns(),
         };
 
-        let report = evaluate_throughput_metric(&input).unwrap();
+        let report = evaluate_throughput_metric(&input);
+        assert_eq!(report.decision, ThroughputMetricDecision::Targeted);
         assert_eq!(report.overall_outcome, "targeted");
         assert!(report.baseline_warning.is_some());
         assert!(
@@ -1342,7 +1637,10 @@ mod tests {
         match load_baseline_manifest() {
             Ok(manifest) => {
                 // If manifest loads successfully, validate its structure
-                assert_eq!(manifest.schema_version, "franken-engine.throughput-baselines.v1");
+                assert_eq!(
+                    manifest.schema_version,
+                    "franken-engine.throughput-baselines.v1"
+                );
                 assert!(manifest.runtimes.contains_key("node"));
                 assert!(manifest.runtimes.contains_key("bun"));
                 assert!(manifest.runtimes.contains_key("frankenengine"));
@@ -1393,8 +1691,14 @@ mod tests {
                 && manifest.runtimes.contains_key("node")
                 && manifest.runtimes.contains_key("bun")
             {
-                assert!(!node_is_placeholder, "Should detect live measurements when manifest has them");
-                assert!(!bun_is_placeholder, "Should detect live measurements when manifest has them");
+                assert!(
+                    !node_is_placeholder,
+                    "Should detect live measurements when manifest has them"
+                );
+                assert!(
+                    !bun_is_placeholder,
+                    "Should detect live measurements when manifest has them"
+                );
             }
         }
     }
@@ -1445,7 +1749,7 @@ mod tests {
         };
 
         // Should succeed with valid timing protections
-        let report = evaluate_throughput_metric(&input).unwrap();
+        let report = evaluate_throughput_metric(&input);
         assert_eq!(report.overall_outcome, "targeted"); // Uses placeholder baselines
         assert_eq!(report.weighted_ratio_millionths, 1_018_923);
     }

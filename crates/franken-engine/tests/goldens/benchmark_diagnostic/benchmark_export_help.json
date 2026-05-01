@@ -1,0 +1,7 @@
+{
+  "exit_code": 0,
+  "stdout": "Export benchmark evidence bundles to JSON/TOML formats\n\nUsage: franken-benchmark-evidence-export [OPTIONS] --input <FILE> --output <FILE>\n\nOptions:\n  -i, --input <FILE>                      Input evidence bundle JSON file\n  -o, --output <FILE>                     Output file path\n  -f, --format <FORMAT>                   Output format: json or toml [default: json]\n  -t, --type <TYPE>                       Export type: bundle or report [default: bundle]\n      --gate-integration <GATE_MANIFEST>  Path to benchmark gate manifest for integration\n  -v, --verbose                           Verbose output\n  -h, --help                              Print help\n  -V, --version                           Print version\n",
+  "stderr": "",
+  "command": "franken-benchmark-evidence-export --help",
+  "category": "benchmark"
+}

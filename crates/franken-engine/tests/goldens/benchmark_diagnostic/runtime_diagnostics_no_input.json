@@ -1,0 +1,7 @@
+{
+  "exit_code": 2,
+  "stdout": "",
+  "stderr": "missing required --input <path>\n",
+  "command": "runtime_diagnostics diagnostics",
+  "category": "diagnostic"
+}

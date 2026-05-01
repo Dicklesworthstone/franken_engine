@@ -4,8 +4,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use frankenengine_engine::containment_latency_metric_gate::{
-    CONTAINMENT_LATENCY_THRESHOLD_MS, ContainmentLatencyDecision, ContainmentLatencyMetricInput,
-    ContainmentLatencyStructuredEvent, evaluate_containment_latency_metric,
+    CONTAINMENT_LATENCY_THRESHOLD_MS, CONTAINMENT_LATENCY_THRESHOLD_US, ContainmentLatencyDecision,
+    ContainmentLatencyMetricInput, ContainmentLatencyStructuredEvent,
+    evaluate_containment_latency_metric,
 };
 use frankenengine_engine::disruptive_floor_metric_gate::{
     DisruptiveFloorGateConfig, DisruptiveMetricId, GateDecisionState, MetricArtifact,
@@ -41,7 +42,9 @@ fn containment_latency_fixture_loads_and_passes() {
     assert_eq!(report.decision, ContainmentLatencyDecision::Pass);
     assert_eq!(report.total_signal_events, 3);
     assert_eq!(report.contained_signal_events, 3);
-    assert_eq!(report.median_latency_ms, Some(120));
+    assert_eq!(report.median_latency_us, Some(120_456));
+    assert_eq!(report.median_latency_ms, Some(121));
+    assert_eq!(report.threshold_us, CONTAINMENT_LATENCY_THRESHOLD_US);
     assert_eq!(report.threshold_ms, CONTAINMENT_LATENCY_THRESHOLD_MS);
     assert_eq!(report.coverage_millionths, 1_000_000);
     assert!(report.invalid_trace_ids.is_empty());
@@ -51,12 +54,17 @@ fn containment_latency_fixture_loads_and_passes() {
         event.metric_id,
         DisruptiveMetricId::ContainmentLatencyMedianMs
     );
+    assert_eq!(event.signal_detected_at_us, 1_000_000);
+    assert_eq!(event.containment_action_applied_at_us, Some(1_080_123));
+    assert_eq!(event.latency_us, Some(80_123));
+    assert_eq!(event.median_latency_us, Some(120_456));
+    assert_eq!(event.threshold_us, 250_000);
     assert_eq!(event.signal_detected_at_ms, 1_000);
     assert_eq!(event.containment_action_applied_at_ms, Some(1_080));
-    assert_eq!(event.latency_ms, Some(80));
-    assert_eq!(event.median_latency_ms, Some(120));
+    assert_eq!(event.latency_ms, Some(81));
+    assert_eq!(event.median_latency_ms, Some(121));
     assert_eq!(event.threshold_ms, 250);
-    assert_eq!(event.clock_source, "monotonic_ms");
+    assert_eq!(event.clock_source, "monotonic_us");
     assert_eq!(event.redaction_status, "redacted");
 }
 
@@ -130,7 +138,7 @@ fn script_emits_pass_and_fail_closed_proof_artifact_bundles() {
         metric_artifact.metric_id,
         DisruptiveMetricId::ContainmentLatencyMedianMs
     );
-    assert_eq!(metric_artifact.observed_value, 120);
+    assert_eq!(metric_artifact.observed_value, 121);
     assert_eq!(metric_artifact.threshold, 250);
     assert_eq!(metric_artifact.redaction_status, "redacted");
 
@@ -143,6 +151,7 @@ fn script_emits_pass_and_fail_closed_proof_artifact_bundles() {
     let event: ContainmentLatencyStructuredEvent =
         serde_json::from_str(&event_line).expect("structured event should parse");
     assert_eq!(event.signal_id, "ambient-write-denied");
-    assert_eq!(event.latency_ms, Some(80));
+    assert_eq!(event.latency_us, Some(80_123));
+    assert_eq!(event.latency_ms, Some(81));
     assert_eq!(event.decision, "contained");
 }

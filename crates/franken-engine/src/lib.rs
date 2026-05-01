@@ -124,6 +124,7 @@ pub mod deterministic_replay;
 pub mod deterministic_serde;
 pub mod deterministic_sim_scheduler;
 pub mod disruption_scorecard;
+pub mod disruptive_floor_metric_gate;
 pub mod distribution_shift_monitor;
 pub mod docs_accuracy_gate;
 pub mod dp_budget_accountant;

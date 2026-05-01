@@ -1,0 +1,36 @@
+{
+  "schema_version": "franken-engine.red-team-scenario.v1",
+  "name": "shell_command_injection_package_script",
+  "title": "Shell command injection through package-script interpolation",
+  "baseline_version": "node-bun-frankenengine-red-team-v1",
+  "attack_vector": "shell_command_injection",
+  "cwe": ["CWE-78", "CWE-94"],
+  "payload": {
+    "program": "shell_command_injection_package_script.js",
+    "entrypoint": "node shell_command_injection_package_script.js",
+    "input": "package script appends an attacker-controlled shell fragment after a trusted command",
+    "success_criteria": "stdout contains franken-redteam-shell-injection"
+  },
+  "expected_outcome": {
+    "node": {
+      "outcome": "succeeds",
+      "observable": "child_process.execSync runs the interpolated shell fragment"
+    },
+    "bun": {
+      "outcome": "succeeds",
+      "observable": "Node-compatible child_process shell execution runs the fragment"
+    },
+    "frankenengine": {
+      "outcome": "fail_closed",
+      "observable": "process-spawn capability is denied before shell evaluation",
+      "denial_reason": "process_spawn_capability_denied"
+    }
+  },
+  "measurement": {
+    "success_signal": "attack_succeeded == true",
+    "failure_signal": "process spawn denied or stdout lacks injected marker"
+  },
+  "reproduction": [
+    "node crates/franken-engine/tests/red_team_scenarios/shell_command_injection_package_script.js"
+  ]
+}

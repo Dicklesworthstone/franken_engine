@@ -1,0 +1,36 @@
+{
+  "schema_version": "franken-engine.red-team-scenario.v1",
+  "name": "supply_chain_backdoor_execution",
+  "title": "Supply-chain backdoor through package lifecycle script execution",
+  "baseline_version": "node-bun-frankenengine-red-team-v1",
+  "attack_vector": "supply_chain_lifecycle_execution",
+  "cwe": ["CWE-829", "CWE-94"],
+  "payload": {
+    "program": "supply_chain_backdoor_execution.js",
+    "entrypoint": "node supply_chain_backdoor_execution.js",
+    "input": "postinstall-style lifecycle hook spawns a child JavaScript process",
+    "success_criteria": "child process emits franken-redteam-postinstall-backdoor"
+  },
+  "expected_outcome": {
+    "node": {
+      "outcome": "succeeds",
+      "observable": "package lifecycle code can spawn a child process"
+    },
+    "bun": {
+      "outcome": "succeeds",
+      "observable": "package lifecycle code can spawn a child process"
+    },
+    "frankenengine": {
+      "outcome": "fail_closed",
+      "observable": "untrusted package lifecycle code has no process-spawn capability",
+      "denial_reason": "package_lifecycle_process_spawn_denied"
+    }
+  },
+  "measurement": {
+    "success_signal": "attack_succeeded == true",
+    "failure_signal": "child process spawn denied or marker absent"
+  },
+  "reproduction": [
+    "node crates/franken-engine/tests/red_team_scenarios/supply_chain_backdoor_execution.js"
+  ]
+}

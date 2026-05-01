@@ -1,0 +1,36 @@
+{
+  "schema_version": "franken-engine.red-team-scenario.v1",
+  "name": "prototype_pollution_capability_escape",
+  "title": "Prototype pollution used to smuggle ambient-authority flags",
+  "baseline_version": "node-bun-frankenengine-red-team-v1",
+  "attack_vector": "prototype_pollution",
+  "cwe": ["CWE-1321", "CWE-915"],
+  "payload": {
+    "program": "prototype_pollution_capability_escape.js",
+    "entrypoint": "node prototype_pollution_capability_escape.js",
+    "input": "JSON object with __proto__.canReachAmbientAuthority set to true",
+    "success_criteria": "a fresh object inherits the attacker-controlled capability flag"
+  },
+  "expected_outcome": {
+    "node": {
+      "outcome": "succeeds",
+      "observable": "vulnerable merge pollutes Object.prototype"
+    },
+    "bun": {
+      "outcome": "succeeds",
+      "observable": "vulnerable merge pollutes Object.prototype"
+    },
+    "frankenengine": {
+      "outcome": "fail_closed",
+      "observable": "__proto__ mutation cannot grant or amplify capabilities",
+      "denial_reason": "prototype_capability_amplification_denied"
+    }
+  },
+  "measurement": {
+    "success_signal": "attack_succeeded == true",
+    "failure_signal": "fresh object does not inherit attacker-controlled flag"
+  },
+  "reproduction": [
+    "node crates/franken-engine/tests/red_team_scenarios/prototype_pollution_capability_escape.js"
+  ]
+}

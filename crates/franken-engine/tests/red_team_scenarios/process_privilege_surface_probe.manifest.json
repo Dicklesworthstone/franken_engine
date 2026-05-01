@@ -1,0 +1,36 @@
+{
+  "schema_version": "franken-engine.red-team-scenario.v1",
+  "name": "process_privilege_surface_probe",
+  "title": "Process privilege surface reachable from untrusted code",
+  "baseline_version": "node-bun-frankenengine-red-team-v1",
+  "attack_vector": "process_privilege_surface",
+  "cwe": ["CWE-250", "CWE-269"],
+  "payload": {
+    "program": "process_privilege_surface_probe.js",
+    "entrypoint": "node process_privilege_surface_probe.js",
+    "input": "probe for UID APIs and ability to spawn a child process with inherited privileges",
+    "success_criteria": "process UID APIs are reachable and a child process starts"
+  },
+  "expected_outcome": {
+    "node": {
+      "outcome": "succeeds",
+      "observable": "process UID APIs and child process spawning are available"
+    },
+    "bun": {
+      "outcome": "succeeds",
+      "observable": "Node-compatible process APIs and child process spawning are available"
+    },
+    "frankenengine": {
+      "outcome": "fail_closed",
+      "observable": "untrusted code cannot access process privilege APIs or spawn children without capabilities",
+      "denial_reason": "process_privilege_surface_denied"
+    }
+  },
+  "measurement": {
+    "success_signal": "attack_succeeded == true",
+    "failure_signal": "UID probe unavailable or child process spawn denied"
+  },
+  "reproduction": [
+    "node crates/franken-engine/tests/red_team_scenarios/process_privilege_surface_probe.js"
+  ]
+}

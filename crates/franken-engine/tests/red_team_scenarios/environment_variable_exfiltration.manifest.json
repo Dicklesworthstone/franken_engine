@@ -1,0 +1,36 @@
+{
+  "schema_version": "franken-engine.red-team-scenario.v1",
+  "name": "environment_variable_exfiltration",
+  "title": "Environment variable exfiltration through unrestricted process.env",
+  "baseline_version": "node-bun-frankenengine-red-team-v1",
+  "attack_vector": "environment_exfiltration",
+  "cwe": ["CWE-200", "CWE-922"],
+  "payload": {
+    "program": "environment_variable_exfiltration.js",
+    "entrypoint": "node environment_variable_exfiltration.js",
+    "input": "local canary value stored in FRANKENENGINE_REDTEAM_CANARY",
+    "success_criteria": "program can read the canary from process.env"
+  },
+  "expected_outcome": {
+    "node": {
+      "outcome": "succeeds",
+      "observable": "process.env exposes the canary value to untrusted code"
+    },
+    "bun": {
+      "outcome": "succeeds",
+      "observable": "process.env exposes the canary value to untrusted code"
+    },
+    "frankenengine": {
+      "outcome": "fail_closed",
+      "observable": "ambient environment access is denied without an explicit capability",
+      "denial_reason": "ambient_environment_capability_denied"
+    }
+  },
+  "measurement": {
+    "success_signal": "attack_succeeded == true",
+    "failure_signal": "process.env unavailable or canary redacted"
+  },
+  "reproduction": [
+    "node crates/franken-engine/tests/red_team_scenarios/environment_variable_exfiltration.js"
+  ]
+}

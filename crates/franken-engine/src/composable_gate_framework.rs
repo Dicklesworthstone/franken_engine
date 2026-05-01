@@ -8,7 +8,7 @@
 //!
 //! All gates follow the pattern: define policy → collect evidence → evaluate → generate receipt
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
@@ -314,6 +314,11 @@ pub trait Gate<P: GatePolicy, E: GateEvidence> {
     /// Gate identifier.
     fn gate_id(&self) -> &str;
 
+    /// Gate identifiers that must complete earlier in a batch.
+    fn dependency_gate_ids(&self) -> Vec<String> {
+        Vec::new()
+    }
+
     /// Gate display name.
     fn display_name(&self) -> &str;
 
@@ -392,9 +397,20 @@ impl GateRunner {
         G: Gate<P, E>,
     {
         let mut receipts = Vec::new();
+        let mut completed_gate_ids = BTreeSet::new();
 
         for gate in gates {
+            for dependency in gate.dependency_gate_ids() {
+                if !completed_gate_ids.contains(&dependency) {
+                    return Err(format!(
+                        "gate {} depends on {dependency}, but that dependency has not completed earlier in this batch",
+                        gate.gate_id()
+                    ));
+                }
+            }
+
             let receipt = self.run_gate(gate, policy, evidence)?;
+            completed_gate_ids.insert(gate.gate_id().to_string());
             receipts.push(receipt);
         }
 
@@ -515,6 +531,49 @@ impl Gate<ExamplePolicy, ExampleEvidence> for ExampleGate {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct DependentExampleGate {
+        gate_id: &'static str,
+        dependencies: Vec<String>,
+    }
+
+    impl DependentExampleGate {
+        fn new(gate_id: &'static str, dependencies: &[&str]) -> Self {
+            Self {
+                gate_id,
+                dependencies: dependencies
+                    .iter()
+                    .map(|dependency| (*dependency).to_string())
+                    .collect(),
+            }
+        }
+    }
+
+    impl Gate<ExamplePolicy, ExampleEvidence> for DependentExampleGate {
+        fn gate_id(&self) -> &str {
+            self.gate_id
+        }
+
+        fn dependency_gate_ids(&self) -> Vec<String> {
+            self.dependencies.clone()
+        }
+
+        fn display_name(&self) -> &str {
+            self.gate_id
+        }
+
+        fn description(&self) -> &str {
+            "dependency-aware test gate"
+        }
+
+        fn evaluate(
+            &self,
+            policy: &ExamplePolicy,
+            evidence: &ExampleEvidence,
+        ) -> GateResult<ExamplePolicy, ExampleEvidence> {
+            GateResult::new(GateVerdict::Approved, policy.clone(), evidence.clone())
+        }
+    }
 
     #[test]
     fn test_gate_verdict_allows_progression() {
@@ -638,6 +697,83 @@ mod tests {
         let receipts = result.expect("serde deserialization should succeed");
         assert_eq!(receipts.len(), 2);
         assert!(receipts.iter().all(|r| r.verdict == GateVerdict::Approved));
+    }
+
+    #[test]
+    fn gate_runner_batch_accepts_declared_dependency_order() {
+        let runner = GateRunner::new(SecurityEpoch::from_raw(1));
+        let gates = vec![
+            DependentExampleGate::new("artifact-gate", &[]),
+            DependentExampleGate::new("publication-gate", &["artifact-gate"]),
+        ];
+        let policy = ExamplePolicy {
+            policy_id: "dependency-policy".to_string(),
+            max_violations: 5,
+            strict_mode: false,
+        };
+        let evidence = ExampleEvidence {
+            evidence_type: "dependency-evidence".to_string(),
+            violation_count: 0,
+            timestamp: chrono::Utc::now().to_rfc3339(),
+        };
+
+        let receipts = runner
+            .run_gate_batch(&gates, &policy, &evidence)
+            .expect("dependency order is valid");
+
+        assert_eq!(receipts.len(), 2);
+        assert_eq!(receipts[0].gate_id, "artifact-gate");
+        assert_eq!(receipts[1].gate_id, "publication-gate");
+    }
+
+    #[test]
+    fn gate_runner_batch_rejects_missing_dependency() {
+        let runner = GateRunner::new(SecurityEpoch::from_raw(1));
+        let gates = vec![DependentExampleGate::new(
+            "publication-gate",
+            &["artifact-gate"],
+        )];
+        let policy = ExamplePolicy {
+            policy_id: "dependency-policy".to_string(),
+            max_violations: 5,
+            strict_mode: false,
+        };
+        let evidence = ExampleEvidence {
+            evidence_type: "dependency-evidence".to_string(),
+            violation_count: 0,
+            timestamp: chrono::Utc::now().to_rfc3339(),
+        };
+
+        let err = runner
+            .run_gate_batch(&gates, &policy, &evidence)
+            .expect_err("missing dependency must fail closed");
+
+        assert!(err.contains("publication-gate depends on artifact-gate"));
+    }
+
+    #[test]
+    fn gate_runner_batch_rejects_late_dependency() {
+        let runner = GateRunner::new(SecurityEpoch::from_raw(1));
+        let gates = vec![
+            DependentExampleGate::new("publication-gate", &["artifact-gate"]),
+            DependentExampleGate::new("artifact-gate", &[]),
+        ];
+        let policy = ExamplePolicy {
+            policy_id: "dependency-policy".to_string(),
+            max_violations: 5,
+            strict_mode: false,
+        };
+        let evidence = ExampleEvidence {
+            evidence_type: "dependency-evidence".to_string(),
+            violation_count: 0,
+            timestamp: chrono::Utc::now().to_rfc3339(),
+        };
+
+        let err = runner
+            .run_gate_batch(&gates, &policy, &evidence)
+            .expect_err("late dependency must fail closed");
+
+        assert!(err.contains("has not completed earlier in this batch"));
     }
 
     #[test]

@@ -2174,6 +2174,23 @@ fn merge_logical_lines_slash_starts_regex(
     }
 }
 
+fn merge_logical_lines_requires_continuation(
+    last_significant: Option<char>,
+    trailing_identifier: &str,
+) -> bool {
+    if matches!(
+        last_significant,
+        Some('=' | '?' | ':' | ',' | '+' | '-' | '*' | '/' | '%' | '&' | '|' | '^' | '<' | '>')
+    ) {
+        return true;
+    }
+
+    matches!(
+        trailing_identifier,
+        "return" | "throw" | "typeof" | "void" | "delete" | "yield" | "case"
+    )
+}
+
 /// Merge physical lines into logical lines by tracking brace/paren/bracket depth.
 /// When a line ends with unbalanced delimiters, subsequent lines are merged until balance.
 fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
@@ -2338,12 +2355,17 @@ fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
 
         byte_offset = byte_offset.saturating_add(segment.len() as u64);
 
-        if brace_depth <= 0
+        let balanced = brace_depth <= 0
             && paren_depth <= 0
             && bracket_depth <= 0
             && in_quote.is_none()
             && !in_block_comment
-            && !in_regex_literal
+            && !in_regex_literal;
+        if balanced
+            && !merge_logical_lines_requires_continuation(
+                last_significant,
+                trailing_identifier.as_str(),
+            )
         {
             let trimmed = current_text.trim();
             if !trimmed.is_empty() {
@@ -12303,9 +12325,82 @@ mod tests {
     }
 
     #[test]
+    fn merge_logical_lines_continues_dangling_assignment_and_binary_operator() {
+        let lines = merge_logical_lines(
+            "const attackSucceeded =\n  lifecycle.status === 0 &&\n  lifecycle.stdout.includes(\"ok\");\nnext;",
+        );
+        assert_eq!(lines.len(), 2);
+        assert_eq!(
+            lines[0].text,
+            "const attackSucceeded = lifecycle.status === 0 && lifecycle.stdout.includes(\"ok\");"
+        );
+        assert_eq!(lines[0].start_line, 1);
+        assert_eq!(lines[0].end_line, 3);
+        assert_eq!(lines[1].text, "next;");
+
+        let lines = merge_logical_lines(
+            "const uidProbeAvailable =\n  typeof process.getuid === \"function\" ||\n  typeof process.geteuid === \"function\";",
+        );
+        assert_eq!(lines.len(), 1);
+        assert_eq!(
+            lines[0].text,
+            "const uidProbeAvailable = typeof process.getuid === \"function\" || typeof process.geteuid === \"function\";"
+        );
+    }
+
+    #[test]
     fn parse_script_with_regex_brace_before_block_keeps_two_statements() {
         let tree = parse_script("var r = /{/;\nif (x) {\n  y;\n}");
         assert_eq!(tree.body.len(), 2);
+    }
+
+    #[test]
+    fn parse_red_team_commonjs_destructuring_multiline_payload() {
+        let tree = parse_script(
+            r#"const { spawnSync } = require("node:child_process");
+
+const lifecycle = spawnSync(
+  process.execPath,
+  ["-e", "process.stdout.write('franken-redteam-postinstall-backdoor')"],
+  { encoding: "utf8" },
+);
+
+const attackSucceeded =
+  lifecycle.status === 0 &&
+  lifecycle.stdout.includes("franken-redteam-postinstall-backdoor");
+
+process.exit(attackSucceeded ? 0 : 1);"#,
+        );
+
+        assert_eq!(tree.body.len(), 4);
+        match &tree.body[0] {
+            Statement::VariableDeclaration(declaration) => {
+                assert!(matches!(
+                    &declaration.declarations[0].pattern,
+                    BindingPattern::ObjectPattern(properties)
+                        if properties.len() == 1
+                            && properties[0].key == Expression::Identifier("spawnSync".to_string())
+                ));
+                assert!(matches!(
+                    declaration.declarations[0].initializer.as_ref(),
+                    Some(Expression::Call { callee, .. })
+                        if matches!(callee.as_ref(), Expression::Identifier(name) if name == "require")
+                ));
+            }
+            other => panic!("expected destructuring require declaration, got {other:?}"),
+        }
+        match &tree.body[2] {
+            Statement::VariableDeclaration(declaration) => {
+                assert!(matches!(
+                    declaration.declarations[0].initializer.as_ref(),
+                    Some(Expression::Binary {
+                        operator: BinaryOperator::LogicalAnd,
+                        ..
+                    })
+                ));
+            }
+            other => panic!("expected multiline attackSucceeded declaration, got {other:?}"),
+        }
     }
 
     // -----------------------------------------------------------------------

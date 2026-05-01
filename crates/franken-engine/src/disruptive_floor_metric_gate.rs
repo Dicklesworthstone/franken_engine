@@ -545,6 +545,28 @@ mod tests {
     }
 
     #[test]
+    fn parent_accepts_replay_coverage_child_artifact() {
+        let child_report = crate::replay_coverage_metric_gate::evaluate_replay_coverage_metric(
+            &crate::replay_coverage_metric_gate::ReplayCoverageMetricInput::representative_fixture(
+                "rev-under-test",
+            ),
+        );
+        let mut artifacts = passing_artifacts();
+        let replay_slot = artifacts
+            .iter_mut()
+            .find(|artifact| {
+                artifact.metric_id == DisruptiveMetricId::SecurityDecisionReplayCoverage
+            })
+            .unwrap();
+        *replay_slot = child_report.metric_artifact;
+
+        let report = evaluate_disruptive_floor_gate(&config(), &artifacts);
+        assert_eq!(report.decision, GateDecisionState::Pass);
+        assert!(report.observed_disruptive_floor_wording_allowed);
+        assert!(report.metric_decisions.iter().all(MetricDecision::passed));
+    }
+
+    #[test]
     fn stale_artifact_fails_closed_with_downgrade() {
         let mut artifacts = passing_artifacts();
         artifacts[0].freshness_days = DEFAULT_MAX_FRESHNESS_DAYS + 1;

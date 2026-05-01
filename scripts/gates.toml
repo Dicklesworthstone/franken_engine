@@ -76,6 +76,14 @@ command = "./scripts/run_claim_to_proof_matrix_gate.sh ci"
 needs_rch = false
 generates_manifest = true
 
+[gates.replay_coverage_metric_gate]
+name = "replay_coverage_metric_gate"
+description = "Replay coverage metric artifact for security-critical decisions"
+artifact_root = "artifacts/replay_coverage_metric"
+command = "./scripts/run_replay_coverage_metric_gate.sh ci"
+needs_rch = false
+generates_manifest = true
+
 # Sample of other gates - in practice this would include all ~53 gates
 [gates.security_epoch_gate]
 name = "security_epoch_gate"

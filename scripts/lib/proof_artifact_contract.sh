@@ -2,6 +2,7 @@
 set -euo pipefail
 
 PROOF_ARTIFACT_MANIFEST_SCHEMA_VERSION="franken-engine.proof-artifact-manifest.v1"
+PROOF_ARTIFACT_EVENT_SCHEMA_VERSION="franken-engine.proof-artifact-event.v1"
 PROOF_ARTIFACT_REPORT_SCHEMA_VERSION="franken-engine.proof-artifact-report.v1"
 PROOF_ARTIFACT_REDACTION_POLICY_SCHEMA_VERSION="franken-engine.proof-artifact-redaction-policy.v1"
 
@@ -28,6 +29,31 @@ proof_contract_sha256_file() {
   fi
 }
 
+proof_contract_repo_root() {
+  git rev-parse --show-toplevel 2>/dev/null || pwd
+}
+
+proof_contract_repo_relative_path() {
+  local path="${1:-}"
+  local root
+
+  if [[ -z "$path" ]]; then
+    printf ''
+    return 0
+  fi
+
+  root="$(proof_contract_repo_root)"
+  if [[ "$path" = /* ]]; then
+    case "$path" in
+      "$root"/*) printf '%s' "${path#"$root"/}" ;;
+      "$root") printf '.' ;;
+      *) printf '%s' "$path" ;;
+    esac
+  else
+    printf '%s' "${path#./}"
+  fi
+}
+
 proof_contract_csv_json() {
   local csv="${1:-}"
   if [[ -z "$csv" ]]; then
@@ -38,7 +64,7 @@ proof_contract_csv_json() {
 }
 
 proof_contract_git_revision() {
-  git rev-parse --short HEAD 2>/dev/null || printf 'unknown'
+  git rev-parse HEAD 2>/dev/null || printf 'unknown'
 }
 
 proof_contract_assert_required_artifacts() {
@@ -85,6 +111,14 @@ proof_contract_write_standard_bundle() {
   local generated_utc
   local bundle_id
   local redacted_rerun_command
+  local run_dir_rel
+  local manifest_path_rel
+  local report_json_path_rel
+  local report_md_path_rel
+  local redaction_policy_path_rel
+  local source_report_path_rel
+  local events_path_rel
+  local commands_path_rel
   local event_count
   local commands_sha256
   local events_sha256
@@ -99,6 +133,14 @@ proof_contract_write_standard_bundle() {
   generated_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   bundle_id="${gate_name}-$(basename "$run_dir")"
   redacted_rerun_command="$(proof_contract_redact_text "$rerun_command")"
+  run_dir_rel="$(proof_contract_repo_relative_path "$run_dir")"
+  manifest_path_rel="$(proof_contract_repo_relative_path "$manifest_path")"
+  report_json_path_rel="$(proof_contract_repo_relative_path "$report_json_path")"
+  report_md_path_rel="$(proof_contract_repo_relative_path "$report_md_path")"
+  redaction_policy_path_rel="$(proof_contract_repo_relative_path "$redaction_policy_path")"
+  source_report_path_rel="$(proof_contract_repo_relative_path "$source_report_path")"
+  events_path_rel="$(proof_contract_repo_relative_path "$events_path")"
+  commands_path_rel="$(proof_contract_repo_relative_path "$commands_path")"
   event_count="$(wc -l <"$events_path" | tr -d '[:space:]')"
   commands_sha256="$(proof_contract_sha256_file "$commands_path")"
   events_sha256="$(proof_contract_sha256_file "$events_path")"
@@ -130,14 +172,14 @@ proof_contract_write_standard_bundle() {
     --arg generated_utc "$generated_utc" \
     --arg source_revision "$source_revision" \
     --arg rerun_command "$redacted_rerun_command" \
-    --arg run_dir "$run_dir" \
-    --arg manifest_json "$manifest_path" \
-    --arg commands_txt "$commands_path" \
-    --arg events_jsonl "$events_path" \
-    --arg report_json "$report_json_path" \
-    --arg report_md "$report_md_path" \
-    --arg redaction_policy_json "$redaction_policy_path" \
-    --arg source_report_path "$source_report_path" \
+    --arg run_dir "$run_dir_rel" \
+    --arg manifest_json "$manifest_path_rel" \
+    --arg commands_txt "$commands_path_rel" \
+    --arg events_jsonl "$events_path_rel" \
+    --arg report_json "$report_json_path_rel" \
+    --arg report_md "$report_md_path_rel" \
+    --arg redaction_policy_json "$redaction_policy_path_rel" \
+    --arg source_report_path "$source_report_path_rel" \
     --arg commands_sha256 "$commands_sha256" \
     --arg events_sha256 "$events_sha256" \
     --arg source_report_sha256 "$source_report_sha256" \
@@ -162,10 +204,22 @@ proof_contract_write_standard_bundle() {
       },
       claim_ids: $claim_ids,
       bead_ids: $bead_ids,
+      environment: {},
+      commands: [
+        {
+          command_id: "rerun",
+          display: $rerun_command,
+          redacted_display: $rerun_command,
+          cwd: $run_dir,
+          exit_code: null,
+          duration_ms: null
+        }
+      ],
       generated_artifacts: [
-        { path: $commands_txt, sha256: $commands_sha256, role: "command_transcript" },
-        { path: $events_jsonl, sha256: $events_sha256, role: "structured_events" },
-        { path: $source_report_path, sha256: $source_report_sha256, role: "source_machine_report" }
+        { path: $commands_txt, sha256: (if $commands_sha256 == "" then null else $commands_sha256 end), role: "command_transcript" },
+        { path: $events_jsonl, sha256: (if $events_sha256 == "" then null else $events_sha256 end), role: "structured_events" },
+        { path: $source_report_path, sha256: (if $source_report_sha256 == "" then null else $source_report_sha256 end), role: "source_machine_report" },
+        { path: $redaction_policy_json, sha256: null, role: "redaction_policy" }
       ],
       expected_artifacts: [],
       verifier_outputs: [

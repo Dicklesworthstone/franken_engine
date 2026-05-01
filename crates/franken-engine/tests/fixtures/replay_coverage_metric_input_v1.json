@@ -1,0 +1,60 @@
+{
+  "code_revision": "rev-under-test",
+  "freshness_days": 0,
+  "scenario_set": "security_critical_allow_deny_escalate_v1",
+  "artifact_path": "artifacts/replay_coverage_metric/coverage_details.json",
+  "artifact_hash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "verification_command": "scripts/run_replay_coverage_metric_gate.sh ci",
+  "redaction_status": "redacted",
+  "confidence_millionths": 1000000,
+  "decisions": [
+    {
+      "decision_id": "allow-extension-read",
+      "decision_kind": "allow",
+      "security_critical": true,
+      "trace_id": "trace-allow-extension-read",
+      "replay_mode": "deterministic_strict",
+      "replay_trace_path": "artifacts/replay_coverage_metric/traces/allow-extension-read.json",
+      "replay_report_path": "artifacts/replay_coverage_metric/reports/allow-extension-read.json",
+      "expected_hash": "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+      "actual_hash": "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+      "replay_report_hash": "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+      "replay_verified": true,
+      "replay_command": "frankenctl replay run --trace artifacts/replay_coverage_metric/traces/allow-extension-read.json --mode strict",
+      "replay_exit_code": 0,
+      "duration_ms": 1
+    },
+    {
+      "decision_id": "deny-ambient-write",
+      "decision_kind": "deny",
+      "security_critical": true,
+      "trace_id": "trace-deny-ambient-write",
+      "replay_mode": "deterministic_strict",
+      "replay_trace_path": "artifacts/replay_coverage_metric/traces/deny-ambient-write.json",
+      "replay_report_path": "artifacts/replay_coverage_metric/reports/deny-ambient-write.json",
+      "expected_hash": "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+      "actual_hash": "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+      "replay_report_hash": "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+      "replay_verified": true,
+      "replay_command": "frankenctl replay run --trace artifacts/replay_coverage_metric/traces/deny-ambient-write.json --mode strict",
+      "replay_exit_code": 0,
+      "duration_ms": 1
+    },
+    {
+      "decision_id": "escalate-high-risk-signal",
+      "decision_kind": "escalate",
+      "security_critical": true,
+      "trace_id": "trace-escalate-high-risk-signal",
+      "replay_mode": "deterministic_strict",
+      "replay_trace_path": "artifacts/replay_coverage_metric/traces/escalate-high-risk-signal.json",
+      "replay_report_path": "artifacts/replay_coverage_metric/reports/escalate-high-risk-signal.json",
+      "expected_hash": "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+      "actual_hash": "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+      "replay_report_hash": "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+      "replay_verified": true,
+      "replay_command": "frankenctl replay run --trace artifacts/replay_coverage_metric/traces/escalate-high-risk-signal.json --mode strict",
+      "replay_exit_code": 0,
+      "duration_ms": 1
+    }
+  ]
+}

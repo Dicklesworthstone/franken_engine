@@ -1,0 +1,41 @@
+{
+  "schema_version": "franken-engine.throughput-disruptive-floor-metric-gate.v1",
+  "bead_id": "bd-y6v8s",
+  "scenario_set": "throughput_placeholder_test",
+  "floor_ratio_millionths": 950000,
+  "max_freshness_days": 14,
+  "evidence": [
+    {
+      "scenario_id": "placeholder_node_test",
+      "runtime_denominator": "node",
+      "frankenengine_ops_per_second": 2650,
+      "denominator_ops_per_second": 2500,
+      "throughput_ratio_millionths": 1060000,
+      "benchmark_duration_ms": 30000,
+      "request_count": 79500,
+      "error_count": 0,
+      "success_rate_millionths": 1000000,
+      "scenario_path": "scenarios/placeholder_test.json",
+      "output_path": "artifacts/placeholder_test.json",
+      "output_hash": "placeholder123",
+      "verification_command": "./scripts/verify_placeholder_test.sh"
+    },
+    {
+      "scenario_id": "placeholder_bun_test",
+      "runtime_denominator": "bun",
+      "frankenengine_ops_per_second": 3456,
+      "denominator_ops_per_second": 3200,
+      "throughput_ratio_millionths": 1080000,
+      "benchmark_duration_ms": 30000,
+      "request_count": 103680,
+      "error_count": 0,
+      "success_rate_millionths": 1000000,
+      "scenario_path": "scenarios/placeholder_test.json",
+      "output_path": "artifacts/placeholder_test_bun.json",
+      "output_hash": "placeholder456",
+      "verification_command": "./scripts/verify_placeholder_test_bun.sh"
+    }
+  ],
+  "code_revision": "placeholder123",
+  "generated_at_utc": "2026-05-01T10:00:00Z"
+}

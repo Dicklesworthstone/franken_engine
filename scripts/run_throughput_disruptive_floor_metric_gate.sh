@@ -81,8 +81,33 @@ echo "Scenario set: $scenario_set"
 echo "Floor ratio: $floor_ratio_millionths millionths"
 echo "Evidence count: $evidence_count"
 
-# Compute metrics (placeholder implementation - in production this would call the Rust binary)
-# For now, we'll use jq to compute basic metrics from the input
+# Validate that evidence doesn't use placeholder baseline values
+placeholder_node_baseline=2500
+placeholder_bun_baseline=3200
+uses_placeholder_baselines=false
+
+# Check for placeholder Node baseline values
+node_placeholder_count="$(jq -r --argjson placeholder "$placeholder_node_baseline" '[.evidence[] | select(.runtime_denominator == "node" and .denominator_ops_per_second == $placeholder)] | length' < "$input_path")"
+if [[ "$node_placeholder_count" -gt 0 ]]; then
+  echo "⚠ WARNING: Detected $node_placeholder_count Node evidence entries using placeholder baseline ($placeholder_node_baseline ops/sec)"
+  uses_placeholder_baselines=true
+fi
+
+# Check for placeholder Bun baseline values
+bun_placeholder_count="$(jq -r --argjson placeholder "$placeholder_bun_baseline" '[.evidence[] | select(.runtime_denominator == "bun" and .denominator_ops_per_second == $placeholder)] | length' < "$input_path")"
+if [[ "$bun_placeholder_count" -gt 0 ]]; then
+  echo "⚠ WARNING: Detected $bun_placeholder_count Bun evidence entries using placeholder baseline ($placeholder_bun_baseline ops/sec)"
+  uses_placeholder_baselines=true
+fi
+
+if [[ "$uses_placeholder_baselines" == "true" ]]; then
+  echo "⚠ DEFENSIVE: Evidence contains placeholder baselines - gate limited to TARGETED status"
+  echo "⚠ Real baseline measurements available in docs/throughput_baseline_measurements_v1.json:"
+  echo "⚠   Node: 442,413 ops/sec (177x higher than placeholder)"
+  echo "⚠   Bun: 1,202,604 ops/sec (376x higher than placeholder)"
+fi
+
+# Compute metrics using evidence data
 
 node_evidence_count="$(jq -r '[.evidence[] | select(.runtime_denominator == "node")] | length' < "$input_path")"
 bun_evidence_count="$(jq -r '[.evidence[] | select(.runtime_denominator == "bun")] | length' < "$input_path")"
@@ -111,11 +136,16 @@ else
   weighted_ratio_millionths="0"
 fi
 
-# Determine outcome
-if [[ "$weighted_ratio_millionths" -ge "$floor_ratio_millionths" ]]; then
+# Determine outcome - force TARGETED status if placeholder baselines detected
+if [[ "$uses_placeholder_baselines" == "true" ]]; then
+  overall_outcome="targeted"
+  outcome_reason="placeholder baselines detected (Node: $node_placeholder_count, Bun: $bun_placeholder_count)"
+elif [[ "$weighted_ratio_millionths" -ge "$floor_ratio_millionths" ]]; then
   overall_outcome="pass"
+  outcome_reason="performance threshold met with live baseline measurements"
 else
   overall_outcome="fail"
+  outcome_reason="performance below threshold ($weighted_ratio_millionths < $floor_ratio_millionths millionths)"
 fi
 
 # Count passing evidence
@@ -136,6 +166,7 @@ cat > "$report_path" <<EOF
   "schema_version": "$schema_version",
   "bead_id": "$bead_id",
   "overall_outcome": "$overall_outcome",
+  "outcome_reason": "$outcome_reason",
   "weighted_ratio_millionths": $weighted_ratio_millionths,
   "evidence_count": $evidence_count,
   "passing_evidence_count": $passing_evidence_count,
@@ -143,6 +174,9 @@ cat > "$report_path" <<EOF
   "bun_evidence_count": $bun_evidence_count,
   "node_avg_ratio_millionths": $node_avg_ratio,
   "bun_avg_ratio_millionths": $bun_avg_ratio,
+  "uses_placeholder_baselines": $uses_placeholder_baselines,
+  "node_placeholder_count": $node_placeholder_count,
+  "bun_placeholder_count": $bun_placeholder_count,
   "verification_commands": $verification_commands,
   "generated_at_utc": "$timestamp"
 }
@@ -183,9 +217,13 @@ echo "✓ Generated manifest: $manifest_path"
 echo "✓ Report hash: $report_hash"
 
 if [[ "$overall_outcome" == "fail" ]]; then
-  echo "❌ Throughput metric gate FAILED: weighted ratio $weighted_ratio_millionths < floor $floor_ratio_millionths"
+  echo "❌ Throughput metric gate FAILED: $outcome_reason"
   exit 1
+elif [[ "$overall_outcome" == "targeted" ]]; then
+  echo "⚠ Throughput metric gate TARGETED: $outcome_reason"
+  echo "⚠ Use live baseline measurements from bd-16ch6 harness for OBSERVED status"
+  exit 0
 else
-  echo "✅ Throughput metric gate PASSED: weighted ratio $weighted_ratio_millionths >= floor $floor_ratio_millionths"
+  echo "✅ Throughput metric gate PASSED: $outcome_reason"
   exit 0
 fi

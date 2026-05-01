@@ -6,15 +6,14 @@
  */
 
 use frankenengine_engine::proof_artifact::{
-    validate_events_jsonl_file, ProofEvent, ProofArtifactError,
-    PROOF_MANIFEST_SCHEMA_VERSION, PROOF_EVENT_SCHEMA_VERSION, PROOF_REPORT_SCHEMA_VERSION,
-    REDACTION_POLICY_SCHEMA_VERSION,
+    PROOF_EVENT_SCHEMA_VERSION, PROOF_MANIFEST_SCHEMA_VERSION, REDACTION_POLICY_SCHEMA_VERSION,
+    validate_events_jsonl_file,
 };
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// Sample proof-artifact bundles from different gates for conformance testing
 const SAMPLE_BUNDLES: &[&str] = &[
@@ -41,12 +40,6 @@ struct ConformanceResult {
 
 #[test]
 fn proof_artifact_contract_conformance() {
-    use std::env;
-
-    // Use isolated CARGO_TARGET_DIR as instructed
-    let original_target = env::var("CARGO_TARGET_DIR");
-    env::set_var("CARGO_TARGET_DIR", "./target_conformance_test");
-
     let mut results = Vec::new();
     let mut total_passed = 0;
     let mut total_tested = 0;
@@ -55,9 +48,14 @@ fn proof_artifact_contract_conformance() {
         total_tested += 1;
         let result = validate_proof_bundle(bundle_path);
 
-        println!("Bundle: {} - {}",
+        println!(
+            "Bundle: {} - {}",
             bundle_path,
-            if result.passed { "✓ PASS" } else { "✗ FAIL" }
+            if result.passed {
+                "✓ PASS"
+            } else {
+                "✗ FAIL"
+            }
         );
 
         for error in &result.errors {
@@ -69,12 +67,6 @@ fn proof_artifact_contract_conformance() {
         }
 
         results.push(result);
-    }
-
-    // Restore original CARGO_TARGET_DIR
-    match original_target {
-        Ok(val) => env::set_var("CARGO_TARGET_DIR", val),
-        Err(_) => env::remove_var("CARGO_TARGET_DIR"),
     }
 
     println!("\nProof Artifact Contract Conformance Summary:");
@@ -98,7 +90,9 @@ fn proof_artifact_contract_conformance() {
             }
         }
 
-        panic!("Proof artifact contract conformance failures detected. See output for bead filing details.");
+        panic!(
+            "Proof artifact contract conformance failures detected. See output for bead filing details."
+        );
     }
 }
 
@@ -153,29 +147,34 @@ fn validate_manifest_schema(manifest_path: &Path) -> Result<(), String> {
         return Err("manifest.json not found".to_string());
     }
 
-    let content = fs::read_to_string(manifest_path)
-        .map_err(|e| format!("Failed to read manifest: {}", e))?;
+    let content =
+        fs::read_to_string(manifest_path).map_err(|e| format!("Failed to read manifest: {}", e))?;
 
-    let manifest: Value = serde_json::from_str(&content)
-        .map_err(|e| format!("Invalid JSON in manifest: {}", e))?;
+    let manifest: Value =
+        serde_json::from_str(&content).map_err(|e| format!("Invalid JSON in manifest: {}", e))?;
 
     // Validate schema version
-    let schema_version = manifest.get("schema_version")
+    let schema_version = manifest
+        .get("schema_version")
         .and_then(|v| v.as_str())
         .ok_or("Missing or invalid schema_version")?;
 
     if schema_version != PROOF_MANIFEST_SCHEMA_VERSION {
         return Err(format!(
             "Invalid schema version: expected '{}', got '{}'",
-            PROOF_MANIFEST_SCHEMA_VERSION,
-            schema_version
+            PROOF_MANIFEST_SCHEMA_VERSION, schema_version
         ));
     }
 
     // Validate required top-level fields
     let required_fields = &[
-        "bundle_id", "gate_name", "status", "generated_utc",
-        "source_revision", "artifact_paths", "generated_artifacts"
+        "bundle_id",
+        "gate_name",
+        "status",
+        "generated_utc",
+        "source_revision",
+        "artifact_paths",
+        "generated_artifacts",
     ];
 
     for field in required_fields {
@@ -185,12 +184,17 @@ fn validate_manifest_schema(manifest_path: &Path) -> Result<(), String> {
     }
 
     // Validate artifact_paths structure
-    let artifact_paths = manifest.get("artifact_paths")
+    let artifact_paths = manifest
+        .get("artifact_paths")
         .ok_or("Missing artifact_paths")?;
 
     let required_artifact_paths = &[
-        "run_dir", "manifest_json", "commands_txt",
-        "events_jsonl", "report_json", "report_md"
+        "run_dir",
+        "manifest_json",
+        "commands_txt",
+        "events_jsonl",
+        "report_json",
+        "report_md",
     ];
 
     for path_field in required_artifact_paths {
@@ -237,17 +241,18 @@ fn validate_hash_chain_integrity(bundle_path: &Path) -> Result<(), String> {
     let manifest: Value = serde_json::from_str(&manifest_content)
         .map_err(|e| format!("Invalid JSON in manifest: {}", e))?;
 
-    let generated_artifacts = manifest.get("generated_artifacts")
+    let generated_artifacts = manifest
+        .get("generated_artifacts")
         .and_then(|v| v.as_array())
         .ok_or("Missing or invalid generated_artifacts array")?;
 
     for (i, artifact) in generated_artifacts.iter().enumerate() {
-        let path = artifact.get("path")
+        let path = artifact
+            .get("path")
             .and_then(|v| v.as_str())
             .ok_or_else(|| format!("Artifact {} missing path", i))?;
 
-        let expected_sha256 = artifact.get("sha256")
-            .and_then(|v| v.as_str());
+        let expected_sha256 = artifact.get("sha256").and_then(|v| v.as_str());
 
         if expected_sha256.is_none() {
             continue; // Some artifacts (like redaction policy) may have null hashes
@@ -273,14 +278,15 @@ fn validate_hash_chain_integrity(bundle_path: &Path) -> Result<(), String> {
 
 /// Validates that all required fields are present in manifest
 fn validate_required_fields(manifest_path: &Path) -> Result<(), String> {
-    let content = fs::read_to_string(manifest_path)
-        .map_err(|e| format!("Failed to read manifest: {}", e))?;
+    let content =
+        fs::read_to_string(manifest_path).map_err(|e| format!("Failed to read manifest: {}", e))?;
 
-    let manifest: Value = serde_json::from_str(&content)
-        .map_err(|e| format!("Invalid JSON in manifest: {}", e))?;
+    let manifest: Value =
+        serde_json::from_str(&content).map_err(|e| format!("Invalid JSON in manifest: {}", e))?;
 
     // Check that generated_artifacts contain all required roles
-    let generated_artifacts = manifest.get("generated_artifacts")
+    let generated_artifacts = manifest
+        .get("generated_artifacts")
         .and_then(|v| v.as_array())
         .ok_or("Missing generated_artifacts")?;
 
@@ -299,7 +305,8 @@ fn validate_required_fields(manifest_path: &Path) -> Result<(), String> {
     }
 
     // Validate freshness structure
-    let freshness = manifest.get("freshness")
+    let freshness = manifest
+        .get("freshness")
         .ok_or("Missing freshness object")?;
 
     let required_freshness_fields = &["generated_utc", "freshness_days", "max_freshness_days"];
@@ -327,20 +334,21 @@ fn validate_redaction_compliance(bundle_path: &Path) -> Result<(), String> {
         .map_err(|e| format!("Invalid JSON in redaction policy: {}", e))?;
 
     // Validate schema version
-    let schema_version = policy.get("schema_version")
+    let schema_version = policy
+        .get("schema_version")
         .and_then(|v| v.as_str())
         .ok_or("Missing schema_version in redaction policy")?;
 
     if schema_version != REDACTION_POLICY_SCHEMA_VERSION {
         return Err(format!(
             "Invalid redaction policy schema version: expected '{}', got '{}'",
-            REDACTION_POLICY_SCHEMA_VERSION,
-            schema_version
+            REDACTION_POLICY_SCHEMA_VERSION, schema_version
         ));
     }
 
     // Validate required redaction fields
-    let replacement = policy.get("replacement")
+    let replacement = policy
+        .get("replacement")
         .and_then(|v| v.as_str())
         .ok_or("Missing replacement field in redaction policy")?;
 
@@ -351,7 +359,8 @@ fn validate_redaction_compliance(bundle_path: &Path) -> Result<(), String> {
         ));
     }
 
-    let env_key_fragments = policy.get("env_key_fragments")
+    let env_key_fragments = policy
+        .get("env_key_fragments")
         .and_then(|v| v.as_array())
         .ok_or("Missing env_key_fragments array")?;
 
@@ -365,10 +374,7 @@ fn validate_redaction_compliance(bundle_path: &Path) -> Result<(), String> {
 
     for pattern in required_patterns {
         if !fragments_str.iter().any(|f| f.contains(pattern)) {
-            return Err(format!(
-                "Missing required redaction pattern: {}",
-                pattern
-            ));
+            return Err(format!("Missing required redaction pattern: {}", pattern));
         }
     }
 
@@ -390,15 +396,16 @@ fn validate_no_secrets_in_file(file_path: &Path) -> Result<(), String> {
 
     // Check for obvious unredacted secret patterns
     let secret_patterns = &[
-        "Bearer ey",        // JWT tokens
-        "sk-[a-zA-Z0-9]",   // OpenAI API keys
+        "Bearer ey",         // JWT tokens
+        "sk-[a-zA-Z0-9]",    // OpenAI API keys
         "TOKEN=[a-zA-Z0-9]", // Environment variables
         "SECRET=[a-zA-Z0-9]",
         "PASSWORD=[a-zA-Z0-9]",
     ];
 
     for pattern in secret_patterns {
-        if content.contains(&pattern[..6]) { // Simple substring check
+        if content.contains(&pattern[..6]) {
+            // Simple substring check
             return Err(format!(
                 "File {} contains potential unredacted secret matching pattern: {}",
                 file_path.display(),
@@ -412,8 +419,7 @@ fn validate_no_secrets_in_file(file_path: &Path) -> Result<(), String> {
 
 /// Calculates SHA256 hash of a file
 fn calculate_file_sha256(path: &Path) -> Result<String, String> {
-    let content = fs::read(path)
-        .map_err(|e| format!("Failed to read file: {}", e))?;
+    let content = fs::read(path).map_err(|e| format!("Failed to read file: {}", e))?;
 
     let mut hasher = Sha256::new();
     hasher.update(&content);
@@ -425,8 +431,8 @@ fn calculate_file_sha256(path: &Path) -> Result<String, String> {
 #[cfg(test)]
 mod conformance_unit_tests {
     use super::*;
-    use tempfile::TempDir;
     use std::fs;
+    use tempfile::TempDir;
 
     #[test]
     fn test_manifest_schema_validation() {
@@ -452,7 +458,11 @@ mod conformance_unit_tests {
             "generated_artifacts": []
         });
 
-        fs::write(&manifest_path, serde_json::to_string_pretty(&valid_manifest).unwrap()).unwrap();
+        fs::write(
+            &manifest_path,
+            serde_json::to_string_pretty(&valid_manifest).unwrap(),
+        )
+        .unwrap();
         assert!(validate_manifest_schema(&manifest_path).is_ok());
 
         // Invalid schema version
@@ -461,7 +471,11 @@ mod conformance_unit_tests {
             "bundle_id": "test-bundle"
         });
 
-        fs::write(&manifest_path, serde_json::to_string_pretty(&invalid_manifest).unwrap()).unwrap();
+        fs::write(
+            &manifest_path,
+            serde_json::to_string_pretty(&invalid_manifest).unwrap(),
+        )
+        .unwrap();
         assert!(validate_manifest_schema(&manifest_path).is_err());
     }
 
@@ -477,7 +491,11 @@ mod conformance_unit_tests {
             "literal_patterns": []
         });
 
-        fs::write(&policy_path, serde_json::to_string_pretty(&valid_policy).unwrap()).unwrap();
+        fs::write(
+            &policy_path,
+            serde_json::to_string_pretty(&valid_policy).unwrap(),
+        )
+        .unwrap();
 
         // Create empty commands.txt to avoid file not found error
         fs::write(temp_dir.path().join("commands.txt"), "").unwrap();

@@ -1,15 +1,12 @@
 #![forbid(unsafe_code)]
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 const SCENARIO_DIR: &str = "tests/red_team_scenarios";
-const EXECUTION_TIMEOUT_SECS: u64 = 10;
 const EXPECTED_SCENARIOS: &[&str] = &[
     "environment_variable_exfiltration",
     "process_privilege_surface_probe",
@@ -46,8 +43,6 @@ struct ScenarioOutput {
 #[derive(Debug, Clone)]
 struct ExpectedOutcome {
     outcome: String, // "succeeds" or "fail_closed"
-    observable: String,
-    denial_reason: Option<String>,
 }
 
 #[derive(Debug)]
@@ -57,6 +52,7 @@ struct ExecutionResult {
     exit_code: i32,
     stdout: String,
     stderr: String,
+    structured_log: String,
     attack_succeeded: bool,
     matches_expectation: bool,
 }
@@ -82,11 +78,6 @@ fn get_expected_outcome(manifest: &Value, runtime: &Runtime) -> ExpectedOutcome 
 
     ExpectedOutcome {
         outcome: outcome_obj["outcome"].as_str().unwrap().to_string(),
-        observable: outcome_obj["observable"].as_str().unwrap().to_string(),
-        denial_reason: outcome_obj
-            .get("denial_reason")
-            .and_then(|v| v.as_str())
-            .map(String::from),
     }
 }
 
@@ -100,6 +91,11 @@ fn execute_scenario(scenario_name: &str, runtime: &Runtime) -> ExecutionResult {
         Runtime::Bun => execute_with_bun(&script_path),
         Runtime::FrankenEngine => execute_with_frankenengine(&script_path, scenario_name),
     };
+    let structured_log = if matches!(runtime, Runtime::FrankenEngine) {
+        extract_frankenengine_structured_log(&stdout, &stderr).unwrap_or_default()
+    } else {
+        String::new()
+    };
 
     // Check if the result matches expectations
     let expected_success = expected.outcome == "succeeds";
@@ -111,6 +107,7 @@ fn execute_scenario(scenario_name: &str, runtime: &Runtime) -> ExecutionResult {
         exit_code,
         stdout,
         stderr,
+        structured_log,
         attack_succeeded,
         matches_expectation,
     }
@@ -158,18 +155,46 @@ fn execute_with_bun(script_path: &Path) -> (i32, String, String, bool) {
 }
 
 fn execute_with_frankenengine(
-    _script_path: &Path,
-    _scenario_name: &str,
+    script_path: &Path,
+    scenario_name: &str,
 ) -> (i32, String, String, bool) {
-    // Stub implementation - FrankenEngine JS execution not yet available
-    // When ready, this should execute the script in FrankenEngine runtime
-    // and return the actual results
-    (
-        1, // exit code indicating failure
-        String::new(),
-        "FrankenEngine JS execution not yet implemented".to_string(),
-        false, // attack should fail in FrankenEngine (fail_closed)
-    )
+    let report_path = std::env::temp_dir().join(format!(
+        "frankenengine-red-team-{scenario_name}-{}.json",
+        std::process::id()
+    ));
+    let output = Command::new(frankenctl_binary())
+        .arg("run")
+        .arg("--input")
+        .arg(script_path)
+        .arg("--extension-id")
+        .arg(format!("red-team-{scenario_name}"))
+        .arg("--goal")
+        .arg("script")
+        .arg("--out")
+        .arg(&report_path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("Failed to execute frankenctl run");
+
+    let exit_code = output.status.code().unwrap_or(-1);
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let mut stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let report_content = std::fs::read_to_string(&report_path).ok();
+    if let Some(report) = &report_content {
+        stderr.push_str("\n[frankenengine-structured-log]\n");
+        stderr.push_str(&report);
+    }
+
+    let attack_succeeded = parse_attack_result(&stdout)
+        .or_else(|| parse_frankenctl_attack_result(&stdout))
+        .or_else(|| {
+            report_content
+                .as_deref()
+                .and_then(parse_frankenctl_attack_result)
+        })
+        .unwrap_or(false);
+    (exit_code, stdout, stderr, attack_succeeded)
 }
 
 fn parse_attack_result(stdout: &str) -> Option<bool> {
@@ -181,6 +206,41 @@ fn parse_attack_result(stdout: &str) -> Option<bool> {
     None
 }
 
+fn frankenctl_binary() -> PathBuf {
+    PathBuf::from(env!("CARGO_BIN_EXE_frankenctl"))
+}
+
+fn parse_frankenctl_report(stdout: &str) -> Option<String> {
+    let value = serde_json::from_str::<Value>(stdout).ok()?;
+    serde_json::to_string(&value).ok()
+}
+
+fn extract_frankenengine_structured_log(stdout: &str, stderr: &str) -> Option<String> {
+    if let Some((_, report)) = stderr.split_once("[frankenengine-structured-log]\n") {
+        let report = report.trim();
+        return serde_json::from_str::<Value>(report)
+            .ok()
+            .and_then(|value| serde_json::to_string(&value).ok())
+            .or_else(|| Some(report.to_string()));
+    }
+    parse_frankenctl_report(stdout)
+}
+
+fn parse_frankenctl_attack_result(stdout: &str) -> Option<bool> {
+    let value = serde_json::from_str::<Value>(stdout).ok()?;
+    value
+        .get("console_output")
+        .and_then(Value::as_array)
+        .and_then(|lines| {
+            lines.iter().find_map(|line| {
+                let line = line.as_str()?;
+                serde_json::from_str::<ScenarioOutput>(line)
+                    .ok()
+                    .map(|output| output.attack_succeeded)
+            })
+        })
+}
+
 #[test]
 fn red_team_harness_executes_all_scenarios() {
     let mut results = Vec::new();
@@ -188,16 +248,12 @@ fn red_team_harness_executes_all_scenarios() {
 
     for scenario_name in EXPECTED_SCENARIOS {
         for runtime in &runtimes {
-            // Skip FrankenEngine for now since it's not implemented
-            if matches!(runtime, Runtime::FrankenEngine) {
-                continue;
-            }
-
             let result = execute_scenario(scenario_name, runtime);
             println!(
-                "Scenario: {}, Runtime: {}, Attack succeeded: {}, Matches expectation: {}",
+                "Scenario: {}, Runtime: {}, Exit code: {}, Attack succeeded: {}, Matches expectation: {}",
                 result.scenario_name,
                 result.runtime.name(),
+                result.exit_code,
                 result.attack_succeeded,
                 result.matches_expectation
             );
@@ -207,6 +263,9 @@ fn red_team_harness_executes_all_scenarios() {
             }
             if !result.stderr.is_empty() {
                 println!("  stderr: {}", result.stderr.trim());
+            }
+            if !result.structured_log.is_empty() {
+                println!("  structured_log: {}", result.structured_log.trim());
             }
 
             results.push(result);
@@ -227,16 +286,22 @@ fn red_team_harness_executes_all_scenarios() {
         (matching_expectations as f64 / total_executions as f64) * 100.0
     );
 
-    // For now, just assert we executed everything without panicking
-    // In the future, we might want to assert specific expectation matches
-    assert!(total_executions > 0, "Should execute at least one scenario");
+    assert_eq!(
+        total_executions,
+        EXPECTED_SCENARIOS.len() * 3,
+        "Should execute every scenario across Node, Bun, and FrankenEngine"
+    );
     assert!(
         matching_expectations > 0,
         "Should have some matching expectations"
     );
-
-    // TODO: When FrankenEngine is ready, assert that all attacks fail in FrankenEngine
-    // but succeed in Node/Bun as expected
+    assert!(
+        results
+            .iter()
+            .filter(|result| result.runtime == Runtime::FrankenEngine)
+            .all(|result| !result.attack_succeeded && result.matches_expectation),
+        "FrankenEngine red-team arm should execute all scenarios and fail closed"
+    );
 }
 
 #[test]

@@ -82,6 +82,16 @@ frankenctl run --input ./demo.js --extension-id demo-ext --out ./artifacts/demo.
 frankenctl replay run --trace ./examples/05_replay_demo/sample_trace.json --mode strict --out ./artifacts/replay_report.json
 ```
 
+The README CLI contract is covered by a user-facing smoke workflow:
+
+```bash
+FRANKENCTL_BIN=target/debug/frankenctl ./scripts/e2e/readme_cli_workflow_smoke.sh
+```
+
+Each run writes a signed artifact manifest, structured events, command
+transcript, stdout/stderr captures, and the emitted compile/run/replay artifacts
+under `artifacts/readme_cli_workflow_smoke/<timestamp>/`.
+
 ## Design Philosophy
 
 1. **Runtime ownership over wrappers**

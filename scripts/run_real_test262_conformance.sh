@@ -24,12 +24,12 @@ echo "  Waivers: $WAIVERS"
 echo "  Case Vectors: $CASE_VECTORS"
 echo
 
-# Step 1: Generate real Test262 case vectors (currently using realistic samples)
+# Step 1: Validate real Test262-derived case vectors.
 echo "🔄 Step 1: Test262 Case Vector Generation"
 echo "========================================="
-echo "Current status: Using realistic sample vectors (BD-24POU implementation)"
-echo "Real implementation would run:"
-echo "  cargo run --bin franken_test262_generator -- --test262-repo ./test262 --output case_vectors.jsonl"
+echo "Current status: Using checked-in vectors derived from official tc39/test262 sources"
+echo "To refresh from a pinned checkout, run:"
+echo "  cargo run -p frankenengine-engine --bin franken_test262_generator -- --test262-repo ./test262 --output $CASE_VECTORS"
 echo
 
 # Validate case vectors format
@@ -86,7 +86,7 @@ echo "  Running franken_test262_runner with real case vectors..."
 
 cd "$PROJECT_ROOT"
 
-# Execute the Test262 runner with our realistic vectors
+# Execute the Test262 runner with the checked-in Test262-derived vectors.
 if timeout 300 cargo run -p frankenengine-engine --bin franken_test262_runner -- \
     --pins "$PINS" \
     --profile "$PROFILE" \
@@ -152,7 +152,7 @@ echo "=========================================="
 echo "✅ COMPLETED:"
 echo "  • Real Test262 harness infrastructure (test262_harness.rs)"
 echo "  • Test262 case vector generator (franken_test262_generator)"
-echo "  • Realistic Test262 case vectors (replaces fake fixtures)"
+echo "  • Checked-in Test262-derived case vectors with source provenance"
 echo "  • Integration with existing franken_test262_runner"
 echo "  • End-to-end Test262 conformance workflow"
 echo
@@ -162,7 +162,7 @@ echo "  • Complete frontmatter metadata extraction"
 echo "  • Test262 harness file integration (assert.js, etc.)"
 echo
 echo "🚀 IMPACT:"
-echo "  • No more fake fixture-only assertions"
+echo "  • No fake fixture-only assertions in the canonical case-vector file"
 echo "  • Real differential testing against tc39/test262"
 echo "  • Proper Test262 conformance measurement"
 echo "  • Foundation for comprehensive ES2020 compliance"

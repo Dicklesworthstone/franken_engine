@@ -33,7 +33,7 @@ CASE_VECTORS="$PROJECT_ROOT/crates/franken-engine/tests/test262_case_vectors.jso
 TEST262_DIR="$PROJECT_ROOT/test262"
 if [[ ! -d "$TEST262_DIR" ]]; then
     echo "⚠️  Test262 suite not found at $TEST262_DIR"
-    echo "For this baseline, we'll use the existing case vectors and observed results"
+    echo "For this baseline, we'll use the checked-in Test262-derived case vectors and observed results"
     echo "Production setup would clone https://github.com/tc39/test262"
 fi
 

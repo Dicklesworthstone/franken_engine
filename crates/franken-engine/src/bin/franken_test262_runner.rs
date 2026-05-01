@@ -19,6 +19,17 @@ const LIVE_HARNESS_VERSION: &str = "franken-engine.test262-live-harness.v1";
 const FE_T262_EXPECTED_VALUE_MISMATCH: &str = "FE-T262-1011";
 const FE_T262_UNEXPECTED_PASS: &str = "FE-T262-1012";
 const FE_T262_CASE_VECTOR_INVALID: &str = "FE-T262-1013";
+const TEST262_ORIGIN_URL_PREFIX: &str = "https://github.com/tc39/test262/blob/";
+const DEVELOPMENT_SAMPLE_TEST_IDS: &[&str] = &[
+    "language/expressions/arithmetic/addition.js",
+    "language/statements/variable/var-declaration.js",
+    "language/expressions/function/arrow-basic.js",
+    "language/statements/for/basic-iteration.js",
+    "built-ins/Array/prototype/map/basic.js",
+    "language/expressions/optional-chaining/basic.js",
+    "language/statements/const/basic-declaration.js",
+    "language/expressions/template-literals/basic.js",
+];
 
 #[derive(Debug, Clone)]
 struct CliArgs {
@@ -267,6 +278,10 @@ struct Test262CaseVector {
     runtime_lane: RuntimeLane,
     #[serde(default)]
     deterministic_seed: u64,
+    #[serde(default)]
+    origin_commit: Option<String>,
+    #[serde(default)]
+    origin_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -386,6 +401,15 @@ fn validate_case_vectors(vectors: Vec<Test262CaseVector>) -> io::Result<Vec<Test
                 format!("{FE_T262_CASE_VECTOR_INVALID}: case vector missing test_id"),
             ));
         }
+        if is_development_sample_test_id(&vector.test_id) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "{FE_T262_CASE_VECTOR_INVALID}: case vector `{}` is a development sample, not an official Test262-derived vector",
+                    vector.test_id
+                ),
+            ));
+        }
         if vector.es2020_clause.trim().is_empty() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -422,8 +446,38 @@ fn validate_case_vectors(vectors: Vec<Test262CaseVector>) -> io::Result<Vec<Test
                 ),
             ));
         }
+        if let Some(origin_commit) = vector.origin_commit.as_deref()
+            && !is_full_git_sha(origin_commit)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "{FE_T262_CASE_VECTOR_INVALID}: case vector `{}` has invalid origin_commit `{}`",
+                    vector.test_id, origin_commit
+                ),
+            ));
+        }
+        if let Some(origin_url) = vector.origin_url.as_deref()
+            && !origin_url.starts_with(TEST262_ORIGIN_URL_PREFIX)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "{FE_T262_CASE_VECTOR_INVALID}: case vector `{}` has non-Test262 origin_url `{}`",
+                    vector.test_id, origin_url
+                ),
+            ));
+        }
     }
     Ok(vectors)
+}
+
+fn is_development_sample_test_id(test_id: &str) -> bool {
+    DEVELOPMENT_SAMPLE_TEST_IDS.contains(&test_id)
+}
+
+fn is_full_git_sha(value: &str) -> bool {
+    value.len() == 40 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 fn load_case_vectors(path: &Path) -> io::Result<Vec<Test262CaseVector>> {
@@ -857,6 +911,65 @@ mod tests {
     }
 
     #[test]
+    fn parse_case_vectors_rejects_development_sample_ids() {
+        let err = parse_case_vectors(&sample_case_line(
+            "language/expressions/arithmetic/addition.js",
+            "5",
+        ))
+        .expect_err("sample-only test ids must fail");
+        assert!(err.to_string().contains("development sample"));
+    }
+
+    #[test]
+    fn parse_case_vectors_rejects_invalid_origin_commit() {
+        let content = serde_json::json!({
+            "test_id": "language/expressions/addition/S11.6.1_A3.1_T1.1.js",
+            "es2020_clause": "11.6.1_A3.1_T1.1",
+            "source": "true + true;",
+            "expected_value": "2",
+            "origin_commit": "not-a-sha",
+            "origin_url": "https://github.com/tc39/test262/blob/d0c1b4555b03dd404873fd6422a4b5da00136500/test/language/expressions/addition/S11.6.1_A3.1_T1.1.js"
+        })
+        .to_string();
+        let err = parse_case_vectors(&content).expect_err("invalid origin commit must fail");
+        assert!(err.to_string().contains("invalid origin_commit"));
+    }
+
+    #[test]
+    fn checked_in_case_vectors_are_provenanced_test262_vectors() {
+        let content = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/test262_case_vectors.jsonl"
+        ));
+        let vectors = parse_case_vectors(content).expect("checked-in case vectors parse");
+        assert!(
+            !vectors.is_empty(),
+            "checked-in case vectors must not be empty"
+        );
+
+        for vector in vectors {
+            assert!(
+                vector.origin_commit.as_deref().is_some_and(is_full_git_sha),
+                "{} missing valid origin_commit",
+                vector.test_id
+            );
+            assert!(
+                vector
+                    .origin_url
+                    .as_deref()
+                    .is_some_and(|url| url.starts_with(TEST262_ORIGIN_URL_PREFIX)),
+                "{} missing valid origin_url",
+                vector.test_id
+            );
+            assert!(
+                !is_development_sample_test_id(&vector.test_id),
+                "{} must not be a development sample",
+                vector.test_id
+            );
+        }
+    }
+
+    #[test]
     fn parse_args_rejects_observed_without_allow_flag() {
         let err = parse_cli_args(&["--observed-results", "/tmp/observed.jsonl"])
             .expect_err("observed path without allow flag must fail");
@@ -918,6 +1031,8 @@ mod tests {
             expected_value: "2".to_string(),
             runtime_lane: RuntimeLane::Hybrid,
             deterministic_seed: 7,
+            origin_commit: None,
+            origin_url: None,
         };
         let (observed, artifact) = execute_case_vector(&case, "rerun-cmd".to_string());
         assert_eq!(observed.outcome, Test262ObservedOutcome::Pass);
@@ -934,6 +1049,8 @@ mod tests {
             expected_value: "5".to_string(),
             runtime_lane: RuntimeLane::Hybrid,
             deterministic_seed: 7,
+            origin_commit: None,
+            origin_url: None,
         };
         let (observed, artifact) = execute_case_vector(&case, "rerun-cmd".to_string());
         assert_eq!(observed.outcome, Test262ObservedOutcome::Fail);

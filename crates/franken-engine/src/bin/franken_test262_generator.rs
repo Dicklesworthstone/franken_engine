@@ -15,7 +15,7 @@
 //! 4. Converts to case vectors for franken_test262_runner
 //! 5. Writes JSONL output compatible with existing Test262 infrastructure
 
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 use std::process;
 
 use frankenengine_engine::test262_harness::{Test262Harness, Test262HarnessError};
@@ -30,6 +30,9 @@ struct CliArgs {
     sample_only: bool,
     sample_count: usize,
 }
+
+const CANONICAL_CASE_VECTORS_RELATIVE: &str = "tests/test262_case_vectors.jsonl";
+const SAMPLE_ONLY_CANONICAL_ERROR: &str = "sample-only Test262 generation cannot write the canonical test262_case_vectors.jsonl; pass --test262-repo for real vectors or choose a scratch --output path";
 
 fn main() {
     let args = parse_args().unwrap_or_else(|err| {
@@ -52,25 +55,32 @@ Options:
   --test262-repo <path>     Path to Test262 repository (will be cloned if missing)
   --pins <path>             Path to Test262 pins configuration (default: tests/test262_conformance_pins.toml)
   --profile <path>          Path to Test262 profile configuration (default: tests/test262_es2020_profile.toml)
-  --output <path>           Output path for case vectors JSONL (default: tests/test262_case_vectors.jsonl)
-  --sample-only             Generate only a sample of tests for faster development
+  --output <path>           Output path for case vectors JSONL (default: crates/franken-engine/tests/test262_case_vectors.jsonl)
+  --sample-only             Generate only a sample from a real Test262 checkout for faster development
   --sample-count <count>    Number of tests in sample (default: 50)
   --help                    Show this help
 
 Example:
-  cargo run --bin franken_test262_generator -- --test262-repo ./test262 --output ./real_test262_vectors.jsonl
-  cargo run --bin franken_test262_generator -- --sample-only --sample-count 10"
+  cargo run -p frankenengine-engine --bin franken_test262_generator -- --test262-repo ./test262 --output ./real_test262_vectors.jsonl
+  cargo run -p frankenengine-engine --bin franken_test262_generator -- --test262-repo ./test262 --sample-only --sample-count 10 --output ./scratch_test262_vectors.jsonl"
 }
 
 fn parse_args() -> Result<CliArgs, String> {
-    let mut args = std::env::args().skip(1);
+    parse_args_from(std::env::args().skip(1))
+}
+
+fn parse_args_from<I>(raw_args: I) -> Result<CliArgs, String>
+where
+    I: IntoIterator<Item = String>,
+{
     let mut test262_repo_path = PathBuf::from("./test262");
     let mut pins_path = PathBuf::from("tests/test262_conformance_pins.toml");
     let mut profile_path = PathBuf::from("tests/test262_es2020_profile.toml");
-    let mut output_path = PathBuf::from("tests/test262_case_vectors.jsonl");
+    let mut output_path = default_case_vectors_path();
     let mut sample_only = false;
     let mut sample_count = 50;
 
+    let mut args = raw_args.into_iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--test262-repo" => {
@@ -123,6 +133,10 @@ fn run(args: CliArgs) -> Result<(), Box<dyn std::error::Error>> {
     println!("BD-24POU: Real Test262 conformance harness integration");
     println!();
 
+    if args.sample_only && output_path_is_canonical_case_vectors(&args.output_path) {
+        return Err(SAMPLE_ONLY_CANONICAL_ERROR.into());
+    }
+
     // Load configuration
     println!("📋 Loading configuration...");
     let pins = load_pins(&args.pins_path)?;
@@ -147,9 +161,10 @@ fn run(args: CliArgs) -> Result<(), Box<dyn std::error::Error>> {
     match harness.ensure_test262_suite() {
         Ok(()) => println!("  ✅ Test262 suite ready"),
         Err(Test262HarnessError::GitError(msg)) => {
-            println!("  ⚠️  Git operation failed: {}", msg);
-            println!("  💡 Generating sample vectors without actual Test262 download");
-            return generate_sample_vectors(&args);
+            return Err(format!(
+                "Test262 suite unavailable: {msg}. Refusing to synthesize sample vectors; use a valid --test262-repo checkout or --sample-only with a real checkout and scratch --output."
+            )
+            .into());
         }
         Err(err) => return Err(err.into()),
     }
@@ -214,12 +229,44 @@ fn load_profile(path: &std::path::Path) -> Result<Test262Profile, Box<dyn std::e
         .map_err(|e| format!("Failed to load profile from {}: {}", path.display(), e).into())
 }
 
+fn default_case_vectors_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(CANONICAL_CASE_VECTORS_RELATIVE)
+}
+
+fn output_path_is_canonical_case_vectors(path: &Path) -> bool {
+    path == Path::new(CANONICAL_CASE_VECTORS_RELATIVE)
+        || normalize_path_for_compare(path)
+            == normalize_path_for_compare(&default_case_vectors_path())
+}
+
+fn normalize_path_for_compare(path: &Path) -> PathBuf {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(path)
+    };
+
+    let mut normalized = PathBuf::new();
+    for component in absolute.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            other => normalized.push(other.as_os_str()),
+        }
+    }
+    normalized
+}
+
 fn generate_sample_pins(path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
     let pins_content = r#"schema_version = "franken-engine.test262-pin.v1"
 source_repo = "tc39/test262"
 es_profile = "ES2020"
-# Using a recent commit from Test262 (this should be updated to latest stable)
-test262_commit = "6fde6c6a5d9e7e6c7b2a4c4e5f6a7b8c9d0e1f2a"
+# Official tc39/test262 commit pinned for reproducible case-vector generation.
+test262_commit = "d0c1b4555b03dd404873fd6422a4b5da00136500"
 "#;
 
     std::fs::create_dir_all(path.parent().unwrap())?;
@@ -227,64 +274,37 @@ test262_commit = "6fde6c6a5d9e7e6c7b2a4c4e5f6a7b8c9d0e1f2a"
     Ok(())
 }
 
-fn generate_sample_vectors(args: &CliArgs) -> Result<(), Box<dyn std::error::Error>> {
-    println!("📝 Generating sample case vectors for development...");
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    // Create realistic sample vectors based on common Test262 patterns
-    let sample_vectors = vec![
-        serde_json::json!({
-            "test_id": "language/expressions/arithmetic/addition.js",
-            "es2020_clause": "12.8.3",
-            "source": "var result = 2 + 3; result;",
-            "expected_value": "5",
-            "runtime_lane": "hybrid",
-            "deterministic_seed": 1
-        }),
-        serde_json::json!({
-            "test_id": "language/statements/variable/var-declaration.js",
-            "es2020_clause": "13.3.1",
-            "source": "var x = 42; x;",
-            "expected_value": "42",
-            "runtime_lane": "hybrid",
-            "deterministic_seed": 2
-        }),
-        serde_json::json!({
-            "test_id": "language/expressions/function/arrow-basic.js",
-            "es2020_clause": "14.2.1",
-            "source": "var f = x => x * 2; f(5);",
-            "expected_value": "10",
-            "runtime_lane": "hybrid",
-            "deterministic_seed": 3
-        }),
-        serde_json::json!({
-            "test_id": "language/statements/for/basic-iteration.js",
-            "es2020_clause": "13.7.4.7",
-            "source": "var sum = 0; for (var i = 1; i <= 3; i++) sum += i; sum;",
-            "expected_value": "6",
-            "runtime_lane": "hybrid",
-            "deterministic_seed": 4
-        }),
-        serde_json::json!({
-            "test_id": "built-ins/Array/prototype/map/basic.js",
-            "es2020_clause": "22.1.3.15",
-            "source": "[1, 2, 3].map(x => x + 1).join(',');",
-            "expected_value": "2,3,4",
-            "runtime_lane": "hybrid",
-            "deterministic_seed": 5
-        }),
-    ];
+    fn parse_cli_args(args: &[&str]) -> Result<CliArgs, String> {
+        parse_args_from(args.iter().map(|arg| (*arg).to_string()))
+    }
 
-    // Write sample vectors to JSONL format
-    let jsonl_content = sample_vectors
-        .into_iter()
-        .map(|v| serde_json::to_string(&v))
-        .collect::<Result<Vec<_>, _>>()?
-        .join("\n");
+    #[test]
+    fn parse_args_defaults_output_to_crate_case_vectors() {
+        let args = parse_cli_args(&[]).expect("default args parse");
+        assert_eq!(args.output_path, default_case_vectors_path());
+    }
 
-    std::fs::write(&args.output_path, jsonl_content)?;
+    #[test]
+    fn canonical_case_vector_detection_catches_default_and_relative_paths() {
+        assert!(output_path_is_canonical_case_vectors(
+            default_case_vectors_path().as_path()
+        ));
+        assert!(output_path_is_canonical_case_vectors(Path::new(
+            CANONICAL_CASE_VECTORS_RELATIVE
+        )));
+        assert!(!output_path_is_canonical_case_vectors(Path::new(
+            "artifacts/test262/scratch_vectors.jsonl"
+        )));
+    }
 
-    println!("  ✅ Generated {} sample case vectors", 5);
-    println!("  💾 Written to: {}", args.output_path.display());
-
-    Ok(())
+    #[test]
+    fn sample_only_rejects_canonical_output_before_network_work() {
+        let args = parse_cli_args(&["--sample-only"]).expect("sample args parse");
+        let err = run(args).expect_err("sample-only canonical output must fail");
+        assert!(err.to_string().contains(SAMPLE_ONLY_CANONICAL_ERROR));
+    }
 }

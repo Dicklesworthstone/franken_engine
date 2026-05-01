@@ -5,9 +5,9 @@
 //! Verifies that quarantine decisions propagate across fleet instances
 //! and achieve convergence for coordinated containment.
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::PathBuf;
-use std::collections::BTreeSet;
 
 // Note: Using direct path inclusion to avoid doc comment issues
 mod live_quarantine_propagation_example {
@@ -42,10 +42,15 @@ fn test_malware_quarantine_propagation() {
     assert_eq!(report.security_event_id, "evt-malware-001");
 
     // High-severity threat should achieve convergence
-    assert!(report.convergence_achieved,
-            "High-severity malware should achieve convergence");
-    assert!(report.convergence_percentage >= 80.0,
-            "Should have high convergence percentage, got: {:.1}%", report.convergence_percentage);
+    assert!(
+        report.convergence_achieved,
+        "High-severity malware should achieve convergence"
+    );
+    assert!(
+        report.convergence_percentage >= 80.0,
+        "Should have high convergence percentage, got: {:.1}%",
+        report.convergence_percentage
+    );
 
     // Verify proof artifacts exist
     let manifest_path = output_dir.join("manifest.json");
@@ -61,10 +66,9 @@ fn test_malware_quarantine_propagation() {
     assert!(markdown_path.exists(), "Markdown report should exist");
 
     // Verify manifest structure
-    let manifest_content = fs::read_to_string(&manifest_path)
-        .expect("Should read manifest");
-    let manifest: serde_json::Value = serde_json::from_str(&manifest_content)
-        .expect("Manifest should be valid JSON");
+    let manifest_content = fs::read_to_string(&manifest_path).expect("Should read manifest");
+    let manifest: serde_json::Value =
+        serde_json::from_str(&manifest_content).expect("Manifest should be valid JSON");
 
     assert_eq!(manifest["bead_id"], EXAMPLE_BEAD_ID);
     assert_eq!(manifest["proof_type"], "quarantine_propagation_convergence");
@@ -73,23 +77,26 @@ fn test_malware_quarantine_propagation() {
     assert!(manifest["events_recorded"].as_u64().unwrap() >= 3); // At least initiate, acks, converge
 
     // Verify events structure
-    let events_content = fs::read_to_string(&events_path)
-        .expect("Should read events");
+    let events_content = fs::read_to_string(&events_path).expect("Should read events");
     let event_lines: Vec<&str> = events_content.trim().split('\n').collect();
     assert!(event_lines.len() >= 3, "Should have multiple events");
 
     // Check for expected event types
     let mut event_types = BTreeSet::new();
     for line in event_lines {
-        let event: serde_json::Value = serde_json::from_str(line)
-            .expect("Event should be valid JSON");
+        let event: serde_json::Value =
+            serde_json::from_str(line).expect("Event should be valid JSON");
         event_types.insert(event["event_type"].as_str().unwrap().to_string());
     }
 
-    assert!(event_types.contains("quarantine_initiated"),
-            "Should have initiation event");
-    assert!(event_types.contains("acknowledgment_received"),
-            "Should have acknowledgment events");
+    assert!(
+        event_types.contains("quarantine_initiated"),
+        "Should have initiation event"
+    );
+    assert!(
+        event_types.contains("acknowledgment_received"),
+        "Should have acknowledgment events"
+    );
 
     cleanup_temp_dir(&output_dir);
 }
@@ -112,8 +119,10 @@ fn test_suspicious_activity_quarantine_propagation() {
     assert_eq!(report.originator_instance, "instance-eu-west-1-replica");
 
     // Should still achieve convergence for medium threats
-    assert!(report.acknowledgments_received > 0,
-            "Should receive some acknowledgments");
+    assert!(
+        report.acknowledgments_received > 0,
+        "Should receive some acknowledgments"
+    );
 
     cleanup_temp_dir(&output_dir);
 }
@@ -128,13 +137,19 @@ fn test_quarantine_propagation_simulation() {
         .expect("Simulation should complete successfully");
 
     // Verify quarantine state
-    assert!(quarantine_state.is_quarantined(&event.extension_id),
-            "Extension should be quarantined");
+    assert!(
+        quarantine_state.is_quarantined(&event.extension_id),
+        "Extension should be quarantined"
+    );
 
     // Verify events
     assert!(events.len() >= 3, "Should have multiple events");
-    assert!(events.iter().any(|e| e.event_type == "quarantine_initiated"),
-            "Should have initiation event");
+    assert!(
+        events
+            .iter()
+            .any(|e| e.event_type == "quarantine_initiated"),
+        "Should have initiation event"
+    );
 
     // Verify timing
     assert!(duration.as_millis() < 1000, "Simulation should be fast");
@@ -160,24 +175,22 @@ fn test_fleet_topology_structure() {
     assert_eq!(fleet.convergence_threshold, 0.8);
 
     // Verify role distribution
-    let roles: BTreeSet<String> = fleet.instances.iter()
-        .map(|i| i.role.clone())
-        .collect();
+    let roles: BTreeSet<String> = fleet.instances.iter().map(|i| i.role.clone()).collect();
     assert!(roles.contains("coordinator"));
     assert!(roles.contains("replica"));
     assert!(roles.contains("witness"));
 
     // Verify regions are diverse
-    let regions: BTreeSet<String> = fleet.instances.iter()
-        .map(|i| i.region.clone())
-        .collect();
+    let regions: BTreeSet<String> = fleet.instances.iter().map(|i| i.region.clone()).collect();
     assert!(regions.len() >= 3, "Should have multiple regions");
 
     // Verify node IDs are unique
-    let node_ids: BTreeSet<String> = fleet.instances.iter()
-        .map(|i| i.node_id.clone())
-        .collect();
-    assert_eq!(node_ids.len(), fleet.instances.len(), "Node IDs should be unique");
+    let node_ids: BTreeSet<String> = fleet.instances.iter().map(|i| i.node_id.clone()).collect();
+    assert_eq!(
+        node_ids.len(),
+        fleet.instances.len(),
+        "Node IDs should be unique"
+    );
 }
 
 #[test]
@@ -207,14 +220,16 @@ fn test_quarantine_decision_determinism() {
     let event = SyntheticSecurityEvent::malware_detection_scenario();
     let fleet = FleetTopology::create_multi_region_fleet();
 
-    let (state1, events1, _) = simulate_quarantine_propagation(&event, &fleet)
-        .expect("First simulation should succeed");
-    let (state2, events2, _) = simulate_quarantine_propagation(&event, &fleet)
-        .expect("Second simulation should succeed");
+    let (state1, events1, _) =
+        simulate_quarantine_propagation(&event, &fleet).expect("First simulation should succeed");
+    let (state2, events2, _) =
+        simulate_quarantine_propagation(&event, &fleet).expect("Second simulation should succeed");
 
     // Both should quarantine the same extension
-    assert_eq!(state1.is_quarantined(&event.extension_id),
-               state2.is_quarantined(&event.extension_id));
+    assert_eq!(
+        state1.is_quarantined(&event.extension_id),
+        state2.is_quarantined(&event.extension_id)
+    );
 
     // Events should have same structure (timestamps may differ)
     assert_eq!(events1.len(), events2.len());
@@ -235,11 +250,10 @@ fn test_proof_artifact_schema_compliance() {
 
     // Test JSON schema compliance for key artifacts
     let manifest_path = output_dir.join("manifest.json");
-    let manifest_content = fs::read_to_string(&manifest_path)
-        .expect("Should read manifest");
+    let manifest_content = fs::read_to_string(&manifest_path).expect("Should read manifest");
 
-    let manifest: serde_json::Value = serde_json::from_str(&manifest_content)
-        .expect("Manifest should be valid JSON");
+    let manifest: serde_json::Value =
+        serde_json::from_str(&manifest_content).expect("Manifest should be valid JSON");
 
     // Verify required manifest fields
     assert!(manifest.get("schema_version").is_some());
@@ -252,11 +266,10 @@ fn test_proof_artifact_schema_compliance() {
 
     // Test report JSON structure
     let report_path = output_dir.join("report.json");
-    let report_content = fs::read_to_string(&report_path)
-        .expect("Should read report");
+    let report_content = fs::read_to_string(&report_path).expect("Should read report");
 
-    let report: serde_json::Value = serde_json::from_str(&report_content)
-        .expect("Report should be valid JSON");
+    let report: serde_json::Value =
+        serde_json::from_str(&report_content).expect("Report should be valid JSON");
 
     assert!(report.get("convergence_achieved").is_some());
     assert!(report.get("acknowledgments_received").is_some());
@@ -271,23 +284,28 @@ fn test_convergence_analysis() {
     let event = SyntheticSecurityEvent::malware_detection_scenario();
     let fleet = FleetTopology::create_multi_region_fleet();
 
-    let (quarantine_state, _, _) = simulate_quarantine_propagation(&event, &fleet)
-        .expect("Simulation should succeed");
+    let (quarantine_state, _, _) =
+        simulate_quarantine_propagation(&event, &fleet).expect("Simulation should succeed");
 
     let evidence_hash = frankenengine_engine::hash_tiers::ContentHash::compute(
-        serde_json::to_string(&event).unwrap().as_bytes()
+        serde_json::to_string(&event).unwrap().as_bytes(),
     );
 
     // Check convergence status
     let convergence_achieved = quarantine_state.is_converged(&evidence_hash, fleet.total_instances);
-    let (acks, total) = quarantine_state.convergence_progress(&evidence_hash).unwrap_or((0, 0));
+    let (acks, total) = quarantine_state
+        .convergence_progress(&evidence_hash)
+        .unwrap_or((0, 0));
 
     // For a 5-instance fleet with 80% threshold, need 4 acks
     assert_eq!(total, fleet.total_instances);
     assert!(acks > 0, "Should have received some acknowledgments");
 
     if convergence_achieved {
-        assert!(acks >= 4, "Convergence should require at least 4/5 instances");
+        assert!(
+            acks >= 4,
+            "Convergence should require at least 4/5 instances"
+        );
         let percentage = (acks as f64 / total as f64) * 100.0;
         assert!(percentage >= 80.0, "Should meet 80% threshold");
     }

@@ -112,7 +112,10 @@ impl GoldenDiag {
             );
         });
 
-        eprintln!("✅ Generated {} fixture: {}", self.framework_name, test_name);
+        eprintln!(
+            "✅ Generated {} fixture: {}",
+            self.framework_name, test_name
+        );
     }
 
     /// Panic with helpful message for missing fixture.
@@ -228,15 +231,30 @@ impl GoldenDiag {
 
                 // Show context around first difference
                 if diff_span <= MAX_DIFF_LINES {
-                    summary.push_str(&self.format_diff_context(&actual_lines, &expected_lines, first, last));
+                    summary.push_str(&self.format_diff_context(
+                        &actual_lines,
+                        &expected_lines,
+                        first,
+                        last,
+                    ));
                 } else {
                     summary.push_str(&format!(
                         "   Diff too large ({} lines), showing first {} and last {} lines:\n",
                         diff_span, DIFF_CONTEXT_LINES, DIFF_CONTEXT_LINES
                     ));
-                    summary.push_str(&self.format_diff_context(&actual_lines, &expected_lines, first, first + DIFF_CONTEXT_LINES - 1));
+                    summary.push_str(&self.format_diff_context(
+                        &actual_lines,
+                        &expected_lines,
+                        first,
+                        first + DIFF_CONTEXT_LINES - 1,
+                    ));
                     summary.push_str("   ... (truncated) ...\n");
-                    summary.push_str(&self.format_diff_context(&actual_lines, &expected_lines, last - DIFF_CONTEXT_LINES + 1, last));
+                    summary.push_str(&self.format_diff_context(
+                        &actual_lines,
+                        &expected_lines,
+                        last - DIFF_CONTEXT_LINES + 1,
+                        last,
+                    ));
                 }
             }
         }

@@ -200,8 +200,8 @@ fn test_cli_golden(test_case: &CliTestCase) {
     // Use improved golden diagnostics
     let diag = golden_diag::GoldenDiag::cli();
     let fixture_path = golden_file_path(test_case.name);
-    let actual_json = serde_json::to_string_pretty(&current_output)
-        .expect("CLI output should serialize to JSON");
+    let actual_json =
+        serde_json::to_string_pretty(&current_output).expect("CLI output should serialize to JSON");
     let hint = format!(
         "CLI output: exit_code={}, stdout_lines={}, stderr_lines={}",
         current_output.exit_code,

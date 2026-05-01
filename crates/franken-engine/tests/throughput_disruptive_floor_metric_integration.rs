@@ -7,12 +7,11 @@ use std::fs;
 use std::path::PathBuf;
 
 use frankenengine_engine::disruptive_floor_metric_gate::{
-    DisruptiveMetricId, MetricArtifact, BEAD_ID as PARENT_BEAD_ID,
+    BEAD_ID as PARENT_BEAD_ID, DisruptiveMetricId, MetricArtifact,
 };
 use frankenengine_engine::throughput_disruptive_floor_metric_gate::{
+    BEAD_ID, RuntimeDenominator, SCHEMA_VERSION, ThroughputEvidence, ThroughputMetricInput,
     create_throughput_metric_artifact, evaluate_throughput_metric,
-    RuntimeDenominator, ThroughputEvidence, ThroughputMetricInput,
-    BEAD_ID, SCHEMA_VERSION,
 };
 
 fn repo_root() -> PathBuf {
@@ -24,10 +23,9 @@ fn fixture_path() -> PathBuf {
 }
 
 fn load_fixture_input() -> ThroughputMetricInput {
-    let content = fs::read_to_string(fixture_path())
-        .expect("Failed to read throughput metric fixture");
-    serde_json::from_str(&content)
-        .expect("Failed to parse throughput metric fixture")
+    let content =
+        fs::read_to_string(fixture_path()).expect("Failed to read throughput metric fixture");
+    serde_json::from_str(&content).expect("Failed to parse throughput metric fixture")
 }
 
 #[test]
@@ -60,8 +58,7 @@ fn test_fixture_loads_and_validates() {
 #[test]
 fn test_throughput_metric_evaluation() {
     let input = load_fixture_input();
-    let report = evaluate_throughput_metric(&input)
-        .expect("Failed to evaluate throughput metric");
+    let report = evaluate_throughput_metric(&input).expect("Failed to evaluate throughput metric");
 
     // Basic validation
     assert_eq!(report.schema_version, SCHEMA_VERSION);
@@ -84,21 +81,18 @@ fn test_throughput_metric_evaluation() {
 #[test]
 fn test_create_metric_artifact_for_parent_integrator() {
     let input = load_fixture_input();
-    let report = evaluate_throughput_metric(&input)
-        .expect("Failed to evaluate throughput metric");
+    let report = evaluate_throughput_metric(&input).expect("Failed to evaluate throughput metric");
 
     let artifact_path = "test_throughput_metric_report.json";
     let artifact_hash = "test_hash_123abc";
 
-    let artifact = create_throughput_metric_artifact(
-        &input,
-        &report,
-        artifact_path,
-        artifact_hash,
-    );
+    let artifact = create_throughput_metric_artifact(&input, &report, artifact_path, artifact_hash);
 
     // Verify artifact matches parent integrator expectations
-    assert_eq!(artifact.metric_id, DisruptiveMetricId::WeightedThroughputNodeBun);
+    assert_eq!(
+        artifact.metric_id,
+        DisruptiveMetricId::WeightedThroughputNodeBun
+    );
     assert_eq!(artifact.threshold, input.floor_ratio_millionths);
     assert_eq!(artifact.observed_value, report.weighted_ratio_millionths);
     assert_eq!(artifact.unit, "ratio_millionths");
@@ -112,7 +106,11 @@ fn test_create_metric_artifact_for_parent_integrator() {
     assert_eq!(artifact.freshness_days, input.max_freshness_days);
     assert_eq!(artifact.confidence_millionths, 950_000);
     assert_eq!(artifact.coverage_millionths, 900_000);
-    assert!(artifact.verification_command.contains("run_throughput_disruptive_floor_metric_gate.sh"));
+    assert!(
+        artifact
+            .verification_command
+            .contains("run_throughput_disruptive_floor_metric_gate.sh")
+    );
     assert_eq!(artifact.redaction_status, "none");
 }
 
@@ -135,14 +133,17 @@ fn test_bead_hierarchy_relationship() {
 #[test]
 fn test_script_exists_and_executable() {
     let script_path = repo_root().join("scripts/run_throughput_disruptive_floor_metric_gate.sh");
-    assert!(script_path.exists(), "Script not found: {}", script_path.display());
+    assert!(
+        script_path.exists(),
+        "Script not found: {}",
+        script_path.display()
+    );
 
     // Check if script is executable (on Unix systems)
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let metadata = fs::metadata(&script_path)
-            .expect("Failed to get script metadata");
+        let metadata = fs::metadata(&script_path).expect("Failed to get script metadata");
         let permissions = metadata.permissions();
         assert!(permissions.mode() & 0o111 != 0, "Script is not executable");
     }
@@ -152,19 +153,13 @@ fn test_script_exists_and_executable() {
 fn test_artifact_schema_compatibility() {
     let input = load_fixture_input();
     let report = evaluate_throughput_metric(&input).unwrap();
-    let artifact = create_throughput_metric_artifact(
-        &input,
-        &report,
-        "test.json",
-        "hash123",
-    );
+    let artifact = create_throughput_metric_artifact(&input, &report, "test.json", "hash123");
 
     // Verify the artifact can be serialized and deserialized
-    let serialized = serde_json::to_string(&artifact)
-        .expect("Failed to serialize metric artifact");
+    let serialized = serde_json::to_string(&artifact).expect("Failed to serialize metric artifact");
 
-    let deserialized: MetricArtifact = serde_json::from_str(&serialized)
-        .expect("Failed to deserialize metric artifact");
+    let deserialized: MetricArtifact =
+        serde_json::from_str(&serialized).expect("Failed to deserialize metric artifact");
 
     assert_eq!(artifact, deserialized);
 }
@@ -172,23 +167,21 @@ fn test_artifact_schema_compatibility() {
 #[test]
 fn test_edge_case_single_denominator() {
     // Test with only Node evidence
-    let node_only_evidence = vec![
-        ThroughputEvidence {
-            scenario_id: "node_only_test".to_string(),
-            runtime_denominator: RuntimeDenominator::Node,
-            frankenengine_ops_per_second: 2600,
-            denominator_ops_per_second: 2500,
-            throughput_ratio_millionths: 1_040_000,
-            benchmark_duration_ms: 10_000,
-            request_count: 26_000,
-            error_count: 0,
-            success_rate_millionths: 1_000_000,
-            scenario_path: "node_test.json".to_string(),
-            output_path: "node_output.json".to_string(),
-            output_hash: "node123".to_string(),
-            verification_command: "verify_node.sh".to_string(),
-        },
-    ];
+    let node_only_evidence = vec![ThroughputEvidence {
+        scenario_id: "node_only_test".to_string(),
+        runtime_denominator: RuntimeDenominator::Node,
+        frankenengine_ops_per_second: 2600,
+        denominator_ops_per_second: 2500,
+        throughput_ratio_millionths: 1_040_000,
+        benchmark_duration_ms: 10_000,
+        request_count: 26_000,
+        error_count: 0,
+        success_rate_millionths: 1_000_000,
+        scenario_path: "node_test.json".to_string(),
+        output_path: "node_output.json".to_string(),
+        output_hash: "node123".to_string(),
+        verification_command: "verify_node.sh".to_string(),
+    }];
 
     let input = ThroughputMetricInput {
         schema_version: SCHEMA_VERSION.to_string(),
@@ -211,23 +204,21 @@ fn test_edge_case_single_denominator() {
 #[test]
 fn test_failing_throughput_scenario() {
     // Create evidence that fails the floor threshold
-    let failing_evidence = vec![
-        ThroughputEvidence {
-            scenario_id: "failing_test".to_string(),
-            runtime_denominator: RuntimeDenominator::Node,
-            frankenengine_ops_per_second: 2000, // Low performance
-            denominator_ops_per_second: 2500,
-            throughput_ratio_millionths: 800_000, // 0.8x ratio - below 0.95 floor
-            benchmark_duration_ms: 10_000,
-            request_count: 20_000,
-            error_count: 100,
-            success_rate_millionths: 995_000,
-            scenario_path: "failing_test.json".to_string(),
-            output_path: "failing_output.json".to_string(),
-            output_hash: "fail123".to_string(),
-            verification_command: "verify_fail.sh".to_string(),
-        },
-    ];
+    let failing_evidence = vec![ThroughputEvidence {
+        scenario_id: "failing_test".to_string(),
+        runtime_denominator: RuntimeDenominator::Node,
+        frankenengine_ops_per_second: 2000, // Low performance
+        denominator_ops_per_second: 2500,
+        throughput_ratio_millionths: 800_000, // 0.8x ratio - below 0.95 floor
+        benchmark_duration_ms: 10_000,
+        request_count: 20_000,
+        error_count: 100,
+        success_rate_millionths: 995_000,
+        scenario_path: "failing_test.json".to_string(),
+        output_path: "failing_output.json".to_string(),
+        output_hash: "fail123".to_string(),
+        verification_command: "verify_fail.sh".to_string(),
+    }];
 
     let input = ThroughputMetricInput {
         schema_version: SCHEMA_VERSION.to_string(),

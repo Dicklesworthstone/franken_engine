@@ -121,14 +121,38 @@ fn test_ambient_authority_rejection() {
     let compute_only = CapabilityProfile::compute_only();
 
     // Verify the profile doesn't include filesystem access
-    assert!(!compute_only.capabilities().contains(&RuntimeCapability::FsRead));
-    assert!(!compute_only.capabilities().contains(&RuntimeCapability::FsWrite));
-    assert!(!compute_only.capabilities().contains(&RuntimeCapability::NetworkEgress));
-    assert!(!compute_only.capabilities().contains(&RuntimeCapability::ProcessSpawn));
+    assert!(
+        !compute_only
+            .capabilities()
+            .contains(&RuntimeCapability::FsRead)
+    );
+    assert!(
+        !compute_only
+            .capabilities()
+            .contains(&RuntimeCapability::FsWrite)
+    );
+    assert!(
+        !compute_only
+            .capabilities()
+            .contains(&RuntimeCapability::NetworkEgress)
+    );
+    assert!(
+        !compute_only
+            .capabilities()
+            .contains(&RuntimeCapability::ProcessSpawn)
+    );
 
     // But does include pure computation capabilities
-    assert!(compute_only.capabilities().contains(&RuntimeCapability::VmDispatch));
-    assert!(compute_only.capabilities().contains(&RuntimeCapability::Builtin));
+    assert!(
+        compute_only
+            .capabilities()
+            .contains(&RuntimeCapability::VmDispatch)
+    );
+    assert!(
+        compute_only
+            .capabilities()
+            .contains(&RuntimeCapability::Builtin)
+    );
 }
 
 #[test]
@@ -137,14 +161,38 @@ fn test_declared_capability_allowed() {
     let engine_core = CapabilityProfile::engine_core();
 
     // Verify the profile includes core engine capabilities
-    assert!(engine_core.capabilities().contains(&RuntimeCapability::VmDispatch));
-    assert!(engine_core.capabilities().contains(&RuntimeCapability::GcInvoke));
-    assert!(engine_core.capabilities().contains(&RuntimeCapability::IrLowering));
-    assert!(engine_core.capabilities().contains(&RuntimeCapability::HeapAllocate));
+    assert!(
+        engine_core
+            .capabilities()
+            .contains(&RuntimeCapability::VmDispatch)
+    );
+    assert!(
+        engine_core
+            .capabilities()
+            .contains(&RuntimeCapability::GcInvoke)
+    );
+    assert!(
+        engine_core
+            .capabilities()
+            .contains(&RuntimeCapability::IrLowering)
+    );
+    assert!(
+        engine_core
+            .capabilities()
+            .contains(&RuntimeCapability::HeapAllocate)
+    );
 
     // But doesn't include dangerous capabilities
-    assert!(!engine_core.capabilities().contains(&RuntimeCapability::ProcessSpawn));
-    assert!(!engine_core.capabilities().contains(&RuntimeCapability::PolicyWrite));
+    assert!(
+        !engine_core
+            .capabilities()
+            .contains(&RuntimeCapability::ProcessSpawn)
+    );
+    assert!(
+        !engine_core
+            .capabilities()
+            .contains(&RuntimeCapability::PolicyWrite)
+    );
 }
 
 #[test]
@@ -195,8 +243,11 @@ fn test_capability_rejection_proof_artifacts() {
     };
 
     let policy_input_path = output_dir.join("capability_policy_input.json");
-    fs::write(&policy_input_path, serde_json::to_string_pretty(&policy_input).unwrap())
-        .expect("Failed to write policy input");
+    fs::write(
+        &policy_input_path,
+        serde_json::to_string_pretty(&policy_input).unwrap(),
+    )
+    .expect("Failed to write policy input");
 
     // 2. Generate Lowered Capability Evidence
     let evidence = CapabilityEvidence {
@@ -212,8 +263,11 @@ fn test_capability_rejection_proof_artifacts() {
     };
 
     let evidence_path = output_dir.join("capability_evidence.json");
-    fs::write(&evidence_path, serde_json::to_string_pretty(&evidence).unwrap())
-        .expect("Failed to write evidence");
+    fs::write(
+        &evidence_path,
+        serde_json::to_string_pretty(&evidence).unwrap(),
+    )
+    .expect("Failed to write evidence");
 
     // 3. Generate Denial Decision Receipt
     let receipt = DenialDecisionReceipt {
@@ -228,8 +282,11 @@ fn test_capability_rejection_proof_artifacts() {
     };
 
     let receipt_path = output_dir.join("denial_decision_receipt.json");
-    fs::write(&receipt_path, serde_json::to_string_pretty(&receipt).unwrap())
-        .expect("Failed to write receipt");
+    fs::write(
+        &receipt_path,
+        serde_json::to_string_pretty(&receipt).unwrap(),
+    )
+    .expect("Failed to write receipt");
 
     // 4. Generate Event Trace
     let event_trace = EventTrace {
@@ -254,8 +311,11 @@ fn test_capability_rejection_proof_artifacts() {
     };
 
     let trace_path = output_dir.join("event_trace.json");
-    fs::write(&trace_path, serde_json::to_string_pretty(&event_trace).unwrap())
-        .expect("Failed to write event trace");
+    fs::write(
+        &trace_path,
+        serde_json::to_string_pretty(&event_trace).unwrap(),
+    )
+    .expect("Failed to write event trace");
 
     // 5. Generate Verifier Report
     let verifier_report = VerifierReport {
@@ -287,8 +347,11 @@ fn test_capability_rejection_proof_artifacts() {
     };
 
     let report_path = output_dir.join("verifier_report.json");
-    fs::write(&report_path, serde_json::to_string_pretty(&verifier_report).unwrap())
-        .expect("Failed to write verifier report");
+    fs::write(
+        &report_path,
+        serde_json::to_string_pretty(&verifier_report).unwrap(),
+    )
+    .expect("Failed to write verifier report");
 
     // Verify all artifacts were created
     assert!(policy_input_path.exists());
@@ -297,22 +360,45 @@ fn test_capability_rejection_proof_artifacts() {
     assert!(trace_path.exists());
     assert!(report_path.exists());
 
-    println!("✅ Generated capability rejection proof artifacts in: {}", output_dir.display());
-    println!("📄 Files: capability_policy_input.json, capability_evidence.json, denial_decision_receipt.json, event_trace.json, verifier_report.json");
+    println!(
+        "✅ Generated capability rejection proof artifacts in: {}",
+        output_dir.display()
+    );
+    println!(
+        "📄 Files: capability_policy_input.json, capability_evidence.json, denial_decision_receipt.json, event_trace.json, verifier_report.json"
+    );
 }
 
 #[test]
 fn test_capability_from_tag_str() {
     // Test capability tag string parsing
-    assert_eq!(RuntimeCapability::from_tag_str("fs_read"), Some(RuntimeCapability::FsRead));
-    assert_eq!(RuntimeCapability::from_tag_str("fs:read"), Some(RuntimeCapability::FsRead));
-    assert_eq!(RuntimeCapability::from_tag_str("fs_write"), Some(RuntimeCapability::FsWrite));
-    assert_eq!(RuntimeCapability::from_tag_str("network_egress"), Some(RuntimeCapability::NetworkEgress));
-    assert_eq!(RuntimeCapability::from_tag_str("process_spawn"), Some(RuntimeCapability::ProcessSpawn));
+    assert_eq!(
+        RuntimeCapability::from_tag_str("fs_read"),
+        Some(RuntimeCapability::FsRead)
+    );
+    assert_eq!(
+        RuntimeCapability::from_tag_str("fs:read"),
+        Some(RuntimeCapability::FsRead)
+    );
+    assert_eq!(
+        RuntimeCapability::from_tag_str("fs_write"),
+        Some(RuntimeCapability::FsWrite)
+    );
+    assert_eq!(
+        RuntimeCapability::from_tag_str("network_egress"),
+        Some(RuntimeCapability::NetworkEgress)
+    );
+    assert_eq!(
+        RuntimeCapability::from_tag_str("process_spawn"),
+        Some(RuntimeCapability::ProcessSpawn)
+    );
 
     // Test that unknown tags return None
     assert_eq!(RuntimeCapability::from_tag_str("unknown_capability"), None);
-    assert_eq!(RuntimeCapability::from_tag_str("promise:some_internal"), None);
+    assert_eq!(
+        RuntimeCapability::from_tag_str("promise:some_internal"),
+        None
+    );
 }
 
 #[test]
@@ -320,7 +406,10 @@ fn test_runtime_capability_display() {
     // Test capability display names
     assert_eq!(RuntimeCapability::FsRead.to_string(), "fs_read");
     assert_eq!(RuntimeCapability::FsWrite.to_string(), "fs_write");
-    assert_eq!(RuntimeCapability::NetworkEgress.to_string(), "network_egress");
+    assert_eq!(
+        RuntimeCapability::NetworkEgress.to_string(),
+        "network_egress"
+    );
     assert_eq!(RuntimeCapability::ProcessSpawn.to_string(), "process_spawn");
     assert_eq!(RuntimeCapability::VmDispatch.to_string(), "vm_dispatch");
     assert_eq!(RuntimeCapability::Builtin.to_string(), "builtin");

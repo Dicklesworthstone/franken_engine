@@ -8,10 +8,10 @@
 
 #![forbid(unsafe_code)]
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
-use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
@@ -91,8 +91,8 @@ const BENCHMARK_DIAGNOSTIC_TEST_CASES: &[BenchmarkDiagnosticTestCase] = &[
         &["--version"],
         "benchmark_export_version",
         "benchmark",
-    ).expect_failure(), // Version flag might not be implemented
-
+    )
+    .expect_failure(), // Version flag might not be implemented
     // Runtime diagnostics tests
     BenchmarkDiagnosticTestCase::new(
         "runtime_diagnostics",
@@ -105,13 +105,15 @@ const BENCHMARK_DIAGNOSTIC_TEST_CASES: &[BenchmarkDiagnosticTestCase] = &[
         &["diagnostics"],
         "runtime_diagnostics_no_input",
         "diagnostic",
-    ).expect_failure(), // Should fail without required input
+    )
+    .expect_failure(), // Should fail without required input
     BenchmarkDiagnosticTestCase::new(
         "runtime_diagnostics",
         &["export-evidence"],
         "runtime_diagnostics_export_no_input",
         "diagnostic",
-    ).expect_failure(), // Should fail without required input
+    )
+    .expect_failure(), // Should fail without required input
 ];
 
 /// Scrub timing values, timestamps, paths, and other non-deterministic content from output
@@ -294,7 +296,10 @@ fn test_benchmark_diagnostic_golden(test_case: &BenchmarkDiagnosticTestCase) {
         &content,
         &fixture_path,
         test_case.name,
-        Some(&format!("{} {} output", test_case.category, test_case.binary)),
+        Some(&format!(
+            "{} {} output",
+            test_case.category, test_case.binary
+        )),
     );
 }
 
@@ -305,7 +310,8 @@ mod tests {
     #[test]
     fn test_scrub_benchmark_diagnostic_output() {
         let input = "Benchmark run: 1245.67 us, hash: abc123def456, path: /data/projects/franken_engine/test";
-        let expected = "Benchmark run: [TIMING_VALUE], hash: [HASH_VALUE], path: [PROJECT_PATH]/test";
+        let expected =
+            "Benchmark run: [TIMING_VALUE], hash: [HASH_VALUE], path: [PROJECT_PATH]/test";
         assert_eq!(scrub_benchmark_diagnostic_output(input), expected);
     }
 

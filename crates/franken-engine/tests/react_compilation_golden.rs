@@ -308,9 +308,7 @@ fn test_react_compilation_golden(test_case: &ReactCompilationTestCase) {
     let fixture_path = golden_file_path(test_case.name);
     let hint = format!(
         "React compilation: mode={:?}, dev={}, jsx_source='{}'",
-        test_case.runtime_mode,
-        test_case.is_dev,
-        test_case.jsx_source
+        test_case.runtime_mode, test_case.is_dev, test_case.jsx_source
     );
 
     diag.assert_golden_match(&actual_json, &fixture_path, test_case.name, Some(&hint));

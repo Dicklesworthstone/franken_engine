@@ -11,9 +11,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
-use frankenengine_engine::ifc_artifacts::{
-    IfcSchemaVersion, Label,
-};
+use frankenengine_engine::ifc_artifacts::{IfcSchemaVersion, Label};
 
 // ---------------------------------------------------------------------------
 // Proof Artifact Structures for IFC/Declassification
@@ -529,19 +527,22 @@ fn test_ifc_declassification_proof_artifacts() {
                 expected: "denied".to_string(),
                 actual: "denied".to_string(),
                 result: "pass".to_string(),
-                evidence: "Flow from confidential to public blocked without declassification".to_string(),
+                evidence: "Flow from confidential to public blocked without declassification"
+                    .to_string(),
             },
             flow_allowed_with_declassification: TestResult {
                 expected: "allowed".to_string(),
                 actual: "allowed".to_string(),
                 result: "pass".to_string(),
-                evidence: "Flow from confidential to public permitted with signed receipt".to_string(),
+                evidence: "Flow from confidential to public permitted with signed receipt"
+                    .to_string(),
             },
             declassification_receipt_generated: TestResult {
                 expected: "signed_receipt".to_string(),
                 actual: "signed_receipt".to_string(),
                 result: "pass".to_string(),
-                evidence: "Declassification receipt includes signature and provenance linkage".to_string(),
+                evidence: "Declassification receipt includes signature and provenance linkage"
+                    .to_string(),
             },
             provenance_trace_complete: TestResult {
                 expected: "complete_trace".to_string(),
@@ -582,6 +583,11 @@ fn test_ifc_declassification_proof_artifacts() {
     assert!(trace_path.exists());
     assert!(report_path.exists());
 
-    println!("✅ Generated IFC/declassification proof artifacts in: {}", output_dir.display());
-    println!("📄 Files: flow_policy_input.json, flow_labels.json, declassification_decision.json, signed_declassification_receipt.json, provenance_trace.json, verifier_report.json");
+    println!(
+        "✅ Generated IFC/declassification proof artifacts in: {}",
+        output_dir.display()
+    );
+    println!(
+        "📄 Files: flow_policy_input.json, flow_labels.json, declassification_decision.json, signed_declassification_receipt.json, provenance_trace.json, verifier_report.json"
+    );
 }

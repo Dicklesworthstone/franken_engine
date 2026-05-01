@@ -37,15 +37,19 @@ fn test_suspicious_extension_decision() {
 
     // Suspicious extension should likely be denied or killed, not allowed
     assert!(
-        report.selected_action == "deny" ||
-        report.selected_action == "kill" ||
-        report.selected_action == "warn",
-        "Suspicious extension should not be allowed, got: {}", report.selected_action
+        report.selected_action == "deny"
+            || report.selected_action == "kill"
+            || report.selected_action == "warn",
+        "Suspicious extension should not be allowed, got: {}",
+        report.selected_action
     );
 
     // High confidence expected for deterministic computation
-    assert!(report.confidence_score >= 800_000,
-            "Should have high confidence, got: {}", report.confidence_score);
+    assert!(
+        report.confidence_score >= 800_000,
+        "Should have high confidence, got: {}",
+        report.confidence_score
+    );
 
     // Verify proof artifacts exist
     let manifest_path = output_dir.join("manifest.json");
@@ -61,10 +65,9 @@ fn test_suspicious_extension_decision() {
     assert!(markdown_path.exists(), "Markdown report should exist");
 
     // Verify manifest structure
-    let manifest_content = fs::read_to_string(&manifest_path)
-        .expect("Should read manifest");
-    let manifest: GuardplaneDecisionManifest = serde_json::from_str(&manifest_content)
-        .expect("Manifest should be valid JSON");
+    let manifest_content = fs::read_to_string(&manifest_path).expect("Should read manifest");
+    let manifest: GuardplaneDecisionManifest =
+        serde_json::from_str(&manifest_content).expect("Manifest should be valid JSON");
 
     assert_eq!(manifest.bead_id, EXAMPLE_BEAD_ID);
     assert_eq!(manifest.proof_type, "guardplane_live_decision_example");
@@ -75,10 +78,9 @@ fn test_suspicious_extension_decision() {
     assert!(!manifest.decision_hash.is_empty());
 
     // Verify events structure
-    let events_content = fs::read_to_string(&events_path)
-        .expect("Should read events");
-    let event: GuardplaneDecisionEvent = serde_json::from_str(events_content.trim())
-        .expect("Event should be valid JSON");
+    let events_content = fs::read_to_string(&events_path).expect("Should read events");
+    let event: GuardplaneDecisionEvent =
+        serde_json::from_str(events_content.trim()).expect("Event should be valid JSON");
 
     assert_eq!(event.component, EXAMPLE_COMPONENT);
     assert_eq!(event.event_type, "guardplane_decision");
@@ -87,13 +89,18 @@ fn test_suspicious_extension_decision() {
 
     // Verify posterior probabilities sum to 1.0 (1_000_000 millionths)
     let total_probability: u64 = event.posterior_probabilities.values().sum();
-    assert_eq!(total_probability, 1_000_000,
-               "Posterior probabilities should sum to 1.0");
+    assert_eq!(
+        total_probability, 1_000_000,
+        "Posterior probabilities should sum to 1.0"
+    );
 
     // For suspicious extension, P(malicious) should be elevated
     let p_malicious = event.posterior_probabilities.get("malicious").unwrap();
-    assert!(*p_malicious > 100_000, // Should be > 10% for suspicious extension
-            "Suspicious extension should have elevated P(malicious), got: {}", p_malicious);
+    assert!(
+        *p_malicious > 100_000, // Should be > 10% for suspicious extension
+        "Suspicious extension should have elevated P(malicious), got: {}",
+        p_malicious
+    );
 
     cleanup_temp_dir(&output_dir);
 }
@@ -113,25 +120,31 @@ fn test_benign_extension_decision() {
     // Benign extension should likely be allowed or warned at most
     assert!(
         report.selected_action == "allow" || report.selected_action == "warn",
-        "Benign extension should not be severely contained, got: {}", report.selected_action
+        "Benign extension should not be severely contained, got: {}",
+        report.selected_action
     );
 
     // Verify events structure
     let events_path = output_dir.join("events.jsonl");
-    let events_content = fs::read_to_string(&events_path)
-        .expect("Should read events");
-    let event: GuardplaneDecisionEvent = serde_json::from_str(events_content.trim())
-        .expect("Event should be valid JSON");
+    let events_content = fs::read_to_string(&events_path).expect("Should read events");
+    let event: GuardplaneDecisionEvent =
+        serde_json::from_str(events_content.trim()).expect("Event should be valid JSON");
 
     // For benign extension, P(benign) should remain high
     let p_benign = event.posterior_probabilities.get("benign").unwrap();
-    assert!(*p_benign > 700_000, // Should remain > 70% for benign extension
-            "Benign extension should have high P(benign), got: {}", p_benign);
+    assert!(
+        *p_benign > 700_000, // Should remain > 70% for benign extension
+        "Benign extension should have high P(benign), got: {}",
+        p_benign
+    );
 
     // P(malicious) should be low
     let p_malicious = event.posterior_probabilities.get("malicious").unwrap();
-    assert!(*p_malicious < 200_000, // Should be < 20% for benign extension
-            "Benign extension should have low P(malicious), got: {}", p_malicious);
+    assert!(
+        *p_malicious < 200_000, // Should be < 20% for benign extension
+        "Benign extension should have low P(malicious), got: {}",
+        p_malicious
+    );
 
     cleanup_temp_dir(&output_dir);
 }
@@ -142,30 +155,37 @@ fn test_posterior_computation_logic() {
     let suspicious_input = SyntheticDecisionInput {
         extension_id: "test-extension".to_string(),
         operation_type: "test_operation".to_string(),
-        hostcall_evidence: vec![
-            HostcallEvidence {
-                hostcall_name: "high_risk_call".to_string(),
-                frequency: 100,
-                anomaly_score_millionths: 900_000, // 90% anomaly
-                privilege_level: "elevated".to_string(),
-            },
-        ],
-        prior_violations: 3, // High number of prior violations
+        hostcall_evidence: vec![HostcallEvidence {
+            hostcall_name: "high_risk_call".to_string(),
+            frequency: 100,
+            anomaly_score_millionths: 900_000, // 90% anomaly
+            privilege_level: "elevated".to_string(),
+        }],
+        prior_violations: 3,         // High number of prior violations
         time_since_install_hours: 1, // Recently installed
     };
 
     let posterior = compute_evidence_posterior(&suspicious_input);
 
     // Verify probabilities are valid
-    assert!(posterior.p_benign >= 10_000, "P(benign) should be at least 1%");
-    assert!(posterior.p_malicious <= 800_000, "P(malicious) should be at most 80%");
+    assert!(
+        posterior.p_benign >= 10_000,
+        "P(benign) should be at least 1%"
+    );
+    assert!(
+        posterior.p_malicious <= 800_000,
+        "P(malicious) should be at most 80%"
+    );
 
-    let total = posterior.p_benign + posterior.p_anomalous + posterior.p_malicious + posterior.p_unknown;
+    let total =
+        posterior.p_benign + posterior.p_anomalous + posterior.p_malicious + posterior.p_unknown;
     assert_eq!(total, 1_000_000, "Probabilities should sum to 1.0");
 
     // High anomaly score and violations should increase P(malicious)
-    assert!(posterior.p_malicious > 100_000, // Should be > 10%
-            "High-risk input should increase P(malicious)");
+    assert!(
+        posterior.p_malicious > 100_000, // Should be > 10%
+        "High-risk input should increase P(malicious)"
+    );
 }
 
 #[test]
@@ -180,18 +200,24 @@ fn test_loss_matrix_completeness() {
 
     // Allow + Malicious should have high loss (security risk)
     let allow_malicious_loss = loss_matrix.loss(ContainmentAction::Allow, RiskState::Malicious);
-    assert!(allow_malicious_loss > 500_000, // Should be > 50% loss
-            "Allowing malicious extension should have high loss");
+    assert!(
+        allow_malicious_loss > 500_000, // Should be > 50% loss
+        "Allowing malicious extension should have high loss"
+    );
 
     // Deny + Benign should have moderate loss (usability impact)
     let deny_benign_loss = loss_matrix.loss(ContainmentAction::Deny, RiskState::Benign);
-    assert!(deny_benign_loss > 100_000, // Should be > 10% loss
-            "Denying benign extension should have some cost");
+    assert!(
+        deny_benign_loss > 100_000, // Should be > 10% loss
+        "Denying benign extension should have some cost"
+    );
 
     // Kill + Malicious should have low loss (good security decision)
     let kill_malicious_loss = loss_matrix.loss(ContainmentAction::Kill, RiskState::Malicious);
-    assert!(kill_malicious_loss < 100_000, // Should be < 10% loss
-            "Killing malicious extension should have low loss");
+    assert!(
+        kill_malicious_loss < 100_000, // Should be < 10% loss
+        "Killing malicious extension should have low loss"
+    );
 }
 
 #[test]
@@ -228,11 +254,10 @@ fn test_proof_artifact_schema_compliance() {
 
     // Test JSON schema compliance for key artifacts
     let manifest_path = output_dir.join("manifest.json");
-    let manifest_content = fs::read_to_string(&manifest_path)
-        .expect("Should read manifest");
+    let manifest_content = fs::read_to_string(&manifest_path).expect("Should read manifest");
 
-    let manifest: serde_json::Value = serde_json::from_str(&manifest_content)
-        .expect("Manifest should be valid JSON");
+    let manifest: serde_json::Value =
+        serde_json::from_str(&manifest_content).expect("Manifest should be valid JSON");
 
     // Verify required manifest fields
     assert!(manifest.get("schema_version").is_some());
@@ -244,11 +269,10 @@ fn test_proof_artifact_schema_compliance() {
 
     // Test report JSON structure
     let report_path = output_dir.join("report.json");
-    let report_content = fs::read_to_string(&report_path)
-        .expect("Should read report");
+    let report_content = fs::read_to_string(&report_path).expect("Should read report");
 
-    let report: serde_json::Value = serde_json::from_str(&report_content)
-        .expect("Report should be valid JSON");
+    let report: serde_json::Value =
+        serde_json::from_str(&report_content).expect("Report should be valid JSON");
 
     assert!(report.get("posterior_risk_assessment").is_some());
     assert!(report.get("expected_losses").is_some());

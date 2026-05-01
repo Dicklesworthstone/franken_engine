@@ -909,6 +909,135 @@ impl fmt::Display for DeclassificationDecision {
     }
 }
 
+/// Cryptographic content binding that links labels to actual data.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContentBinding {
+    /// Hash of the content being labeled.
+    pub content_hash: ContentHash,
+    /// The label applied to this content.
+    pub content_label: Label,
+    /// Combined hash of content_hash || label for signature verification.
+    pub binding_hash: ContentHash,
+    /// Signature over the binding_hash by the engine's signing key.
+    pub binding_signature: Signature,
+}
+
+impl ContentBinding {
+    /// Create a new content binding with cryptographic verification.
+    pub fn new(
+        content: &[u8],
+        label: Label,
+        signing_key: &SigningKey,
+    ) -> Result<Self, crate::signature_preimage::SignatureError> {
+        let content_hash = ContentHash::compute(content);
+        let binding_hash = Self::compute_binding_hash(&content_hash, &label);
+
+        // Create signature over the binding hash
+        let binding_signature = {
+            let preimage = format!("ifc-content-binding:{}", binding_hash.as_hex());
+            let preimage_bytes = preimage.as_bytes();
+            crate::signature_preimage::sign_preimage(signing_key, preimage_bytes)?
+        };
+
+        Ok(Self {
+            content_hash,
+            content_label: label,
+            binding_hash,
+            binding_signature,
+        })
+    }
+
+    /// Verify that the content binding is cryptographically valid.
+    pub fn verify(
+        &self,
+        content: &[u8],
+        verification_key: &VerificationKey,
+    ) -> Result<(), ContentBindingError> {
+        // Verify content hash matches
+        let computed_content_hash = ContentHash::compute(content);
+        if computed_content_hash != self.content_hash {
+            return Err(ContentBindingError::ContentHashMismatch {
+                expected: self.content_hash,
+                computed: computed_content_hash,
+            });
+        }
+
+        // Verify binding hash is correctly computed
+        let computed_binding_hash =
+            Self::compute_binding_hash(&self.content_hash, &self.content_label);
+        if computed_binding_hash != self.binding_hash {
+            return Err(ContentBindingError::BindingHashMismatch {
+                expected: self.binding_hash,
+                computed: computed_binding_hash,
+            });
+        }
+
+        // Verify signature over binding hash
+        let preimage = format!("ifc-content-binding:{}", self.binding_hash.as_hex());
+        let preimage_bytes = preimage.as_bytes();
+        crate::signature_preimage::verify_signature(
+            verification_key,
+            preimage_bytes,
+            &self.binding_signature,
+        )
+        .map_err(|e| ContentBindingError::SignatureVerificationFailed(e))?;
+
+        Ok(())
+    }
+
+    /// Compute the binding hash: hash(content_hash || label).
+    fn compute_binding_hash(content_hash: &ContentHash, label: &Label) -> ContentHash {
+        let label_bytes = serde_json::to_vec(label).expect("Label serialization should succeed");
+        let mut combined = Vec::new();
+        combined.extend_from_slice(content_hash.as_bytes());
+        combined.extend_from_slice(&label_bytes);
+        ContentHash::compute(&combined)
+    }
+}
+
+/// Errors that can occur during content binding operations.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ContentBindingError {
+    /// Content hash does not match expected value.
+    ContentHashMismatch {
+        expected: ContentHash,
+        computed: ContentHash,
+    },
+    /// Binding hash does not match expected value.
+    BindingHashMismatch {
+        expected: ContentHash,
+        computed: ContentHash,
+    },
+    /// Signature verification failed.
+    SignatureVerificationFailed(crate::signature_preimage::SignatureError),
+}
+
+impl fmt::Display for ContentBindingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ContentHashMismatch { expected, computed } => {
+                write!(
+                    f,
+                    "Content hash mismatch: expected {}, computed {}",
+                    expected.as_hex(),
+                    computed.as_hex()
+                )
+            }
+            Self::BindingHashMismatch { expected, computed } => {
+                write!(
+                    f,
+                    "Binding hash mismatch: expected {}, computed {}",
+                    expected.as_hex(),
+                    computed.as_hex()
+                )
+            }
+            Self::SignatureVerificationFailed(e) => {
+                write!(f, "Signature verification failed: {}", e)
+            }
+        }
+    }
+}
+
 /// Signed record of an approved (or denied) cross-label data flow.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeclassificationReceipt {
@@ -918,6 +1047,8 @@ pub struct DeclassificationReceipt {
     pub source_label: Label,
     /// Sink clearance being declassified to.
     pub sink_clearance: Label,
+    /// Cryptographic binding of content to source label.
+    pub content_binding: Option<ContentBinding>,
     /// Reference to the declassification route in the governing policy.
     pub declassification_route_ref: String,
     /// Decision contract that authorized this declassification.
@@ -981,6 +1112,58 @@ impl DeclassificationReceipt {
             "replay_linkage",
             &self.replay_linkage,
         )?;
+        Ok(())
+    }
+
+    /// Validate content binding if present and verify against actual content.
+    pub fn validate_content_binding(
+        &self,
+        content: &[u8],
+        verification_key: &VerificationKey,
+    ) -> Result<(), IfcValidationError> {
+        if let Some(binding) = &self.content_binding {
+            // Verify the content binding is cryptographically valid
+            binding.verify(content, verification_key).map_err(|e| {
+                IfcValidationError::InvalidFieldValue {
+                    field: "content_binding".to_string(),
+                    value: format!("binding verification failed: {}", e),
+                }
+            })?;
+
+            // Verify the binding's label matches the receipt's source label
+            if binding.content_label != self.source_label {
+                return Err(IfcValidationError::InvalidFieldValue {
+                    field: "content_binding.content_label".to_string(),
+                    value: format!(
+                        "Content binding label {:?} does not match receipt source label {:?}",
+                        binding.content_label, self.source_label
+                    ),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Check if this receipt has secure content binding.
+    pub fn has_secure_content_binding(&self) -> bool {
+        self.content_binding.is_some()
+    }
+
+    /// Defensive check: refuse declassification operations if content binding is missing
+    /// for high-security labels.
+    pub fn require_content_binding_for_security(&self) -> Result<(), IfcValidationError> {
+        // Require content binding for Secret and TopSecret labels
+        if (self.source_label.level() >= 3 || self.sink_clearance.level() >= 3)
+            && self.content_binding.is_none()
+        {
+            return Err(IfcValidationError::InvalidFieldValue {
+                field: "content_binding".to_string(),
+                value: format!(
+                    "Content binding is required for security-critical labels (source: {:?}, sink: {:?})",
+                    self.source_label, self.sink_clearance
+                ),
+            });
+        }
         Ok(())
     }
 

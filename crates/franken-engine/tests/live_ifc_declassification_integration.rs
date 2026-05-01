@@ -11,7 +11,10 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
-use frankenengine_engine::ifc_artifacts::{IfcSchemaVersion, Label};
+use frankenengine_engine::ifc_artifacts::{
+    ContentBinding, DeclassificationDecision, DeclassificationReceipt, IfcSchemaVersion, Label,
+};
+use frankenengine_engine::signature_preimage::{SigningKey, VerificationKey};
 
 // ---------------------------------------------------------------------------
 // Proof Artifact Structures for IFC/Declassification
@@ -590,4 +593,133 @@ fn test_ifc_declassification_proof_artifacts() {
     println!(
         "📄 Files: flow_policy_input.json, flow_labels.json, declassification_decision.json, signed_declassification_receipt.json, provenance_trace.json, verifier_report.json"
     );
+}
+
+/// Test demonstrating the content binding security fix.
+///
+/// This test shows that before the fix, an attacker could swap content while
+/// preserving labels. After the fix, content binding verification prevents this attack.
+#[test]
+fn test_content_binding_prevents_content_swapping_attack() {
+    // Generate a signing key pair for testing
+    let signing_key = SigningKey::generate();
+    let verification_key = signing_key.verification_key();
+
+    // Original content and label
+    let original_content = b"This is confidential data that should be protected";
+    let confidential_label = Label::Confidential;
+
+    // Create a content binding for the original content
+    let content_binding =
+        ContentBinding::new(original_content, confidential_label.clone(), &signing_key)
+            .expect("Content binding creation should succeed");
+
+    // Create a declassification receipt with the content binding
+    let receipt = DeclassificationReceipt {
+        receipt_id: "test-receipt-001".to_string(),
+        source_label: confidential_label,
+        sink_clearance: Label::Internal,
+        content_binding: Some(content_binding),
+        declassification_route_ref: "test-route".to_string(),
+        decision_contract_id: "test-contract".to_string(),
+        policy_evaluation_summary: "Test evaluation".to_string(),
+        loss_assessment_milli: 100_000, // 10% expected loss
+        decision: DeclassificationDecision::Allow,
+        authorized_by: verification_key.clone(),
+        replay_linkage: "test-trace-123".to_string(),
+        timestamp_ms: 1735689000000, // 2024-12-31 example
+        schema_version: IfcSchemaVersion::CURRENT,
+        signature: frankenengine_engine::signature_preimage::Signature::from_bytes([0u8; 64]), // Placeholder
+    };
+
+    // Test 1: Legitimate content validation should succeed
+    let validation_result = receipt.validate_content_binding(original_content, &verification_key);
+    assert!(
+        validation_result.is_ok(),
+        "Legitimate content should pass validation: {:?}",
+        validation_result
+    );
+
+    // Test 2: Attacker tries to swap content while preserving the receipt
+    let malicious_content = b"This is malicious content injected by an attacker!!";
+    let attack_result = receipt.validate_content_binding(malicious_content, &verification_key);
+
+    // The attack should fail due to content hash mismatch
+    assert!(
+        attack_result.is_err(),
+        "Malicious content swap should be detected and rejected"
+    );
+
+    // Verify the specific error is content hash mismatch
+    match attack_result {
+        Err(e) => {
+            let error_msg = e.to_string();
+            assert!(
+                error_msg.contains("binding verification failed"),
+                "Error should indicate binding verification failure, got: {}",
+                error_msg
+            );
+        }
+        Ok(_) => panic!("Attack should not succeed"),
+    }
+
+    println!("✅ Content binding successfully prevents content swapping attacks");
+}
+
+/// Test that high-security labels require content binding as a defensive measure.
+#[test]
+fn test_high_security_labels_require_content_binding() {
+    // Create a receipt for Secret data without content binding
+    let receipt_without_binding = DeclassificationReceipt {
+        receipt_id: "test-receipt-no-binding".to_string(),
+        source_label: Label::Secret, // High-security label
+        sink_clearance: Label::Internal,
+        content_binding: None, // Missing content binding!
+        declassification_route_ref: "test-route".to_string(),
+        decision_contract_id: "test-contract".to_string(),
+        policy_evaluation_summary: "Test evaluation".to_string(),
+        loss_assessment_milli: 100_000,
+        decision: DeclassificationDecision::Allow,
+        authorized_by: SigningKey::generate().verification_key(),
+        replay_linkage: "test-trace-123".to_string(),
+        timestamp_ms: 1735689000000,
+        schema_version: IfcSchemaVersion::CURRENT,
+        signature: frankenengine_engine::signature_preimage::Signature::from_bytes([0u8; 64]),
+    };
+
+    // Defensive check should fail for high-security labels without content binding
+    let security_check = receipt_without_binding.require_content_binding_for_security();
+    assert!(
+        security_check.is_err(),
+        "High-security labels should require content binding"
+    );
+
+    // Check the error message
+    match security_check {
+        Err(e) => {
+            let error_msg = e.to_string();
+            assert!(
+                error_msg.contains("Content binding is required for security-critical labels"),
+                "Error should indicate content binding requirement, got: {}",
+                error_msg
+            );
+        }
+        Ok(_) => panic!("Security check should fail without content binding"),
+    }
+
+    // Test that low-security labels don't require content binding (backward compatibility)
+    let receipt_public = DeclassificationReceipt {
+        source_label: Label::Public,
+        sink_clearance: Label::Internal,
+        content_binding: None,
+        ..receipt_without_binding
+    };
+
+    let public_security_check = receipt_public.require_content_binding_for_security();
+    assert!(
+        public_security_check.is_ok(),
+        "Public/Internal labels should not require content binding for backward compatibility"
+    );
+
+    println!("✅ High-security labels properly require content binding");
 }

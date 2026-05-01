@@ -19,8 +19,10 @@ events_path="${run_dir}/events.jsonl"
 report_path="${run_dir}/proof_suite_report.json"
 commands_path="${run_dir}/commands.txt"
 markdown_path="${run_dir}/report.md"
+gate_output_dir="${run_dir}/gate_outputs"
 
 mkdir -p "$run_dir"
+mkdir -p "$gate_output_dir"
 printf './scripts/run_proof_suite.sh %s\n' "$mode" >"$commands_path"
 
 # Use focused CARGO_TARGET_DIR as required
@@ -74,6 +76,8 @@ emit_suite_event() {
   local gate_exit_code="$5"
   local gate_duration_ms="$6"
   local gate_error="${7:-}"
+  local gate_output_path="${8:-}"
+  local gate_output_line_count="${9:-0}"
 
   jq -nc \
     --arg gate_name "$gate_name" \
@@ -83,6 +87,8 @@ emit_suite_event() {
     --arg gate_exit_code "$gate_exit_code" \
     --arg gate_duration_ms "$gate_duration_ms" \
     --arg gate_error "$gate_error" \
+    --arg gate_output_path "$gate_output_path" \
+    --arg gate_output_line_count "$gate_output_line_count" \
     '{
       schema_version: "'"$PROOF_ARTIFACT_EVENT_SCHEMA_VERSION"'",
       event_name: "proof_suite.gate_executed",
@@ -95,7 +101,9 @@ emit_suite_event() {
       gate_status: $gate_status,
       gate_exit_code: ($gate_exit_code | tonumber),
       gate_duration_ms: ($gate_duration_ms | tonumber),
-      gate_error: (if $gate_error == "" then null else $gate_error end)
+      gate_error: (if $gate_error == "" then null else $gate_error end),
+      gate_output_path: (if $gate_output_path == "" then null else $gate_output_path end),
+      gate_output_line_count: ($gate_output_line_count | tonumber)
     }' >>"$events_path"
 }
 
@@ -112,6 +120,8 @@ for gate_spec in "${PROOF_GATES[@]}"; do
     gate_start_time=$(date +%s%3N)
     gate_exit_code=0
     gate_output=""
+    gate_output_path="${gate_output_dir}/${gate_name}.log"
+    gate_output_lines=0
     gate_status="pass"
     gate_error=""
 
@@ -136,11 +146,18 @@ for gate_spec in "${PROOF_GATES[@]}"; do
         gate_error="Gate failed with exit code $gate_exit_code"
         failed_gates=$((failed_gates + 1))
         echo "   ❌ FAILED (exit code: $gate_exit_code)"
+    fi
 
-        # Show first few lines of error output
+    printf '%s\n' "$gate_output" >"$gate_output_path"
+    if [[ -n "$gate_output" ]]; then
+        gate_output_lines=$(printf '%s\n' "$gate_output" | wc -l | tr -d '[:space:]')
+    fi
+
+    if [[ "$gate_status" == "fail" ]]; then
+        echo "   Full output: ${gate_output_path}"
         if [[ -n "$gate_output" ]]; then
-            echo "   Error preview:"
-            echo "$gate_output" | head -3 | sed 's/^/      /'
+            echo "   Error preview (first 20 lines):"
+            printf '%s\n' "$gate_output" | awk 'NR <= 20 { print }' | sed 's/^/      /'
         fi
     fi
 
@@ -158,7 +175,9 @@ for gate_spec in "${PROOF_GATES[@]}"; do
         "$gate_status" \
         "$gate_exit_code" \
         "$gate_duration" \
-        "$gate_error"
+        "$gate_error" \
+        "$gate_output_path" \
+        "$gate_output_lines"
 
     echo ""
 done
@@ -248,8 +267,9 @@ if [[ $failed_gates -gt 0 ]]; then
             echo "" >> "$markdown_path"
             echo "**Bead**: $gate_bead" >> "$markdown_path"
             echo "**Duration**: ${gate_duration}ms" >> "$markdown_path"
+            echo "**Full output**: \`gate_outputs/${gate_name}.log\`" >> "$markdown_path"
             echo "" >> "$markdown_path"
-            echo "Check the events.jsonl file for detailed error information." >> "$markdown_path"
+            echo "Check the full output artifact and events.jsonl file for detailed error information." >> "$markdown_path"
             echo "" >> "$markdown_path"
         fi
     done
@@ -260,6 +280,7 @@ cat >> "$markdown_path" <<EOF
 ## Artifacts Generated
 
 - \`events.jsonl\`: Detailed gate execution events
+- \`gate_outputs/\`: Complete stdout/stderr for each gate
 - \`commands.txt\`: Command transcript
 - \`report.json\`: Machine-readable report
 - \`manifest.json\`: Proof artifact manifest

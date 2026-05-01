@@ -17,54 +17,76 @@ format_percent_millionths() {
   printf '%d.%06d' "$((percent_millionths / 1000000))" "$((percent_millionths % 1000000))"
 }
 
-write_signal() {
-  local signal_id="$1"
-  local detected_us="$2"
-  local applied_us="$3"
-  local action="$4"
-  local clock_id="${5:-proof-clock-1}"
-  local action_exit_code="${6:-0}"
+require_live_input() {
+  if [[ -z "${CONTAINMENT_LATENCY_METRIC_INPUT:-}" ]]; then
+    echo "missing live containment latency evidence: set CONTAINMENT_LATENCY_METRIC_INPUT to a measured metric input JSON file" >&2
+    return 2
+  fi
+  if [[ ! -f "$CONTAINMENT_LATENCY_METRIC_INPUT" ]]; then
+    echo "containment latency evidence file does not exist: ${CONTAINMENT_LATENCY_METRIC_INPUT}" >&2
+    return 2
+  fi
+}
 
-  jq -nc \
-    --arg signal_id "$signal_id" \
-    --arg trace_id "trace-${signal_id}" \
-    --arg policy_id "policy-${signal_id}" \
-    --arg workload_profile "extension_host_mixed_policy_signals" \
-    --arg clock_id "$clock_id" \
-    --arg clock_source "monotonic_us" \
-    --arg action "$action" \
-    --arg action_command "frankenctl policy contain --signal ${signal_id} --action ${action}" \
-    --arg measurement_status "measured" \
-    --arg evidence_bead_id "bd-38mby" \
-    --arg evidence_commit_hash "$code_revision" \
-    --arg evidence_test_name "scripts/run_containment_latency_metric_gate.sh" \
-    --argjson detected_us "$detected_us" \
-    --argjson applied_us "$applied_us" \
-    --argjson action_exit_code "$action_exit_code" \
-    '{
-      signal_id: $signal_id,
-      trace_id: $trace_id,
-      policy_id: $policy_id,
-      workload_profile: $workload_profile,
-      signal_detected_at_us: $detected_us,
-      containment_action_applied_at_us: $applied_us,
-      clock_id: $clock_id,
-      clock_source: $clock_source,
-      action: $action,
-      action_command: $action_command,
-      action_exit_code: $action_exit_code,
-      duration_us: 1137,
-      measurement_status: $measurement_status,
-      evidence_bead_id: $evidence_bead_id,
-      evidence_commit_hash: $evidence_commit_hash,
-      evidence_test_name: $evidence_test_name
-    }'
+validate_live_input() {
+  local input_path="$1"
+  local reasons
+  local clock_count
+
+  if ! jq -e 'type == "object" and (.signals | type == "array") and (.signals | length > 0)' "$input_path" >/dev/null; then
+    echo "invalid containment latency evidence: expected object with non-empty signals array" >&2
+    return 1
+  fi
+
+  reasons="$(
+    jq -r '
+      .signals[]? as $signal
+      | ($signal.signal_id // "<missing-signal-id>") as $signal_id
+      | [
+          (if (($signal.signal_detected_at_us | type) != "number") then "\($signal_id): missing numeric signal_detected_at_us" else empty end),
+          (if (($signal.containment_action_applied_at_us | type) != "number") then "\($signal_id): missing numeric containment_action_applied_at_us" else empty end),
+          (if (($signal.containment_action_applied_at_us | type) == "number" and ($signal.signal_detected_at_us | type) == "number" and $signal.containment_action_applied_at_us < $signal.signal_detected_at_us) then "\($signal_id): non-monotonic containment timestamp" else empty end),
+          (if (($signal.clock_id // "") | tostring | test("^\\s*$")) then "\($signal_id): missing clock_id" else empty end),
+          (if (($signal.clock_id // "") | tostring | test("^proof-clock")) then "\($signal_id): synthetic proof-clock clock_id" else empty end),
+          (if (($signal.clock_source // "") != "monotonic_us") then "\($signal_id): clock_source must be monotonic_us" else empty end),
+          (if (($signal.action_command // "") | tostring | test("^\\s*$")) then "\($signal_id): missing action_command" else empty end),
+          (if (($signal.duration_us | type) != "number") then "\($signal_id): missing numeric duration_us" else empty end),
+          (if (($signal.duration_us // null) == 1137) then "\($signal_id): synthetic duration_us=1137" else empty end),
+          (if ([1000, 5000, 10000, 100000] | index($signal.duration_us // null)) then "\($signal_id): suspicious round duration_us" else empty end),
+          (if (($signal.containment_action_applied_at_us | type) == "number" and ($signal.signal_detected_at_us | type) == "number" and (($signal.containment_action_applied_at_us - $signal.signal_detected_at_us) as $latency | ($latency == 80000 or $latency == 120000 or $latency == 200000))) then "\($signal_id): suspicious round latency_us" else empty end),
+          (if (($signal.action_exit_code // null) != 0) then "\($signal_id): action_exit_code must be 0" else empty end),
+          (if (($signal.measurement_status // "") != "measured") then "\($signal_id): measurement_status must be measured" else empty end),
+          (if (($signal.evidence_bead_id // "") | tostring | test("^\\s*$")) then "\($signal_id): missing evidence_bead_id" else empty end),
+          (if (($signal.evidence_commit_hash // "") | tostring | test("^\\s*$")) then "\($signal_id): missing evidence_commit_hash" else empty end),
+          (if (($signal.evidence_test_name // "") | tostring | test("^\\s*$")) then "\($signal_id): missing evidence_test_name" else empty end),
+          (if (($signal.evidence_test_name // "") | tostring | test("representative_fixture|run_containment_latency_metric_gate\\.sh")) then "\($signal_id): synthetic evidence_test_name" else empty end)
+        ][]
+    ' "$input_path"
+  )"
+
+  if [[ -n "$reasons" ]]; then
+    echo "containment latency evidence rejected:" >&2
+    echo "$reasons" >&2
+    return 1
+  fi
+
+  clock_count="$(jq '[.signals[].clock_id] | unique | length' "$input_path")"
+  if [[ "$clock_count" -ne 1 ]]; then
+    echo "containment latency evidence rejected: mixed clock_id values" >&2
+    return 1
+  fi
+}
+
+checked_input_path() {
+  require_live_input || return $?
+  validate_live_input "$CONTAINMENT_LATENCY_METRIC_INPUT" || return $?
+  printf '%s' "$CONTAINMENT_LATENCY_METRIC_INPUT"
 }
 
 write_bundle() {
   local bundle_dir="$1"
   local variant="$2"
-  local fail_one="${3:-false}"
+  local input_path="$3"
   local details_path="${bundle_dir}/latency_details.json"
   local metric_path="${bundle_dir}/metric_artifact.json"
   local metric_report_path="${bundle_dir}/metric_report.json"
@@ -72,48 +94,64 @@ write_bundle() {
   local commands_path="${bundle_dir}/commands.txt"
   local summary_path="${bundle_dir}/summary.md"
   local signals_path="${bundle_dir}/signals.jsonl"
-  local verification_command="./scripts/run_containment_latency_metric_gate.sh ${mode}"
-  local signal_two_clock="proof-clock-1"
-  local signal_two_applied=2120456
-  local valid_count=3
-  local median_us=120456
-  local median_ms=121
-  local observed_ms=121
-  local coverage_millionths=1000000
-  local decision="pass"
-  local report_decision="pass"
-  local reason="median_latency_within_threshold"
-  local failure_count=0
+  local verification_command="CONTAINMENT_LATENCY_METRIC_INPUT=$(proof_contract_repo_relative_path "$input_path") ./scripts/run_containment_latency_metric_gate.sh ${mode}"
+  local input_code_revision
+  local scenario_set
+  local freshness_days
+  local confidence_millionths
+  local redaction_status
+  local total
+  local contained
+  local median_us
+  local median_ms
+  local observed_ms
+  local coverage_millionths
+  local decision
+  local report_decision
+  local reason
+  local failure_count
   local details_hash
 
   mkdir -p "$bundle_dir"
-  : >"$signals_path"
+  jq -c '.signals[]' "$input_path" >"$signals_path"
 
-  if [[ "$fail_one" == "true" ]]; then
-    signal_two_clock="proof-clock-2"
-    valid_count=2
-    median_us=139956
-    median_ms=140
-    observed_ms=251
-    coverage_millionths=666666
+  input_code_revision="$(jq -r '.code_revision // empty' "$input_path")"
+  if [[ -z "$input_code_revision" ]]; then
+    input_code_revision="$code_revision"
+  fi
+  scenario_set="$(jq -r '.scenario_set // "policy_signal_to_containment_action_v1"' "$input_path")"
+  freshness_days="$(jq -r '.freshness_days // 0' "$input_path")"
+  confidence_millionths="$(jq -r '.confidence_millionths // 990000' "$input_path")"
+  redaction_status="$(jq -r '.redaction_status // "redacted"' "$input_path")"
+  total="$(jq '.signals | length' "$input_path")"
+  contained="$(jq --argjson threshold_us 250000 '[.signals[] | select((.containment_action_applied_at_us - .signal_detected_at_us) <= $threshold_us)] | length' "$input_path")"
+  median_us="$(
+    jq '[.signals[] | (.containment_action_applied_at_us - .signal_detected_at_us)] | sort | length as $len | (($len / 2) | floor) as $mid | if $len == 0 then 0 elif ($len % 2) == 1 then .[$mid] else ((.[($mid - 1)] + .[$mid]) / 2 | floor) end' "$input_path"
+  )"
+  median_ms=$(((median_us + 999) / 1000))
+  observed_ms="$median_ms"
+  coverage_millionths=$(((contained * 1000000) / total))
+  if ((median_us <= 250000)); then
+    decision="pass"
+    report_decision="pass"
+    reason="median_latency_within_threshold"
+    failure_count=0
+  else
     decision="fail"
     report_decision="fail_closed"
-    reason="invalid_signal_to_action_trace"
+    reason="median_latency_exceeds_threshold"
     failure_count=1
   fi
-
-  write_signal "ambient-write-denied" 1000000 1080123 "isolate" >>"$signals_path"
-  write_signal "capability-revoked" 2000000 "$signal_two_applied" "revoke_capability" "$signal_two_clock" >>"$signals_path"
-  write_signal "compute-budget-killed" 3000000 3199789 "kill_execution" >>"$signals_path"
 
   jq -s \
     --arg schema_version "franken-engine.containment-latency-metric-gate.details.v1" \
     --arg component "containment_latency_metric_gate" \
     --arg bead_id "bd-38mby" \
-    --arg code_revision "$code_revision" \
-    --arg scenario_set "policy_signal_to_containment_action_v1" \
-    --argjson total 3 \
-    --argjson contained "$valid_count" \
+    --arg code_revision "$input_code_revision" \
+    --arg scenario_set "$scenario_set" \
+    --arg raw_evidence_input_path "$(proof_contract_repo_relative_path "$input_path")" \
+    --argjson total "$total" \
+    --argjson contained "$contained" \
     --argjson median_us "$median_us" \
     --argjson median_ms "$median_ms" \
     --argjson coverage "$coverage_millionths" \
@@ -130,17 +168,23 @@ write_bundle() {
       threshold_us: 250000,
       threshold_ms: 250,
       coverage_millionths: $coverage,
+      raw_evidence_input_path: $raw_evidence_input_path,
       signals: .
     }' "$signals_path" >"$details_path"
   details_hash="sha256:$(proof_contract_sha256_file "$details_path")"
 
   jq -n \
-    --arg code_revision "$code_revision" \
+    --arg code_revision "$input_code_revision" \
     --arg artifact_path "$(proof_contract_repo_relative_path "$details_path")" \
     --arg artifact_hash "$details_hash" \
     --arg verification_command "$verification_command" \
+    --arg scenario_set "$scenario_set" \
+    --arg redaction_status "$redaction_status" \
     --argjson observed "$observed_ms" \
     --argjson coverage "$coverage_millionths" \
+    --argjson freshness_days "$freshness_days" \
+    --argjson confidence_millionths "$confidence_millionths" \
+    --argjson total "$total" \
     '{
       metric_id: "containment_latency_median_ms",
       threshold: 250,
@@ -148,16 +192,16 @@ write_bundle() {
       unit: "ms",
       baseline: "signal_to_action_trace",
       candidate: "franken_engine",
-      denominator_id: "containment_signals:3",
-      scenario_set: "policy_signal_to_containment_action_v1",
+      denominator_id: ("containment_signals:" + ($total | tostring)),
+      scenario_set: $scenario_set,
       artifact_path: $artifact_path,
       artifact_hash: $artifact_hash,
       code_revision: $code_revision,
-      freshness_days: 0,
-      confidence_millionths: 990000,
+      freshness_days: $freshness_days,
+      confidence_millionths: $confidence_millionths,
       coverage_millionths: $coverage,
       verification_command: $verification_command,
-      redaction_status: "redacted"
+      redaction_status: $redaction_status
     }' >"$metric_path"
 
   printf '%s\n' "$verification_command" >"$commands_path"
@@ -170,16 +214,17 @@ write_bundle() {
     --arg proof_manifest_id "containment_latency_metric_gate:${variant}" \
     --arg artifact_path "$(proof_contract_repo_relative_path "$details_path")" \
     --arg artifact_hash "$details_hash" \
-    --arg code_revision "$code_revision" \
-    --arg redaction_status "redacted" \
+    --arg code_revision "$input_code_revision" \
+    --arg redaction_status "$redaction_status" \
     --argjson median_us "$median_us" \
     --argjson median_ms "$median_ms" \
-    --argjson coverage_numerator "$valid_count" \
-    --argjson coverage_denominator 3 \
+    --argjson coverage_numerator "$contained" \
+    --argjson coverage_denominator "$total" \
+    --argjson freshness_days "$freshness_days" \
     --arg coverage_percent "$(format_percent_millionths "$coverage_millionths")" \
     '. as $signal
     | ($signal.containment_action_applied_at_us - $signal.signal_detected_at_us) as $latency_us
-    | ($signal.clock_id == "proof-clock-1" and $signal.action_exit_code == 0 and ($signal.containment_action_applied_at_us >= $signal.signal_detected_at_us)) as $contained
+    | ($signal.action_exit_code == 0 and ($signal.containment_action_applied_at_us >= $signal.signal_detected_at_us) and $latency_us <= 250000) as $contained
     | {
         schema_version: $schema_version,
         event_name: $event_name,
@@ -212,13 +257,13 @@ write_bundle() {
         command: $signal.action_command,
         exit_code: $signal.action_exit_code,
         decision: (if $contained then "contained" else "not_contained" end),
-        reason: (if $contained then "signal_to_action_latency_observed" else "mixed_clock_metadata" end),
+        reason: (if $contained then "signal_to_action_latency_observed" elif $latency_us > 250000 then "latency_exceeds_threshold" else "invalid_signal_to_action_trace" end),
         artifact_path: $artifact_path,
         artifact_hash: $artifact_hash,
         code_revision: $code_revision,
         duration_us: $signal.duration_us,
         duration_ms: (($signal.duration_us + 999) / 1000 | floor),
-        freshness_days: 0,
+        freshness_days: $freshness_days,
         redaction_status: $redaction_status,
         remediation: (if $contained then "none" else "record monotonic signal/action timestamps and rerun containment verifier" end)
       }' "$signals_path" >"$events_path"
@@ -228,8 +273,8 @@ write_bundle() {
     --arg component "containment_latency_metric_gate" \
     --arg bead_id "bd-38mby" \
     --slurpfile metric "$metric_path" \
-    --argjson total 3 \
-    --argjson contained "$valid_count" \
+    --argjson total "$total" \
+    --argjson contained "$contained" \
     --argjson median_us "$median_us" \
     --argjson median_ms "$median_ms" \
     --argjson coverage "$coverage_millionths" \
@@ -281,19 +326,23 @@ write_bundle() {
 
   echo "containment_latency_metric_artifact=${metric_path}"
   echo "containment_latency_proof_manifest=${bundle_dir}/manifest.json"
+  [[ "$decision" == "pass" ]]
 }
 
 case "$mode" in
   ci)
-    write_bundle "${run_dir}/pass" "pass" "false"
-    write_bundle "${run_dir}/fail_closed" "fail_closed" "true"
-    jq -e '.status == "fail" and .failure_count == 1' "${run_dir}/fail_closed/report.json" >/dev/null
+    input_path="$(checked_input_path)"
+    write_bundle "${run_dir}/measured" "measured" "$input_path"
     ;;
   pass)
-    write_bundle "$run_dir" "pass" "false"
+    input_path="$(checked_input_path)"
+    write_bundle "$run_dir" "pass" "$input_path"
     ;;
   fail_closed)
-    write_bundle "$run_dir" "fail_closed" "true"
+    input_path="$(checked_input_path)"
+    if write_bundle "$run_dir" "fail_closed" "$input_path"; then
+      echo "expected fail_closed containment latency evidence, but measured input passed" >&2
+    fi
     exit 1
     ;;
   *)

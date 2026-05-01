@@ -4,8 +4,8 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fmt;
-use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::fs::{self, File, OpenOptions};
+use std::io::{BufReader, Read, Write};
 use std::path::{Component, Path};
 
 pub const PROOF_MANIFEST_SCHEMA_VERSION: &str = "franken-engine.proof-artifact-manifest.v1";
@@ -442,8 +442,24 @@ pub fn sha256_hex(bytes: impl AsRef<[u8]>) -> String {
 }
 
 pub fn sha256_file(path: impl AsRef<Path>) -> Result<String, ProofArtifactError> {
-    let bytes = fs::read(path).map_err(|error| ProofArtifactError::Io(error.to_string()))?;
-    Ok(sha256_hex(bytes))
+    let file = File::open(path).map_err(|error| ProofArtifactError::Io(error.to_string()))?;
+    let mut reader = BufReader::new(file);
+    let mut hasher = Sha256::new();
+    let mut buffer = [0; 8192]; // 8KB chunks
+
+    loop {
+        let bytes_read = reader
+            .read(&mut buffer)
+            .map_err(|error| ProofArtifactError::Io(error.to_string()))?;
+
+        if bytes_read == 0 {
+            break; // EOF
+        }
+
+        hasher.update(&buffer[..bytes_read]);
+    }
+
+    Ok(format!("{:x}", hasher.finalize()))
 }
 
 pub fn validate_sha256(value: &str) -> Result<(), ProofArtifactError> {
@@ -858,6 +874,34 @@ mod tests {
         validate_sha256(&digest).expect("raw digest");
         validate_sha256(&format!("sha256:{digest}")).expect("prefixed digest");
         assert!(validate_sha256("sha256:not-a-digest").is_err());
+    }
+
+    #[test]
+    fn sha256_file_streams_without_loading_full_file() {
+        use tempfile::NamedTempFile;
+
+        // Create test data larger than internal buffer (8KB chunks)
+        let test_data = "x".repeat(20_000); // 20KB test data
+        let expected_hash = sha256_hex(&test_data);
+
+        // Write test data to a temporary file
+        let mut temp_file = NamedTempFile::new().expect("create temp file");
+        temp_file
+            .write_all(test_data.as_bytes())
+            .expect("write test data");
+
+        // Hash the file using streaming implementation
+        let file_hash = sha256_file(temp_file.path()).expect("hash file");
+
+        // Verify streaming hash matches direct hash
+        assert_eq!(
+            file_hash, expected_hash,
+            "Streaming file hash should match direct hash of same data"
+        );
+
+        // Verify it produces a valid SHA256 hex string
+        validate_sha256(&file_hash).expect("file hash should be valid");
+        assert_eq!(file_hash.len(), 64, "SHA256 hash should be 64 hex chars");
     }
 
     #[test]

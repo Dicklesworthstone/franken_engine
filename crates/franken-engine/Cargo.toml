@@ -30,6 +30,10 @@ path = "src/bin/franken_decision_demo.rs"
 name = "franken-quarantine-mesh-demo"
 path = "src/bin/franken_quarantine_mesh_demo.rs"
 
+[[example]]
+name = "live_ifc_declassification_example"
+path = "../../examples/live_ifc_declassification_example.rs"
+
 [features]
 default = ["asupersync-integration"]
 asupersync-integration = [

@@ -4,7 +4,8 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fmt;
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::path::{Component, Path};
 
 pub const PROOF_MANIFEST_SCHEMA_VERSION: &str = "franken-engine.proof-artifact-manifest.v1";
@@ -305,12 +306,18 @@ impl Default for RedactionPolicy {
             schema_version: REDACTION_POLICY_SCHEMA_VERSION.to_string(),
             replacement: "<redacted>".to_string(),
             env_key_fragments: vec![
+                "API_KEY".to_string(),
+                "ACCESS_TOKEN".to_string(),
                 "TOKEN".to_string(),
+                "_TOKEN".to_string(),
                 "SECRET".to_string(),
                 "PASSWORD".to_string(),
                 "CREDENTIAL".to_string(),
                 "AUTH".to_string(),
                 "KEY".to_string(),
+                "_KEY".to_string(),
+                "BEARER".to_string(),
+                "OAUTH".to_string(),
             ],
             literal_patterns: vec!["Bearer ".to_string()],
         }
@@ -338,12 +345,32 @@ pub fn redact_text(input: &str, policy: &RedactionPolicy) -> String {
         .iter()
         .map(|fragment| fragment.to_ascii_uppercase())
         .collect();
+    let literal_markers: Vec<String> = policy
+        .literal_patterns
+        .iter()
+        .filter_map(|pattern| pattern.split_whitespace().next())
+        .map(|pattern| pattern.to_ascii_uppercase())
+        .filter(|pattern| !pattern.is_empty())
+        .collect();
 
-    input
-        .split_whitespace()
-        .map(|token| redact_token(token, &fragments, &policy.replacement))
-        .collect::<Vec<_>>()
-        .join(" ")
+    let mut redact_next = false;
+    let mut redacted = Vec::new();
+
+    for token in input.split_whitespace() {
+        let is_literal_marker = is_literal_marker(token, &literal_markers);
+        if redact_next && !is_literal_marker {
+            redacted.push(policy.replacement.clone());
+            redact_next = false;
+            continue;
+        }
+
+        let (redacted_token, token_redacts_next) =
+            redact_token(token, &fragments, &literal_markers, &policy.replacement);
+        redact_next = token_redacts_next || (redact_next && is_literal_marker);
+        redacted.push(redacted_token);
+    }
+
+    redacted.join(" ")
 }
 
 pub fn render_report_markdown(report: &ProofMachineReport) -> String {
@@ -426,24 +453,90 @@ pub fn validate_sha256(value: &str) -> Result<(), ProofArtifactError> {
     }
 }
 
-fn redact_token(token: &str, fragments: &[String], replacement: &str) -> String {
-    if let Some((key, _value)) = token.split_once('=') {
-        let key_upper = key.to_ascii_uppercase();
-        if fragments
-            .iter()
-            .any(|fragment| key_upper.contains(fragment))
-        {
-            return format!("{key}={replacement}");
+fn redact_token(
+    token: &str,
+    fragments: &[String],
+    literal_markers: &[String],
+    replacement: &str,
+) -> (String, bool) {
+    if let Some((redacted, redact_next)) =
+        redact_sensitive_assignment(token, fragments, literal_markers, replacement)
+    {
+        return (redacted, redact_next);
+    }
+
+    if let Some(redacted) = redact_inline_bearer(token, replacement) {
+        return (redacted, false);
+    }
+
+    if is_sensitive_value_leader(token, fragments, literal_markers) {
+        return (token.to_string(), true);
+    }
+
+    (token.to_string(), false)
+}
+
+fn redact_sensitive_assignment(
+    token: &str,
+    fragments: &[String],
+    literal_markers: &[String],
+    replacement: &str,
+) -> Option<(String, bool)> {
+    for separator in ['=', ':'] {
+        if let Some((key, value)) = token.split_once(separator) {
+            if contains_sensitive_fragment(&key.to_ascii_uppercase(), fragments) {
+                if value.is_empty() || is_literal_marker(value, literal_markers) {
+                    return Some((token.to_string(), true));
+                }
+                return Some((format!("{key}{separator}{replacement}"), false));
+            }
         }
     }
 
-    if let Some(rest) = token.strip_prefix("Bearer") {
-        if !rest.is_empty() {
-            return format!("Bearer{replacement}");
+    None
+}
+
+fn redact_inline_bearer(token: &str, replacement: &str) -> Option<String> {
+    const BEARER_SCHEME: &str = "Bearer";
+
+    if let Some(scheme) = token.get(..BEARER_SCHEME.len())
+        && token.len() > BEARER_SCHEME.len()
+        && scheme.eq_ignore_ascii_case(BEARER_SCHEME)
+    {
+        let rest = &token[BEARER_SCHEME.len()..];
+        if let Some(delimiter) = rest.chars().next() {
+            if delimiter == ':' || delimiter == '=' {
+                return Some(format!("{scheme}{delimiter}{replacement}"));
+            }
         }
+        return Some(format!("{scheme}{replacement}"));
     }
 
-    token.to_string()
+    None
+}
+
+fn is_sensitive_value_leader(
+    token: &str,
+    fragments: &[String],
+    literal_markers: &[String],
+) -> bool {
+    let normalized = token
+        .trim_start_matches('-')
+        .trim_end_matches(':')
+        .replace('-', "_")
+        .to_ascii_uppercase();
+    contains_sensitive_fragment(&normalized, fragments) || is_literal_marker(token, literal_markers)
+}
+
+fn contains_sensitive_fragment(value_upper: &str, fragments: &[String]) -> bool {
+    fragments
+        .iter()
+        .any(|fragment| value_upper.contains(fragment))
+}
+
+fn is_literal_marker(token: &str, literal_markers: &[String]) -> bool {
+    let normalized = token.trim_end_matches(':').to_ascii_uppercase();
+    literal_markers.iter().any(|marker| normalized == *marker)
 }
 
 fn require_schema(
@@ -570,6 +663,92 @@ pub fn validate_events_jsonl_file(
     Ok(events)
 }
 
+/// Atomically writes multiple events to a JSONL file, creating or truncating the file
+pub fn write_events_jsonl_atomic(
+    path: impl AsRef<Path>,
+    events: &[ProofEvent],
+) -> Result<(), ProofArtifactError> {
+    // Validate all events first
+    for event in events {
+        event.validate()?;
+    }
+
+    // Collect all lines into a single buffer for atomic write
+    let mut buffer = Vec::new();
+    for event in events {
+        let line = serde_json::to_string(event)
+            .map_err(|e| ProofArtifactError::JsonMalformed(e.to_string()))?;
+
+        // Validate the serialized line
+        validate_event_json_line(&line)?;
+
+        buffer.push(line);
+    }
+
+    // Join all lines and write atomically
+    let content = buffer.join("\n");
+    if !content.is_empty() {
+        let content_with_final_newline = format!("{}\n", content);
+        fs::write(path, content_with_final_newline.as_bytes())
+            .map_err(|e| ProofArtifactError::Io(e.to_string()))?;
+    } else {
+        fs::write(path, b"").map_err(|e| ProofArtifactError::Io(e.to_string()))?;
+    }
+
+    Ok(())
+}
+
+/// Atomically appends events to a JSONL file (race-safe for concurrent access)
+pub fn append_events_jsonl_atomic(
+    path: impl AsRef<Path>,
+    events: &[ProofEvent],
+) -> Result<(), ProofArtifactError> {
+    // Validate all events first
+    for event in events {
+        event.validate()?;
+    }
+
+    // Collect all lines into a single buffer for atomic append
+    let mut buffer = Vec::new();
+    for event in events {
+        let line = serde_json::to_string(event)
+            .map_err(|e| ProofArtifactError::JsonMalformed(e.to_string()))?;
+
+        // Validate the serialized line
+        validate_event_json_line(&line)?;
+
+        buffer.push(line);
+    }
+
+    if buffer.is_empty() {
+        return Ok(());
+    }
+
+    // Join all lines with newlines and add final newline
+    let content = format!("{}\n", buffer.join("\n"));
+
+    // Use append mode with atomic write guarantees up to PIPE_BUF (typically 4KB on Linux)
+    // For larger writes, consider using file locking
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|e| ProofArtifactError::Io(e.to_string()))?;
+
+    file.write_all(content.as_bytes())
+        .map_err(|e| ProofArtifactError::Io(e.to_string()))?;
+
+    Ok(())
+}
+
+/// Atomically emits a single event to a JSONL file via append (race-safe)
+pub fn emit_event_jsonl_atomic(
+    path: impl AsRef<Path>,
+    event: &ProofEvent,
+) -> Result<(), ProofArtifactError> {
+    append_events_jsonl_atomic(path, &[event.clone()])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -691,6 +870,71 @@ mod tests {
         assert!(redacted.contains("PASSWORD=<redacted>"));
         assert!(redacted.contains("NORMAL=value"));
         assert!(!redacted.contains("hunter2"));
+    }
+
+    #[test]
+    fn redaction_policy_scrubs_high_risk_assignment_variants() {
+        let policy = RedactionPolicy::default();
+        policy.validate().expect("policy validates");
+
+        for fragment in [
+            "API_KEY",
+            "ACCESS_TOKEN",
+            "_TOKEN",
+            "_KEY",
+            "BEARER",
+            "OAUTH",
+        ] {
+            assert!(
+                policy
+                    .env_key_fragments
+                    .iter()
+                    .any(|value| value == fragment),
+                "default redaction policy must include {fragment}"
+            );
+        }
+
+        let redacted = redact_text(
+            "API_KEY=alpha ACCESS_TOKEN=bravo OAUTH_CLIENT_SECRET=charlie BEARER=delta NORMAL=value",
+            &policy,
+        );
+
+        assert!(redacted.contains("API_KEY=<redacted>"));
+        assert!(redacted.contains("ACCESS_TOKEN=<redacted>"));
+        assert!(redacted.contains("OAUTH_CLIENT_SECRET=<redacted>"));
+        assert!(redacted.contains("BEARER=<redacted>"));
+        assert!(redacted.contains("NORMAL=value"));
+        for secret in ["alpha", "bravo", "charlie", "delta"] {
+            assert!(!redacted.contains(secret));
+        }
+    }
+
+    #[test]
+    fn redaction_policy_scrubs_bearer_literal_values() {
+        let policy = RedactionPolicy::default();
+        policy.validate().expect("policy validates");
+
+        let redacted = redact_text(
+            "curl -H Authorization: Bearer opaque-access-token Bearer:compact-token Bearer=inline-token",
+            &policy,
+        );
+
+        assert!(redacted.contains("Bearer <redacted>"));
+        assert!(redacted.contains("Bearer:<redacted>"));
+        assert!(redacted.contains("Bearer=<redacted>"));
+        for secret in ["opaque-access-token", "compact-token", "inline-token"] {
+            assert!(!redacted.contains(secret));
+        }
+    }
+
+    #[test]
+    fn redaction_policy_scrubs_inline_bearer_after_sensitive_header() {
+        let policy = RedactionPolicy::default();
+
+        let redacted = redact_text("Authorization: Bearersecret", &policy);
+
+        assert_eq!(redacted, "Authorization: Bearer<redacted>");
+        assert!(!redacted.contains("Bearersecret"));
     }
 
     #[test]
@@ -877,6 +1121,212 @@ mod tests {
             // Expected
         } else {
             panic!("Expected JsonMalformed error");
+        }
+    }
+
+    #[test]
+    fn write_events_jsonl_atomic_creates_valid_jsonl() {
+        use tempfile::NamedTempFile;
+
+        let events = vec![
+            ProofEvent {
+                schema_version: PROOF_EVENT_SCHEMA_VERSION.to_string(),
+                event_name: "test1.completed".to_string(),
+                severity: ProofEventSeverity::Info,
+                step_id: "step-001".to_string(),
+                command_id: Some("cmd-001".to_string()),
+                artifact_path: None,
+                artifact_sha256: None,
+                exit_code: Some(0),
+                duration_ms: Some(10),
+                decision: "passed".to_string(),
+                remediation: None,
+            },
+            ProofEvent {
+                schema_version: PROOF_EVENT_SCHEMA_VERSION.to_string(),
+                event_name: "test2.completed".to_string(),
+                severity: ProofEventSeverity::Warning,
+                step_id: "step-002".to_string(),
+                command_id: Some("cmd-002".to_string()),
+                artifact_path: None,
+                artifact_sha256: None,
+                exit_code: Some(0),
+                duration_ms: Some(20),
+                decision: "warned".to_string(),
+                remediation: Some("review warnings".to_string()),
+            },
+        ];
+
+        let temp_file = NamedTempFile::new().expect("create temp file");
+        let temp_path = temp_file.path();
+
+        // Write events atomically
+        write_events_jsonl_atomic(temp_path, &events).expect("write events");
+
+        // Validate by reading back
+        let read_events = validate_events_jsonl_file(temp_path).expect("read back events");
+        assert_eq!(read_events.len(), 2);
+        assert_eq!(read_events[0].event_name, "test1.completed");
+        assert_eq!(read_events[1].event_name, "test2.completed");
+
+        // Verify JSONL format by reading raw content
+        let content = std::fs::read_to_string(temp_path).expect("read content");
+        let lines: Vec<&str> = content.lines().collect();
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].contains("test1.completed"));
+        assert!(lines[1].contains("test2.completed"));
+    }
+
+    #[test]
+    fn append_events_jsonl_atomic_preserves_existing_content() {
+        use tempfile::NamedTempFile;
+
+        let initial_events = vec![ProofEvent {
+            schema_version: PROOF_EVENT_SCHEMA_VERSION.to_string(),
+            event_name: "initial.event".to_string(),
+            severity: ProofEventSeverity::Info,
+            step_id: "step-000".to_string(),
+            command_id: None,
+            artifact_path: None,
+            artifact_sha256: None,
+            exit_code: None,
+            duration_ms: None,
+            decision: "initial".to_string(),
+            remediation: None,
+        }];
+
+        let appended_events = vec![ProofEvent {
+            schema_version: PROOF_EVENT_SCHEMA_VERSION.to_string(),
+            event_name: "appended.event".to_string(),
+            severity: ProofEventSeverity::Error,
+            step_id: "step-001".to_string(),
+            command_id: None,
+            artifact_path: None,
+            artifact_sha256: None,
+            exit_code: Some(1),
+            duration_ms: Some(5),
+            decision: "failed".to_string(),
+            remediation: Some("fix the error".to_string()),
+        }];
+
+        let temp_file = NamedTempFile::new().expect("create temp file");
+        let temp_path = temp_file.path();
+
+        // Write initial events
+        write_events_jsonl_atomic(temp_path, &initial_events).expect("write initial");
+
+        // Append more events
+        append_events_jsonl_atomic(temp_path, &appended_events).expect("append events");
+
+        // Validate all events are present
+        let read_events = validate_events_jsonl_file(temp_path).expect("read all events");
+        assert_eq!(read_events.len(), 2);
+        assert_eq!(read_events[0].event_name, "initial.event");
+        assert_eq!(read_events[1].event_name, "appended.event");
+    }
+
+    #[test]
+    fn emit_event_jsonl_atomic_single_event_append() {
+        use tempfile::NamedTempFile;
+
+        let event = ProofEvent {
+            schema_version: PROOF_EVENT_SCHEMA_VERSION.to_string(),
+            event_name: "single.emission".to_string(),
+            severity: ProofEventSeverity::Warning,
+            step_id: "step-single".to_string(),
+            command_id: None,
+            artifact_path: None,
+            artifact_sha256: None,
+            exit_code: None,
+            duration_ms: None,
+            decision: "noted".to_string(),
+            remediation: None,
+        };
+
+        let temp_file = NamedTempFile::new().expect("create temp file");
+        let temp_path = temp_file.path();
+
+        // Emit single event
+        emit_event_jsonl_atomic(temp_path, &event).expect("emit event");
+
+        // Emit another event
+        emit_event_jsonl_atomic(temp_path, &event).expect("emit second event");
+
+        // Validate both events are present
+        let read_events = validate_events_jsonl_file(temp_path).expect("read events");
+        assert_eq!(read_events.len(), 2);
+        assert_eq!(read_events[0].event_name, "single.emission");
+        assert_eq!(read_events[1].event_name, "single.emission");
+    }
+
+    #[test]
+    fn concurrent_event_emission_preserves_jsonl_integrity() {
+        use std::sync::Arc;
+        use std::thread;
+        use tempfile::NamedTempFile;
+
+        let temp_file = NamedTempFile::new().expect("create temp file");
+        let temp_path = Arc::new(temp_file.path().to_path_buf());
+
+        let mut handles = vec![];
+
+        // Spawn multiple threads that emit events concurrently
+        for thread_id in 0..8 {
+            let path = Arc::clone(&temp_path);
+            let handle = thread::spawn(move || {
+                for event_id in 0..10 {
+                    let event = ProofEvent {
+                        schema_version: PROOF_EVENT_SCHEMA_VERSION.to_string(),
+                        event_name: format!("thread{}.event{}", thread_id, event_id),
+                        severity: ProofEventSeverity::Info,
+                        step_id: format!("step-{}-{}", thread_id, event_id),
+                        command_id: None,
+                        artifact_path: None,
+                        artifact_sha256: None,
+                        exit_code: Some(0),
+                        duration_ms: Some(1),
+                        decision: "concurrent".to_string(),
+                        remediation: None,
+                    };
+
+                    emit_event_jsonl_atomic(&*path, &event).expect("emit concurrent event");
+                }
+            });
+            handles.push(handle);
+        }
+
+        // Wait for all threads to complete
+        for handle in handles {
+            handle.join().expect("thread completed");
+        }
+
+        // Validate that all events were written correctly and JSONL is not corrupted
+        let read_events = validate_events_jsonl_file(&*temp_path).expect("read concurrent events");
+        assert_eq!(read_events.len(), 80); // 8 threads * 10 events each
+
+        // Verify all events are valid and no corruption occurred
+        let mut thread_event_counts = std::collections::BTreeMap::new();
+        for event in &read_events {
+            assert!(event.event_name.starts_with("thread"));
+            assert!(event.event_name.contains(".event"));
+            assert_eq!(event.decision, "concurrent");
+
+            let thread_id = event
+                .event_name
+                .chars()
+                .skip(6) // skip "thread"
+                .take_while(|c| c.is_ascii_digit())
+                .collect::<String>()
+                .parse::<usize>()
+                .expect("parse thread id");
+
+            *thread_event_counts.entry(thread_id).or_insert(0) += 1;
+        }
+
+        // Verify each thread contributed exactly 10 events
+        assert_eq!(thread_event_counts.len(), 8);
+        for count in thread_event_counts.values() {
+            assert_eq!(*count, 10);
         }
     }
 }

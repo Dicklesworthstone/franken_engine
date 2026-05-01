@@ -674,9 +674,11 @@ fn target_feature(
                 .to_string(),
             role: "candidate_fixture".to_string(),
             proof_kind: FeatureProofKind::StaticFixture,
-            verification_command: String::new(),
-            user_facing_workflow: String::new(),
-            proof_manifest_id: String::new(),
+            verification_command: "cargo test -p frankenengine-engine --lib production_feature_catalog_target_features_have_verification_metadata -- --nocapture".to_string(),
+            user_facing_workflow: format!(
+                "Keep {feature_id} in the production feature catalog target lane until a live proof manifest exists."
+            ),
+            proof_manifest_id: format!("{SCHEMA_VERSION}:target:{feature_id}"),
             redaction_status: "redacted".to_string(),
             // Target/Hypothesis features don't need evidence yet
             evidence_bead_id: None,
@@ -876,6 +878,43 @@ mod tests {
                 .unsupported_candidate_feature_ids
                 .contains(&"signed_policy_checkpoints".to_string())
         );
+    }
+
+    #[test]
+    fn production_feature_catalog_target_features_have_verification_metadata() {
+        let input = ProductionFeatureCatalogInput::representative_fixture("rev-under-test");
+        let target_features = input
+            .features
+            .iter()
+            .filter(|feature| {
+                matches!(
+                    feature.state,
+                    ProductionFeatureState::Target | ProductionFeatureState::Hypothesis
+                )
+            })
+            .collect::<Vec<_>>();
+
+        assert!(!target_features.is_empty());
+        for feature in target_features {
+            assert_eq!(feature.artifact_handles.len(), 1);
+            let artifact = &feature.artifact_handles[0];
+            assert!(
+                artifact
+                    .verification_command
+                    .contains("cargo test -p frankenengine-engine --lib")
+            );
+            assert!(
+                artifact.verification_command.contains(
+                    "production_feature_catalog_target_features_have_verification_metadata"
+                )
+            );
+            assert!(!artifact.user_facing_workflow.trim().is_empty());
+            assert!(
+                artifact
+                    .proof_manifest_id
+                    .starts_with("franken-engine.production-feature-catalog-gate.v1:target:")
+            );
+        }
     }
 
     #[test]

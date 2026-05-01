@@ -8,6 +8,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
 ARTIFACTS_DIR="$PROJECT_ROOT/artifacts/test262/$TIMESTAMP"
+target_dir="${CARGO_TARGET_DIR:-target}"
+if [[ "$target_dir" != /* ]]; then
+    target_dir="$PROJECT_ROOT/$target_dir"
+fi
 
 echo "🧪 Test262 Baseline Pass Rate Measurement"
 echo "Timestamp: $TIMESTAMP"
@@ -16,7 +20,7 @@ echo "Artifacts: $ARTIFACTS_DIR"
 mkdir -p "$ARTIFACTS_DIR"
 
 # Check if Test262 runner binary exists
-RUNNER="$PROJECT_ROOT/target/debug/franken_test262_runner"
+RUNNER="$target_dir/debug/franken_test262_runner"
 if [[ ! -f "$RUNNER" ]]; then
     echo "Building Test262 runner..."
     cd "$PROJECT_ROOT"

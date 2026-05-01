@@ -10,6 +10,9 @@ rch_build_timeout_sec="${RCH_BUILD_TIMEOUT_SEC:-1800}"
 artifact_root="${LAW_MINING_ARTIFACT_ROOT:-artifacts/law_mining}"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 target_dir="${CARGO_TARGET_DIR:-/var/tmp/rch_target_franken_engine_law_mining_${timestamp}}"
+if [[ "$target_dir" != /* ]]; then
+  target_dir="${root_dir}/${target_dir}"
+fi
 generated_at_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 run_dir="${artifact_root}/${timestamp}"
 manifest_path="${run_dir}/suite_run_manifest.json"
@@ -19,7 +22,7 @@ policy_id="${LAW_MINING_POLICY_ID:-policy.rgc.810}"
 run_id="run-law-mining-${timestamp}"
 source_commit="$(git rev-parse HEAD 2>/dev/null || echo unknown)"
 suite_commands_path="${run_dir}/suite_commands.txt"
-local_binary_path="${root_dir}/target/debug/franken_law_mining"
+local_binary_path="${target_dir}/debug/franken_law_mining"
 
 mkdir -p "$run_dir"
 

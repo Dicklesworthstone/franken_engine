@@ -68,6 +68,15 @@ readme_line_for() {
   fi
 }
 
+resolve_cargo_target_dir() {
+  local target_dir="${CARGO_TARGET_DIR:-target}"
+  if [[ "$target_dir" = /* ]]; then
+    printf '%s\n' "$target_dir"
+  else
+    printf '%s/%s\n' "$root_dir" "$target_dir"
+  fi
+}
+
 assert_readme_contains() {
   local needle="$1"
   if [[ -z "$(readme_line_for "$needle")" ]]; then
@@ -78,11 +87,8 @@ assert_readme_contains() {
 
 resolve_frankenctl_bin() {
   local candidate="${FRANKENCTL_BIN:-}"
-  if [[ -z "$candidate" && -n "${CARGO_TARGET_DIR:-}" ]]; then
-    candidate="${CARGO_TARGET_DIR}/debug/frankenctl"
-  fi
   if [[ -z "$candidate" ]]; then
-    candidate="${root_dir}/target/debug/frankenctl"
+    candidate="$(resolve_cargo_target_dir)/debug/frankenctl"
   fi
   if [[ ! -x "$candidate" ]]; then
     cat >&2 <<EOF

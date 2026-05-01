@@ -6,6 +6,10 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+target_dir="${CARGO_TARGET_DIR:-target}"
+if [[ "$target_dir" != /* ]]; then
+    target_dir="$PROJECT_ROOT/$target_dir"
+fi
 
 echo "🧪 Real Test262 Conformance Integration (BD-24POU)"
 echo "=================================================================="
@@ -64,7 +68,7 @@ echo "🧪 Step 2: Test262 Conformance Execution"
 echo "========================================="
 
 # Check if Test262 runner exists
-RUNNER="$PROJECT_ROOT/target/debug/franken_test262_runner"
+RUNNER="$target_dir/debug/franken_test262_runner"
 if [[ ! -f "$RUNNER" ]]; then
     echo "🔨 Building Test262 runner..."
     cd "$PROJECT_ROOT"

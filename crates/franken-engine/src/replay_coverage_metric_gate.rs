@@ -35,6 +35,24 @@ impl SecurityDecisionKind {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReplayVerificationStatus {
+    Verified,    // Real verification with proper evidence
+    Provisional, // Claims verification but lacks evidence
+    Unverified,  // No verification attempted
+}
+
+impl ReplayVerificationStatus {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Verified => "verified",
+            Self::Provisional => "provisional",
+            Self::Unverified => "unverified",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SecurityDecisionReplayEvidence {
     pub decision_id: String,
@@ -47,24 +65,242 @@ pub struct SecurityDecisionReplayEvidence {
     pub expected_hash: String,
     pub actual_hash: String,
     pub replay_report_hash: String,
-    pub replay_verified: bool,
+    pub replay_verified: bool, // Legacy field - use verification_status instead
     pub replay_command: String,
     pub replay_exit_code: i32,
     pub duration_ms: u64,
+    // Evidence requirements for verified replay coverage
+    pub verification_status: Option<ReplayVerificationStatus>, // New field for proper verification tracking
+    pub evidence_bead_id: Option<String>, // Closed bead ID that implemented replay
+    pub evidence_commit_hash: Option<String>, // Commit hash with replay implementation
+    pub evidence_test_name: Option<String>, // Test name proving replay functionality
+}
+
+/// Detects fake SHA256 hash patterns commonly used in placeholder replay data
+fn is_fake_replay_hash(hash: &str) -> bool {
+    if !hash.starts_with("sha256:") || hash.len() != 71 {
+        return false; // Invalid format, will be caught by existing validation
+    }
+
+    let hex_part = &hash[7..];
+
+    // Common fake patterns in replay evidence
+    let fake_patterns = [
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", // sequential hex from representative_fixture
+        "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789", // from replay_evidence
+        "1111111111111111111111111111111111111111111111111111111111111111", // all 1's
+        "0000000000000000000000000000000000000000000000000000000000000000", // all 0's
+        "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff", // all f's
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", // all a's
+        "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef", // deadbeef pattern
+    ];
+
+    // Check if it matches known fake patterns
+    if fake_patterns.contains(&hex_part) {
+        return true;
+    }
+
+    // Check for repetitive patterns (same 4-char sequence repeated)
+    if hex_part.len() == 64 {
+        let chunk = &hex_part[0..4];
+        if hex_part
+            .chars()
+            .collect::<Vec<_>>()
+            .chunks(4)
+            .all(|c| c.iter().collect::<String>() == chunk)
+        {
+            return true;
+        }
+    }
+
+    false
+}
+
+/// Validates scenario enumeration for proper coverage analysis
+fn validate_scenario_enumeration(
+    decisions: &[SecurityDecisionReplayEvidence],
+) -> Result<(), String> {
+    // Check for empty decision set
+    if decisions.is_empty() {
+        return Err("Empty decision set: cannot validate coverage without scenarios".to_string());
+    }
+
+    // Validate unique decision IDs
+    let mut decision_ids = std::collections::BTreeSet::new();
+    let mut duplicates = Vec::new();
+
+    for decision in decisions {
+        if decision_ids.contains(&decision.decision_id) {
+            duplicates.push(decision.decision_id.clone());
+        } else {
+            decision_ids.insert(decision.decision_id.clone());
+        }
+    }
+
+    if !duplicates.is_empty() {
+        return Err(format!(
+            "Duplicate decision IDs detected: {}. Each scenario must have unique ID for proper coverage enumeration.",
+            duplicates.join(", ")
+        ));
+    }
+
+    // Validate coverage of security decision types (Allow, Deny, Escalate)
+    let security_critical_decisions: Vec<_> = decisions
+        .iter()
+        .filter(|d| d.security_critical)
+        .collect();
+
+    if security_critical_decisions.is_empty() {
+        return Err("No security-critical decisions found: coverage analysis requires security-critical scenarios".to_string());
+    }
+
+    // Check coverage of each decision kind for security-critical scenarios
+    let mut covered_kinds = std::collections::BTreeSet::new();
+    for decision in &security_critical_decisions {
+        covered_kinds.insert(decision.decision_kind);
+    }
+
+    // All three decision kinds (Allow, Deny, Escalate) should be covered for comprehensive replay coverage
+    let expected_kinds = [
+        SecurityDecisionKind::Allow,
+        SecurityDecisionKind::Deny,
+        SecurityDecisionKind::Escalate,
+    ];
+
+    let missing_kinds: Vec<_> = expected_kinds
+        .iter()
+        .filter(|kind| !covered_kinds.contains(kind))
+        .collect();
+
+    if !missing_kinds.is_empty() {
+        return Err(format!(
+            "Incomplete decision kind coverage: missing {}. Security-critical replay coverage requires all decision types (Allow, Deny, Escalate) to be tested.",
+            missing_kinds.iter().map(|k| k.as_str()).collect::<Vec<_>>().join(", ")
+        ));
+    }
+
+    // Validate against placeholder patterns that indicate incomplete enumeration
+    let placeholder_decision_patterns = [
+        "test-decision",
+        "example-decision",
+        "placeholder",
+        "dummy-decision",
+        "fake-decision",
+    ];
+
+    for decision in decisions {
+        let id_lower = decision.decision_id.to_lowercase();
+        for pattern in &placeholder_decision_patterns {
+            if id_lower.contains(pattern) {
+                return Err(format!(
+                    "Placeholder decision ID detected: '{}'. Enumeration contains placeholder data instead of real scenario IDs.",
+                    decision.decision_id
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Validates evidence requirements for verified replay coverage
+fn validate_replay_evidence_requirements(
+    evidence: &SecurityDecisionReplayEvidence,
+) -> Result<ReplayVerificationStatus, String> {
+    // Detect fake hash patterns first
+    if is_fake_replay_hash(&evidence.expected_hash)
+        || is_fake_replay_hash(&evidence.actual_hash)
+        || is_fake_replay_hash(&evidence.replay_report_hash)
+    {
+        return Ok(ReplayVerificationStatus::Provisional);
+    }
+
+    // Check for obviously fake timing (1ms is suspiciously short for real replay)
+    if evidence.duration_ms < 10 && evidence.replay_verified && evidence.security_critical {
+        return Ok(ReplayVerificationStatus::Provisional);
+    }
+
+    // For claims of verification, require evidence
+    if evidence.replay_verified && evidence.security_critical {
+        if let (Some(bead_id), Some(commit_hash), Some(test_name)) = (
+            &evidence.evidence_bead_id,
+            &evidence.evidence_commit_hash,
+            &evidence.evidence_test_name,
+        ) {
+            // Validate bead ID format (should be bd-xxxxx)
+            if !bead_id.starts_with("bd-") || bead_id.len() < 6 {
+                return Err(format!(
+                    "Invalid evidence bead ID format for {}: expected bd-xxxxx, got {}",
+                    evidence.decision_id, bead_id
+                ));
+            }
+
+            // Validate commit hash format (should be 7-40 hex chars)
+            if commit_hash.len() < 7
+                || commit_hash.len() > 40
+                || !commit_hash.chars().all(|c| c.is_ascii_hexdigit())
+            {
+                return Err(format!(
+                    "Invalid evidence commit hash format for {}: {}",
+                    evidence.decision_id, commit_hash
+                ));
+            }
+
+            // Validate test name is not empty
+            if test_name.trim().is_empty() {
+                return Err(format!(
+                    "Missing evidence test name for {}",
+                    evidence.decision_id
+                ));
+            }
+
+            Ok(ReplayVerificationStatus::Verified)
+        } else {
+            Ok(ReplayVerificationStatus::Provisional)
+        }
+    } else {
+        Ok(ReplayVerificationStatus::Unverified)
+    }
 }
 
 impl SecurityDecisionReplayEvidence {
     pub fn replay_backed(&self) -> bool {
-        self.security_critical
-            && self.replay_verified
-            && self.replay_exit_code == 0
-            && self.expected_hash == self.actual_hash
-            && !self.replay_trace_path.trim().is_empty()
-            && !self.replay_report_path.trim().is_empty()
-            && !self.replay_command.trim().is_empty()
-            && validate_sha256(&self.replay_report_hash).is_ok()
-            && validate_sha256(&self.expected_hash).is_ok()
-            && validate_sha256(&self.actual_hash).is_ok()
+        // Use evidence validation to determine if replay is truly backed
+        match validate_replay_evidence_requirements(self) {
+            Ok(ReplayVerificationStatus::Verified) => {
+                // Additional checks for truly verified replay
+                self.security_critical
+                    && self.replay_verified
+                    && self.replay_exit_code == 0
+                    && self.expected_hash == self.actual_hash
+                    && !self.replay_trace_path.trim().is_empty()
+                    && !self.replay_report_path.trim().is_empty()
+                    && !self.replay_command.trim().is_empty()
+                    && validate_sha256(&self.replay_report_hash).is_ok()
+                    && validate_sha256(&self.expected_hash).is_ok()
+                    && validate_sha256(&self.actual_hash).is_ok()
+            }
+            Ok(ReplayVerificationStatus::Provisional) => {
+                // Provisional claims don't count as backed
+                false
+            }
+            Ok(ReplayVerificationStatus::Unverified) => {
+                // Unverified obviously don't count
+                false
+            }
+            Err(_) => {
+                // Invalid evidence format
+                false
+            }
+        }
+    }
+
+    /// Get the verification status, checking evidence requirements
+    pub fn get_verification_status(&self) -> ReplayVerificationStatus {
+        match validate_replay_evidence_requirements(self) {
+            Ok(status) => status,
+            Err(_) => ReplayVerificationStatus::Provisional, // Invalid evidence defaults to provisional
+        }
     }
 }
 
@@ -90,7 +326,7 @@ impl ReplayCoverageMetricInput {
             artifact_path: "artifacts/replay_coverage_metric/coverage_details.json".to_string(),
             artifact_hash:
                 "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-                    .to_string(),
+                    .to_string(), // Fake hash - will be detected as provisional
             verification_command: "scripts/run_replay_coverage_metric_gate.sh ci".to_string(),
             redaction_status: "redacted".to_string(),
             confidence_millionths: COVERAGE_SCALE_MILLIONTHS,
@@ -108,6 +344,9 @@ fn replay_evidence(
     decision_kind: SecurityDecisionKind,
 ) -> SecurityDecisionReplayEvidence {
     let decision_id = decision_id.into();
+    // NOTE: This function creates PROVISIONAL evidence since the representative
+    // data lacks real verification. In production, decisions should only be marked
+    // as verified with proper bead IDs, commit hashes, and test evidence.
     SecurityDecisionReplayEvidence {
         decision_kind,
         security_critical: true,
@@ -121,13 +360,18 @@ fn replay_evidence(
             .to_string(),
         replay_report_hash:
             "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789".to_string(),
-        replay_verified: true,
+        replay_verified: true, // Legacy field - will be downgraded due to fake hashes
         replay_command: format!(
             "frankenctl replay run --trace artifacts/replay_coverage_metric/traces/{decision_id}.json --mode strict"
         ),
         replay_exit_code: 0,
-        duration_ms: 1,
+        duration_ms: 1, // Fake timing - too fast for real replay
         decision_id,
+        // Evidence fields left empty - this makes it PROVISIONAL
+        verification_status: None, // Will be computed by validation
+        evidence_bead_id: None,
+        evidence_commit_hash: None,
+        evidence_test_name: None,
     }
 }
 
@@ -149,7 +393,8 @@ pub struct ReplayCoverageStructuredEvent {
     pub trace_id: String,
     pub replay_mode: String,
     pub security_critical: bool,
-    pub replay_verified: bool,
+    pub replay_verified: bool,                         // Legacy field
+    pub verification_status: ReplayVerificationStatus, // New evidence-based status
     pub replay_trace_path: String,
     pub replay_report_path: String,
     pub expected_hash: String,
@@ -212,6 +457,44 @@ pub fn evaluate_replay_coverage_metric(
 ) -> ReplayCoverageMetricReport {
     // The seed inventory is explicit so the gate can fail closed on missing
     // replay evidence before live security-decision logs exist.
+    let mut global_failures = Vec::new();
+
+    // Validate scenario enumeration first - fail closed if enumeration is invalid
+    if let Err(validation_error) = validate_scenario_enumeration(&input.decisions) {
+        global_failures.push("invalid_scenario_enumeration");
+        // Return early with fail-closed decision due to enumeration validation failure
+        return ReplayCoverageMetricReport {
+            schema_version: SCHEMA_VERSION.to_string(),
+            component: COMPONENT.to_string(),
+            bead_id: BEAD_ID.to_string(),
+            metric_artifact: MetricArtifact {
+                metric_id: DisruptiveMetricId::SecurityDecisionReplayCoverage,
+                threshold: DisruptiveMetricId::SecurityDecisionReplayCoverage.threshold(),
+                observed_value: 0, // Fail closed with 0% coverage
+                unit: DisruptiveMetricId::SecurityDecisionReplayCoverage.unit().to_string(),
+                baseline: DisruptiveMetricId::SecurityDecisionReplayCoverage.expected_baseline().to_string(),
+                candidate: "franken_engine".to_string(),
+                denominator_id: "invalid_enumeration".to_string(),
+                scenario_set: input.scenario_set.clone(),
+                artifact_path: input.artifact_path.clone(),
+                artifact_hash: input.artifact_hash.clone(),
+                code_revision: input.code_revision.clone(),
+                freshness_days: input.freshness_days,
+                confidence_millionths: 0, // No confidence in invalid enumeration
+                coverage_millionths: 0,
+                verification_command: input.verification_command.clone(),
+                redaction_status: input.redaction_status.clone(),
+            },
+            total_security_critical_decisions: 0,
+            replay_backed_security_critical_decisions: 0,
+            coverage_millionths: 0,
+            decision: ReplayCoverageDecision::FailClosed,
+            reason: format!("enumeration_validation_failed: {}", validation_error),
+            uncovered_decision_ids: vec![],
+            events: vec![],
+        };
+    }
+
     let critical_decisions = input
         .decisions
         .iter()
@@ -221,7 +504,6 @@ pub fn evaluate_replay_coverage_metric(
     let mut covered = 0_u64;
     let mut uncovered_decision_ids = Vec::new();
     let mut events = Vec::new();
-    let mut global_failures = Vec::new();
 
     if input.code_revision.trim().is_empty() {
         global_failures.push("missing_code_revision");
@@ -252,18 +534,29 @@ pub fn evaluate_replay_coverage_metric(
     let coverage_percent = format!("{:.6}", coverage_millionths as f64 / 10_000.0);
     for decision in &critical_decisions {
         let replay_backed = decision.replay_backed();
+        let verification_status = decision.get_verification_status();
+
         let event_reason = if replay_backed {
             "replay_artifact_verified"
-        } else if decision.replay_trace_path.trim().is_empty() {
-            "missing_replay_trace"
-        } else if decision.replay_report_path.trim().is_empty() {
-            "missing_replay_report"
-        } else if decision.expected_hash != decision.actual_hash {
-            "nondeterministic_replay_output"
-        } else if decision.replay_exit_code != 0 {
-            "replay_command_failed"
         } else {
-            "missing_or_unverified_replay_artifact"
+            match verification_status {
+                ReplayVerificationStatus::Verified => {
+                    // Verified but not backed - check specific issues
+                    if decision.replay_trace_path.trim().is_empty() {
+                        "missing_replay_trace"
+                    } else if decision.replay_report_path.trim().is_empty() {
+                        "missing_replay_report"
+                    } else if decision.expected_hash != decision.actual_hash {
+                        "nondeterministic_replay_output"
+                    } else if decision.replay_exit_code != 0 {
+                        "replay_command_failed"
+                    } else {
+                        "missing_or_unverified_replay_artifact"
+                    }
+                }
+                ReplayVerificationStatus::Provisional => "provisional_verification_lacks_evidence",
+                ReplayVerificationStatus::Unverified => "unverified_replay_coverage",
+            }
         }
         .to_string();
 
@@ -278,6 +571,7 @@ pub fn evaluate_replay_coverage_metric(
             replay_mode: decision.replay_mode.clone(),
             security_critical: decision.security_critical,
             replay_verified: decision.replay_verified,
+            verification_status,
             replay_trace_path: decision.replay_trace_path.clone(),
             replay_report_path: decision.replay_report_path.clone(),
             expected_hash: decision.expected_hash.clone(),
@@ -366,6 +660,44 @@ pub const fn coverage_millionths(covered: u64, total: u64) -> u64 {
     }
 }
 
+/// Creates a properly evidenced replay coverage entry for testing (non-fake data)
+#[cfg(test)]
+fn replay_evidence_with_real_verification(
+    decision_id: impl Into<String>,
+    decision_kind: SecurityDecisionKind,
+    bead_id: impl Into<String>,
+    commit_hash: impl Into<String>,
+    test_name: impl Into<String>,
+    expected_hash: impl Into<String>,
+    actual_hash: impl Into<String>,
+    report_hash: impl Into<String>,
+) -> SecurityDecisionReplayEvidence {
+    let decision_id = decision_id.into();
+    SecurityDecisionReplayEvidence {
+        decision_kind,
+        security_critical: true,
+        trace_id: format!("trace-{decision_id}"),
+        replay_mode: "deterministic_strict".to_string(),
+        replay_trace_path: format!("artifacts/replay_coverage_metric/traces/{decision_id}.json"),
+        replay_report_path: format!("artifacts/replay_coverage_metric/reports/{decision_id}.json"),
+        expected_hash: expected_hash.into(),
+        actual_hash: actual_hash.into(),
+        replay_report_hash: report_hash.into(),
+        replay_verified: true,
+        replay_command: format!(
+            "frankenctl replay run --trace artifacts/replay_coverage_metric/traces/{decision_id}.json --mode strict"
+        ),
+        replay_exit_code: 0,
+        duration_ms: 500, // Realistic timing for replay
+        decision_id,
+        // Real evidence requirements
+        verification_status: Some(ReplayVerificationStatus::Verified),
+        evidence_bead_id: Some(bead_id.into()),
+        evidence_commit_hash: Some(commit_hash.into()),
+        evidence_test_name: Some(test_name.into()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -437,6 +769,10 @@ mod tests {
             replay_command: String::new(),
             replay_exit_code: 1,
             duration_ms: 0,
+            verification_status: None,
+            evidence_bead_id: None,
+            evidence_commit_hash: None,
+            evidence_test_name: None,
         });
         let report = evaluate_replay_coverage_metric(&input);
         assert_eq!(report.total_security_critical_decisions, 3);
@@ -559,5 +895,378 @@ mod tests {
         let markdown = report.to_markdown();
         assert!(markdown.contains("Replay Coverage Metric Gate"));
         assert!(markdown.contains("escalate-high-risk-signal"));
+    }
+
+    #[test]
+    fn fake_replay_hashes_detected_and_marked_provisional() {
+        // The representative fixture has fake hashes, which should be detected
+        let report = evaluate_replay_coverage_metric(
+            &ReplayCoverageMetricInput::representative_fixture("rev-under-test"),
+        );
+
+        // Since evidence uses fake data, should fail coverage due to provisional status
+        assert_eq!(report.decision, ReplayCoverageDecision::FailClosed);
+        assert_eq!(report.replay_backed_security_critical_decisions, 0); // None backed due to fake hashes
+
+        // Check that provisional verification status is detected
+        assert!(
+            report.events.iter().any(|event| event
+                .reason
+                .contains("provisional_verification_lacks_evidence")),
+            "Expected provisional verification detection, got: {:?}",
+            report.events.iter().map(|e| &e.reason).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn verified_replay_coverage_with_proper_evidence_passes() {
+        let valid_evidence = [
+            replay_evidence_with_real_verification(
+                "allow-extension-read",
+                SecurityDecisionKind::Allow,
+                "bd-12345",
+                "a1b2c3d4",
+                "test_replay_allow_extension_read",
+                "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", // SHA256 of empty string
+                "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", // Same hash (deterministic)
+                "sha256:f7c3c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b866", // Different report hash
+            ),
+            replay_evidence_with_real_verification(
+                "deny-ambient-write",
+                SecurityDecisionKind::Deny,
+                "bd-67890",
+                "e5f6g7h8",
+                "test_replay_deny_ambient_write",
+                "sha256:a1c3c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b877", // Different valid hash
+                "sha256:a1c3c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b877", // Same hash (deterministic)
+                "sha256:b2c3c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b888", // Different report hash
+            ),
+            replay_evidence_with_real_verification(
+                "escalate-high-risk-signal",
+                SecurityDecisionKind::Escalate,
+                "bd-abcde",
+                "i9j0k1l2",
+                "test_replay_escalate_high_risk",
+                "sha256:c3c3c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b999", // Different valid hash
+                "sha256:c3c3c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b999", // Same hash (deterministic)
+                "sha256:d4c3c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852baaa", // Different report hash
+            ),
+        ];
+
+        let input = ReplayCoverageMetricInput {
+            code_revision: "real-revision".to_string(),
+            freshness_days: 0,
+            scenario_set: "security_critical_allow_deny_escalate_v1".to_string(),
+            artifact_path: "artifacts/replay_coverage_metric/coverage_details.json".to_string(),
+            artifact_hash:
+                "sha256:1234567890123456789012345678901234567890123456789012345678901234"
+                    .to_string(), // Valid but not fake
+            verification_command: "scripts/run_replay_coverage_metric_gate.sh ci".to_string(),
+            redaction_status: "redacted".to_string(),
+            confidence_millionths: COVERAGE_SCALE_MILLIONTHS,
+            decisions: valid_evidence.to_vec(),
+        };
+
+        let report = evaluate_replay_coverage_metric(&input);
+
+        assert_eq!(report.decision, ReplayCoverageDecision::Pass);
+        assert_eq!(report.total_security_critical_decisions, 3);
+        assert_eq!(report.replay_backed_security_critical_decisions, 3);
+        assert_eq!(report.coverage_millionths, COVERAGE_SCALE_MILLIONTHS);
+        assert!(
+            report
+                .events
+                .iter()
+                .all(|event| event.reason == "replay_artifact_verified"
+                    && event.verification_status == ReplayVerificationStatus::Verified),
+            "All events should be verified with proper evidence"
+        );
+    }
+
+    #[test]
+    fn missing_evidence_requirements_marks_replay_provisional() {
+        let mut evidence = replay_evidence_with_real_verification(
+            "incomplete-replay",
+            SecurityDecisionKind::Allow,
+            "bd-99999",
+            "commit123",
+            "test_works",
+            "sha256:1234567890123456789012345678901234567890123456789012345678901234", // Valid but not fake
+            "sha256:1234567890123456789012345678901234567890123456789012345678901234", // Same hash
+            "sha256:5678901234567890123456789012345678901234567890123456789012345678", // Different report hash
+        );
+
+        // Remove evidence to simulate missing requirements
+        evidence.evidence_bead_id = None;
+        evidence.evidence_commit_hash = None;
+        evidence.evidence_test_name = None;
+
+        let input = ReplayCoverageMetricInput {
+            code_revision: "test-revision".to_string(),
+            freshness_days: 0,
+            scenario_set: "security_critical_allow_deny_escalate_v1".to_string(),
+            artifact_path: "artifacts/replay_coverage_metric/coverage_details.json".to_string(),
+            artifact_hash:
+                "sha256:1234567890123456789012345678901234567890123456789012345678901234"
+                    .to_string(),
+            verification_command: "scripts/run_replay_coverage_metric_gate.sh ci".to_string(),
+            redaction_status: "redacted".to_string(),
+            confidence_millionths: COVERAGE_SCALE_MILLIONTHS,
+            decisions: vec![evidence],
+        };
+
+        let report = evaluate_replay_coverage_metric(&input);
+
+        assert_eq!(report.decision, ReplayCoverageDecision::FailClosed);
+        assert_eq!(report.replay_backed_security_critical_decisions, 0); // Not backed due to missing evidence
+        assert!(
+            report.events[0]
+                .reason
+                .contains("provisional_verification_lacks_evidence"),
+            "Expected provisional verification error, got: {}",
+            report.events[0].reason
+        );
+        assert_eq!(
+            report.events[0].verification_status,
+            ReplayVerificationStatus::Provisional
+        );
+    }
+
+    #[test]
+    fn invalid_evidence_format_rejected() {
+        let mut evidence = replay_evidence_with_real_verification(
+            "bad-evidence-replay",
+            SecurityDecisionKind::Deny,
+            "invalid-bead", // Invalid bead ID format
+            "xyz",          // Invalid commit hash format
+            "",             // Empty test name
+            "sha256:1234567890123456789012345678901234567890123456789012345678901234",
+            "sha256:1234567890123456789012345678901234567890123456789012345678901234",
+            "sha256:5678901234567890123456789012345678901234567890123456789012345678",
+        );
+
+        let input = ReplayCoverageMetricInput {
+            code_revision: "test-revision".to_string(),
+            freshness_days: 0,
+            scenario_set: "security_critical_allow_deny_escalate_v1".to_string(),
+            artifact_path: "artifacts/replay_coverage_metric/coverage_details.json".to_string(),
+            artifact_hash:
+                "sha256:1234567890123456789012345678901234567890123456789012345678901234"
+                    .to_string(),
+            verification_command: "scripts/run_replay_coverage_metric_gate.sh ci".to_string(),
+            redaction_status: "redacted".to_string(),
+            confidence_millionths: COVERAGE_SCALE_MILLIONTHS,
+            decisions: vec![evidence],
+        };
+
+        let report = evaluate_replay_coverage_metric(&input);
+
+        assert_eq!(report.decision, ReplayCoverageDecision::FailClosed);
+        assert_eq!(report.replay_backed_security_critical_decisions, 0); // Not backed due to invalid evidence
+        assert_eq!(
+            report.events[0].verification_status,
+            ReplayVerificationStatus::Provisional
+        );
+    }
+
+    #[test]
+    fn is_fake_replay_hash_detection_comprehensive() {
+        let fake_hashes = [
+            "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", // From representative_fixture
+            "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789", // From replay_evidence
+            "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+            "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "sha256:deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+        ];
+
+        for fake_hash in &fake_hashes {
+            assert!(
+                is_fake_replay_hash(fake_hash),
+                "Should detect {} as fake replay hash",
+                fake_hash
+            );
+        }
+
+        // Real hashes should not be detected as fake
+        let real_hashes = [
+            "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "sha256:2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae",
+        ];
+
+        for real_hash in &real_hashes {
+            assert!(
+                !is_fake_replay_hash(real_hash),
+                "Should not detect {} as fake replay hash",
+                real_hash
+            );
+        }
+    }
+
+    #[test]
+    fn fake_timing_data_detected_as_provisional() {
+        let mut evidence = replay_evidence("suspicious-timing", SecurityDecisionKind::Allow);
+        evidence.duration_ms = 1; // Suspiciously fast
+        evidence.replay_verified = true;
+        evidence.security_critical = true;
+
+        let status = evidence.get_verification_status();
+        assert_eq!(status, ReplayVerificationStatus::Provisional);
+
+        // Test with more realistic timing
+        evidence.duration_ms = 500;
+        evidence.evidence_bead_id = Some("bd-12345".to_string());
+        evidence.evidence_commit_hash = Some("abc123def".to_string());
+        evidence.evidence_test_name = Some("test_replay_timing".to_string());
+
+        // But keep fake hashes - should still be provisional due to fake hashes
+        let status = evidence.get_verification_status();
+        assert_eq!(status, ReplayVerificationStatus::Provisional);
+    }
+
+    #[test]
+    fn test_scenario_enumeration_validation_duplicate_ids() {
+        // Create decisions with duplicate IDs
+        let decisions = vec![
+            replay_evidence("duplicate-id", SecurityDecisionKind::Allow),
+            replay_evidence("unique-id", SecurityDecisionKind::Deny),
+            replay_evidence("duplicate-id", SecurityDecisionKind::Escalate), // Duplicate!
+        ];
+
+        let result = validate_scenario_enumeration(&decisions);
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert!(error.contains("Duplicate decision IDs detected"));
+        assert!(error.contains("duplicate-id"));
+    }
+
+    #[test]
+    fn test_scenario_enumeration_validation_missing_coverage() {
+        // Create decisions missing the Escalate decision kind
+        let decisions = vec![
+            replay_evidence("allow-test", SecurityDecisionKind::Allow),
+            replay_evidence("deny-test", SecurityDecisionKind::Deny),
+            // Missing SecurityDecisionKind::Escalate
+        ];
+
+        let result = validate_scenario_enumeration(&decisions);
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert!(error.contains("Incomplete decision kind coverage"));
+        assert!(error.contains("missing escalate"));
+    }
+
+    #[test]
+    fn test_scenario_enumeration_validation_placeholder_detection() {
+        // Create decisions with placeholder IDs
+        let decisions = vec![
+            replay_evidence("test-decision", SecurityDecisionKind::Allow), // Placeholder pattern
+            replay_evidence("real-deny-decision", SecurityDecisionKind::Deny),
+            replay_evidence("escalate-example-decision", SecurityDecisionKind::Escalate), // Placeholder pattern
+        ];
+
+        let result = validate_scenario_enumeration(&decisions);
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert!(error.contains("Placeholder decision ID detected"));
+        assert!(error.contains("test-decision"));
+    }
+
+    #[test]
+    fn test_scenario_enumeration_validation_empty_set() {
+        let decisions = vec![];
+
+        let result = validate_scenario_enumeration(&decisions);
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert!(error.contains("Empty decision set"));
+    }
+
+    #[test]
+    fn test_scenario_enumeration_validation_no_security_critical() {
+        // Create decisions but mark them as not security critical
+        let mut decisions = vec![
+            replay_evidence("allow-test", SecurityDecisionKind::Allow),
+            replay_evidence("deny-test", SecurityDecisionKind::Deny),
+            replay_evidence("escalate-test", SecurityDecisionKind::Escalate),
+        ];
+
+        // Mark all as non-security-critical
+        for decision in &mut decisions {
+            decision.security_critical = false;
+        }
+
+        let result = validate_scenario_enumeration(&decisions);
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert!(error.contains("No security-critical decisions found"));
+    }
+
+    #[test]
+    fn test_scenario_enumeration_validation_success() {
+        // Create valid decisions with unique IDs and complete coverage
+        let decisions = vec![
+            replay_evidence("real-allow-decision", SecurityDecisionKind::Allow),
+            replay_evidence("real-deny-decision", SecurityDecisionKind::Deny),
+            replay_evidence("real-escalate-decision", SecurityDecisionKind::Escalate),
+        ];
+
+        let result = validate_scenario_enumeration(&decisions);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_evaluate_metric_with_invalid_enumeration_fails_closed() {
+        // Create input with duplicate decision IDs
+        let mut input = ReplayCoverageMetricInput::representative_fixture("abc123");
+        input.decisions = vec![
+            replay_evidence("duplicate-id", SecurityDecisionKind::Allow),
+            replay_evidence("unique-id", SecurityDecisionKind::Deny),
+            replay_evidence("duplicate-id", SecurityDecisionKind::Escalate), // Duplicate!
+        ];
+
+        let report = evaluate_replay_coverage_metric(&input);
+
+        // Should fail closed due to enumeration validation
+        assert_eq!(report.decision, ReplayCoverageDecision::FailClosed);
+        assert!(report.reason.contains("enumeration_validation_failed"));
+        assert!(report.reason.contains("Duplicate decision IDs detected"));
+        assert_eq!(report.coverage_millionths, 0); // Zero coverage due to invalid enumeration
+        assert_eq!(report.total_security_critical_decisions, 0);
+        assert_eq!(report.replay_backed_security_critical_decisions, 0);
+    }
+
+    #[test]
+    fn test_evaluate_metric_with_missing_coverage_fails_closed() {
+        // Create input missing Escalate decision kind
+        let mut input = ReplayCoverageMetricInput::representative_fixture("abc123");
+        input.decisions = vec![
+            replay_evidence("allow-decision", SecurityDecisionKind::Allow),
+            replay_evidence("deny-decision", SecurityDecisionKind::Deny),
+            // Missing Escalate decision kind
+        ];
+
+        let report = evaluate_replay_coverage_metric(&input);
+
+        // Should fail closed due to incomplete coverage enumeration
+        assert_eq!(report.decision, ReplayCoverageDecision::FailClosed);
+        assert!(report.reason.contains("enumeration_validation_failed"));
+        assert!(report.reason.contains("Incomplete decision kind coverage"));
+        assert!(report.reason.contains("missing escalate"));
+        assert_eq!(report.coverage_millionths, 0);
+    }
+
+    #[test]
+    fn test_evaluate_metric_with_valid_enumeration_proceeds() {
+        // Create input with valid enumeration
+        let input = ReplayCoverageMetricInput::representative_fixture("abc123");
+        // Representative fixture already has proper Allow/Deny/Escalate coverage
+
+        let report = evaluate_replay_coverage_metric(&input);
+
+        // Should not fail due to enumeration (though may fail for other reasons like provisional evidence)
+        assert!(!report.reason.contains("enumeration_validation_failed"));
+        assert!(report.total_security_critical_decisions > 0); // Should have processed the decisions
     }
 }

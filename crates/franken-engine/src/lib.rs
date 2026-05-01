@@ -346,6 +346,7 @@ pub mod react_specialization_benchmark_gate;
 pub mod react_ssr_verification;
 pub mod receipt_verifier_pipeline;
 pub mod recovery_artifact;
+pub mod red_team_compromise_rate_metric_gate;
 pub mod regexp_deterministic_engine;
 pub mod regexp_string_governance;
 pub mod regexp_string_governance_gate;

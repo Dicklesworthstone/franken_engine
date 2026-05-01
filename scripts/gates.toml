@@ -84,6 +84,14 @@ command = "./scripts/run_replay_coverage_metric_gate.sh ci"
 needs_rch = false
 generates_manifest = true
 
+[gates.red_team_compromise_rate_metric_gate]
+name = "red_team_compromise_rate_metric_gate"
+description = "Red-team compromise-rate metric artifact with Node/Bun baseline comparison"
+artifact_root = "artifacts/red_team_compromise_rate_metric"
+command = "./scripts/run_red_team_compromise_rate_metric_gate.sh ci"
+needs_rch = false
+generates_manifest = true
+
 # Sample of other gates - in practice this would include all ~53 gates
 [gates.security_epoch_gate]
 name = "security_epoch_gate"

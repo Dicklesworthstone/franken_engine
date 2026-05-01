@@ -6,12 +6,12 @@
 #![forbid(unsafe_code)]
 
 use frankenengine_engine::compromise_rate_disruptive_floor_metric_gate::{
-    analyze_compromise_rate_metric_input, generate_compromise_rate_metric_artifact,
-    CompromiseRateEvidence, CompromiseRateMetricInput, RuntimeDenominator, BEAD_ID,
-    DEFAULT_REDUCTION_THRESHOLD_FACTOR, SCHEMA_VERSION,
+    BEAD_ID, CompromiseRateEvidence, CompromiseRateMetricInput, DEFAULT_REDUCTION_THRESHOLD_FACTOR,
+    RuntimeDenominator, SCHEMA_VERSION, analyze_compromise_rate_metric_input,
+    generate_compromise_rate_metric_artifact,
 };
 use frankenengine_engine::disruptive_floor_metric_gate::{
-    DisruptiveMetricId, DEFAULT_MAX_FRESHNESS_DAYS,
+    DEFAULT_MAX_FRESHNESS_DAYS, DisruptiveMetricId,
 };
 use serde_json;
 use std::path::PathBuf;
@@ -30,17 +30,20 @@ fn test_compromise_rate_metric_fixture_loads() {
     assert_eq!(input.schema_version, SCHEMA_VERSION);
     assert_eq!(input.bead_id, BEAD_ID);
     assert!(!input.evidence.is_empty());
-    assert_eq!(input.reduction_threshold_factor, DEFAULT_REDUCTION_THRESHOLD_FACTOR);
+    assert_eq!(
+        input.reduction_threshold_factor,
+        DEFAULT_REDUCTION_THRESHOLD_FACTOR
+    );
 }
 
 #[test]
 fn test_compromise_rate_metric_analysis() {
     let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(FIXTURE_PATH);
-    let fixture_content = std::fs::read_to_string(&fixture_path)
-        .expect("Could not read compromise rate fixture");
+    let fixture_content =
+        std::fs::read_to_string(&fixture_path).expect("Could not read compromise rate fixture");
 
-    let input: CompromiseRateMetricInput = serde_json::from_str(&fixture_content)
-        .expect("Failed to parse compromise rate fixture");
+    let input: CompromiseRateMetricInput =
+        serde_json::from_str(&fixture_content).expect("Failed to parse compromise rate fixture");
 
     let report = analyze_compromise_rate_metric_input(&input)
         .expect("Failed to analyze compromise rate input");
@@ -56,24 +59,24 @@ fn test_compromise_rate_metric_analysis() {
 #[test]
 fn test_compromise_rate_metric_artifact_generation() {
     let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(FIXTURE_PATH);
-    let fixture_content = std::fs::read_to_string(&fixture_path)
-        .expect("Could not read compromise rate fixture");
+    let fixture_content =
+        std::fs::read_to_string(&fixture_path).expect("Could not read compromise rate fixture");
 
-    let input: CompromiseRateMetricInput = serde_json::from_str(&fixture_content)
-        .expect("Failed to parse compromise rate fixture");
+    let input: CompromiseRateMetricInput =
+        serde_json::from_str(&fixture_content).expect("Failed to parse compromise rate fixture");
 
     let artifact = generate_compromise_rate_metric_artifact(&input)
         .expect("Failed to generate compromise rate artifact");
 
-    assert_eq!(artifact.metric_id, DisruptiveMetricId::RedTeamCompromiseRateReduction);
-    assert!(artifact.outcome == "pass" || artifact.outcome == "fail");
-    assert!(artifact.value_millionths > 0);
+    assert_eq!(
+        artifact.metric_id,
+        DisruptiveMetricId::RedTeamCompromiseRateReduction
+    );
+    assert!(artifact.observed_value > 0);
     assert!(artifact.confidence_millionths > 0);
     assert!(artifact.coverage_millionths > 0);
-    assert_eq!(
-        artifact.threshold_millionths,
-        DEFAULT_REDUCTION_THRESHOLD_FACTOR * 1_000_000
-    );
+    assert_eq!(artifact.threshold, DEFAULT_REDUCTION_THRESHOLD_FACTOR);
+    assert_eq!(artifact.unit, "x_rate_reduction");
 }
 
 #[test]
@@ -203,8 +206,14 @@ fn test_compromise_rate_edge_cases() {
         "zero_repro".to_string(),
     );
 
-    assert_eq!(zero_baseline_evidence.baseline_compromise_rate_millionths, 0);
-    assert_eq!(zero_baseline_evidence.frankenengine_compromise_rate_millionths, 0);
+    assert_eq!(
+        zero_baseline_evidence.baseline_compromise_rate_millionths,
+        0
+    );
+    assert_eq!(
+        zero_baseline_evidence.frankenengine_compromise_rate_millionths,
+        0
+    );
     // When both are 0, reduction ratio should be 1x (no improvement needed)
     assert_eq!(zero_baseline_evidence.reduction_ratio_millionths, 1_000_000);
 }
@@ -250,11 +259,11 @@ fn test_compromise_rate_insufficient_reduction() {
 fn test_parent_child_bead_relationship() {
     // This test verifies that the compromise rate metric integrates with the parent disruptive floor gate
     let fixture_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(FIXTURE_PATH);
-    let fixture_content = std::fs::read_to_string(&fixture_path)
-        .expect("Could not read compromise rate fixture");
+    let fixture_content =
+        std::fs::read_to_string(&fixture_path).expect("Could not read compromise rate fixture");
 
-    let input: CompromiseRateMetricInput = serde_json::from_str(&fixture_content)
-        .expect("Failed to parse compromise rate fixture");
+    let input: CompromiseRateMetricInput =
+        serde_json::from_str(&fixture_content).expect("Failed to parse compromise rate fixture");
 
     // Verify parent bead integration
     assert_eq!(input.bead_id, BEAD_ID); // Child bead ID
@@ -267,12 +276,12 @@ fn test_parent_child_bead_relationship() {
     let artifact = generate_compromise_rate_metric_artifact(&input)
         .expect("Failed to generate artifact for parent");
 
-    assert_eq!(artifact.metric_id, DisruptiveMetricId::RedTeamCompromiseRateReduction);
-    assert!(artifact.value_millionths >= 1_000_000); // At least 1x reduction
     assert_eq!(
-        artifact.threshold_millionths,
-        DEFAULT_REDUCTION_THRESHOLD_FACTOR * 1_000_000
+        artifact.metric_id,
+        DisruptiveMetricId::RedTeamCompromiseRateReduction
     );
+    assert!(artifact.observed_value >= 1); // At least 1x reduction
+    assert_eq!(artifact.threshold, DEFAULT_REDUCTION_THRESHOLD_FACTOR);
 
     // Verify artifact can be consumed by parent gate
     let artifact_json = serde_json::to_string(&artifact)
@@ -285,6 +294,6 @@ fn test_parent_child_bead_relationship() {
             .expect("Failed to parse artifact - schema incompatibility");
 
     assert_eq!(parsed_artifact.metric_id, artifact.metric_id);
-    assert_eq!(parsed_artifact.outcome, artifact.outcome);
-    assert_eq!(parsed_artifact.value_millionths, artifact.value_millionths);
+    assert_eq!(parsed_artifact.threshold, artifact.threshold);
+    assert_eq!(parsed_artifact.observed_value, artifact.observed_value);
 }

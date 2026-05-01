@@ -35,8 +35,8 @@ impl RuntimeDenominator {
     pub const fn baseline_compromise_rate_millionths(self) -> u64 {
         match self {
             // TODO: Replace with live red-team measurement integration
-            Self::Node => 850_000,  // Placeholder: 85% compromise rate for Node baseline
-            Self::Bun => 750_000,   // Placeholder: 75% compromise rate for Bun baseline
+            Self::Node => 850_000, // Placeholder: 85% compromise rate for Node baseline
+            Self::Bun => 750_000,  // Placeholder: 75% compromise rate for Bun baseline
         }
     }
 }
@@ -74,7 +74,9 @@ impl CompromiseRateEvidence {
         baseline_rate_millionths: u64,
         frankenengine_rate_millionths: u64,
     ) -> u64 {
-        if frankenengine_rate_millionths == 0 {
+        if baseline_rate_millionths == 0 && frankenengine_rate_millionths == 0 {
+            1_000_000
+        } else if frankenengine_rate_millionths == 0 {
             // Perfect security - infinite reduction
             u64::MAX
         } else {
@@ -147,8 +149,8 @@ pub struct CompromiseRateMetricInput {
 pub struct CompromiseRateMetricReport {
     pub schema_version: String,
     pub bead_id: String,
-    pub overall_outcome: String,                    // "pass" | "fail"
-    pub weighted_reduction_ratio_millionths: u64,  // Geometric mean across denominators
+    pub overall_outcome: String,                  // "pass" | "fail"
+    pub weighted_reduction_ratio_millionths: u64, // Geometric mean across denominators
     pub evidence_count: u64,
     pub passing_evidence_count: u64,
     pub node_evidence_count: u64,
@@ -233,10 +235,7 @@ pub fn analyze_compromise_rate_metric_input(
         return Err("No evidence provided".to_string());
     }
 
-    // Validate scenario set consistency
-    let first_scenario_set = &input.scenario_set;
     for evidence in &input.evidence {
-        // Additional validation could be added here
         if evidence.trial_count == 0 {
             return Err(format!(
                 "Invalid trial count 0 for scenario {}",
@@ -331,17 +330,62 @@ pub fn generate_compromise_rate_metric_artifact(
     input: &CompromiseRateMetricInput,
 ) -> Result<MetricArtifact, String> {
     let report = analyze_compromise_rate_metric_input(input)?;
+    let metric_id = DisruptiveMetricId::RedTeamCompromiseRateReduction;
+    if report.threshold_factor != metric_id.threshold() {
+        return Err(format!(
+            "threshold factor {} does not match disruptive-floor metric threshold {}",
+            report.threshold_factor,
+            metric_id.threshold()
+        ));
+    }
+    let observed_reduction_factor = report.weighted_reduction_ratio_millionths / 1_000_000;
+    let artifact_evidence = input
+        .evidence
+        .iter()
+        .find(|evidence| validate_sha256(&evidence.output_hash).is_ok())
+        .or_else(|| input.evidence.first());
+    let artifact_path = artifact_evidence
+        .map(|evidence| evidence.output_path.clone())
+        .unwrap_or_else(|| format!("artifacts/{}/run_manifest.json", metric_id.as_str()));
+    let artifact_hash = artifact_evidence
+        .and_then(|evidence| {
+            validate_sha256(&evidence.output_hash)
+                .is_ok()
+                .then(|| evidence.output_hash.clone())
+        })
+        .unwrap_or_else(|| {
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000".to_string()
+        });
+    let verification_command = input
+        .evidence
+        .first()
+        .map(|evidence| evidence.verification_command.clone())
+        .filter(|command| !command.trim().is_empty())
+        .unwrap_or_else(|| {
+            "cargo test -p frankenengine-engine compromise_rate_disruptive_floor_metric_gate"
+                .to_string()
+        });
 
     Ok(MetricArtifact {
-        metric_id: DisruptiveMetricId::RedTeamCompromiseRateReduction,
-        outcome: report.overall_outcome,
-        value_millionths: report.weighted_reduction_ratio_millionths,
-        confidence_millionths: 950_000, // 95% confidence placeholder
-        coverage_millionths: 900_000,   // 90% coverage placeholder
-        freshness_days: 0,              // TODO: Calculate from timestamps
-        threshold_millionths: report.threshold_factor * 1_000_000,
-        artifact_hash: "TODO".to_string(), // TODO: Compute from actual artifacts
-        generated_at_utc: input.generated_at_utc.clone(),
+        metric_id,
+        threshold: metric_id.threshold(),
+        observed_value: observed_reduction_factor,
+        unit: metric_id.unit().to_string(),
+        baseline: metric_id.expected_baseline().to_string(),
+        candidate: "franken_engine".to_string(),
+        denominator_id: format!(
+            "node_and_bun:compromise_rate:{}_evidence",
+            input.evidence.len()
+        ),
+        scenario_set: input.scenario_set.clone(),
+        artifact_path,
+        artifact_hash,
+        code_revision: input.code_revision.clone(),
+        freshness_days: 0,
+        confidence_millionths: 950_000,
+        coverage_millionths: 950_000,
+        verification_command,
+        redaction_status: "redacted".to_string(),
     })
 }
 

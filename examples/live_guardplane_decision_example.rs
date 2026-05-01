@@ -1,16 +1,14 @@
-//! Live guardplane posterior and expected-loss decision example.
-//!
-//! This example demonstrates the FrankenEngine's probabilistic guardplane
-//! computing posterior risk distributions and selecting containment actions
-//! based on expected-loss minimization.
-
-#![forbid(unsafe_code)]
+// Live guardplane posterior and expected-loss decision example.
+//
+// This example demonstrates the FrankenEngine's probabilistic guardplane
+// computing posterior risk distributions and selecting containment actions
+// based on expected-loss minimization.
 
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
 use frankenengine_engine::bayesian_posterior::{Posterior, RiskState};
@@ -19,8 +17,8 @@ use frankenengine_engine::expected_loss_selector::{
 };
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::proof_artifact::{
-    ProofArtifactPaths, ProofCommand, ProofRunStatus, PROOF_EVENT_SCHEMA_VERSION,
-    PROOF_MANIFEST_SCHEMA_VERSION, PROOF_REPORT_SCHEMA_VERSION,
+    ProofArtifactPaths, ProofCommand, PROOF_EVENT_SCHEMA_VERSION, PROOF_MANIFEST_SCHEMA_VERSION,
+    PROOF_REPORT_SCHEMA_VERSION,
 };
 
 pub const EXAMPLE_BEAD_ID: &str = "bd-1ypps";
@@ -185,7 +183,8 @@ pub fn compute_evidence_posterior(input: &SyntheticDecisionInput) -> Posterior {
     posterior.p_benign = posterior.p_benign.max(10_000); // At least 1%
     posterior.p_malicious = posterior.p_malicious.min(800_000); // At most 80%
 
-    let total = posterior.p_benign + posterior.p_anomalous + posterior.p_malicious + posterior.p_unknown;
+    let total =
+        posterior.p_benign + posterior.p_anomalous + posterior.p_malicious + posterior.p_unknown;
     if total != 1_000_000 {
         let adjustment = 1_000_000 - total;
         posterior.p_benign += adjustment;
@@ -200,30 +199,72 @@ pub fn create_security_loss_matrix() -> LossMatrix {
         "security_focused_v1",
         vec![
             // Allow action: low cost for benign, high cost for malicious
-            LossEntry::new(ContainmentAction::Allow, RiskState::Benign, 10_000),     // 1% cost
-            LossEntry::new(ContainmentAction::Allow, RiskState::Anomalous, 200_000), // 20% cost
-            LossEntry::new(ContainmentAction::Allow, RiskState::Malicious, 900_000), // 90% cost
-            LossEntry::new(ContainmentAction::Allow, RiskState::Unknown, 300_000),   // 30% cost
-
-            // Warn action: moderate cost across all states
-            LossEntry::new(ContainmentAction::Warn, RiskState::Benign, 50_000),      // 5% cost
-            LossEntry::new(ContainmentAction::Warn, RiskState::Anomalous, 100_000),  // 10% cost
-            LossEntry::new(ContainmentAction::Warn, RiskState::Malicious, 400_000),  // 40% cost
-            LossEntry::new(ContainmentAction::Warn, RiskState::Unknown, 150_000),    // 15% cost
-
-            // Deny action: high cost for benign, low cost for malicious
-            LossEntry::new(ContainmentAction::Deny, RiskState::Benign, 300_000),     // 30% cost
-            LossEntry::new(ContainmentAction::Deny, RiskState::Anomalous, 150_000),  // 15% cost
-            LossEntry::new(ContainmentAction::Deny, RiskState::Malicious, 50_000),   // 5% cost
-            LossEntry::new(ContainmentAction::Deny, RiskState::Unknown, 200_000),    // 20% cost
-
-            // Kill action: very high cost for benign, very low cost for malicious
-            LossEntry::new(ContainmentAction::Kill, RiskState::Benign, 800_000),     // 80% cost
-            LossEntry::new(ContainmentAction::Kill, RiskState::Anomalous, 400_000),  // 40% cost
-            LossEntry::new(ContainmentAction::Kill, RiskState::Malicious, 20_000),   // 2% cost
-            LossEntry::new(ContainmentAction::Kill, RiskState::Unknown, 600_000),    // 60% cost
+            loss_entry(ContainmentAction::Allow, RiskState::Benign, 10_000), // 1% cost
+            loss_entry(ContainmentAction::Allow, RiskState::Anomalous, 200_000), // 20% cost
+            loss_entry(ContainmentAction::Allow, RiskState::Malicious, 900_000), // 90% cost
+            loss_entry(ContainmentAction::Allow, RiskState::Unknown, 300_000), // 30% cost
+            // Challenge action: moderate cost across all states
+            loss_entry(ContainmentAction::Challenge, RiskState::Benign, 50_000), // 5% cost
+            loss_entry(ContainmentAction::Challenge, RiskState::Anomalous, 100_000), // 10% cost
+            loss_entry(ContainmentAction::Challenge, RiskState::Malicious, 400_000), // 40% cost
+            loss_entry(ContainmentAction::Challenge, RiskState::Unknown, 150_000), // 15% cost
+            // Sandbox action: balanced mitigation for suspicious but not proven-malicious inputs
+            loss_entry(ContainmentAction::Sandbox, RiskState::Benign, 100_000), // 10% cost
+            loss_entry(ContainmentAction::Sandbox, RiskState::Anomalous, 70_000), // 7% cost
+            loss_entry(ContainmentAction::Sandbox, RiskState::Malicious, 150_000), // 15% cost
+            loss_entry(ContainmentAction::Sandbox, RiskState::Unknown, 90_000), // 9% cost
+            // Suspend action: high cost for benign, low cost for malicious
+            loss_entry(ContainmentAction::Suspend, RiskState::Benign, 300_000), // 30% cost
+            loss_entry(ContainmentAction::Suspend, RiskState::Anomalous, 150_000), // 15% cost
+            loss_entry(ContainmentAction::Suspend, RiskState::Malicious, 50_000), // 5% cost
+            loss_entry(ContainmentAction::Suspend, RiskState::Unknown, 200_000), // 20% cost
+            // Terminate action: very high cost for benign, very low cost for malicious
+            loss_entry(ContainmentAction::Terminate, RiskState::Benign, 800_000), // 80% cost
+            loss_entry(ContainmentAction::Terminate, RiskState::Anomalous, 400_000), // 40% cost
+            loss_entry(ContainmentAction::Terminate, RiskState::Malicious, 20_000), // 2% cost
+            loss_entry(ContainmentAction::Terminate, RiskState::Unknown, 600_000), // 60% cost
+            // Quarantine action: strongest response, reserved for highly malicious posterior mass
+            loss_entry(ContainmentAction::Quarantine, RiskState::Benign, 600_000), // 60% cost
+            loss_entry(ContainmentAction::Quarantine, RiskState::Anomalous, 250_000), // 25% cost
+            loss_entry(ContainmentAction::Quarantine, RiskState::Malicious, 10_000), // 1% cost
+            loss_entry(ContainmentAction::Quarantine, RiskState::Unknown, 300_000), // 30% cost
         ],
     )
+}
+
+fn loss_entry(action: ContainmentAction, state: RiskState, loss_millionths: i64) -> LossEntry {
+    LossEntry {
+        action,
+        state,
+        loss_millionths,
+    }
+}
+
+fn expected_losses_for_report(decision: &ActionDecision) -> BTreeMap<String, u64> {
+    decision
+        .explanation
+        .all_expected_losses
+        .iter()
+        .map(|(action, loss)| (action.clone(), (*loss).max(0) as u64))
+        .collect()
+}
+
+fn selected_marker(decision: &ActionDecision, action: ContainmentAction) -> &'static str {
+    if decision.action == action {
+        "← **SELECTED**"
+    } else {
+        ""
+    }
+}
+
+fn action_loss_percent(decision: &ActionDecision, action: ContainmentAction) -> f64 {
+    decision
+        .explanation
+        .all_expected_losses
+        .get(&action.to_string())
+        .copied()
+        .unwrap_or_default() as f64
+        / 10_000.0
 }
 
 /// Execute the guardplane decision pipeline and generate proof artifacts.
@@ -269,15 +310,17 @@ pub fn execute_guardplane_decision_with_proof(
             ("unknown".to_string(), posterior.p_unknown as u64),
         ]),
         loss_matrix_id: "security_focused_v1".to_string(),
-        expected_losses: BTreeMap::from([
-            ("allow".to_string(), decision.expected_loss_allow as u64),
-            ("warn".to_string(), decision.expected_loss_warn as u64),
-            ("deny".to_string(), decision.expected_loss_deny as u64),
-            ("kill".to_string(), decision.expected_loss_kill as u64),
-        ]),
-        selected_action: format!("{:?}", decision.action).to_lowercase(),
+        expected_losses: expected_losses_for_report(&decision),
+        selected_action: decision.action.to_string(),
         confidence_millionths: 850_000, // High confidence for this deterministic example
-        explanation: decision.explanation.clone(),
+        explanation: format!(
+            "{} selected with expected loss {} millionths; runner-up {} at {} millionths; margin {} millionths",
+            decision.action,
+            decision.expected_loss_millionths,
+            decision.runner_up_action,
+            decision.runner_up_loss_millionths,
+            decision.explanation.margin_millionths
+        ),
     };
 
     // Write events.jsonl
@@ -287,14 +330,20 @@ pub fn execute_guardplane_decision_with_proof(
     // Write commands.txt (example command that would be executed)
     let command = ProofCommand {
         command_id: "guardplane_decision_001".to_string(),
-        display: format!("guardplane-decision --extension {} --operation {}",
-                         input.extension_id, input.operation_type),
-        redacted_display: "guardplane-decision --extension [REDACTED] --operation [REDACTED]".to_string(),
+        display: format!(
+            "guardplane-decision --extension {} --operation {}",
+            input.extension_id, input.operation_type
+        ),
+        redacted_display: "guardplane-decision --extension [REDACTED] --operation [REDACTED]"
+            .to_string(),
         cwd: "/data/projects/franken_engine".to_string(),
         exit_code: Some(0),
         duration_ms: Some(15),
     };
-    fs::write(&artifacts.commands_txt, format!("{}\n", serde_json::to_string(&command)?))?;
+    fs::write(
+        &artifacts.commands_txt,
+        format!("{}\n", serde_json::to_string(&command)?),
+    )?;
 
     // Create machine-readable report
     let report = GuardplaneDecisionReport {
@@ -308,7 +357,7 @@ pub fn execute_guardplane_decision_with_proof(
         } else {
             "contained".to_string()
         },
-        selected_action: format!("{:?}", decision.action).to_lowercase(),
+        selected_action: decision.action.to_string(),
         posterior_risk_assessment: decision_event.posterior_probabilities.clone(),
         expected_losses: decision_event.expected_losses.clone(),
         confidence_score: decision_event.confidence_millionths,
@@ -316,23 +365,33 @@ pub fn execute_guardplane_decision_with_proof(
             "{} hostcalls analyzed, {} prior violations, avg anomaly score {:.1}%",
             input.hostcall_evidence.len(),
             input.prior_violations,
-            input.hostcall_evidence.iter()
+            input
+                .hostcall_evidence
+                .iter()
                 .map(|e| e.anomaly_score_millionths)
-                .sum::<u64>() as f64 / (input.hostcall_evidence.len() as f64 * 10_000.0)
+                .sum::<u64>() as f64
+                / (input.hostcall_evidence.len() as f64 * 10_000.0)
         ),
         recommendation: format!(
             "Extension {} should be {} based on {} risk assessment (P(malicious)={:.1}%)",
             input.extension_id,
-            format!("{:?}", decision.action).to_lowercase(),
-            if posterior.p_malicious > 500_000 { "high" }
-            else if posterior.p_malicious > 200_000 { "medium" }
-            else { "low" },
+            decision.action,
+            if posterior.p_malicious > 500_000 {
+                "high"
+            } else if posterior.p_malicious > 200_000 {
+                "medium"
+            } else {
+                "low"
+            },
             posterior.p_malicious as f64 / 10_000.0
         ),
     };
 
     // Write report.json
-    fs::write(&artifacts.report_json, serde_json::to_string_pretty(&report)?)?;
+    fs::write(
+        &artifacts.report_json,
+        serde_json::to_string_pretty(&report)?,
+    )?;
 
     // Write human-readable report.md
     let markdown_report = format!(
@@ -357,10 +416,12 @@ pub fn execute_guardplane_decision_with_proof(
 
 | Action | Expected Loss | Decision |
 |--------|---------------|----------|
-| Allow  | {:.1}%        | {}       |
-| Warn   | {:.1}%        | {}       |
-| Deny   | {:.1}%        | {}       |
-| Kill   | {:.1}%        | {}       |
+| Allow      | {:.1}%        | {}       |
+| Challenge  | {:.1}%        | {}       |
+| Sandbox    | {:.1}%        | {}       |
+| Suspend    | {:.1}%        | {}       |
+| Terminate  | {:.1}%        | {}       |
+| Quarantine | {:.1}%        | {}       |
 
 ## Evidence Summary
 
@@ -373,21 +434,25 @@ pub fn execute_guardplane_decision_with_proof(
 *This report was generated by the FrankenEngine Live Guardplane Decision Example (bd-1ypps)*
 "#,
         input.extension_id,
-        format!("{:?}", decision.action),
+        decision.action,
         decision_event.confidence_millionths as f64 / 10_000.0,
         timestamp_str,
         posterior.p_benign as f64 / 10_000.0,
         posterior.p_anomalous as f64 / 10_000.0,
         posterior.p_malicious as f64 / 10_000.0,
         posterior.p_unknown as f64 / 10_000.0,
-        decision.expected_loss_allow as f64 / 10_000.0,
-        if matches!(decision.action, ContainmentAction::Allow) { "← **SELECTED**" } else { "" },
-        decision.expected_loss_warn as f64 / 10_000.0,
-        if matches!(decision.action, ContainmentAction::Warn) { "← **SELECTED**" } else { "" },
-        decision.expected_loss_deny as f64 / 10_000.0,
-        if matches!(decision.action, ContainmentAction::Deny) { "← **SELECTED**" } else { "" },
-        decision.expected_loss_kill as f64 / 10_000.0,
-        if matches!(decision.action, ContainmentAction::Kill) { "← **SELECTED**" } else { "" },
+        action_loss_percent(&decision, ContainmentAction::Allow),
+        selected_marker(&decision, ContainmentAction::Allow),
+        action_loss_percent(&decision, ContainmentAction::Challenge),
+        selected_marker(&decision, ContainmentAction::Challenge),
+        action_loss_percent(&decision, ContainmentAction::Sandbox),
+        selected_marker(&decision, ContainmentAction::Sandbox),
+        action_loss_percent(&decision, ContainmentAction::Suspend),
+        selected_marker(&decision, ContainmentAction::Suspend),
+        action_loss_percent(&decision, ContainmentAction::Terminate),
+        selected_marker(&decision, ContainmentAction::Terminate),
+        action_loss_percent(&decision, ContainmentAction::Quarantine),
+        selected_marker(&decision, ContainmentAction::Quarantine),
         report.evidence_summary,
         report.recommendation,
     );
@@ -409,12 +474,15 @@ pub fn execute_guardplane_decision_with_proof(
         artifacts,
         commands_executed: 1,
         events_recorded: 1,
-        evidence_hash: format!("{:x}", evidence_hash.as_bytes()),
-        decision_hash: format!("{:x}", decision_hash.as_bytes()),
+        evidence_hash: evidence_hash.to_hex(),
+        decision_hash: decision_hash.to_hex(),
     };
 
     // Write manifest.json
-    fs::write(&manifest.artifacts.manifest_json, serde_json::to_string_pretty(&manifest)?)?;
+    fs::write(
+        &manifest.artifacts.manifest_json,
+        serde_json::to_string_pretty(&manifest)?,
+    )?;
 
     println!("✅ Guardplane decision proof artifacts generated:");
     println!("   📁 Output directory: {}", output_dir.display());
@@ -422,13 +490,16 @@ pub fn execute_guardplane_decision_with_proof(
     println!("   📊 Report: {}", manifest.artifacts.report_json);
     println!("   📝 Human report: {}", manifest.artifacts.report_md);
     println!("   📋 Events: {}", manifest.artifacts.events_jsonl);
-    println!("   🔍 Decision: {} (confidence: {:.1}%)",
-             format!("{:?}", decision.action),
-             decision_event.confidence_millionths as f64 / 10_000.0);
+    println!(
+        "   🔍 Decision: {} (confidence: {:.1}%)",
+        format!("{:?}", decision.action),
+        decision_event.confidence_millionths as f64 / 10_000.0
+    );
 
     Ok(report)
 }
 
+#[allow(dead_code)]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("🚀 FrankenEngine Live Guardplane Decision Example");
     println!("   Demonstrating posterior computation + expected-loss decision making");

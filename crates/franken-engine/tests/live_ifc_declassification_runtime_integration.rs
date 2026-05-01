@@ -8,6 +8,8 @@
 use std::fs;
 use std::path::PathBuf;
 
+use frankenengine_engine::ifc_artifacts::Label;
+
 // Note: Using direct path inclusion to avoid doc comment issues
 mod live_ifc_declassification_example {
     include!("../../../examples/live_ifc_declassification_example.rs");
@@ -40,11 +42,20 @@ fn test_allowed_declassification_scenario() {
     assert_eq!(result.component, EXAMPLE_COMPONENT);
     assert_eq!(result.scenario_id, "allowed-api-metrics-to-incident");
     assert!(result.flow_attempted, "Flow should have been attempted");
-    assert!(result.declassification_required, "Flow should require declassification");
-    assert!(result.declassification_approved, "Declassification should be approved");
+    assert!(
+        result.declassification_required,
+        "Flow should require declassification"
+    );
+    assert!(
+        result.declassification_approved,
+        "Declassification should be approved"
+    );
     assert!(result.flow_completed, "Flow should complete successfully");
     assert!(result.receipt_generated, "Receipt should be generated");
-    assert!(result.receipt_hash.is_some(), "Receipt hash should be present");
+    assert!(
+        result.receipt_hash.is_some(),
+        "Receipt hash should be present"
+    );
     assert!(result.error_reason.is_none(), "Should have no error");
 
     // Generate proof artifacts and verify they exist
@@ -66,23 +77,30 @@ fn test_allowed_declassification_scenario() {
     assert!(markdown_path.exists(), "Markdown report should exist");
 
     // Verify manifest structure
-    let manifest_content = fs::read_to_string(&manifest_path)
-        .expect("Should read manifest");
-    let manifest: serde_json::Value = serde_json::from_str(&manifest_content)
-        .expect("Manifest should be valid JSON");
+    let manifest_content = fs::read_to_string(&manifest_path).expect("Should read manifest");
+    let manifest: serde_json::Value =
+        serde_json::from_str(&manifest_content).expect("Manifest should be valid JSON");
 
     assert_eq!(manifest["bead_id"], EXAMPLE_BEAD_ID);
     assert_eq!(manifest["component"], EXAMPLE_COMPONENT);
-    assert_eq!(manifest["proof_type"], "ifc_declassification_flow_verification");
+    assert_eq!(
+        manifest["proof_type"],
+        "ifc_declassification_flow_verification"
+    );
     assert_eq!(manifest["flow_scenarios_count"], 1);
     assert_eq!(manifest["status"], "completed");
-    assert!(manifest["flow_verification_evidence_hash"].as_str().unwrap().len() > 0);
+    assert!(
+        manifest["flow_verification_evidence_hash"]
+            .as_str()
+            .unwrap()
+            .len()
+            > 0
+    );
 
     // Verify report structure
-    let report_content = fs::read_to_string(&report_path)
-        .expect("Should read report");
-    let report: serde_json::Value = serde_json::from_str(&report_content)
-        .expect("Report should be valid JSON");
+    let report_content = fs::read_to_string(&report_path).expect("Should read report");
+    let report: serde_json::Value =
+        serde_json::from_str(&report_content).expect("Report should be valid JSON");
 
     assert_eq!(report["flow_scenarios_executed"], 1);
     assert_eq!(report["flows_requiring_declassification"], 1);
@@ -110,16 +128,25 @@ fn test_denied_flow_scenario() {
     assert_eq!(result.component, EXAMPLE_COMPONENT);
     assert_eq!(result.scenario_id, "denied-debug-to-logs");
     assert!(result.flow_attempted, "Flow should have been attempted");
-    assert!(result.declassification_required, "Flow should require declassification");
-    assert!(!result.declassification_approved, "Declassification should be denied");
+    assert!(
+        result.declassification_required,
+        "Flow should require declassification"
+    );
+    assert!(
+        !result.declassification_approved,
+        "Declassification should be denied"
+    );
     assert!(!result.flow_completed, "Flow should not complete");
     assert!(!result.receipt_generated, "Receipt should not be generated");
     assert!(result.receipt_hash.is_none(), "Receipt hash should be None");
     assert!(result.error_reason.is_some(), "Should have error reason");
 
     let error_reason = result.error_reason.as_ref().unwrap();
-    assert!(error_reason.contains("No matching") || error_reason.contains("route"),
-            "Error should mention missing route, got: {}", error_reason);
+    assert!(
+        error_reason.contains("No matching") || error_reason.contains("route"),
+        "Error should mention missing route, got: {}",
+        error_reason
+    );
 
     cleanup_temp_dir(&output_dir);
 }
@@ -153,10 +180,9 @@ fn test_complete_ifc_demonstration() {
 
     // Verify combined results
     let report_path = output_dir.join("report.json");
-    let report_content = fs::read_to_string(&report_path)
-        .expect("Should read report");
-    let report: serde_json::Value = serde_json::from_str(&report_content)
-        .expect("Report should be valid JSON");
+    let report_content = fs::read_to_string(&report_path).expect("Should read report");
+    let report: serde_json::Value =
+        serde_json::from_str(&report_content).expect("Report should be valid JSON");
 
     assert_eq!(report["flow_scenarios_executed"], 2);
     assert_eq!(report["flows_requiring_declassification"], 2);
@@ -166,15 +192,14 @@ fn test_complete_ifc_demonstration() {
 
     // Verify events structure
     let events_path = output_dir.join("events.jsonl");
-    let events_content = fs::read_to_string(&events_path)
-        .expect("Should read events");
+    let events_content = fs::read_to_string(&events_path).expect("Should read events");
     let event_lines: Vec<&str> = events_content.trim().split('\n').collect();
     assert_eq!(event_lines.len(), 2, "Should have two event lines");
 
     // Verify each event is valid JSON
     for line in event_lines {
-        let event: serde_json::Value = serde_json::from_str(line)
-            .expect("Event should be valid JSON");
+        let event: serde_json::Value =
+            serde_json::from_str(line).expect("Event should be valid JSON");
         assert_eq!(event["event_type"], "scenario_execution");
         assert!(event["scenario_id"].as_str().unwrap().len() > 0);
         assert!(event["execution_time_ms"].is_u64());
@@ -244,7 +269,11 @@ fn test_flow_policy_structure() {
     assert_eq!(route.conditions.len(), 3);
     assert!(route.conditions.contains(&"security_review".to_string()));
     assert!(route.conditions.contains(&"pii_scrubbing".to_string()));
-    assert!(route.conditions.contains(&"incident_response_approval".to_string()));
+    assert!(
+        route
+            .conditions
+            .contains(&"incident_response_approval".to_string())
+    );
 }
 
 #[test]
@@ -274,13 +303,15 @@ fn test_flow_verification_result_serde() {
 
     // Test serialization/deserialization
     let json = serde_json::to_string(&result).expect("Should serialize");
-    let parsed: FlowVerificationResult = serde_json::from_str(&json)
-        .expect("Should deserialize");
+    let parsed: FlowVerificationResult = serde_json::from_str(&json).expect("Should deserialize");
 
     assert_eq!(result.bead_id, parsed.bead_id);
     assert_eq!(result.scenario_id, parsed.scenario_id);
     assert_eq!(result.flow_attempted, parsed.flow_attempted);
-    assert_eq!(result.declassification_required, parsed.declassification_required);
+    assert_eq!(
+        result.declassification_required,
+        parsed.declassification_required
+    );
     assert_eq!(result.error_reason, parsed.error_reason);
     assert_eq!(result.execution_time_ms, parsed.execution_time_ms);
 }
@@ -346,11 +377,10 @@ fn test_proof_artifact_json_schema_compliance() {
 
     // Test JSON schema compliance for key artifacts
     let manifest_path = output_dir.join("manifest.json");
-    let manifest_content = fs::read_to_string(&manifest_path)
-        .expect("Should read manifest");
+    let manifest_content = fs::read_to_string(&manifest_path).expect("Should read manifest");
 
-    let manifest: serde_json::Value = serde_json::from_str(&manifest_content)
-        .expect("Manifest should be valid JSON");
+    let manifest: serde_json::Value =
+        serde_json::from_str(&manifest_content).expect("Manifest should be valid JSON");
 
     // Verify required manifest fields exist and have correct types
     assert!(manifest.get("schema_version").is_some());
@@ -365,20 +395,25 @@ fn test_proof_artifact_json_schema_compliance() {
     assert!(manifest.get("generated_at_utc").is_some());
 
     // Test specific values
-    assert_eq!(manifest["schema_version"], "cd3d2b4d.franken-engine.ifc-declassification.v1");
+    assert_eq!(
+        manifest["schema_version"],
+        "cd3d2b4d.franken-engine.ifc-declassification.v1"
+    );
     assert_eq!(manifest["bead_id"], EXAMPLE_BEAD_ID);
     assert_eq!(manifest["component"], EXAMPLE_COMPONENT);
-    assert_eq!(manifest["proof_type"], "ifc_declassification_flow_verification");
+    assert_eq!(
+        manifest["proof_type"],
+        "ifc_declassification_flow_verification"
+    );
     assert_eq!(manifest["flow_scenarios_count"], 1);
     assert_eq!(manifest["status"], "completed");
 
     // Test report JSON structure
     let report_path = output_dir.join("report.json");
-    let report_content = fs::read_to_string(&report_path)
-        .expect("Should read report");
+    let report_content = fs::read_to_string(&report_path).expect("Should read report");
 
-    let report: serde_json::Value = serde_json::from_str(&report_content)
-        .expect("Report should be valid JSON");
+    let report: serde_json::Value =
+        serde_json::from_str(&report_content).expect("Report should be valid JSON");
 
     assert!(report.get("flow_scenarios_executed").is_some());
     assert!(report.get("flows_requiring_declassification").is_some());

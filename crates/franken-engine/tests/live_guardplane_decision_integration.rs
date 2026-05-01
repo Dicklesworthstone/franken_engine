@@ -5,7 +5,6 @@
 //! Verifies that the guardplane can compute Bayesian posteriors and select
 //! optimal containment actions using expected-loss minimization.
 
-use std::fs;
 use std::path::PathBuf;
 
 use serde_json;
@@ -18,7 +17,7 @@ fn temp_output_dir(test_name: &str) -> PathBuf {
 }
 
 fn cleanup_temp_dir(dir: &PathBuf) {
-    let _ = fs::remove_dir_all(dir);
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 #[test]
@@ -35,11 +34,9 @@ fn test_suspicious_extension_decision() {
     assert_eq!(report.component, EXAMPLE_COMPONENT);
     assert_eq!(report.extension_id, "suspicious-extension-v1.2.3");
 
-    // Suspicious extension should likely be denied or killed, not allowed
+    // Suspicious extension should be mitigated, not allowed.
     assert!(
-        report.selected_action == "deny"
-            || report.selected_action == "kill"
-            || report.selected_action == "warn",
+        report.selected_action != "allow",
         "Suspicious extension should not be allowed, got: {}",
         report.selected_action
     );
@@ -65,7 +62,7 @@ fn test_suspicious_extension_decision() {
     assert!(markdown_path.exists(), "Markdown report should exist");
 
     // Verify manifest structure
-    let manifest_content = fs::read_to_string(&manifest_path).expect("Should read manifest");
+    let manifest_content = std::fs::read_to_string(&manifest_path).expect("Should read manifest");
     let manifest: GuardplaneDecisionManifest =
         serde_json::from_str(&manifest_content).expect("Manifest should be valid JSON");
 
@@ -78,7 +75,7 @@ fn test_suspicious_extension_decision() {
     assert!(!manifest.decision_hash.is_empty());
 
     // Verify events structure
-    let events_content = fs::read_to_string(&events_path).expect("Should read events");
+    let events_content = std::fs::read_to_string(&events_path).expect("Should read events");
     let event: GuardplaneDecisionEvent =
         serde_json::from_str(events_content.trim()).expect("Event should be valid JSON");
 
@@ -117,16 +114,16 @@ fn test_benign_extension_decision() {
     // Verify basic report structure
     assert_eq!(report.extension_id, "trusted-extension-v2.1.0");
 
-    // Benign extension should likely be allowed or warned at most
+    // Benign extension should be allowed or challenged at most.
     assert!(
-        report.selected_action == "allow" || report.selected_action == "warn",
+        report.selected_action == "allow" || report.selected_action == "challenge",
         "Benign extension should not be severely contained, got: {}",
         report.selected_action
     );
 
     // Verify events structure
     let events_path = output_dir.join("events.jsonl");
-    let events_content = fs::read_to_string(&events_path).expect("Should read events");
+    let events_content = std::fs::read_to_string(&events_path).expect("Should read events");
     let event: GuardplaneDecisionEvent =
         serde_json::from_str(events_content.trim()).expect("Event should be valid JSON");
 
@@ -196,7 +193,8 @@ fn test_loss_matrix_completeness() {
     assert!(loss_matrix.is_complete(), "Loss matrix should be complete");
 
     // Verify reasonable loss values
-    use frankenengine_engine::expected_loss_selector::{ContainmentAction, RiskState};
+    use frankenengine_engine::bayesian_posterior::RiskState;
+    use frankenengine_engine::expected_loss_selector::ContainmentAction;
 
     // Allow + Malicious should have high loss (security risk)
     let allow_malicious_loss = loss_matrix.loss(ContainmentAction::Allow, RiskState::Malicious);
@@ -205,18 +203,18 @@ fn test_loss_matrix_completeness() {
         "Allowing malicious extension should have high loss"
     );
 
-    // Deny + Benign should have moderate loss (usability impact)
-    let deny_benign_loss = loss_matrix.loss(ContainmentAction::Deny, RiskState::Benign);
+    // Suspend + Benign should have moderate loss (usability impact)
+    let deny_benign_loss = loss_matrix.loss(ContainmentAction::Suspend, RiskState::Benign);
     assert!(
         deny_benign_loss > 100_000, // Should be > 10% loss
-        "Denying benign extension should have some cost"
+        "Suspending benign extension should have some cost"
     );
 
-    // Kill + Malicious should have low loss (good security decision)
-    let kill_malicious_loss = loss_matrix.loss(ContainmentAction::Kill, RiskState::Malicious);
+    // Terminate + Malicious should have low loss (good security decision)
+    let kill_malicious_loss = loss_matrix.loss(ContainmentAction::Terminate, RiskState::Malicious);
     assert!(
         kill_malicious_loss < 100_000, // Should be < 10% loss
-        "Killing malicious extension should have low loss"
+        "Terminating malicious extension should have low loss"
     );
 }
 
@@ -240,7 +238,10 @@ fn test_expected_loss_selector_determinism() {
     let decision2 = selector2.select(&posterior2);
 
     assert_eq!(decision1.action, decision2.action);
-    assert_eq!(decision1.expected_loss, decision2.expected_loss);
+    assert_eq!(
+        decision1.expected_loss_millionths,
+        decision2.expected_loss_millionths
+    );
 }
 
 #[test]
@@ -254,7 +255,7 @@ fn test_proof_artifact_schema_compliance() {
 
     // Test JSON schema compliance for key artifacts
     let manifest_path = output_dir.join("manifest.json");
-    let manifest_content = fs::read_to_string(&manifest_path).expect("Should read manifest");
+    let manifest_content = std::fs::read_to_string(&manifest_path).expect("Should read manifest");
 
     let manifest: serde_json::Value =
         serde_json::from_str(&manifest_content).expect("Manifest should be valid JSON");
@@ -269,7 +270,7 @@ fn test_proof_artifact_schema_compliance() {
 
     // Test report JSON structure
     let report_path = output_dir.join("report.json");
-    let report_content = fs::read_to_string(&report_path).expect("Should read report");
+    let report_content = std::fs::read_to_string(&report_path).expect("Should read report");
 
     let report: serde_json::Value =
         serde_json::from_str(&report_content).expect("Report should be valid JSON");

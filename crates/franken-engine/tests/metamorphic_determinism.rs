@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! Metamorphic determinism test for FrankenEngine execution.
 //!
 //! **Metamorphic Relation**: f(x) = f(x)
@@ -24,14 +26,13 @@
 )]
 
 use std::collections::BTreeMap;
-use std::env;
 
 use frankenengine_engine::ast::ParseGoal;
-use frankenengine_engine::baseline_interpreter::LaneChoice;
 use frankenengine_engine::execution_orchestrator::{
     ExecutionOrchestrator, ExtensionPackage, LossMatrixPreset, OrchestratorConfig,
-    OrchestratorResult, ParserOptions,
+    OrchestratorResult,
 };
+use frankenengine_engine::parser::ParserOptions;
 use frankenengine_engine::security_epoch::SecurityEpoch;
 
 // ---------------------------------------------------------------------------
@@ -77,11 +78,6 @@ fn assert_determinism_equivalence(
     package: &ExtensionPackage,
     description: &str,
 ) -> Result<(), String> {
-    // Use isolated target directory as required
-    unsafe {
-        env::set_var("CARGO_TARGET_DIR", "/tmp/metamorphic_determinism_test");
-    }
-
     let config = create_deterministic_config();
     let mut orchestrator1 = ExecutionOrchestrator::new(config.clone());
     let mut orchestrator2 = ExecutionOrchestrator::new(config);
@@ -107,8 +103,10 @@ fn compare_orchestrator_results(
 ) -> Result<(), String> {
     // Identity fields (should be different due to unique IDs)
     if result1.extension_id != result2.extension_id {
-        return Err(format!("[{}] extension_id differs: '{}' vs '{}'",
-            description, result1.extension_id, result2.extension_id));
+        return Err(format!(
+            "[{}] extension_id differs: '{}' vs '{}'",
+            description, result1.extension_id, result2.extension_id
+        ));
     }
 
     // Note: trace_id and decision_id are expected to be different between runs
@@ -121,29 +119,43 @@ fn compare_orchestrator_results(
 
     // Lowering should be deterministic
     if result1.lowering_events.len() != result2.lowering_events.len() {
-        return Err(format!("[{}] lowering_events count differs: {} vs {}",
-            description, result1.lowering_events.len(), result2.lowering_events.len()));
+        return Err(format!(
+            "[{}] lowering_events count differs: {} vs {}",
+            description,
+            result1.lowering_events.len(),
+            result2.lowering_events.len()
+        ));
     }
 
     if result1.lowering_witnesses.len() != result2.lowering_witnesses.len() {
-        return Err(format!("[{}] lowering_witnesses count differs: {} vs {}",
-            description, result1.lowering_witnesses.len(), result2.lowering_witnesses.len()));
+        return Err(format!(
+            "[{}] lowering_witnesses count differs: {} vs {}",
+            description,
+            result1.lowering_witnesses.len(),
+            result2.lowering_witnesses.len()
+        ));
     }
 
     // Execution should be deterministic
     if result1.lane != result2.lane {
-        return Err(format!("[{}] lane differs: '{:?}' vs '{:?}'",
-            description, result1.lane, result2.lane));
+        return Err(format!(
+            "[{}] lane differs: '{:?}' vs '{:?}'",
+            description, result1.lane, result2.lane
+        ));
     }
 
     if result1.lane_reason != result2.lane_reason {
-        return Err(format!("[{}] lane_reason differs: '{:?}' vs '{:?}'",
-            description, result1.lane_reason, result2.lane_reason));
+        return Err(format!(
+            "[{}] lane_reason differs: '{:?}' vs '{:?}'",
+            description, result1.lane_reason, result2.lane_reason
+        ));
     }
 
     if result1.execution_value != result2.execution_value {
-        return Err(format!("[{}] execution_value differs: '{}' vs '{}'",
-            description, result1.execution_value, result2.execution_value));
+        return Err(format!(
+            "[{}] execution_value differs: '{}' vs '{}'",
+            description, result1.execution_value, result2.execution_value
+        ));
     }
 
     if result1.console_output != result2.console_output {
@@ -151,8 +163,10 @@ fn compare_orchestrator_results(
     }
 
     if result1.instructions_executed != result2.instructions_executed {
-        return Err(format!("[{}] instructions_executed differs: {} vs {}",
-            description, result1.instructions_executed, result2.instructions_executed));
+        return Err(format!(
+            "[{}] instructions_executed differs: {} vs {}",
+            description, result1.instructions_executed, result2.instructions_executed
+        ));
     }
 
     // Risk assessment should be deterministic
@@ -161,42 +175,60 @@ fn compare_orchestrator_results(
     }
 
     if result1.risk_state != result2.risk_state {
-        return Err(format!("[{}] risk_state differs: '{:?}' vs '{:?}'",
-            description, result1.risk_state, result2.risk_state));
+        return Err(format!(
+            "[{}] risk_state differs: '{:?}' vs '{:?}'",
+            description, result1.risk_state, result2.risk_state
+        ));
     }
 
     // Action decision should be deterministic
     if result1.containment_action != result2.containment_action {
-        return Err(format!("[{}] containment_action differs: '{:?}' vs '{:?}'",
-            description, result1.containment_action, result2.containment_action));
+        return Err(format!(
+            "[{}] containment_action differs: '{:?}' vs '{:?}'",
+            description, result1.containment_action, result2.containment_action
+        ));
     }
 
     if result1.expected_loss_millionths != result2.expected_loss_millionths {
-        return Err(format!("[{}] expected_loss_millionths differs: {} vs {}",
-            description, result1.expected_loss_millionths, result2.expected_loss_millionths));
+        return Err(format!(
+            "[{}] expected_loss_millionths differs: {} vs {}",
+            description, result1.expected_loss_millionths, result2.expected_loss_millionths
+        ));
     }
 
     if result1.action_decision != result2.action_decision {
-        return Err(format!("[{}] action_decision differs: '{:?}' vs '{:?}'",
-            description, result1.action_decision, result2.action_decision));
+        return Err(format!(
+            "[{}] action_decision differs: '{:?}' vs '{:?}'",
+            description, result1.action_decision, result2.action_decision
+        ));
     }
 
     // Evidence should be deterministic count-wise
     if result1.evidence_entries.len() != result2.evidence_entries.len() {
-        return Err(format!("[{}] evidence_entries count differs: {} vs {}",
-            description, result1.evidence_entries.len(), result2.evidence_entries.len()));
+        return Err(format!(
+            "[{}] evidence_entries count differs: {} vs {}",
+            description,
+            result1.evidence_entries.len(),
+            result2.evidence_entries.len()
+        ));
     }
 
     // Cell events should be deterministic count-wise
     if result1.cell_events.len() != result2.cell_events.len() {
-        return Err(format!("[{}] cell_events count differs: {} vs {}",
-            description, result1.cell_events.len(), result2.cell_events.len()));
+        return Err(format!(
+            "[{}] cell_events count differs: {} vs {}",
+            description,
+            result1.cell_events.len(),
+            result2.cell_events.len()
+        ));
     }
 
     // Epoch should be identical (same config)
     if result1.epoch != result2.epoch {
-        return Err(format!("[{}] epoch differs: '{:?}' vs '{:?}'",
-            description, result1.epoch, result2.epoch));
+        return Err(format!(
+            "[{}] epoch differs: '{:?}' vs '{:?}'",
+            description, result1.epoch, result2.epoch
+        ));
     }
 
     Ok(())
@@ -208,10 +240,6 @@ fn compare_orchestrator_results(
 
 #[test]
 fn metamorphic_determinism_simple_expressions() {
-    unsafe {
-        unsafe { env::set_var("CARGO_TARGET_DIR", "/tmp/metamorphic_determinism_focused"); }
-    }
-
     let test_cases = [
         ("literal_number", "42"),
         ("literal_string", r#""hello world""#),
@@ -232,13 +260,23 @@ fn metamorphic_determinism_simple_expressions() {
 
 #[test]
 fn metamorphic_determinism_function_definitions() {
-    unsafe { env::set_var("CARGO_TARGET_DIR", "/tmp/metamorphic_determinism_functions"); }
-
     let test_cases = [
-        ("simple_function", "function add(a, b) { return a + b; } add(1, 2);"),
-        ("arrow_function", "const multiply = (x, y) => x * y; multiply(3, 4);"),
-        ("closure", "function outer(x) { return function(y) { return x + y; }; } outer(5)(3);"),
-        ("recursive", "function factorial(n) { return n <= 1 ? 1 : n * factorial(n - 1); } factorial(5);"),
+        (
+            "simple_function",
+            "function add(a, b) { return a + b; } add(1, 2);",
+        ),
+        (
+            "arrow_function",
+            "const multiply = (x, y) => x * y; multiply(3, 4);",
+        ),
+        (
+            "closure",
+            "function outer(x) { return function(y) { return x + y; }; } outer(5)(3);",
+        ),
+        (
+            "recursive",
+            "function factorial(n) { return n <= 1 ? 1 : n * factorial(n - 1); } factorial(5);",
+        ),
     ];
 
     for (name, source) in &test_cases {
@@ -253,13 +291,20 @@ fn metamorphic_determinism_function_definitions() {
 
 #[test]
 fn metamorphic_determinism_control_flow() {
-    unsafe { env::set_var("CARGO_TARGET_DIR", "/tmp/metamorphic_determinism_control"); }
-
     let test_cases = [
         ("if_else", "let x = 5; if (x > 3) { x * 2 } else { x + 1 }"),
-        ("switch", "let day = 2; switch(day) { case 1: 'Mon'; break; case 2: 'Tue'; break; default: 'Other'; }"),
-        ("for_loop", "let sum = 0; for (let i = 1; i <= 5; i++) { sum += i; } sum;"),
-        ("while_loop", "let count = 0, total = 0; while (count < 3) { total += count; count++; } total;"),
+        (
+            "switch",
+            "let day = 2; switch(day) { case 1: 'Mon'; break; case 2: 'Tue'; break; default: 'Other'; }",
+        ),
+        (
+            "for_loop",
+            "let sum = 0; for (let i = 1; i <= 5; i++) { sum += i; } sum;",
+        ),
+        (
+            "while_loop",
+            "let count = 0, total = 0; while (count < 3) { total += count; count++; } total;",
+        ),
     ];
 
     for (name, source) in &test_cases {
@@ -274,14 +319,21 @@ fn metamorphic_determinism_control_flow() {
 
 #[test]
 fn metamorphic_determinism_data_structures() {
-    unsafe { env::set_var("CARGO_TARGET_DIR", "/tmp/metamorphic_determinism_data"); }
-
     let test_cases = [
         ("array_literal", "[1, 2, 3, 4, 5]"),
         ("array_methods", "let arr = [1, 2, 3]; arr.map(x => x * 2);"),
-        ("object_literal", "let obj = { a: 1, b: 2, c: 3 }; obj.a + obj.b;"),
-        ("object_methods", "let person = { name: 'Alice', age: 30 }; Object.keys(person).length;"),
-        ("nested_structures", "let data = { users: [{id: 1, name: 'Bob'}] }; data.users[0].name;"),
+        (
+            "object_literal",
+            "let obj = { a: 1, b: 2, c: 3 }; obj.a + obj.b;",
+        ),
+        (
+            "object_methods",
+            "let person = { name: 'Alice', age: 30 }; Object.keys(person).length;",
+        ),
+        (
+            "nested_structures",
+            "let data = { users: [{id: 1, name: 'Bob'}] }; data.users[0].name;",
+        ),
     ];
 
     for (name, source) in &test_cases {
@@ -296,12 +348,19 @@ fn metamorphic_determinism_data_structures() {
 
 #[test]
 fn metamorphic_determinism_error_handling() {
-    unsafe { env::set_var("CARGO_TARGET_DIR", "/tmp/metamorphic_determinism_errors"); }
-
     let test_cases = [
-        ("try_catch", "try { JSON.parse('{\"valid\": true}'); } catch (e) { 'error'; }"),
-        ("throw_custom", "try { throw new Error('test'); } catch (e) { e.message; }"),
-        ("type_error", "try { null.nonexistent; } catch (e) { 'caught'; }"),
+        (
+            "try_catch",
+            "try { JSON.parse('{\"valid\": true}'); } catch (e) { 'error'; }",
+        ),
+        (
+            "throw_custom",
+            "try { throw new Error('test'); } catch (e) { e.message; }",
+        ),
+        (
+            "type_error",
+            "try { null.nonexistent; } catch (e) { 'caught'; }",
+        ),
     ];
 
     for (name, source) in &test_cases {
@@ -312,7 +371,7 @@ fn metamorphic_determinism_error_handling() {
             Err(msg) => {
                 // Error handling should still be deterministic
                 panic!("✗ {} - NON-DETERMINISM DETECTED: {}", name, msg)
-            },
+            }
         }
     }
 }
@@ -326,12 +385,10 @@ fn metamorphic_determinism_comprehensive_validation() {
     // This test serves as a comprehensive validation of the determinism property
     // across a diverse portfolio of JavaScript constructs
 
-    unsafe { env::set_var("CARGO_TARGET_DIR", "/tmp/metamorphic_determinism_comprehensive"); }
-
-    println!("\n=== FrankenEngine Metamorphic Determinism Validation ==="); }
-    println!("Testing fundamental property: f(x) = f(x)"); }
-    println!("Same input → Same output (byte-identical results)"); }
-    println!(""); }
+    println!("\n=== FrankenEngine Metamorphic Determinism Validation ===");
+    println!("Testing fundamental property: f(x) = f(x)");
+    println!("Same input → Same output (byte-identical results)");
+    println!();
 
     // Complex program combining multiple features
     let complex_source = r#"
@@ -369,13 +426,18 @@ fn metamorphic_determinism_comprehensive_validation() {
 
     match assert_determinism_equivalence(&package, "comprehensive") {
         Ok(()) => {
-            println!("✅ METAMORPHIC DETERMINISM VERIFIED"); }
-            println!("FrankenEngine execution is replay-stable"); }
-            println!("Property: Same input produces byte-identical outputs"); }
-            println!("Coverage: expressions, functions, control flow, data structures, error handling"); }
-        },
+            println!("✅ METAMORPHIC DETERMINISM VERIFIED");
+            println!("FrankenEngine execution is replay-stable");
+            println!("Property: Same input produces byte-identical outputs");
+            println!(
+                "Coverage: expressions, functions, control flow, data structures, error handling"
+            );
+        }
         Err(msg) => {
-            panic!("\n🚨 CRITICAL: NON-DETERMINISM DETECTED\n{}\n\nThis indicates a replay-stability bug that requires immediate investigation.", msg);
+            panic!(
+                "\n🚨 CRITICAL: NON-DETERMINISM DETECTED\n{}\n\nThis indicates a replay-stability bug that requires immediate investigation.",
+                msg
+            );
         }
     }
 }

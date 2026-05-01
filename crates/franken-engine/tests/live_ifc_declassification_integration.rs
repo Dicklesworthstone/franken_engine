@@ -9,12 +9,15 @@
 
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::PathBuf;
 
 use frankenengine_engine::ifc_artifacts::{
     ContentBinding, DeclassificationDecision, DeclassificationReceipt, IfcSchemaVersion, Label,
 };
-use frankenengine_engine::signature_preimage::{SigningKey, VerificationKey};
+use frankenengine_engine::signature_preimage::SigningKey;
+
+fn test_signing_key(seed: u8) -> SigningKey {
+    SigningKey::from_bytes([seed; 32]).expect("test signing key bytes are valid")
+}
 
 // ---------------------------------------------------------------------------
 // Proof Artifact Structures for IFC/Declassification
@@ -95,7 +98,7 @@ pub struct FlowAnalysis {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct DeclassificationDecision {
+pub struct DeclassificationDecisionArtifact {
     pub schema_version: String,
     pub example_id: String,
     pub request_id: String,
@@ -402,7 +405,7 @@ fn test_ifc_declassification_proof_artifacts() {
     .expect("Failed to write flow labels");
 
     // 3. Generate Declassification Decision
-    let decision = DeclassificationDecision {
+    let decision = DeclassificationDecisionArtifact {
         schema_version: SCHEMA_VERSION.to_string(),
         example_id: EXAMPLE_ID.to_string(),
         request_id: "declassify_20260501T054700Z".to_string(),
@@ -602,7 +605,7 @@ fn test_ifc_declassification_proof_artifacts() {
 #[test]
 fn test_content_binding_prevents_content_swapping_attack() {
     // Generate a signing key pair for testing
-    let signing_key = SigningKey::generate();
+    let signing_key = test_signing_key(7);
     let verification_key = signing_key.verification_key();
 
     // Original content and label
@@ -682,7 +685,7 @@ fn test_high_security_labels_require_content_binding() {
         policy_evaluation_summary: "Test evaluation".to_string(),
         loss_assessment_milli: 100_000,
         decision: DeclassificationDecision::Allow,
-        authorized_by: SigningKey::generate().verification_key(),
+        authorized_by: test_signing_key(9).verification_key(),
         replay_linkage: "test-trace-123".to_string(),
         timestamp_ms: 1735689000000,
         not_before_ms: 0,

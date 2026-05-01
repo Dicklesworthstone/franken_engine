@@ -1,10 +1,9 @@
-//! Live quarantine propagation example with convergence evidence.
-//!
-//! This example demonstrates FrankenEngine's fleet-wide quarantine propagation,
-//! showing how security decisions spread across instances and achieve convergence
-//! for coordinated containment.
+// Live quarantine propagation example with convergence evidence.
+//
+// This example demonstrates FrankenEngine's fleet-wide quarantine propagation,
+// showing how security decisions spread across instances and achieve convergence
+// for coordinated containment.
 
-use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 use std::time::Duration;
@@ -15,11 +14,11 @@ use serde::{Deserialize, Serialize};
 use frankenengine_engine::fleet_immune_protocol::NodeId;
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::proof_artifact::{
-    ProofArtifactPaths, ProofCommand, PROOF_EVENT_SCHEMA_VERSION,
-    PROOF_MANIFEST_SCHEMA_VERSION, PROOF_REPORT_SCHEMA_VERSION,
+    ProofArtifactPaths, ProofCommand, PROOF_EVENT_SCHEMA_VERSION, PROOF_MANIFEST_SCHEMA_VERSION,
+    PROOF_REPORT_SCHEMA_VERSION,
 };
 use frankenengine_engine::quarantine_propagation::{
-    QuarantineAck, QuarantineDecision, QuarantineProtocolManager, QuarantineState,
+    QuarantineAck, QuarantineDecision, QuarantineState,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
 
@@ -145,7 +144,9 @@ impl SyntheticSecurityEvent {
                 },
                 ThreatIndicator {
                     indicator_type: "file_hash".to_string(),
-                    value: "sha256:7b8c9d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c".to_string(),
+                    value:
+                        "sha256:7b8c9d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c"
+                            .to_string(),
                     confidence_score: 99,
                     source: "virus_total".to_string(),
                 },
@@ -229,24 +230,27 @@ impl FleetTopology {
 pub fn simulate_quarantine_propagation(
     event: &SyntheticSecurityEvent,
     fleet: &FleetTopology,
-) -> Result<(QuarantineState, Vec<QuarantinePropagationEvent>, Duration), Box<dyn std::error::Error>> {
+) -> Result<(QuarantineState, Vec<QuarantinePropagationEvent>, Duration), Box<dyn std::error::Error>>
+{
     let start_time = std::time::Instant::now();
     let mut events = Vec::new();
     let mut quarantine_state = QuarantineState::new();
 
     // Step 1: Detection instance issues quarantine decision
-    let originator_node = NodeId::from_str(&event.detection_instance)?;
-    let evidence_hash = ContentHash::compute(serde_json::to_string(event)?.as_bytes());
+    let originator_node = NodeId::new(event.detection_instance.clone());
     let security_epoch = SecurityEpoch::from_raw(1000); // Example epoch
 
     let quarantine_decision = QuarantineDecision::new(
         event.extension_id.clone(),
-        format!("Security threat detected: {} (severity: {})", event.threat_type, event.severity_score),
+        format!(
+            "Security threat detected: {} (severity: {})",
+            event.threat_type, event.severity_score
+        ),
         originator_node,
         1, // Lamport timestamp
-        evidence_hash.clone(),
         security_epoch,
     );
+    let evidence_hash = quarantine_decision.evidence_hash;
 
     // Record initiation event
     events.push(QuarantinePropagationEvent {
@@ -257,13 +261,17 @@ pub fn simulate_quarantine_propagation(
         event_id: event.event_id.clone(),
         extension_id: event.extension_id.clone(),
         originator_instance: event.detection_instance.clone(),
-        target_instances: fleet.instances.iter().map(|i| i.instance_name.clone()).collect(),
+        target_instances: fleet
+            .instances
+            .iter()
+            .map(|i| i.instance_name.clone())
+            .collect(),
         propagation_step: "initiated".to_string(),
         acknowledgments_received: 0,
         total_instances: fleet.total_instances as u32,
         convergence_achieved: false,
         convergence_time_ms: None,
-        evidence_hash: format!("{:x}", evidence_hash.as_bytes()),
+        evidence_hash: evidence_hash.to_hex(),
     });
 
     // Add decision to quarantine state
@@ -285,11 +293,13 @@ pub fn simulate_quarantine_propagation(
         };
 
         // Create acknowledgment
-        let ack_node = NodeId::from_str(&instance.instance_name)?;
+        let ack_node = NodeId::new(instance.instance_name.clone());
         let acknowledgment = QuarantineAck::new(
-            evidence_hash.clone(),
+            evidence_hash,
             ack_node,
             (i + 2) as u64, // Lamport timestamp increments
+            true,
+            Some(format!("quarantine enforced by {}", instance.instance_name)),
         );
 
         if quarantine_state.add_acknowledgment(acknowledgment) {
@@ -310,7 +320,7 @@ pub fn simulate_quarantine_propagation(
                 total_instances: fleet.total_instances as u32,
                 convergence_achieved: false,
                 convergence_time_ms: Some(processing_delay_ms),
-                evidence_hash: format!("{:x}", evidence_hash.as_bytes()),
+                evidence_hash: evidence_hash.to_hex(),
             });
         }
     }
@@ -323,18 +333,27 @@ pub fn simulate_quarantine_propagation(
     events.push(QuarantinePropagationEvent {
         schema_version: PROOF_EVENT_SCHEMA_VERSION.to_string(),
         timestamp_utc: Utc::now().to_rfc3339(),
-        event_type: if convergence_achieved { "convergence_achieved" } else { "convergence_timeout" }.to_string(),
+        event_type: if convergence_achieved {
+            "convergence_achieved"
+        } else {
+            "convergence_timeout"
+        }
+        .to_string(),
         component: EXAMPLE_COMPONENT.to_string(),
         event_id: event.event_id.clone(),
         extension_id: event.extension_id.clone(),
         originator_instance: event.detection_instance.clone(),
-        target_instances: fleet.instances.iter().map(|i| i.instance_name.clone()).collect(),
+        target_instances: fleet
+            .instances
+            .iter()
+            .map(|i| i.instance_name.clone())
+            .collect(),
         propagation_step: "converged".to_string(),
         acknowledgments_received: acknowledgment_count,
         total_instances: fleet.total_instances as u32,
         convergence_achieved,
         convergence_time_ms: Some(total_time.as_millis() as u64),
-        evidence_hash: format!("{:x}", evidence_hash.as_bytes()),
+        evidence_hash: evidence_hash.to_hex(),
     });
 
     Ok((quarantine_state, events, total_time))
@@ -352,10 +371,21 @@ pub fn execute_quarantine_propagation_with_proof(
     let timestamp_str = timestamp.to_rfc3339();
 
     // Step 1: Simulate quarantine propagation
-    let (quarantine_state, events, propagation_time) = simulate_quarantine_propagation(event, fleet)?;
+    let (quarantine_state, events, propagation_time) =
+        simulate_quarantine_propagation(event, fleet)?;
 
     // Step 2: Generate convergence analysis
-    let evidence_hash = ContentHash::compute(serde_json::to_string(event)?.as_bytes());
+    let evidence_hash = quarantine_state
+        .pending_decisions
+        .keys()
+        .next()
+        .copied()
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "quarantine simulation produced no pending decision",
+            )
+        })?;
     let convergence_achieved = quarantine_state.is_converged(&evidence_hash, fleet.total_instances);
 
     let (acks_received, total_instances) = quarantine_state
@@ -382,14 +412,21 @@ pub fn execute_quarantine_propagation_with_proof(
     // Write commands.txt
     let command = ProofCommand {
         command_id: "quarantine_propagation_001".to_string(),
-        display: format!("quarantine-propagate --extension {} --event {} --fleet-size {}",
-                         event.extension_id, event.event_id, fleet.total_instances),
-        redacted_display: "quarantine-propagate --extension [REDACTED] --event [REDACTED] --fleet-size [REDACTED]".to_string(),
+        display: format!(
+            "quarantine-propagate --extension {} --event {} --fleet-size {}",
+            event.extension_id, event.event_id, fleet.total_instances
+        ),
+        redacted_display:
+            "quarantine-propagate --extension [REDACTED] --event [REDACTED] --fleet-size [REDACTED]"
+                .to_string(),
         cwd: "/data/projects/franken_engine".to_string(),
         exit_code: Some(0),
         duration_ms: Some(propagation_time.as_millis() as u64),
     };
-    fs::write(&artifacts.commands_txt, format!("{}\n", serde_json::to_string(&command)?))?;
+    fs::write(
+        &artifacts.commands_txt,
+        format!("{}\n", serde_json::to_string(&command)?),
+    )?;
 
     // Create convergence report
     let report = QuarantineConvergenceReport {
@@ -426,7 +463,10 @@ pub fn execute_quarantine_propagation_with_proof(
     };
 
     // Write report.json
-    fs::write(&artifacts.report_json, serde_json::to_string_pretty(&report)?)?;
+    fs::write(
+        &artifacts.report_json,
+        serde_json::to_string_pretty(&report)?,
+    )?;
 
     // Write human-readable report.md
     let markdown_report = format!(
@@ -477,41 +517,56 @@ pub fn execute_quarantine_propagation_with_proof(
         event.threat_type,
         event.severity_score,
         event.detection_instance,
-        if convergence_achieved { "✅ ACHIEVED" } else { "❌ FAILED" },
+        if convergence_achieved {
+            "✅ ACHIEVED"
+        } else {
+            "❌ FAILED"
+        },
         convergence_percentage,
         acks_received,
         total_instances,
         propagation_time.as_millis(),
         report.quarantine_decision_outcome.to_uppercase(),
-        fleet.instances.iter()
-            .map(|i| format!("| {} | {} | {} | {} |",
-                             i.instance_name,
-                             i.role,
-                             i.region,
-                             if i.instance_name == event.detection_instance {
-                                 "🔍 Detector"
-                             } else {
-                                 "✅ Acknowledged"
-                             }))
+        fleet
+            .instances
+            .iter()
+            .map(|i| format!(
+                "| {} | {} | {} | {} |",
+                i.instance_name,
+                i.role,
+                i.region,
+                if i.instance_name == event.detection_instance {
+                    "🔍 Detector"
+                } else {
+                    "✅ Acknowledged"
+                }
+            ))
             .collect::<Vec<_>>()
             .join("\n"),
-        event.indicators.iter()
-            .map(|ind| format!("| {} | {} | {}% | {} |",
-                               ind.indicator_type,
-                               if ind.value.len() > 50 {
-                                   format!("{}...", &ind.value[..47])
-                               } else {
-                                   ind.value.clone()
-                               },
-                               ind.confidence_score,
-                               ind.source))
+        event
+            .indicators
+            .iter()
+            .map(|ind| format!(
+                "| {} | {} | {}% | {} |",
+                ind.indicator_type,
+                if ind.value.len() > 50 {
+                    format!("{}...", &ind.value[..47])
+                } else {
+                    ind.value.clone()
+                },
+                ind.confidence_score,
+                ind.source
+            ))
             .collect::<Vec<_>>()
             .join("\n"),
-        events.iter()
-            .map(|e| format!("- **{}**: {} ({}ms)",
-                             e.propagation_step,
-                             e.event_type,
-                             e.convergence_time_ms.unwrap_or(0)))
+        events
+            .iter()
+            .map(|e| format!(
+                "- **{}**: {} ({}ms)",
+                e.propagation_step,
+                e.event_type,
+                e.convergence_time_ms.unwrap_or(0)
+            ))
             .collect::<Vec<_>>()
             .join("\n"),
         report.decision_summary,
@@ -522,7 +577,8 @@ pub fn execute_quarantine_propagation_with_proof(
 
     // Compute content hashes for integrity
     let quarantine_evidence_hash = ContentHash::compute(serde_json::to_string(event)?.as_bytes());
-    let convergence_evidence_hash = ContentHash::compute(serde_json::to_string(&events)?.as_bytes());
+    let convergence_evidence_hash =
+        ContentHash::compute(serde_json::to_string(&events)?.as_bytes());
 
     // Create manifest following cd3d2b4d contract
     let manifest = QuarantinePropagationManifest {
@@ -534,15 +590,18 @@ pub fn execute_quarantine_propagation_with_proof(
         generated_at_utc: timestamp_str,
         artifacts,
         security_event_id: event.event_id.clone(),
-        quarantine_evidence_hash: format!("{:x}", quarantine_evidence_hash.as_bytes()),
-        convergence_evidence_hash: format!("{:x}", convergence_evidence_hash.as_bytes()),
+        quarantine_evidence_hash: quarantine_evidence_hash.to_hex(),
+        convergence_evidence_hash: convergence_evidence_hash.to_hex(),
         fleet_instances_count: fleet.total_instances as u32,
         commands_executed: 1,
         events_recorded: events.len() as u32,
     };
 
     // Write manifest.json
-    fs::write(&manifest.artifacts.manifest_json, serde_json::to_string_pretty(&manifest)?)?;
+    fs::write(
+        &manifest.artifacts.manifest_json,
+        serde_json::to_string_pretty(&manifest)?,
+    )?;
 
     println!("✅ Quarantine propagation proof artifacts generated:");
     println!("   📁 Output directory: {}", output_dir.display());
@@ -550,22 +609,36 @@ pub fn execute_quarantine_propagation_with_proof(
     println!("   📊 Report: {}", manifest.artifacts.report_json);
     println!("   📝 Human report: {}", manifest.artifacts.report_md);
     println!("   📋 Events: {}", manifest.artifacts.events_jsonl);
-    println!("   🔄 Convergence: {} ({:.1}%)",
-             if convergence_achieved { "ACHIEVED" } else { "FAILED" },
-             convergence_percentage);
+    println!(
+        "   🔄 Convergence: {} ({:.1}%)",
+        if convergence_achieved {
+            "ACHIEVED"
+        } else {
+            "FAILED"
+        },
+        convergence_percentage
+    );
 
     Ok(report)
 }
 
+#[allow(dead_code)]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("🚀 FrankenEngine Live Quarantine Propagation Example");
     println!("   Demonstrating fleet-wide quarantine propagation + convergence tracking");
 
     // Create fleet topology
     let fleet = FleetTopology::create_multi_region_fleet();
-    println!("\n🌐 Fleet topology: {} instances across {} regions",
-             fleet.total_instances,
-             fleet.instances.iter().map(|i| &i.region).collect::<std::collections::BTreeSet<_>>().len());
+    println!(
+        "\n🌐 Fleet topology: {} instances across {} regions",
+        fleet.total_instances,
+        fleet
+            .instances
+            .iter()
+            .map(|i| &i.region)
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+    );
 
     // Example 1: High-severity malware detection
     println!("\n🚨 Example 1: Malware Detection Quarantine");

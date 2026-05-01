@@ -287,9 +287,12 @@ fn test_convergence_analysis() {
     let (quarantine_state, _, _) =
         simulate_quarantine_propagation(&event, &fleet).expect("Simulation should succeed");
 
-    let evidence_hash = frankenengine_engine::hash_tiers::ContentHash::compute(
-        serde_json::to_string(&event).unwrap().as_bytes(),
-    );
+    let evidence_hash = quarantine_state
+        .pending_decisions
+        .keys()
+        .next()
+        .copied()
+        .expect("simulation should record a quarantine decision");
 
     // Check convergence status
     let convergence_achieved = quarantine_state.is_converged(&evidence_hash, fleet.total_instances);

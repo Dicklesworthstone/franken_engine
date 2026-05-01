@@ -26,6 +26,7 @@
 
 use std::collections::BTreeSet;
 use std::fmt;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
@@ -1065,6 +1066,10 @@ pub struct DeclassificationReceipt {
     pub replay_linkage: String,
     /// Timestamp (unix ms).
     pub timestamp_ms: u64,
+    /// Receipt validity window start (unix ms) - receipt invalid before this time.
+    pub not_before_ms: u64,
+    /// Receipt validity window end (unix ms) - receipt invalid after this time.
+    pub not_after_ms: u64,
     /// Schema version.
     pub schema_version: IfcSchemaVersion,
     /// Signature (decision-contract-level signing).
@@ -1112,6 +1117,56 @@ impl DeclassificationReceipt {
             "replay_linkage",
             &self.replay_linkage,
         )?;
+
+        // Validate timestamp bounds
+        self.validate_timestamp_bounds()?;
+
+        Ok(())
+    }
+
+    /// Validate that the receipt's timestamp bounds are consistent and the receipt
+    /// is currently within its validity window.
+    pub fn validate_timestamp_bounds(&self) -> Result<(), IfcValidationError> {
+        let artifact_id = trimmed_artifact_id(&self.receipt_id, "<empty-receipt-id>");
+
+        // Check that not_before <= not_after
+        if self.not_before_ms > self.not_after_ms {
+            return Err(IfcValidationError::InvalidTimestampBounds {
+                artifact_kind: "declassification_receipt".to_string(),
+                artifact_id: artifact_id.to_string(),
+                not_before_ms: self.not_before_ms,
+                not_after_ms: self.not_after_ms,
+            });
+        }
+
+        // Get current time
+        let current_time_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|_| IfcValidationError::SystemTimeError {
+                artifact_kind: "declassification_receipt".to_string(),
+                artifact_id: artifact_id.to_string(),
+            })?
+            .as_millis() as u64;
+
+        // Check if receipt is valid now (not expired and not pre-dated)
+        if current_time_ms < self.not_before_ms {
+            return Err(IfcValidationError::ReceiptNotYetValid {
+                artifact_kind: "declassification_receipt".to_string(),
+                artifact_id: artifact_id.to_string(),
+                current_time_ms,
+                not_before_ms: self.not_before_ms,
+            });
+        }
+
+        if current_time_ms > self.not_after_ms {
+            return Err(IfcValidationError::ReceiptExpired {
+                artifact_kind: "declassification_receipt".to_string(),
+                artifact_id: artifact_id.to_string(),
+                current_time_ms,
+                not_after_ms: self.not_after_ms,
+            });
+        }
+
         Ok(())
     }
 
@@ -1401,6 +1456,32 @@ pub enum IfcValidationError {
     },
     /// Flow is prohibited by policy.
     FlowProhibited { source: Label, sink: Label },
+    /// Receipt timestamp bounds are invalid (not_before > not_after).
+    InvalidTimestampBounds {
+        artifact_kind: String,
+        artifact_id: String,
+        not_before_ms: u64,
+        not_after_ms: u64,
+    },
+    /// Receipt is not yet valid (current time < not_before).
+    ReceiptNotYetValid {
+        artifact_kind: String,
+        artifact_id: String,
+        current_time_ms: u64,
+        not_before_ms: u64,
+    },
+    /// Receipt is expired (current time > not_after).
+    ReceiptExpired {
+        artifact_kind: String,
+        artifact_id: String,
+        current_time_ms: u64,
+        not_after_ms: u64,
+    },
+    /// System time error when validating timestamp bounds.
+    SystemTimeError {
+        artifact_kind: String,
+        artifact_id: String,
+    },
 }
 
 impl fmt::Display for IfcValidationError {
@@ -1436,6 +1517,48 @@ impl fmt::Display for IfcValidationError {
             }
             Self::FlowProhibited { source, sink } => {
                 write!(f, "flow from {source} to {sink} is prohibited")
+            }
+            Self::InvalidTimestampBounds {
+                artifact_kind,
+                artifact_id,
+                not_before_ms,
+                not_after_ms,
+            } => {
+                write!(
+                    f,
+                    "{artifact_kind} {artifact_id} has invalid timestamp bounds: not_before ({not_before_ms}) > not_after ({not_after_ms})"
+                )
+            }
+            Self::ReceiptNotYetValid {
+                artifact_kind,
+                artifact_id,
+                current_time_ms,
+                not_before_ms,
+            } => {
+                write!(
+                    f,
+                    "{artifact_kind} {artifact_id} is not yet valid: current time ({current_time_ms}) < not_before ({not_before_ms})"
+                )
+            }
+            Self::ReceiptExpired {
+                artifact_kind,
+                artifact_id,
+                current_time_ms,
+                not_after_ms,
+            } => {
+                write!(
+                    f,
+                    "{artifact_kind} {artifact_id} is expired: current time ({current_time_ms}) > not_after ({not_after_ms})"
+                )
+            }
+            Self::SystemTimeError {
+                artifact_kind,
+                artifact_id,
+            } => {
+                write!(
+                    f,
+                    "{artifact_kind} {artifact_id} failed to get system time for timestamp validation"
+                )
             }
         }
     }
@@ -1511,6 +1634,7 @@ mod tests {
             receipt_id: "receipt-001".to_string(),
             source_label: Label::Secret,
             sink_clearance: Label::Internal,
+            content_binding: None,
             declassification_route_ref: "declass-1".to_string(),
             decision_contract_id: "decision-contract-1".to_string(),
             policy_evaluation_summary: "approved by security team".to_string(),
@@ -1519,6 +1643,8 @@ mod tests {
             authorized_by: test_key().verification_key(),
             replay_linkage: "trace-abc".to_string(),
             timestamp_ms: 1_700_000_000_000,
+            not_before_ms: 1_700_000_000_000 - 3600_000, // 1 hour before timestamp
+            not_after_ms: 1_700_000_000_000 + 3600_000,  // 1 hour after timestamp
             schema_version: IfcSchemaVersion::CURRENT,
             signature: sentinel_sig(),
         }
@@ -1928,6 +2054,114 @@ mod tests {
     fn receipt_decision_display() {
         assert_eq!(DeclassificationDecision::Allow.to_string(), "allow");
         assert_eq!(DeclassificationDecision::Deny.to_string(), "deny");
+    }
+
+    #[test]
+    fn receipt_timestamp_bounds_valid_window() {
+        let current_time = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+
+        let mut receipt = make_receipt();
+        // Set receipt to be valid for 1 hour before and after current time
+        receipt.not_before_ms = current_time - 3600_000;
+        receipt.not_after_ms = current_time + 3600_000;
+
+        // Should validate successfully since we're in the valid window
+        assert!(receipt.validate_timestamp_bounds().is_ok());
+        assert!(receipt.validate().is_ok());
+    }
+
+    #[test]
+    fn receipt_timestamp_bounds_expired() {
+        let current_time = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+
+        let mut receipt = make_receipt();
+        // Set receipt to have expired 1 hour ago
+        receipt.not_before_ms = current_time - 7200_000; // 2 hours ago
+        receipt.not_after_ms = current_time - 3600_000;  // 1 hour ago
+
+        // Should fail validation because receipt is expired
+        let err = receipt.validate_timestamp_bounds().unwrap_err();
+        assert!(matches!(err, IfcValidationError::ReceiptExpired { .. }));
+
+        // Overall validation should also fail
+        let err = receipt.validate().unwrap_err();
+        assert!(matches!(err, IfcValidationError::ReceiptExpired { .. }));
+    }
+
+    #[test]
+    fn receipt_timestamp_bounds_not_yet_valid() {
+        let current_time = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+
+        let mut receipt = make_receipt();
+        // Set receipt to be valid starting 1 hour in the future
+        receipt.not_before_ms = current_time + 3600_000;  // 1 hour from now
+        receipt.not_after_ms = current_time + 7200_000;   // 2 hours from now
+
+        // Should fail validation because receipt is not yet valid
+        let err = receipt.validate_timestamp_bounds().unwrap_err();
+        assert!(matches!(err, IfcValidationError::ReceiptNotYetValid { .. }));
+
+        // Overall validation should also fail
+        let err = receipt.validate().unwrap_err();
+        assert!(matches!(err, IfcValidationError::ReceiptNotYetValid { .. }));
+    }
+
+    #[test]
+    fn receipt_timestamp_bounds_invalid_window() {
+        let mut receipt = make_receipt();
+        // Set not_before > not_after (invalid)
+        receipt.not_before_ms = 1_700_000_000_000;
+        receipt.not_after_ms = 1_699_000_000_000;
+
+        // Should fail validation because the window is invalid
+        let err = receipt.validate_timestamp_bounds().unwrap_err();
+        assert!(matches!(err, IfcValidationError::InvalidTimestampBounds { .. }));
+
+        // Overall validation should also fail
+        let err = receipt.validate().unwrap_err();
+        assert!(matches!(err, IfcValidationError::InvalidTimestampBounds { .. }));
+    }
+
+    #[test]
+    fn receipt_timestamp_bounds_edge_cases() {
+        let current_time = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
+
+        // Test exact boundary cases
+        let mut receipt = make_receipt();
+
+        // Exactly at not_before boundary (should be valid)
+        receipt.not_before_ms = current_time;
+        receipt.not_after_ms = current_time + 3600_000;
+        assert!(receipt.validate_timestamp_bounds().is_ok());
+
+        // Exactly at not_after boundary (should be valid)
+        receipt.not_before_ms = current_time - 3600_000;
+        receipt.not_after_ms = current_time;
+        assert!(receipt.validate_timestamp_bounds().is_ok());
+
+        // Just before not_before (should fail)
+        receipt.not_before_ms = current_time + 1;
+        receipt.not_after_ms = current_time + 3600_000;
+        let err = receipt.validate_timestamp_bounds().unwrap_err();
+        assert!(matches!(err, IfcValidationError::ReceiptNotYetValid { .. }));
+
+        // Just after not_after (should fail)
+        receipt.not_before_ms = current_time - 3600_000;
+        receipt.not_after_ms = current_time - 1;
+        let err = receipt.validate_timestamp_bounds().unwrap_err();
+        assert!(matches!(err, IfcValidationError::ReceiptExpired { .. }));
     }
 
     // -- ConfinementClaim tests --

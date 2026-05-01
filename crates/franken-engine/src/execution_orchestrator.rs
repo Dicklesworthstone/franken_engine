@@ -2256,6 +2256,7 @@ mod tests {
             receipt_id: format!("receipt-{trace_id}-{decision_contract_id}"),
             source_label: Label::Secret,
             sink_clearance: Label::Public,
+            content_binding: None,
             declassification_route_ref: "declassify.audit".to_string(),
             decision_contract_id: decision_contract_id.to_string(),
             policy_evaluation_summary: "approved".to_string(),
@@ -2264,6 +2265,8 @@ mod tests {
             authorized_by: signing_key.verification_key(),
             replay_linkage: trace_id.to_string(),
             timestamp_ms: 1_700_000_000_000,
+            not_before_ms: 0,
+            not_after_ms: u64::MAX,
             schema_version: IfcSchemaVersion::CURRENT,
             signature: Signature::from_bytes(SIGNATURE_SENTINEL),
         };

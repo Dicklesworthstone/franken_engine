@@ -83,7 +83,10 @@ fn get_expected_outcome(manifest: &Value, runtime: &Runtime) -> ExpectedOutcome 
     ExpectedOutcome {
         outcome: outcome_obj["outcome"].as_str().unwrap().to_string(),
         observable: outcome_obj["observable"].as_str().unwrap().to_string(),
-        denial_reason: outcome_obj.get("denial_reason").and_then(|v| v.as_str()).map(String::from),
+        denial_reason: outcome_obj
+            .get("denial_reason")
+            .and_then(|v| v.as_str())
+            .map(String::from),
     }
 }
 
@@ -116,7 +119,10 @@ fn execute_scenario(scenario_name: &str, runtime: &Runtime) -> ExecutionResult {
 fn execute_with_node(script_path: &Path) -> (i32, String, String, bool) {
     let output = Command::new("/usr/bin/node")
         .arg(script_path)
-        .env("FRANKENENGINE_REDTEAM_CANARY", "canary-token-for-local-test-only")
+        .env(
+            "FRANKENENGINE_REDTEAM_CANARY",
+            "canary-token-for-local-test-only",
+        )
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
@@ -134,7 +140,10 @@ fn execute_with_bun(script_path: &Path) -> (i32, String, String, bool) {
     let output = Command::new("/home/ubuntu/.bun/bin/bun")
         .arg("run")
         .arg(script_path)
-        .env("FRANKENENGINE_REDTEAM_CANARY", "canary-token-for-local-test-only")
+        .env(
+            "FRANKENENGINE_REDTEAM_CANARY",
+            "canary-token-for-local-test-only",
+        )
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
@@ -148,7 +157,10 @@ fn execute_with_bun(script_path: &Path) -> (i32, String, String, bool) {
     (exit_code, stdout, stderr, attack_succeeded)
 }
 
-fn execute_with_frankenengine(_script_path: &Path, _scenario_name: &str) -> (i32, String, String, bool) {
+fn execute_with_frankenengine(
+    _script_path: &Path,
+    _scenario_name: &str,
+) -> (i32, String, String, bool) {
     // Stub implementation - FrankenEngine JS execution not yet available
     // When ready, this should execute the script in FrankenEngine runtime
     // and return the actual results
@@ -210,13 +222,18 @@ fn red_team_harness_executes_all_scenarios() {
     println!("Total executions: {}", total_executions);
     println!("Successful attacks: {}", successful_attacks);
     println!("Matching expectations: {}", matching_expectations);
-    println!("Expectation match rate: {:.1}%",
-        (matching_expectations as f64 / total_executions as f64) * 100.0);
+    println!(
+        "Expectation match rate: {:.1}%",
+        (matching_expectations as f64 / total_executions as f64) * 100.0
+    );
 
     // For now, just assert we executed everything without panicking
     // In the future, we might want to assert specific expectation matches
     assert!(total_executions > 0, "Should execute at least one scenario");
-    assert!(matching_expectations > 0, "Should have some matching expectations");
+    assert!(
+        matching_expectations > 0,
+        "Should have some matching expectations"
+    );
 
     // TODO: When FrankenEngine is ready, assert that all attacks fail in FrankenEngine
     // but succeed in Node/Bun as expected
@@ -232,14 +249,22 @@ fn red_team_harness_environment_variable_exfiltration_focused() {
         let result = execute_scenario(scenario_name, runtime);
 
         // This scenario should succeed on Node/Bun (attack_succeeded = true)
-        assert!(result.attack_succeeded,
-            "Environment variable exfiltration should succeed on {}", runtime.name());
+        assert!(
+            result.attack_succeeded,
+            "Environment variable exfiltration should succeed on {}",
+            runtime.name()
+        );
 
-        assert!(result.matches_expectation,
-            "Result should match manifest expectation for {}", runtime.name());
+        assert!(
+            result.matches_expectation,
+            "Result should match manifest expectation for {}",
+            runtime.name()
+        );
 
         // Verify the output contains expected JSON
-        assert!(result.stdout.contains("attack_succeeded"),
-            "stdout should contain attack result JSON");
+        assert!(
+            result.stdout.contains("attack_succeeded"),
+            "stdout should contain attack result JSON"
+        );
     }
 }

@@ -47,7 +47,7 @@ No dependency on external JS engine bindings for core runtime behavior.
 ## 3. Strategic Objective
 Build a de novo Rust-native runtime family that does not merely replace Node/Bun, but functionally obsoletes them for extension-heavy agent workloads, while delivering:
 - alien-artifact-grade performance
-- mathematically explicit security decisions
+- **HYPOTHESIS**: mathematically explicit security decisions (requires formal specification artifacts)
 - operationally explainable automated defense
 
 This project’s explicit objective is to make FrankenEngine + franken_node the first practical runtime stack with default-on, probabilistic, active defense against untrusted extension supply-chain attacks, a posture not provided by standard Node/Bun default architectures.
@@ -585,7 +585,7 @@ The following upgrades apply graveyard primitives directly to each initiative so
 The following upgrades apply `alien-artifact-coding` principles so each initiative lands with mathematical rigor, explainability, and formal safety framing rather than heuristic behavior.
 
 1. **TS-first authoring -> native capability-typed IR execution**  
-   Add a proof-carrying compilation contract: each lowering stage emits invariants and a machine-checkable witness that capability annotations are preserved end-to-end. For optimization passes, use an isomorphism ledger that records ordering/tie-break semantics and verifies behavioral equivalence on golden corpora. Expose a galaxy-brain “why this lowered shape is safe” panel that shows source capability intent, transformed IR constraints, and preserved proof obligations.
+   **HYPOTHESIS**: Add a proof-carrying compilation contract: each lowering stage emits invariants and a machine-checkable witness that capability annotations are preserved end-to-end. For optimization passes, use an isomorphism ledger that records ordering/tie-break semantics and verifies behavioral equivalence on golden corpora. Expose a galaxy-brain “why this lowered shape is safe” panel that shows source capability intent, transformed IR constraints, and preserved proof obligations. *(Requires formal verification infrastructure with Lean/Coq/TLA+ proof artifacts.)*
 
 2. **Probabilistic Guardplane**  
    Implement the full Bayesian decision loop (`classify -> quantify -> decide -> explain -> calibrate`) as first-class runtime APIs. Model each action (`allow/challenge/sandbox/...`) with explicit expected-loss matrices and require posterior + regret-by-action logging for every decision. Add conformal coverage wrappers and PAC-Bayes-style confidence accounting so risk thresholds are justified by finite-sample or distribution-robust bounds, not ad-hoc constants.
@@ -603,7 +603,7 @@ The following upgrades apply `alien-artifact-coding` principles so each initiati
    Turn shadow promotion into a formal hypothesis test: the extension advances only when statistical evidence supports “no harmful divergence” under defined risk budgets. Use conformal residual bands over shadow-vs-active deltas to detect subtle behavioral drift without hard-coded thresholds. Add VOI-guided scenario selection so shadow validation focuses on the most discriminative workloads first.
 
 7. **Capability lattice + typed policy DSL**  
-   Give policy evaluation a formal semantics with explicit monotonicity and non-interference properties, then encode these as executable checks in policy CI. For composition, use mathematically explicit merge operators with proofs or bounded counterexamples when rules conflict. Add galaxy-brain policy explanations that show rule application traces, confidence context, and why denied alternatives remain unsafe.
+   **HYPOTHESIS**: Give policy evaluation a formal semantics with explicit monotonicity and non-interference properties, then encode these as executable checks in policy CI. For composition, use mathematically explicit merge operators with proofs or bounded counterexamples when rules conflict. Add galaxy-brain policy explanations that show rule application traces, confidence context, and why denied alternatives remain unsafe. *(Requires formal specification with TLA+/Coq proof artifacts.)*
 
 8. **Deterministic per-extension resource budgets**  
    Model budget control as a sequential decision process with asymmetric costs (service degradation vs compromise risk) and solve via expected-loss minimization. Use Bayesian demand estimation with BOCPD drift segmentation so adaptation reacts to regime change while preserving strict hard caps. When uncertainty spikes, force graceful deterministic fallback and log the precise trigger condition and posterior rationale.
@@ -628,7 +628,7 @@ Global rule for every item:
    Build a fixed compilation benchmark suite (parse/lower/check/emit) and profile each phase separately to avoid blind optimization. Prioritize high-score levers like arena allocation for IR nodes, memoized symbol resolution, and batch validation passes to remove N+1 checks in large extension graphs. Gate every compiler optimization with semantic equivalence fixtures and deterministic IR snapshot checksums.
 
 2. **Probabilistic Guardplane**  
-   Benchmark the full decision pipeline by stage (feature extraction, posterior update, action selection) and enforce strict per-stage latency budgets so security does not become a throughput tax. Profile model-update hotpaths for allocation churn and branch misprediction, then optimize only the dominant contributors. Keep mathematically equivalent fast paths (precomputed constants, batched updates) behind isomorphism proof notes and golden decision traces.
+   Benchmark the full decision pipeline by stage (feature extraction, posterior update, action selection) and enforce strict per-stage latency budgets so security does not become a throughput tax. Profile model-update hotpaths for allocation churn and branch misprediction, then optimize only the dominant contributors. **HYPOTHESIS**: Keep mathematically equivalent fast paths (precomputed constants, batched updates) behind isomorphism proof notes and golden decision traces. *(Requires formal mathematical equivalence proofs.)*
 
 3. **Deterministic evidence graph + replay**  
    Measure append/write/read/replay throughput and p99 replay latency on realistic incident traces, then profile serialization and index lookup hotspots. Apply one-lever improvements such as zero-copy encoding, small-buffer reuse, and keyed index acceleration only when scores justify it. Require bit-for-bit replay parity on deterministic traces and explicit migration failure behavior for version changes.
@@ -736,7 +736,7 @@ The following initiatives are intentionally extreme. They are designed to produc
    **What it entails:** Replace ad-hoc policy composition with typed, proof-producing policy compilation.  
    **How it works:** Policies compile into a formal IR with machine-checkable properties: monotonicity, non-interference, attenuation legality, determinism of merges, and precedence stability. Model-checking/SMT passes validate compositions. On conflict, compiler emits bounded counterexample traces and deterministic rejection diagnostics.  
    **Why it is useful/compelling:** Large teams can safely compose many policy sources without hidden privilege escalations or merge-order bugs. Policy evolution becomes disciplined engineering, not textual patching.  
-   **Rationale/justification:** Policy sprawl is a known failure mode in secure platforms. A theorem-backed compiler is the only scalable route to high-assurance policy governance.
+   **Rationale/justification:** Policy sprawl is a known failure mode in secure platforms. **HYPOTHESIS**: A theorem-backed compiler is the only scalable route to high-assurance policy governance. *(Requires formal theorem implementation with proof artifacts.)*
 
 9. **Revocation Mesh SLO**  
    **What it entails:** Treat revocation propagation as a reliability-critical data plane with explicit SLOs and proofs, not a background best-effort process.  
@@ -825,7 +825,7 @@ This section is a canonical lens over already-adopted scope, not an additional p
 2. **Fleet Immune System Consensus Plane** -> canonical owner: `9F.2`, execution: `10.12`.
 3. **Causal Time-Machine Runtime** -> canonical owner: `9F.3`, execution: `10.12`.
 4. **Attested Execution Cells** -> canonical owner: `9I.1` (TEE-bound receipts) + attested cell runtime tasks in `10.12`.
-5. **Policy Theorem Engine** -> canonical owner: `9F.8`, execution: `10.12`.
+5. **HYPOTHESIS: Policy Theorem Engine** -> canonical owner: `9F.8`, execution: `10.12`. *(Requires formal theorem verification infrastructure.)*
 6. **Autonomous Red/Blue Co-Evolution System** -> canonical owner: `9F.7`, execution: `10.12`.
 7. **Global Trust Economics Layer** -> canonical owner: `9F.15` + trust-economics tasks in `10.12`.
 8. **Secure Extension Reputation Graph** -> canonical owner: `10.12` reputation-graph schema/update tasks (`Define secure extension reputation graph schema...`, `Implement low-latency reputation updates...`) + success criterion `13` (“secure extension reputation graph drives measurable reduction in first-time compromise windows”).
@@ -895,7 +895,7 @@ These eight additions are intentionally selected as non-trivial upgrades that de
    - Static pass computes a conservative authority upper bound using capability lattice reachability and effect-flow analysis.
    - Dynamic ablation pass runs staged capability subtraction experiments in deterministic shadow environments; each subtraction is evaluated against behavioral correctness, policy invariants, and risk budgets.
    - Synthesizer emits a signed `capability_witness` artifact containing: `extension_id`, `policy_id`, required capability set, denied capability set, minimality proof obligations, confidence interval, replay seed/transcript hash, rollback token, and witness signature bundle.
-   - Policy theorem checks validate monotonic safety constraints and merge legality before witness promotion.
+   - **HYPOTHESIS**: Policy theorem checks validate monotonic safety constraints and merge legality before witness promotion. *(Requires formal theorem validation implementation.)*
    - Runtime enforcement uses capability escrow: out-of-envelope requests never get ambient grants; they trigger deterministic `challenge`/`sandbox` pathways with receipt + replay linkage. Time-bounded emergency grants, when allowed by policy, are explicit signed artifacts with mandatory post-incident review.
    - Continuous refinement loop updates synthesis candidates from production evidence, but live decisions consume only signed promoted snapshots to preserve replay determinism.
    **Why it is useful/compelling:** Least privilege stops being a manual governance tax and becomes a compounding runtime property. Security posture improves while developer/operator burden drops, because the system explains exactly why each retained capability is necessary and proves the provenance of each denied surface.

@@ -305,6 +305,126 @@
       "reason": "Live IFC declassification example (bd-dpfvh) generates actual source-to-sink flow with signed declassification receipts and replay-verifiable provenance artifacts.",
       "owning_bead": "bd-dpfvh",
       "downgrade_text": "Target: deterministic information-flow confinement with signed declassification receipts."
+    },
+    {
+      "claim_id": "FE-CLAIM-016",
+      "claim_scope": "security",
+      "claim_text": "Mathematically explicit security decisions.",
+      "source_path": "PLAN_TO_CREATE_FRANKEN_ENGINE.md",
+      "source_span": {
+        "start_line": 50,
+        "end_line": 50,
+        "must_contain": "mathematically explicit security decisions"
+      },
+      "allowed_state": "hypothesis",
+      "actual_wording_state": "hypothesis",
+      "artifact_path": null,
+      "verification_command": "TBD: formal mathematical specification for security decisions",
+      "freshness_days": null,
+      "decision": "downgrade_until_live_proof",
+      "reason": "No formal mathematical specification or proof artifacts exist for security decision algorithms.",
+      "owning_bead": "bd-csnqb",
+      "downgrade_text": "Hypothesis: security decisions may use mathematically explicit specifications after formal modeling artifacts land."
+    },
+    {
+      "claim_id": "FE-CLAIM-017",
+      "claim_scope": "compiler",
+      "claim_text": "Proof-carrying compilation contract with machine-checkable witness and isomorphism ledger.",
+      "source_path": "PLAN_TO_CREATE_FRANKEN_ENGINE.md",
+      "source_span": {
+        "start_line": 588,
+        "end_line": 588,
+        "must_contain": "proof-carrying compilation contract"
+      },
+      "allowed_state": "hypothesis",
+      "actual_wording_state": "hypothesis",
+      "artifact_path": null,
+      "verification_command": "TBD: implement formal proof-carrying compilation with Lean/Coq verification",
+      "freshness_days": null,
+      "decision": "downgrade_until_live_proof",
+      "reason": "No formal proof-carrying code implementation or verification artifacts exist.",
+      "owning_bead": "bd-csnqb",
+      "downgrade_text": "Hypothesis: compilation may include proof-carrying contracts after formal verification infrastructure lands."
+    },
+    {
+      "claim_id": "FE-CLAIM-018",
+      "claim_scope": "policy",
+      "claim_text": "Policy evaluation with formal semantics and mathematically explicit merge operators with proofs.",
+      "source_path": "PLAN_TO_CREATE_FRANKEN_ENGINE.md",
+      "source_span": {
+        "start_line": 606,
+        "end_line": 606,
+        "must_contain": "formal semantics with explicit monotonicity"
+      },
+      "allowed_state": "hypothesis",
+      "actual_wording_state": "hypothesis",
+      "artifact_path": null,
+      "verification_command": "TBD: implement formal policy semantics with TLA+/Coq proofs",
+      "freshness_days": null,
+      "decision": "downgrade_until_live_proof",
+      "reason": "No formal semantics specification or mathematical proofs for policy operations exist.",
+      "owning_bead": "bd-csnqb",
+      "downgrade_text": "Hypothesis: policy evaluation may include formal semantics and mathematical proofs after specification artifacts land."
+    },
+    {
+      "claim_id": "FE-CLAIM-019",
+      "claim_scope": "optimization",
+      "claim_text": "Mathematically equivalent fast paths behind isomorphism proof notes.",
+      "source_path": "PLAN_TO_CREATE_FRANKEN_ENGINE.md",
+      "source_span": {
+        "start_line": 631,
+        "end_line": 631,
+        "must_contain": "isomorphism proof notes"
+      },
+      "allowed_state": "hypothesis",
+      "actual_wording_state": "hypothesis",
+      "artifact_path": null,
+      "verification_command": "TBD: implement isomorphism proofs for optimization equivalence",
+      "freshness_days": null,
+      "decision": "downgrade_until_live_proof",
+      "reason": "No mathematical isomorphism proofs or equivalence verification artifacts exist.",
+      "owning_bead": "bd-csnqb",
+      "downgrade_text": "Hypothesis: optimization fast paths may include mathematical equivalence proofs after formal verification artifacts land."
+    },
+    {
+      "claim_id": "FE-CLAIM-020",
+      "claim_scope": "policy",
+      "claim_text": "Theorem-backed compiler for high-assurance policy governance.",
+      "source_path": "PLAN_TO_CREATE_FRANKEN_ENGINE.md",
+      "source_span": {
+        "start_line": 739,
+        "end_line": 739,
+        "must_contain": "theorem-backed compiler"
+      },
+      "allowed_state": "hypothesis",
+      "actual_wording_state": "hypothesis",
+      "artifact_path": null,
+      "verification_command": "TBD: implement theorem-backed policy compilation with formal verification",
+      "freshness_days": null,
+      "decision": "downgrade_until_live_proof",
+      "reason": "No formal theorems or theorem-backed compilation implementation exists.",
+      "owning_bead": "bd-csnqb",
+      "downgrade_text": "Hypothesis: policy compilation may use theorem-backed approaches after formal theorem artifacts land."
+    },
+    {
+      "claim_id": "FE-CLAIM-021",
+      "claim_scope": "policy",
+      "claim_text": "Policy Theorem Engine with theorem checks for monotonic safety constraints.",
+      "source_path": "PLAN_TO_CREATE_FRANKEN_ENGINE.md",
+      "source_span": {
+        "start_line": 828,
+        "end_line": 898,
+        "must_contain": "Policy Theorem Engine"
+      },
+      "allowed_state": "hypothesis",
+      "actual_wording_state": "hypothesis",
+      "artifact_path": null,
+      "verification_command": "TBD: implement Policy Theorem Engine with formal theorem validation",
+      "freshness_days": null,
+      "decision": "downgrade_until_live_proof",
+      "reason": "No formal theorem engine implementation or theorem validation artifacts exist.",
+      "owning_bead": "bd-csnqb",
+      "downgrade_text": "Hypothesis: policy evaluation may include a theorem engine after formal verification infrastructure lands."
     }
   ]
 }

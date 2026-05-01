@@ -43,6 +43,12 @@ proof lacks exact downgrade text.
 | `FE-CLAIM-013` | replay | `PLAN_TO_CREATE_FRANKEN_ENGINE.md:60` | `target` | require replay coverage class enumeration | `bd-2488a` |
 | `FE-CLAIM-014` | capability | `PLAN_TO_CREATE_FRANKEN_ENGINE.md:61` | `target` | require three named production feature proof bundles | `bd-1qkrc` |
 | `FE-CLAIM-015` | ifc | `PLAN_TO_CREATE_FRANKEN_ENGINE.md:94` | `observed` | allow observed IFC with signed declassification receipts | `bd-dpfvh` |
+| `FE-CLAIM-016` | security | `PLAN_TO_CREATE_FRANKEN_ENGINE.md:50` | `hypothesis` | downgrade until formal mathematical specification exists | `bd-csnqb` |
+| `FE-CLAIM-017` | compiler | `PLAN_TO_CREATE_FRANKEN_ENGINE.md:588` | `hypothesis` | downgrade until proof-carrying compilation artifacts exist | `bd-csnqb` |
+| `FE-CLAIM-018` | policy | `PLAN_TO_CREATE_FRANKEN_ENGINE.md:606` | `hypothesis` | downgrade until formal policy semantics proofs exist | `bd-csnqb` |
+| `FE-CLAIM-019` | optimization | `PLAN_TO_CREATE_FRANKEN_ENGINE.md:631` | `hypothesis` | downgrade until isomorphism equivalence proofs exist | `bd-csnqb` |
+| `FE-CLAIM-020` | policy | `PLAN_TO_CREATE_FRANKEN_ENGINE.md:739` | `hypothesis` | downgrade until theorem-backed compiler exists | `bd-csnqb` |
+| `FE-CLAIM-021` | policy | `PLAN_TO_CREATE_FRANKEN_ENGINE.md:828-898` | `hypothesis` | downgrade until Policy Theorem Engine with formal verification exists | `bd-csnqb` |
 
 ## Failure Output
 

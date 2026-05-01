@@ -69,6 +69,45 @@ fn containment_latency_fixture_loads_and_passes() {
 }
 
 #[test]
+fn containment_latency_preserves_sub_millisecond_precision() {
+    let mut input = load_fixture_input();
+    for signal in &mut input.signals {
+        signal.containment_action_applied_at_us = Some(signal.signal_detected_at_us + 100);
+        signal.duration_us = 100;
+    }
+
+    let report = evaluate_containment_latency_metric(&input);
+
+    assert_eq!(report.decision, ContainmentLatencyDecision::Pass);
+    assert_eq!(report.median_latency_us, Some(100));
+    assert_eq!(report.median_latency_ms, Some(1));
+    assert_eq!(report.metric_artifact.observed_value, 1);
+    assert_eq!(report.events[0].latency_us, Some(100));
+    assert_eq!(report.events[0].latency_ms, Some(1));
+    assert_eq!(report.events[0].duration_us, 100);
+    assert_eq!(report.events[0].duration_ms, 1);
+}
+
+#[test]
+fn containment_latency_fails_one_microsecond_over_threshold() {
+    let mut input = load_fixture_input();
+    input.signals[0].containment_action_applied_at_us =
+        Some(input.signals[0].signal_detected_at_us + 249_999);
+    input.signals[1].containment_action_applied_at_us =
+        Some(input.signals[1].signal_detected_at_us + 250_001);
+    input.signals[2].containment_action_applied_at_us =
+        Some(input.signals[2].signal_detected_at_us + 250_001);
+
+    let report = evaluate_containment_latency_metric(&input);
+
+    assert_eq!(report.decision, ContainmentLatencyDecision::FailClosed);
+    assert_eq!(report.reason, "median_latency_exceeds_threshold");
+    assert_eq!(report.median_latency_us, Some(250_001));
+    assert_eq!(report.median_latency_ms, Some(251));
+    assert_eq!(report.metric_artifact.observed_value, 251);
+}
+
+#[test]
 fn containment_latency_child_artifact_is_consumed_by_parent_integrator() {
     let input = load_fixture_input();
     let child_report = evaluate_containment_latency_metric(&input);

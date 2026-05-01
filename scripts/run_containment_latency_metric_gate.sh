@@ -11,10 +11,16 @@ run_id="${CONTAINMENT_LATENCY_METRIC_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}"
 run_dir="${CONTAINMENT_LATENCY_METRIC_RUN_DIR:-${artifact_root}/${run_id}}"
 code_revision="${CONTAINMENT_LATENCY_METRIC_CODE_REVISION:-$(git rev-parse HEAD 2>/dev/null || echo unknown)}"
 
+format_percent_millionths() {
+  local coverage_millionths="$1"
+  local percent_millionths=$((coverage_millionths * 100))
+  printf '%d.%06d' "$((percent_millionths / 1000000))" "$((percent_millionths % 1000000))"
+}
+
 write_signal() {
   local signal_id="$1"
-  local detected_ms="$2"
-  local applied_ms="$3"
+  local detected_us="$2"
+  local applied_us="$3"
   local action="$4"
   local clock_id="${5:-proof-clock-1}"
   local action_exit_code="${6:-0}"
@@ -25,25 +31,33 @@ write_signal() {
     --arg policy_id "policy-${signal_id}" \
     --arg workload_profile "extension_host_mixed_policy_signals" \
     --arg clock_id "$clock_id" \
-    --arg clock_source "monotonic_ms" \
+    --arg clock_source "monotonic_us" \
     --arg action "$action" \
     --arg action_command "frankenctl policy contain --signal ${signal_id} --action ${action}" \
-    --argjson detected_ms "$detected_ms" \
-    --argjson applied_ms "$applied_ms" \
+    --arg measurement_status "measured" \
+    --arg evidence_bead_id "bd-38mby" \
+    --arg evidence_commit_hash "$code_revision" \
+    --arg evidence_test_name "scripts/run_containment_latency_metric_gate.sh" \
+    --argjson detected_us "$detected_us" \
+    --argjson applied_us "$applied_us" \
     --argjson action_exit_code "$action_exit_code" \
     '{
       signal_id: $signal_id,
       trace_id: $trace_id,
       policy_id: $policy_id,
       workload_profile: $workload_profile,
-      signal_detected_at_ms: $detected_ms,
-      containment_action_applied_at_ms: $applied_ms,
+      signal_detected_at_us: $detected_us,
+      containment_action_applied_at_us: $applied_us,
       clock_id: $clock_id,
       clock_source: $clock_source,
       action: $action,
       action_command: $action_command,
       action_exit_code: $action_exit_code,
-      duration_ms: 1
+      duration_us: 1137,
+      measurement_status: $measurement_status,
+      evidence_bead_id: $evidence_bead_id,
+      evidence_commit_hash: $evidence_commit_hash,
+      evidence_test_name: $evidence_test_name
     }'
 }
 
@@ -60,10 +74,11 @@ write_bundle() {
   local signals_path="${bundle_dir}/signals.jsonl"
   local verification_command="./scripts/run_containment_latency_metric_gate.sh ${mode}"
   local signal_two_clock="proof-clock-1"
-  local signal_two_applied=2120
+  local signal_two_applied=2120456
   local valid_count=3
-  local median_ms=120
-  local observed_ms=120
+  local median_us=120456
+  local median_ms=121
+  local observed_ms=121
   local coverage_millionths=1000000
   local decision="pass"
   local report_decision="pass"
@@ -77,6 +92,7 @@ write_bundle() {
   if [[ "$fail_one" == "true" ]]; then
     signal_two_clock="proof-clock-2"
     valid_count=2
+    median_us=139956
     median_ms=140
     observed_ms=251
     coverage_millionths=666666
@@ -86,9 +102,9 @@ write_bundle() {
     failure_count=1
   fi
 
-  write_signal "ambient-write-denied" 1000 1080 "isolate" >>"$signals_path"
-  write_signal "capability-revoked" 2000 "$signal_two_applied" "revoke_capability" "$signal_two_clock" >>"$signals_path"
-  write_signal "compute-budget-killed" 3000 3200 "kill_execution" >>"$signals_path"
+  write_signal "ambient-write-denied" 1000000 1080123 "isolate" >>"$signals_path"
+  write_signal "capability-revoked" 2000000 "$signal_two_applied" "revoke_capability" "$signal_two_clock" >>"$signals_path"
+  write_signal "compute-budget-killed" 3000000 3199789 "kill_execution" >>"$signals_path"
 
   jq -s \
     --arg schema_version "franken-engine.containment-latency-metric-gate.details.v1" \
@@ -98,7 +114,8 @@ write_bundle() {
     --arg scenario_set "policy_signal_to_containment_action_v1" \
     --argjson total 3 \
     --argjson contained "$valid_count" \
-    --argjson median "$median_ms" \
+    --argjson median_us "$median_us" \
+    --argjson median_ms "$median_ms" \
     --argjson coverage "$coverage_millionths" \
     '{
       schema_version: $schema_version,
@@ -108,7 +125,10 @@ write_bundle() {
       scenario_set: $scenario_set,
       total_signal_events: $total,
       contained_signal_events: $contained,
-      median_latency_ms: $median,
+      median_latency_us: $median_us,
+      median_latency_ms: $median_ms,
+      threshold_us: 250000,
+      threshold_ms: 250,
       coverage_millionths: $coverage,
       signals: .
     }' "$signals_path" >"$details_path"
@@ -152,12 +172,14 @@ write_bundle() {
     --arg artifact_hash "$details_hash" \
     --arg code_revision "$code_revision" \
     --arg redaction_status "redacted" \
-    --argjson median "$median_ms" \
+    --argjson median_us "$median_us" \
+    --argjson median_ms "$median_ms" \
     --argjson coverage_numerator "$valid_count" \
     --argjson coverage_denominator 3 \
-    --arg coverage_percent "$(printf '%0.6f' "$(awk "BEGIN { print ${coverage_millionths} / 10000 }")")" \
+    --arg coverage_percent "$(format_percent_millionths "$coverage_millionths")" \
     '. as $signal
-    | ($signal.clock_id == "proof-clock-1" and $signal.action_exit_code == 0 and ($signal.containment_action_applied_at_ms >= $signal.signal_detected_at_ms)) as $contained
+    | ($signal.containment_action_applied_at_us - $signal.signal_detected_at_us) as $latency_us
+    | ($signal.clock_id == "proof-clock-1" and $signal.action_exit_code == 0 and ($signal.containment_action_applied_at_us >= $signal.signal_detected_at_us)) as $contained
     | {
         schema_version: $schema_version,
         event_name: $event_name,
@@ -170,10 +192,15 @@ write_bundle() {
         trace_id: $signal.trace_id,
         policy_id: $signal.policy_id,
         workload_profile: $signal.workload_profile,
-        signal_detected_at_ms: $signal.signal_detected_at_ms,
-        containment_action_applied_at_ms: $signal.containment_action_applied_at_ms,
-        latency_ms: ($signal.containment_action_applied_at_ms - $signal.signal_detected_at_ms),
-        median_latency_ms: $median,
+        signal_detected_at_us: $signal.signal_detected_at_us,
+        containment_action_applied_at_us: $signal.containment_action_applied_at_us,
+        latency_us: $latency_us,
+        median_latency_us: $median_us,
+        threshold_us: 250000,
+        signal_detected_at_ms: ($signal.signal_detected_at_us / 1000 | floor),
+        containment_action_applied_at_ms: ($signal.containment_action_applied_at_us / 1000 | floor),
+        latency_ms: (($latency_us + 999) / 1000 | floor),
+        median_latency_ms: $median_ms,
         threshold_ms: 250,
         clock_id: $signal.clock_id,
         clock_source: $signal.clock_source,
@@ -189,7 +216,8 @@ write_bundle() {
         artifact_path: $artifact_path,
         artifact_hash: $artifact_hash,
         code_revision: $code_revision,
-        duration_ms: $signal.duration_ms,
+        duration_us: $signal.duration_us,
+        duration_ms: (($signal.duration_us + 999) / 1000 | floor),
         freshness_days: 0,
         redaction_status: $redaction_status,
         remediation: (if $contained then "none" else "record monotonic signal/action timestamps and rerun containment verifier" end)
@@ -202,7 +230,8 @@ write_bundle() {
     --slurpfile metric "$metric_path" \
     --argjson total 3 \
     --argjson contained "$valid_count" \
-    --argjson median "$median_ms" \
+    --argjson median_us "$median_us" \
+    --argjson median_ms "$median_ms" \
     --argjson coverage "$coverage_millionths" \
     --arg decision "$report_decision" \
     --arg reason "$reason" \
@@ -214,7 +243,9 @@ write_bundle() {
       metric_artifact: $metric[0],
       total_signal_events: $total,
       contained_signal_events: $contained,
-      median_latency_ms: $median,
+      median_latency_us: $median_us,
+      median_latency_ms: $median_ms,
+      threshold_us: 250000,
       threshold_ms: 250,
       coverage_millionths: $coverage,
       decision: $decision,
@@ -227,7 +258,7 @@ write_bundle() {
     printf '# Containment Latency Metric Gate\n\n'
     printf -- '- Variant: `%s`\n' "$variant"
     printf -- '- Decision: `%s`\n' "$decision"
-    printf -- '- Median latency: `%s` ms\n' "$median_ms"
+    printf -- '- Median latency: `%s` us (`%s` ms)\n' "$median_us" "$median_ms"
     printf -- '- Metric artifact: `%s`\n' "$(proof_contract_repo_relative_path "$metric_path")"
     printf -- '- Shared proof manifest: `%s`\n' "$(proof_contract_repo_relative_path "${bundle_dir}/manifest.json")"
     printf '\n'

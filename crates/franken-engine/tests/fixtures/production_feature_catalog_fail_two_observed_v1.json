@@ -1,0 +1,91 @@
+{
+  "schema_version": "franken-engine.production-feature-catalog-gate.v1",
+  "code_revision": "rev-under-test",
+  "max_freshness_days": 14,
+  "features": [
+    {
+      "feature_id": "posterior_policy_actions",
+      "user_facing_name": "Posterior-explained policy actions",
+      "impossible_by_default_rationale": "Posterior-explained policy actions are impossible by default versus Node and Bun because release wording requires signed runtime policy evidence before the action can be called production-observed.",
+      "state": "observed",
+      "artifact_handles": [
+        {
+          "path": "artifacts/production_feature_catalog/posterior_policy_actions/manifest.json",
+          "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+          "role": "live_proof_manifest",
+          "proof_kind": "live_proof_artifact",
+          "verification_command": "scripts/run_claim_to_proof_matrix_gate.sh ci",
+          "user_facing_workflow": "frankenctl proof verify --feature posterior_policy_actions",
+          "proof_manifest_id": "franken-engine.proof-artifact-manifest.v1:posterior_policy_actions",
+          "redaction_status": "redacted"
+        }
+      ],
+      "freshness_days": 0,
+      "owning_bead": "bd-policy",
+      "downgrade_text": "State posterior-explained policy actions as a target until a fresh live proof artifact passes."
+    },
+    {
+      "feature_id": "deterministic_replay_counterfactuals",
+      "user_facing_name": "Deterministic replay and counterfactuals",
+      "impossible_by_default_rationale": "Deterministic replay and counterfactuals are impossible by default versus Node and Bun because users get replay-verifiable decision artifacts instead of best-effort runtime behavior.",
+      "state": "observed",
+      "artifact_handles": [
+        {
+          "path": "artifacts/production_feature_catalog/deterministic_replay_counterfactuals/manifest.json",
+          "sha256": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+          "role": "live_proof_manifest",
+          "proof_kind": "live_proof_artifact",
+          "verification_command": "scripts/replay_gate.sh ci",
+          "user_facing_workflow": "frankenctl replay verify --counterfactual",
+          "proof_manifest_id": "franken-engine.proof-artifact-manifest.v1:deterministic_replay_counterfactuals",
+          "redaction_status": "redacted"
+        }
+      ],
+      "freshness_days": 0,
+      "owning_bead": "bd-replay",
+      "downgrade_text": "State deterministic replay and counterfactuals as a target until a fresh live proof artifact passes."
+    },
+    {
+      "feature_id": "signed_policy_checkpoints",
+      "user_facing_name": "Signed policy checkpoints",
+      "impossible_by_default_rationale": "Signed policy checkpoints are impossible by default versus Node and Bun because policy state is tied to auditable signed checkpoints and verifier reports.",
+      "state": "target",
+      "artifact_handles": [
+        {
+          "path": "tests/fixtures/signed_policy_checkpoints_shape.json",
+          "sha256": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+          "role": "candidate_fixture",
+          "proof_kind": "static_fixture",
+          "verification_command": "",
+          "user_facing_workflow": "",
+          "proof_manifest_id": "",
+          "redaction_status": "redacted"
+        }
+      ],
+      "freshness_days": 14,
+      "owning_bead": "bd-checkpoint",
+      "downgrade_text": "State signed policy checkpoints as a target until a fresh live proof artifact passes."
+    },
+    {
+      "feature_id": "autonomous_quarantine_mesh",
+      "user_facing_name": "Autonomous quarantine mesh",
+      "impossible_by_default_rationale": "Autonomous quarantine mesh remains a target relative to Node and Bun until the user-facing quarantine proof emits convergence artifacts.",
+      "state": "target",
+      "artifact_handles": [
+        {
+          "path": "tests/fixtures/autonomous_quarantine_mesh_shape.json",
+          "sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "role": "candidate_fixture",
+          "proof_kind": "static_fixture",
+          "verification_command": "",
+          "user_facing_workflow": "",
+          "proof_manifest_id": "",
+          "redaction_status": "redacted"
+        }
+      ],
+      "freshness_days": 14,
+      "owning_bead": "bd-1py8v",
+      "downgrade_text": "State autonomous quarantine mesh as target until live propagation proof artifacts pass."
+    }
+  ]
+}

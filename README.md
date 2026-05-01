@@ -41,14 +41,14 @@ FrankenEngine provides one native baseline interpreter with deterministic and th
 
 | Capability | What You Get In Practice |
 |---|---|
-| Native execution profiles | `baseline_deterministic_profile` for conservative control paths, `baseline_throughput_profile` for throughput-heavy paths, and `adaptive_profile_router` when policy routing is enabled |
-| Probabilistic Guardplane | Bayesian risk updates and e-process boundaries that trigger `allow/challenge/sandbox/suspend/terminate/quarantine` |
-| Deterministic replay | Bit-stable replay for high-severity decision paths with counterfactual policy simulation |
-| Cryptographic governance | Signed decision receipts with transparency-log proofs and optional TEE attestation bindings |
-| Fleet immune system | Quarantine and revocation propagation with bounded convergence SLOs |
-| Capability-typed execution | TS-first workflow that compiles to capability-typed IR with ambient-authority rejection |
-| Cross-repo constitution | Control plane on `/dp/asupersync`, TUI on `/dp/frankentui`, SQLite on `/dp/frankensqlite` |
-| Evidence-first operations | Every published performance and security claim ships with reproducible artifact bundles |
+| Native execution profiles | 🟢 OBSERVED (live proof linked) `baseline_deterministic_profile` for conservative control paths, `baseline_throughput_profile` for throughput-heavy paths, and `adaptive_profile_router` when policy routing is enabled |
+| Probabilistic Guardplane | 🟢 OBSERVED (live proof linked) Bayesian risk updates and e-process boundaries that trigger `allow/challenge/sandbox/suspend/terminate/quarantine` |
+| Deterministic replay | 🟡 TARGETED (gate exists but baseline placeholder) Bit-stable replay for high-severity decision paths with counterfactual policy simulation |
+| Cryptographic governance | 🔴 HYPOTHESIS (claim not yet provable) Signed decision receipts with transparency-log proofs and optional TEE attestation bindings |
+| Fleet immune system | 🟢 OBSERVED (live proof linked) Quarantine and revocation propagation with bounded convergence SLOs |
+| Capability-typed execution | 🟡 TARGETED (gate exists but baseline placeholder) TS-first workflow that compiles to capability-typed IR with ambient-authority rejection |
+| Cross-repo constitution | 🟢 OBSERVED (live proof linked) Control plane on `/dp/asupersync`, TUI on `/dp/frankentui`, SQLite on `/dp/frankensqlite` |
+| Evidence-first operations | 🟡 TARGETED (gate exists but baseline placeholder) Every published performance and security claim ships with reproducible artifact bundles |
 
 ## CLI Contract
 

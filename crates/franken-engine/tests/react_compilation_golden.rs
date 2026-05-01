@@ -8,7 +8,6 @@
 
 #![forbid(unsafe_code)]
 
-use std::fs;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -197,32 +196,6 @@ fn golden_file_path(test_name: &str) -> PathBuf {
         .join("goldens")
         .join("react_compilation")
         .join(format!("{}.json", test_name))
-}
-
-/// Load golden fixture from file if it exists.
-fn load_golden_fixture(test_name: &str) -> Option<ReactCompilationFixture> {
-    let path = golden_file_path(test_name);
-    if !path.exists() {
-        return None;
-    }
-
-    let content = fs::read_to_string(path).ok()?;
-    serde_json::from_str(&content).ok()
-}
-
-/// Save golden fixture to file.
-fn save_golden_fixture(
-    fixture: &ReactCompilationFixture,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let path = golden_file_path(&fixture.test_name);
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-
-    let content = serde_json::to_string_pretty(fixture)?;
-    fs::write(path, content)?;
-
-    Ok(())
 }
 
 /// Convert a typed fixture into a comparison value with source coordinates stripped.

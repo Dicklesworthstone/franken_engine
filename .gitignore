@@ -44,6 +44,7 @@ Thumbs.db
 
 # Golden artifact test outputs (transient diff files)
 tests/golden/*.actual
+crates/franken-engine/tests/goldens/**/*.actual
 *.actual.json
 
 # Runtime SQLite databases

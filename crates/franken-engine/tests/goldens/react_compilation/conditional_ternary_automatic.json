@@ -1,132 +1,132 @@
 {
-  "test_name": "conditional_ternary_automatic",
+  "config": {
+    "automatic_import_source": null,
+    "build_mode": "production",
+    "classic_fragment_pragma": null,
+    "classic_pragma": null,
+    "emit_self": true,
+    "emit_source": true,
+    "max_depth": 100,
+    "runtime_mode": "automatic",
+    "source_file": null
+  },
   "input_jsx": {
-    "type": "element",
-    "name": {
-      "type": "identifier",
-      "name": "div",
-      "span": {
-        "start_offset": 1,
-        "end_offset": 4,
-        "start_line": 1,
-        "start_column": 2,
-        "end_line": 1,
-        "end_column": 5
-      }
-    },
     "attributes": [],
     "children": [
       {
-        "type": "expression_container",
         "expression": "isActive ? <span>Active</span> : <span>Inactive</span>",
         "span": {
-          "start_offset": 5,
-          "end_offset": 61,
-          "start_line": 1,
-          "start_column": 6,
-          "end_line": 1,
-          "end_column": 62
-        }
+          "end_column": "[END_COLUMN]",
+          "end_line": "[END_LINE]",
+          "end_offset": "[END_OFFSET]",
+          "start_column": "[START_COLUMN]",
+          "start_line": "[START_LINE]",
+          "start_offset": "[START_OFFSET]"
+        },
+        "type": "expression_container"
       }
     ],
+    "name": {
+      "name": "div",
+      "span": {
+        "end_column": "[END_COLUMN]",
+        "end_line": "[END_LINE]",
+        "end_offset": "[END_OFFSET]",
+        "start_column": "[START_COLUMN]",
+        "start_line": "[START_LINE]",
+        "start_offset": "[START_OFFSET]"
+      },
+      "type": "identifier"
+    },
     "self_closing": false,
     "span": {
-      "start_offset": 0,
-      "end_offset": 67,
-      "start_line": 1,
-      "start_column": 1,
-      "end_line": 1,
-      "end_column": 68
-    }
-  },
-  "config": {
-    "runtime_mode": "automatic",
-    "build_mode": "production",
-    "source_file": null,
-    "emit_self": true,
-    "emit_source": true,
-    "classic_pragma": null,
-    "classic_fragment_pragma": null,
-    "automatic_import_source": null,
-    "max_depth": 100
+      "end_column": "[END_COLUMN]",
+      "end_line": "[END_LINE]",
+      "end_offset": "[END_OFFSET]",
+      "start_column": "[START_COLUMN]",
+      "start_line": "[START_LINE]",
+      "start_offset": "[START_OFFSET]"
+    },
+    "type": "element"
   },
   "result": {
-    "element": {
-      "element_type": {
-        "type": "intrinsic",
-        "tag": "div"
-      },
-      "props": {
-        "entries": [
-          {
-            "type": "named",
-            "name": "children",
-            "value": {
-              "type": "expression",
-              "expression": "isActive ? <span>Active</span> : <span>Inactive</span>"
-            },
-            "span": null
-          }
-        ],
-        "has_spreads": false,
-        "extracted_key": null,
-        "extracted_ref": null
-      },
-      "children": [],
-      "call_convention": {
-        "type": "automatic",
-        "factory": "jsx",
-        "import_source": "react/jsx-runtime"
-      },
-      "source_location": null,
-      "is_static_children": false,
-      "depth": 0,
-      "span": {
-        "start_offset": 0,
-        "end_offset": 67,
-        "start_line": 1,
-        "start_column": 1,
-        "end_line": 1,
-        "end_column": 68
-      }
-    },
     "diagnostics": [
       {
         "code": "CHILDREN_IN_PROPS",
-        "severity": "info",
         "message": "Children (1 total) folded into props for automatic runtime",
+        "severity": "info",
         "span": {
-          "start_offset": 0,
-          "end_offset": 67,
-          "start_line": 1,
-          "start_column": 1,
-          "end_line": 1,
-          "end_column": 68
+          "end_column": "[END_COLUMN]",
+          "end_line": "[END_LINE]",
+          "end_offset": "[END_OFFSET]",
+          "start_column": "[START_COLUMN]",
+          "start_line": "[START_LINE]",
+          "start_offset": "[START_OFFSET]"
         }
       }
     ],
-    "required_imports": [
-      {
-        "source": "react/jsx-runtime",
-        "name": "jsx",
-        "is_default": false
+    "element": {
+      "call_convention": {
+        "factory": "jsx",
+        "import_source": "react/jsx-runtime",
+        "type": "automatic"
+      },
+      "children": [],
+      "depth": 0,
+      "element_type": {
+        "tag": "div",
+        "type": "intrinsic"
+      },
+      "is_static_children": false,
+      "props": {
+        "entries": [
+          {
+            "name": "children",
+            "span": null,
+            "type": "named",
+            "value": {
+              "expression": "isActive ? <span>Active</span> : <span>Inactive</span>",
+              "type": "expression"
+            }
+          }
+        ],
+        "extracted_key": null,
+        "extracted_ref": null,
+        "has_spreads": false
+      },
+      "source_location": null,
+      "span": {
+        "end_column": "[END_COLUMN]",
+        "end_line": "[END_LINE]",
+        "end_offset": "[END_OFFSET]",
+        "start_column": "[START_COLUMN]",
+        "start_line": "[START_LINE]",
+        "start_offset": "[START_OFFSET]"
       }
-    ],
+    },
     "feature_families_used": [
       "element",
       "expression_child"
     ],
+    "required_imports": [
+      {
+        "is_default": false,
+        "name": "jsx",
+        "source": "react/jsx-runtime"
+      }
+    ],
     "stats": {
       "elements_lowered": 1,
-      "fragments_lowered": 0,
-      "text_children": 0,
       "expression_children": 1,
-      "spread_attributes": 0,
-      "max_depth_reached": 0,
-      "total_props": 0,
+      "fragments_lowered": 0,
       "keys_extracted": 0,
-      "refs_extracted": 0
+      "max_depth_reached": 0,
+      "refs_extracted": 0,
+      "spread_attributes": 0,
+      "text_children": 0,
+      "total_props": 0
     }
   },
-  "schema_version": "franken-engine.react-compilation-golden.v1"
+  "schema_version": "franken-engine.react-compilation-golden.v1",
+  "test_name": "conditional_ternary_automatic"
 }

@@ -10,7 +10,7 @@
 #![forbid(unsafe_code)]
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// Maximum lines to show from start/end of diff before truncating.
 const DIFF_CONTEXT_LINES: usize = 10;
@@ -28,6 +28,7 @@ pub struct GoldenDiag {
 
 impl GoldenDiag {
     /// Create diagnostics helper for CLI golden tests.
+    #[allow(dead_code)]
     pub fn cli() -> Self {
         Self {
             framework_name: "CLI golden",
@@ -44,6 +45,7 @@ impl GoldenDiag {
     }
 
     /// Create diagnostics helper for policy theorem compiler golden tests.
+    #[allow(dead_code)]
     pub fn policy() -> Self {
         Self {
             framework_name: "Policy golden",

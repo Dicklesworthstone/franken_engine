@@ -1,6 +1,6 @@
 {
-  "exit_code": 0,
-  "stdout": "[PROJECT_PATH] is up to date\n",
-  "stderr": "",
+  "exit_code": 1,
+  "stdout": "",
+  "stderr": "architecture inventory failed: /data/projects/franken_engine/crates/franken-engine/../../docs/ARCHITECTURE_INVENTORY.md is stale; run scripts/generate_architecture_inventory.sh\n",
   "command": "franken-architecture-inventory --check"
 }

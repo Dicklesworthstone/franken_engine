@@ -108,16 +108,17 @@ write_event() {
   local artifact_path="$6"
   local artifact_schema="$7"
   local exit_code="$8"
-  local stdout_path="$9"
-  local stderr_path="${10}"
-  local duration_ms="${11}"
-  local decision="${12}"
-  local error_code="${13}"
-  local remediation="${14}"
-  local readme_line="${15}"
-  local artifact_sha256="${16}"
-  local link_signature="${17}"
-  local signed_link="${18}"
+  local expected_exit_code="$9"
+  local stdout_path="${10}"
+  local stderr_path="${11}"
+  local duration_ms="${12}"
+  local decision="${13}"
+  local error_code="${14}"
+  local remediation="${15}"
+  local readme_line="${16}"
+  local artifact_sha256="${17}"
+  local link_signature="${18}"
+  local signed_link="${19}"
   local readme_line_json="null"
   local severity="info"
 
@@ -142,6 +143,7 @@ write_event() {
     --arg artifact_path "$artifact_path" \
     --arg schema_id "$artifact_schema" \
     --argjson exit_code "$exit_code" \
+    --argjson expected_exit_code "$expected_exit_code" \
     --arg stdout_path "$stdout_path" \
     --arg stderr_path "$stderr_path" \
     --argjson duration_ms "$duration_ms" \
@@ -169,6 +171,8 @@ write_event() {
       artifact_path: $artifact_path,
       schema_id: $schema_id,
       exit_code: $exit_code,
+      expected_exit_code: $expected_exit_code,
+      exit_code_matches_expectation: ($exit_code == $expected_exit_code),
       stdout_path: $stdout_path,
       stderr_path: $stderr_path,
       duration_ms: $duration_ms,
@@ -223,8 +227,9 @@ run_step() {
   local readme_command="$3"
   local artifact_rel="$4"
   local artifact_schema="$5"
-  local executable="$6"
-  shift 6
+  local expected_exit_code="$6"
+  local executable="$7"
+  shift 7
   local exec_args=("$@")
   local stdout_path="${step_logs_dir}/step_$(printf '%03d' "$step_index")_${step_name}.stdout"
   local stderr_path="${step_logs_dir}/step_$(printf '%03d' "$step_index")_${step_name}.stderr"
@@ -247,6 +252,11 @@ run_step() {
   local link_signature
   local signed_link
 
+  if ! [[ "$expected_exit_code" =~ ^-?[0-9]+$ ]]; then
+    echo "invalid expected exit code for step ${step_name}: ${expected_exit_code}" >&2
+    exit 5
+  fi
+
   if [[ "$executable" == "$frankenctl_bin" ]]; then
     command_name="frankenctl"
   else
@@ -265,6 +275,7 @@ run_step() {
     printf '[step %03d] cwd=%s\n' "$step_index" "$workspace_dir"
     printf '  README: %s:%s %s\n' "$readme_path" "${readme_line:-unknown}" "$readme_command"
     printf '  display: %s\n' "$readme_command"
+    printf '  expected_exit_code: %s\n' "$expected_exit_code"
     printf '  actual:'
     printf ' %q' "$executable" "${exec_args[@]}"
     printf '\n'
@@ -281,11 +292,11 @@ run_step() {
   end_ms="$(date +%s%3N)"
   duration_ms=$((end_ms - start_ms))
 
-  if [[ "$exit_code" -ne 0 ]]; then
+  if [[ "$exit_code" -ne "$expected_exit_code" ]]; then
     decision="failed"
-    error_code="command_failed"
-    remediation="Inspect stderr_path and rerun the README command from cwd."
-  elif ! validate_step_artifact "$step_name" "$artifact_path" "$stdout_path"; then
+    error_code="unexpected_exit_code"
+    remediation="Expected exit code ${expected_exit_code}; inspect stderr_path and rerun the README command from cwd."
+  elif [[ "$expected_exit_code" -eq 0 ]] && ! validate_step_artifact "$step_name" "$artifact_path" "$stdout_path"; then
     decision="failed"
     error_code="artifact_validation_failed"
     remediation="The command exited successfully but did not emit the README contract artifact."
@@ -315,6 +326,7 @@ run_step() {
     "$artifact_path_for_event" \
     "$artifact_schema" \
     "$exit_code" \
+    "$expected_exit_code" \
     "$stdout_path_for_event" \
     "$stderr_path_for_event" \
     "$duration_ms" \
@@ -407,48 +419,56 @@ run_step 0 version \
   "frankenctl version" \
   "__stdout__" \
   "$version_stdout_schema" \
+  0 \
   "$frankenctl_bin" version
 
 run_step 1 setup_artifacts_dir \
   "mkdir -p ./artifacts" \
   "artifacts" \
   "$fixture_schema" \
+  0 \
   bash -c "mkdir -p ./artifacts"
 
 run_step 2 setup_demo_source \
   "printf 'const answer = 40 + 2;\\n' > ./demo.js" \
   "demo.js" \
   "$fixture_schema" \
+  0 \
   bash -c "printf 'const answer = 40 + 2;\n' > ./demo.js"
 
 run_step 3 compile \
   "frankenctl compile --input ./demo.js --out ./artifacts/demo.compile.json --goal script" \
   "artifacts/demo.compile.json" \
   "$compile_artifact_schema" \
+  0 \
   "$frankenctl_bin" compile --input ./demo.js --out ./artifacts/demo.compile.json --goal script
 
 run_step 4 verify_compile_artifact \
   "frankenctl verify compile-artifact --input ./artifacts/demo.compile.json" \
   "__stdout__" \
   "$frankenctl_schema" \
+  0 \
   "$frankenctl_bin" verify compile-artifact --input ./artifacts/demo.compile.json
 
 run_step 5 run \
   "frankenctl run --input ./demo.js --extension-id demo-ext --out ./artifacts/demo.run.json" \
   "artifacts/demo.run.json" \
   "$frankenctl_schema" \
+  0 \
   "$frankenctl_bin" run --input ./demo.js --extension-id demo-ext --out ./artifacts/demo.run.json
 
 run_step 6 prepare_replay_trace \
   "frankenctl replay run --trace ./examples/05_replay_demo/sample_trace.json --mode strict --out ./artifacts/replay_report.json" \
   "examples/05_replay_demo/sample_trace.json" \
   "$fixture_schema" \
+  0 \
   bash -c "mkdir -p ./examples/05_replay_demo && cp \"${root_dir}/examples/05_replay_demo/sample_trace.json\" ./examples/05_replay_demo/sample_trace.json"
 
 run_step 7 replay_run \
   "frankenctl replay run --trace ./examples/05_replay_demo/sample_trace.json --mode strict --out ./artifacts/replay_report.json" \
   "artifacts/replay_report.json" \
   "$frankenctl_schema" \
+  0 \
   "$frankenctl_bin" replay run --trace ./examples/05_replay_demo/sample_trace.json --mode strict --out ./artifacts/replay_report.json
 
 write_manifest

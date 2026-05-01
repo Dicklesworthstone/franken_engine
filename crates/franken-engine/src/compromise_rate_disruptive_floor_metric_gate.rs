@@ -88,6 +88,108 @@ pub struct CompromiseRateEvidence {
 }
 
 impl CompromiseRateEvidence {
+    /// Validate baseline parameters for sanity
+    pub fn validate_baseline_parameters(
+        baseline_compromises: u64,
+        frankenengine_compromises: u64,
+        trial_count: u64,
+    ) -> Result<(), String> {
+        if trial_count == 0 {
+            return Err("Trial count cannot be zero".to_string());
+        }
+
+        if baseline_compromises > trial_count {
+            return Err(format!(
+                "Baseline compromises ({}) cannot exceed trial count ({})",
+                baseline_compromises, trial_count
+            ));
+        }
+
+        if frankenengine_compromises > trial_count {
+            return Err(format!(
+                "FrankenEngine compromises ({}) cannot exceed trial count ({})",
+                frankenengine_compromises, trial_count
+            ));
+        }
+
+        // Check for overflow conditions that could indicate corrupted data
+        if baseline_compromises == u64::MAX {
+            return Err("Baseline compromises value appears corrupted (u64::MAX)".to_string());
+        }
+
+        if frankenengine_compromises == u64::MAX {
+            return Err("FrankenEngine compromises value appears corrupted (u64::MAX)".to_string());
+        }
+
+        Ok(())
+    }
+
+    /// Validate that compromise rates are within bounds [0, 1_000_000] millionths (0-100%)
+    pub fn validate_compromise_rates(
+        baseline_rate_millionths: u64,
+        frankenengine_rate_millionths: u64,
+    ) -> Result<(), String> {
+        const MAX_RATE_MILLIONTHS: u64 = 1_000_000; // 100%
+
+        if baseline_rate_millionths > MAX_RATE_MILLIONTHS {
+            return Err(format!(
+                "Baseline compromise rate ({}) exceeds 100% ({})",
+                baseline_rate_millionths, MAX_RATE_MILLIONTHS
+            ));
+        }
+
+        if frankenengine_rate_millionths > MAX_RATE_MILLIONTHS {
+            return Err(format!(
+                "FrankenEngine compromise rate ({}) exceeds 100% ({})",
+                frankenengine_rate_millionths, MAX_RATE_MILLIONTHS
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Validate placeholder values for TARGETED data quality scenarios
+    pub fn validate_placeholder_baselines(
+        baseline_rate_millionths: u64,
+        frankenengine_rate_millionths: u64,
+        is_targeted_data: bool,
+    ) -> Result<(), String> {
+        if !is_targeted_data {
+            return Ok(());
+        }
+
+        // For TARGETED data, baseline should be clearly placeholder values
+        // Common placeholder patterns: 0, round percentages in millionths
+        let common_placeholder_rates = [
+            0,         // 0%
+            500_000,   // 50%
+            750_000,   // 75% (Bun placeholder)
+            800_000,   // 80%
+            850_000,   // 85% (Node placeholder)
+            900_000,   // 90%
+            1_000_000, // 100%
+        ];
+
+        let baseline_looks_placeholder =
+            common_placeholder_rates.contains(&baseline_rate_millionths);
+        let frankenengine_looks_placeholder =
+            common_placeholder_rates.contains(&frankenengine_rate_millionths);
+
+        if !baseline_looks_placeholder && !frankenengine_looks_placeholder {
+            return Err(format!(
+                "For TARGETED data quality, baseline values should be clearly placeholders. \
+                Found baseline: {} millionths ({}%), frankenengine: {} millionths ({}%). \
+                Expected round percentage values like 0, 50%, 75%, 80%, 85%, 90%, or 100%.",
+                baseline_rate_millionths,
+                baseline_rate_millionths / 10_000,
+                frankenengine_rate_millionths,
+                frankenengine_rate_millionths / 10_000
+            ));
+        }
+
+        Ok(())
+    }
+
     pub fn calculate_compromise_rate_millionths(compromises: u64, trials: u64) -> u64 {
         if trials == 0 {
             0
@@ -156,6 +258,64 @@ impl CompromiseRateEvidence {
             success_criteria,
             reproducibility_command,
         }
+    }
+
+    pub fn new_validated(
+        scenario_id: String,
+        runtime_denominator: RuntimeDenominator,
+        baseline_posture: String,
+        frankenengine_posture: String,
+        trial_count: u64,
+        baseline_compromises: u64,
+        frankenengine_compromises: u64,
+        scenario_path: String,
+        output_path: String,
+        output_hash: String,
+        verification_command: String,
+        success_criteria: String,
+        reproducibility_command: String,
+    ) -> Result<Self, String> {
+        // Validate baseline parameters
+        Self::validate_baseline_parameters(
+            baseline_compromises,
+            frankenengine_compromises,
+            trial_count,
+        )?;
+
+        let baseline_compromise_rate_millionths =
+            Self::calculate_compromise_rate_millionths(baseline_compromises, trial_count);
+        let frankenengine_compromise_rate_millionths =
+            Self::calculate_compromise_rate_millionths(frankenengine_compromises, trial_count);
+
+        // Validate compromise rates are within bounds
+        Self::validate_compromise_rates(
+            baseline_compromise_rate_millionths,
+            frankenengine_compromise_rate_millionths,
+        )?;
+
+        let reduction_ratio_millionths = Self::calculate_reduction_ratio_millionths(
+            baseline_compromise_rate_millionths,
+            frankenengine_compromise_rate_millionths,
+        );
+
+        Ok(Self {
+            scenario_id,
+            runtime_denominator,
+            baseline_posture,
+            frankenengine_posture,
+            trial_count,
+            baseline_compromises,
+            frankenengine_compromises,
+            baseline_compromise_rate_millionths,
+            frankenengine_compromise_rate_millionths,
+            reduction_ratio_millionths,
+            scenario_path,
+            output_path,
+            output_hash,
+            verification_command,
+            success_criteria,
+            reproducibility_command,
+        })
     }
 }
 
@@ -262,13 +422,33 @@ pub fn analyze_compromise_rate_metric_input(
         return Err("No evidence provided".to_string());
     }
 
+    // Check if evidence contains fictional scenarios first
+    let has_fictional_data = contains_fictional_scenarios(&input.evidence);
+
+    // Validate each piece of evidence
     for evidence in &input.evidence {
-        if evidence.trial_count == 0 {
-            return Err(format!(
-                "Invalid trial count 0 for scenario {}",
-                evidence.scenario_id
-            ));
-        }
+        // Validate basic parameters
+        CompromiseRateEvidence::validate_baseline_parameters(
+            evidence.baseline_compromises,
+            evidence.frankenengine_compromises,
+            evidence.trial_count,
+        )
+        .map_err(|e| format!("Scenario {}: {}", evidence.scenario_id, e))?;
+
+        // Validate compromise rates are within bounds
+        CompromiseRateEvidence::validate_compromise_rates(
+            evidence.baseline_compromise_rate_millionths,
+            evidence.frankenengine_compromise_rate_millionths,
+        )
+        .map_err(|e| format!("Scenario {}: {}", evidence.scenario_id, e))?;
+
+        // Validate placeholder patterns for TARGETED data
+        CompromiseRateEvidence::validate_placeholder_baselines(
+            evidence.baseline_compromise_rate_millionths,
+            evidence.frankenengine_compromise_rate_millionths,
+            has_fictional_data,
+        )
+        .map_err(|e| format!("Scenario {}: {}", evidence.scenario_id, e))?;
     }
 
     let weighted_reduction_ratio = compute_weighted_geometric_mean_reduction(&input.evidence);
@@ -315,8 +495,7 @@ pub fn analyze_compromise_rate_metric_input(
         .filter(|e| e.meets_reduction_threshold(input.reduction_threshold_factor))
         .count() as u64;
 
-    // Check if evidence contains fictional scenarios
-    let has_fictional_data = contains_fictional_scenarios(&input.evidence);
+    // Determine data quality (already checked earlier)
     let data_quality = if has_fictional_data {
         "targeted"
     } else {
@@ -720,5 +899,253 @@ mod tests {
         assert!(!report.uncertainty_notes.contains("⚠️ WARNING"));
         assert!(!report.uncertainty_notes.contains("placeholder/fictional"));
         assert!(report.coverage_notes.contains("Data quality: observed"));
+    }
+
+    // Baseline validation tests
+
+    #[test]
+    fn test_validate_baseline_parameters_valid() {
+        // Valid parameters should pass
+        assert!(CompromiseRateEvidence::validate_baseline_parameters(80, 8, 100).is_ok());
+        assert!(CompromiseRateEvidence::validate_baseline_parameters(0, 0, 100).is_ok());
+        assert!(CompromiseRateEvidence::validate_baseline_parameters(100, 100, 100).is_ok());
+    }
+
+    #[test]
+    fn test_validate_baseline_parameters_zero_trials() {
+        // Zero trial count should be rejected
+        let result = CompromiseRateEvidence::validate_baseline_parameters(80, 8, 0);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Trial count cannot be zero"));
+    }
+
+    #[test]
+    fn test_validate_baseline_parameters_compromises_exceed_trials() {
+        // Baseline compromises exceeding trials should be rejected
+        let result = CompromiseRateEvidence::validate_baseline_parameters(150, 8, 100);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .contains("Baseline compromises (150) cannot exceed trial count (100)")
+        );
+
+        // FrankenEngine compromises exceeding trials should be rejected
+        let result = CompromiseRateEvidence::validate_baseline_parameters(80, 150, 100);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .contains("FrankenEngine compromises (150) cannot exceed trial count (100)")
+        );
+    }
+
+    #[test]
+    fn test_validate_baseline_parameters_corrupted_values() {
+        // u64::MAX values (indicating potential corruption) should be rejected
+        let result = CompromiseRateEvidence::validate_baseline_parameters(u64::MAX, 8, 100);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .contains("Baseline compromises value appears corrupted")
+        );
+
+        let result = CompromiseRateEvidence::validate_baseline_parameters(80, u64::MAX, 100);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .contains("FrankenEngine compromises value appears corrupted")
+        );
+    }
+
+    #[test]
+    fn test_validate_compromise_rates_valid() {
+        // Valid rates (0-100%) should pass
+        assert!(CompromiseRateEvidence::validate_compromise_rates(0, 0).is_ok());
+        assert!(CompromiseRateEvidence::validate_compromise_rates(500_000, 50_000).is_ok()); // 50% vs 5%
+        assert!(CompromiseRateEvidence::validate_compromise_rates(1_000_000, 0).is_ok()); // 100% vs 0%
+    }
+
+    #[test]
+    fn test_validate_compromise_rates_exceeds_100_percent() {
+        // Rates > 100% should be rejected
+        let result = CompromiseRateEvidence::validate_compromise_rates(1_500_000, 50_000);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .contains("Baseline compromise rate (1500000) exceeds 100%")
+        );
+
+        let result = CompromiseRateEvidence::validate_compromise_rates(500_000, 2_000_000);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .contains("FrankenEngine compromise rate (2000000) exceeds 100%")
+        );
+    }
+
+    #[test]
+    fn test_validate_placeholder_baselines_non_targeted() {
+        // Non-targeted data should always pass placeholder validation
+        assert!(
+            CompromiseRateEvidence::validate_placeholder_baselines(123_456, 78_901, false).is_ok()
+        );
+        assert!(
+            CompromiseRateEvidence::validate_placeholder_baselines(850_000, 85_000, false).is_ok()
+        );
+    }
+
+    #[test]
+    fn test_validate_placeholder_baselines_targeted_valid() {
+        // TARGETED data with placeholder values should pass
+        assert!(
+            CompromiseRateEvidence::validate_placeholder_baselines(850_000, 85_000, true).is_ok()
+        ); // 85% vs 8.5%
+        assert!(CompromiseRateEvidence::validate_placeholder_baselines(750_000, 0, true).is_ok()); // 75% vs 0%
+        assert!(CompromiseRateEvidence::validate_placeholder_baselines(0, 0, true).is_ok()); // 0% vs 0%
+        assert!(
+            CompromiseRateEvidence::validate_placeholder_baselines(1_000_000, 500_000, true)
+                .is_ok()
+        ); // 100% vs 50%
+    }
+
+    #[test]
+    fn test_validate_placeholder_baselines_targeted_invalid() {
+        // TARGETED data with non-placeholder values should be rejected
+        let result = CompromiseRateEvidence::validate_placeholder_baselines(123_456, 78_901, true);
+        assert!(result.is_err());
+        assert!(
+            result.unwrap_err().contains(
+                "For TARGETED data quality, baseline values should be clearly placeholders"
+            )
+        );
+    }
+
+    #[test]
+    fn test_new_validated_success() {
+        let result = CompromiseRateEvidence::new_validated(
+            "test_scenario".to_string(),
+            RuntimeDenominator::Node,
+            "default".to_string(),
+            "frankenengine".to_string(),
+            100,
+            80, // 80% baseline
+            8,  // 8% frankenengine
+            "test_path".to_string(),
+            "output_path".to_string(),
+            "hash123".to_string(),
+            "verify_cmd".to_string(),
+            "host_compromise".to_string(),
+            "repro_cmd".to_string(),
+        );
+
+        assert!(result.is_ok());
+        let evidence = result.unwrap();
+        assert_eq!(evidence.baseline_compromise_rate_millionths, 800_000);
+        assert_eq!(evidence.frankenengine_compromise_rate_millionths, 80_000);
+    }
+
+    #[test]
+    fn test_new_validated_failure_compromises_exceed_trials() {
+        let result = CompromiseRateEvidence::new_validated(
+            "test_scenario".to_string(),
+            RuntimeDenominator::Node,
+            "default".to_string(),
+            "frankenengine".to_string(),
+            100,
+            150, // Invalid: more compromises than trials
+            8,
+            "test_path".to_string(),
+            "output_path".to_string(),
+            "hash123".to_string(),
+            "verify_cmd".to_string(),
+            "host_compromise".to_string(),
+            "repro_cmd".to_string(),
+        );
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("cannot exceed trial count"));
+    }
+
+    #[test]
+    fn test_analyze_input_with_baseline_validation_errors() {
+        // Create evidence with invalid baseline (compromises > trials)
+        let evidence = CompromiseRateEvidence {
+            scenario_id: "invalid_scenario".to_string(),
+            runtime_denominator: RuntimeDenominator::Node,
+            baseline_posture: "default".to_string(),
+            frankenengine_posture: "frankenengine".to_string(),
+            trial_count: 100,
+            baseline_compromises: 150, // Invalid
+            frankenengine_compromises: 8,
+            baseline_compromise_rate_millionths: 1_500_000, // > 100%, invalid
+            frankenengine_compromise_rate_millionths: 80_000,
+            reduction_ratio_millionths: 1_875_000,
+            scenario_path: "path".to_string(),
+            output_path: "output".to_string(),
+            output_hash: "hash".to_string(),
+            verification_command: "verify".to_string(),
+            success_criteria: "success".to_string(),
+            reproducibility_command: "repro".to_string(),
+        };
+
+        let input = CompromiseRateMetricInput {
+            schema_version: SCHEMA_VERSION.to_string(),
+            bead_id: BEAD_ID.to_string(),
+            scenario_set: "test_set".to_string(),
+            reduction_threshold_factor: 10,
+            max_freshness_days: DEFAULT_MAX_FRESHNESS_DAYS,
+            evidence: vec![evidence],
+            code_revision: "abc123".to_string(),
+            generated_at_utc: "2026-05-01T05:00:00Z".to_string(),
+        };
+
+        let result = analyze_compromise_rate_metric_input(&input);
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        // Should catch the baseline validation error
+        assert!(error.contains("invalid_scenario"));
+        assert!(error.contains("cannot exceed trial count"));
+    }
+
+    #[test]
+    fn test_analyze_input_with_targeted_placeholder_validation() {
+        // Create fictional evidence with valid placeholder values
+        let evidence = CompromiseRateEvidence::new(
+            "fictional_scenario".to_string(),
+            RuntimeDenominator::Node,
+            "default".to_string(),
+            "frankenengine".to_string(),
+            100,
+            85, // 85% baseline (850_000 millionths - valid placeholder)
+            8,  // 8% frankenengine (80_000 millionths)
+            "/test/scenarios/fictional_path".to_string(), // Fictional path
+            "output_path".to_string(),
+            "hash".to_string(),
+            "verify".to_string(),
+            "success".to_string(),
+            "repro".to_string(),
+        );
+
+        let input = CompromiseRateMetricInput {
+            schema_version: SCHEMA_VERSION.to_string(),
+            bead_id: BEAD_ID.to_string(),
+            scenario_set: "fictional_test".to_string(),
+            reduction_threshold_factor: 10,
+            max_freshness_days: DEFAULT_MAX_FRESHNESS_DAYS,
+            evidence: vec![evidence],
+            code_revision: "abc123".to_string(),
+            generated_at_utc: "2026-05-01T05:00:00Z".to_string(),
+        };
+
+        // Should pass because fictional data has placeholder-looking values
+        let result = analyze_compromise_rate_metric_input(&input);
+        assert!(result.is_ok());
+        let report = result.unwrap();
+        assert_eq!(report.data_quality, "targeted");
     }
 }

@@ -120,7 +120,10 @@ fn should_update_policy_goldens() -> bool {
 }
 
 fn canonical_policy_result_json(result: &CompilationResult) -> String {
-    serde_json::to_string_pretty(result).expect("policy theorem result should serialize")
+    let mut json =
+        serde_json::to_string_pretty(result).expect("policy theorem result should serialize");
+    json.push('\n');
+    json
 }
 
 fn assert_policy_compiler_golden(result: &CompilationResult, test_name: &str) {

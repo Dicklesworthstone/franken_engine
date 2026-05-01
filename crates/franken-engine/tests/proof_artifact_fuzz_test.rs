@@ -1,4 +1,4 @@
-use frankenengine_engine::proof_artifact::{validate_event_json_line, ProofArtifactError};
+use frankenengine_engine::proof_artifact::{ProofArtifactError, validate_event_json_line};
 use proptest::prelude::*;
 
 // Custom strategy for generating potentially problematic JSON strings

@@ -1,4 +1,4 @@
-use frankenengine_engine::proof_artifact::{validate_event_json_line, ProofArtifactError};
+use frankenengine_engine::proof_artifact::{ProofArtifactError, validate_event_json_line};
 use std::time::Instant;
 
 /// Manual fuzzing harness for proof artifact JSON validation
@@ -15,9 +15,7 @@ fn manual_fuzz_session() {
         test_count += 1;
 
         // Wrap in catch_unwind to detect panics
-        let result = std::panic::catch_unwind(|| {
-            validate_event_json_line(test_case)
-        });
+        let result = std::panic::catch_unwind(|| validate_event_json_line(test_case));
 
         match result {
             Ok(_validation_result) => {
@@ -28,7 +26,11 @@ fn manual_fuzz_session() {
             }
             Err(_panic_payload) => {
                 crash_count += 1;
-                println!("CRASH DETECTED in test case {}: {:?}", i, test_case.chars().take(100).collect::<String>());
+                println!(
+                    "CRASH DETECTED in test case {}: {:?}",
+                    i,
+                    test_case.chars().take(100).collect::<String>()
+                );
             }
         }
 
@@ -93,9 +95,7 @@ fn generate_test_cases() -> Vec<String> {
 
     // Test large arrays
     for elem_count in [100, 500, 1000] {
-        let elements: Vec<String> = (0..elem_count)
-            .map(|i| format!(r#""item{}""#, i))
-            .collect();
+        let elements: Vec<String> = (0..elem_count).map(|i| format!(r#""item{}""#, i)).collect();
         let large_array = format!("[{}]", elements.join(","));
         cases.push(large_array);
     }
@@ -132,7 +132,7 @@ mod rand {
 
     pub fn random<T>() -> T
     where
-        T: From<u8>
+        T: From<u8>,
     {
         let seed = SEED.load(Ordering::Relaxed);
         let new_seed = seed.wrapping_mul(1103515245).wrapping_add(12345);

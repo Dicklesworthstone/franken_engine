@@ -20,7 +20,7 @@
 use std::collections::BTreeSet;
 
 use frankenengine_engine::ifc_artifacts::*;
-use frankenengine_engine::signature_preimage::{Signature, SigningKey, SIGNATURE_SENTINEL};
+use frankenengine_engine::signature_preimage::{SIGNATURE_SENTINEL, Signature, SigningKey};
 
 // ===========================================================================
 // Helpers

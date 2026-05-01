@@ -22,7 +22,7 @@ use frankenengine_engine::ifc_artifacts::{
     FlowAuthorizationAdvisory, FlowCheckResult, FlowEnvelope, FlowPolicy, FlowProof, FlowRule,
     IfcSchemaVersion, IfcValidationError, Ir2LabelSource, Label, ProofMethod,
 };
-use frankenengine_engine::signature_preimage::{Signature, SigningKey, SIGNATURE_SENTINEL};
+use frankenengine_engine::signature_preimage::{SIGNATURE_SENTINEL, Signature, SigningKey};
 
 // ── helpers ──────────────────────────────────────────────────────────────
 

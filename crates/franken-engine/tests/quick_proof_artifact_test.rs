@@ -1,4 +1,4 @@
-use frankenengine_engine::proof_artifact::{validate_event_json_line, ProofArtifactError};
+use frankenengine_engine::proof_artifact::{ProofArtifactError, validate_event_json_line};
 
 #[test]
 fn test_basic_validation_works() {
@@ -35,8 +35,14 @@ fn test_basic_validation_works() {
 #[test]
 fn test_edge_cases() {
     let test_cases = vec![
-        "{", "}", "null", "123", "[]",
-        "{\"key\":}", "{,}", "{\"incomplete",
+        "{",
+        "}",
+        "null",
+        "123",
+        "[]",
+        "{\"key\":}",
+        "{,}",
+        "{\"incomplete",
         r#"{"num":1.7976931348623157e+308}"#,
     ];
 

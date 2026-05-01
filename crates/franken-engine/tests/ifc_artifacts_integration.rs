@@ -30,7 +30,7 @@ use frankenengine_engine::ifc_artifacts::{
     IfcSchemaVersion, IfcValidationError, Ir2LabelSource, Label, ProofMethod,
 };
 use frankenengine_engine::signature_preimage::{
-    Signature, SignatureError, SigningKey, SIGNATURE_SENTINEL,
+    SIGNATURE_SENTINEL, Signature, SignatureError, SigningKey,
 };
 
 // ---------------------------------------------------------------------------

@@ -22,7 +22,7 @@ pub const BEAD_ID: &str = "bd-y6v8s";
 pub const THROUGHPUT_SCALE_OPS_PER_SECOND: u64 = 1000;
 pub const DEFAULT_FLOOR_RATIO_MILLIONTHS: u64 = 950_000; // 0.95 minimum ratio
 pub const DEFAULT_MAX_FRESHNESS_DAYS: u64 = 14; // Default maximum age for evidence
-pub const DEFAULT_MAX_BENCHMARK_DURATION_MS: u64 = 3600_000; // 1 hour maximum
+pub const DEFAULT_MAX_BENCHMARK_DURATION_MS: u64 = 3_600_000; // 1 hour maximum
 
 /// Baseline manifest file path relative to project root
 pub const BASELINE_MANIFEST_PATH: &str = "docs/throughput_baseline_measurements_v1.json";

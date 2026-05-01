@@ -2083,7 +2083,7 @@ mod tests {
         let mut receipt = make_receipt();
         // Set receipt to have expired 1 hour ago
         receipt.not_before_ms = current_time - 7200_000; // 2 hours ago
-        receipt.not_after_ms = current_time - 3600_000;  // 1 hour ago
+        receipt.not_after_ms = current_time - 3600_000; // 1 hour ago
 
         // Should fail validation because receipt is expired
         let err = receipt.validate_timestamp_bounds().unwrap_err();
@@ -2103,8 +2103,8 @@ mod tests {
 
         let mut receipt = make_receipt();
         // Set receipt to be valid starting 1 hour in the future
-        receipt.not_before_ms = current_time + 3600_000;  // 1 hour from now
-        receipt.not_after_ms = current_time + 7200_000;   // 2 hours from now
+        receipt.not_before_ms = current_time + 3600_000; // 1 hour from now
+        receipt.not_after_ms = current_time + 7200_000; // 2 hours from now
 
         // Should fail validation because receipt is not yet valid
         let err = receipt.validate_timestamp_bounds().unwrap_err();
@@ -2124,11 +2124,17 @@ mod tests {
 
         // Should fail validation because the window is invalid
         let err = receipt.validate_timestamp_bounds().unwrap_err();
-        assert!(matches!(err, IfcValidationError::InvalidTimestampBounds { .. }));
+        assert!(matches!(
+            err,
+            IfcValidationError::InvalidTimestampBounds { .. }
+        ));
 
         // Overall validation should also fail
         let err = receipt.validate().unwrap_err();
-        assert!(matches!(err, IfcValidationError::InvalidTimestampBounds { .. }));
+        assert!(matches!(
+            err,
+            IfcValidationError::InvalidTimestampBounds { .. }
+        ));
     }
 
     #[test]

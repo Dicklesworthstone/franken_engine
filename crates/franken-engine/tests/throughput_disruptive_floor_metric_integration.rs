@@ -7,12 +7,12 @@ use std::fs;
 use std::path::PathBuf;
 
 use frankenengine_engine::disruptive_floor_metric_gate::{
-    DisruptiveMetricId, MetricArtifact, BEAD_ID as PARENT_BEAD_ID,
+    BEAD_ID as PARENT_BEAD_ID, DisruptiveMetricId, MetricArtifact,
 };
 use frankenengine_engine::throughput_disruptive_floor_metric_gate::{
-    create_throughput_metric_artifact, evaluate_throughput_metric, RuntimeDenominator,
-    ThroughputEvidence, ThroughputMeasurementStatus, ThroughputMetricInput, BEAD_ID,
-    DEFAULT_MAX_BENCHMARK_DURATION_MS, SCHEMA_VERSION,
+    BEAD_ID, DEFAULT_MAX_BENCHMARK_DURATION_MS, RuntimeDenominator, SCHEMA_VERSION,
+    ThroughputEvidence, ThroughputMeasurementStatus, ThroughputMetricInput,
+    create_throughput_metric_artifact, evaluate_throughput_metric,
 };
 
 fn repo_root() -> PathBuf {
@@ -107,9 +107,11 @@ fn test_create_metric_artifact_for_parent_integrator() {
     assert_eq!(artifact.freshness_days, input.max_freshness_days);
     assert_eq!(artifact.confidence_millionths, 950_000);
     assert_eq!(artifact.coverage_millionths, 900_000);
-    assert!(artifact
-        .verification_command
-        .contains("run_throughput_disruptive_floor_metric_gate.sh"));
+    assert!(
+        artifact
+            .verification_command
+            .contains("run_throughput_disruptive_floor_metric_gate.sh")
+    );
     assert_eq!(artifact.redaction_status, "none");
 }
 

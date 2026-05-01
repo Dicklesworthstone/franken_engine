@@ -14,8 +14,8 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 use frankenengine_engine::proof_artifact::{
-    ProofArtifactError, ProofRunStatus, PROOF_EVENT_SCHEMA_VERSION,
-    PROOF_MANIFEST_SCHEMA_VERSION, PROOF_REPORT_SCHEMA_VERSION, REDACTION_POLICY_SCHEMA_VERSION,
+    PROOF_EVENT_SCHEMA_VERSION, PROOF_MANIFEST_SCHEMA_VERSION, PROOF_REPORT_SCHEMA_VERSION,
+    ProofArtifactError, ProofRunStatus, REDACTION_POLICY_SCHEMA_VERSION,
 };
 
 // ---------------------------------------------------------------------------
@@ -287,7 +287,10 @@ fn test_manifest_compatibility_validation() {
     let validated = validate_manifest_schema(&manifest_path);
     assert!(validated.is_ok());
     let validated_manifest = validated.unwrap();
-    assert_eq!(validated_manifest.schema_version, PROOF_MANIFEST_SCHEMA_VERSION);
+    assert_eq!(
+        validated_manifest.schema_version,
+        PROOF_MANIFEST_SCHEMA_VERSION
+    );
     assert_eq!(validated_manifest.gate_name, "test_gate");
     assert_eq!(validated_manifest.status, "pass");
 }
@@ -311,11 +314,8 @@ fn test_cli_command_transcript_redaction() {
     };
 
     let policy_path = test_dir.join("redaction_policy.json");
-    fs::write(
-        &policy_path,
-        serde_json::to_string_pretty(&policy).unwrap(),
-    )
-    .expect("Failed to write redaction policy");
+    fs::write(&policy_path, serde_json::to_string_pretty(&policy).unwrap())
+        .expect("Failed to write redaction policy");
 
     let validated_policy = validate_redaction_policy(&policy_path);
     assert!(validated_policy.is_ok());
@@ -380,7 +380,10 @@ fn test_structured_events_validation() {
     assert!(validated_events.is_ok());
     let events_list = validated_events.unwrap();
     assert_eq!(events_list.len(), 2);
-    assert_eq!(events_list[0].event_name, "readme_cli_workflow.step_completed");
+    assert_eq!(
+        events_list[0].event_name,
+        "readme_cli_workflow.step_completed"
+    );
     assert_eq!(events_list[1].step_id, "compile");
 }
 
@@ -415,9 +418,7 @@ fn test_artifact_linkage_validation() {
     let required_roles = ["command_transcript", "structured_events", "machine_report"];
     for required_role in &required_roles {
         assert!(
-            generated_artifacts
-                .iter()
-                .any(|a| a.role == *required_role),
+            generated_artifacts.iter().any(|a| a.role == *required_role),
             "Missing required artifact role: {}",
             required_role
         );

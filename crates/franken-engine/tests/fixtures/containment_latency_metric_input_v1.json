@@ -1,0 +1,54 @@
+{
+  "code_revision": "rev-under-test",
+  "freshness_days": 0,
+  "scenario_set": "policy_signal_to_containment_action_v1",
+  "artifact_path": "artifacts/containment_latency_metric/latency_details.json",
+  "artifact_hash": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "verification_command": "scripts/run_containment_latency_metric_gate.sh ci",
+  "redaction_status": "redacted",
+  "confidence_millionths": 990000,
+  "signals": [
+    {
+      "signal_id": "ambient-write-denied",
+      "trace_id": "trace-ambient-write-denied",
+      "policy_id": "policy-ambient-write-denied",
+      "workload_profile": "extension_host_mixed_policy_signals",
+      "signal_detected_at_ms": 1000,
+      "containment_action_applied_at_ms": 1080,
+      "clock_id": "proof-clock-1",
+      "clock_source": "monotonic_ms",
+      "action": "isolate",
+      "action_command": "frankenctl policy contain --signal ambient-write-denied --action isolate",
+      "action_exit_code": 0,
+      "duration_ms": 1
+    },
+    {
+      "signal_id": "capability-revoked",
+      "trace_id": "trace-capability-revoked",
+      "policy_id": "policy-capability-revoked",
+      "workload_profile": "extension_host_mixed_policy_signals",
+      "signal_detected_at_ms": 2000,
+      "containment_action_applied_at_ms": 2120,
+      "clock_id": "proof-clock-1",
+      "clock_source": "monotonic_ms",
+      "action": "revoke_capability",
+      "action_command": "frankenctl policy contain --signal capability-revoked --action revoke_capability",
+      "action_exit_code": 0,
+      "duration_ms": 1
+    },
+    {
+      "signal_id": "compute-budget-killed",
+      "trace_id": "trace-compute-budget-killed",
+      "policy_id": "policy-compute-budget-killed",
+      "workload_profile": "extension_host_mixed_policy_signals",
+      "signal_detected_at_ms": 3000,
+      "containment_action_applied_at_ms": 3200,
+      "clock_id": "proof-clock-1",
+      "clock_source": "monotonic_ms",
+      "action": "kill_execution",
+      "action_command": "frankenctl policy contain --signal compute-budget-killed --action kill_execution",
+      "action_exit_code": 0,
+      "duration_ms": 1
+    }
+  ]
+}

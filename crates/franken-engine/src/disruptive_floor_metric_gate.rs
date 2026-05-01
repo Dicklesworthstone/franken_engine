@@ -567,6 +567,27 @@ mod tests {
     }
 
     #[test]
+    fn parent_accepts_containment_latency_child_artifact() {
+        let child_report =
+            crate::containment_latency_metric_gate::evaluate_containment_latency_metric(
+                &crate::containment_latency_metric_gate::ContainmentLatencyMetricInput::representative_fixture(
+                    "rev-under-test",
+                ),
+            );
+        let mut artifacts = passing_artifacts();
+        let containment_slot = artifacts
+            .iter_mut()
+            .find(|artifact| artifact.metric_id == DisruptiveMetricId::ContainmentLatencyMedianMs)
+            .unwrap();
+        *containment_slot = child_report.metric_artifact;
+
+        let report = evaluate_disruptive_floor_gate(&config(), &artifacts);
+        assert_eq!(report.decision, GateDecisionState::Pass);
+        assert!(report.observed_disruptive_floor_wording_allowed);
+        assert!(report.metric_decisions.iter().all(MetricDecision::passed));
+    }
+
+    #[test]
     fn stale_artifact_fails_closed_with_downgrade() {
         let mut artifacts = passing_artifacts();
         artifacts[0].freshness_days = DEFAULT_MAX_FRESHNESS_DAYS + 1;

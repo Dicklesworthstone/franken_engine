@@ -3,6 +3,7 @@ set -euo pipefail
 
 root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root_dir"
+source "${root_dir}/scripts/lib/proof_artifact_contract.sh"
 
 mode="${1:-ci}"
 artifact_root="${CLAIM_TO_PROOF_MATRIX_ARTIFACT_ROOT:-artifacts/claim_to_proof_matrix_gate}"
@@ -84,6 +85,11 @@ emit_event() {
     --arg status "$status" \
     --arg downgrade_text "$downgrade_text" \
     '{
+      schema_version: "'"$PROOF_ARTIFACT_EVENT_SCHEMA_VERSION"'",
+      event_name: "claim_to_proof_matrix.claim_checked",
+      severity: (if $status == "pass" then "info" else "error" end),
+      step_id: $claim_id,
+      command_id: "claim-to-proof-matrix",
       claim_id: $claim_id,
       claim_scope: $claim_scope,
       source_path: $source_path,
@@ -221,11 +227,27 @@ jq -n \
     claim_count: $claim_count,
     failures: $failures,
     verdict: (if $failures == 0 then "pass" else "fail" end),
-    events: $events
+      events: $events
   }' >"$report_path"
+
+claim_ids_csv="$(jq -r '.claims[].claim_id' "$matrix_path" | paste -sd, -)"
+verdict="$(jq -r '.verdict' "$report_path")"
+proof_contract_write_standard_bundle \
+  "$run_dir" \
+  "claim_to_proof_matrix_gate" \
+  "$verdict" \
+  "./scripts/run_claim_to_proof_matrix_gate.sh ${mode}" \
+  "$report_path" \
+  "$events_path" \
+  "$commands_path" \
+  "bd-1qkrc,bd-1k59y" \
+  "$claim_ids_csv" \
+  "$failures"
 
 echo "claim_to_proof_matrix_gate_report=$report_path"
 echo "claim_to_proof_matrix_events=$events_path"
+echo "claim_to_proof_matrix_manifest=${run_dir}/manifest.json"
+echo "claim_to_proof_matrix_contract_report=${run_dir}/report.json"
 
 if [[ "$failures" -ne 0 ]]; then
   jq -r '.events[] | select(.status != "pass") | "\(.claim_id): \(.reason) -> \(.downgrade_text // "no downgrade text")"' "$report_path" >&2

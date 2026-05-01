@@ -3,6 +3,7 @@ set -euo pipefail
 
 root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 readme_path="${root_dir}/README.md"
+source "${root_dir}/scripts/lib/proof_artifact_contract.sh"
 
 workflow_id="readme-cli-workflow-smoke-v1"
 manifest_schema="franken-engine.readme-cli-workflow-smoke.v1"
@@ -118,12 +119,19 @@ write_event() {
   local link_signature="${17}"
   local signed_link="${18}"
   local readme_line_json="null"
+  local severity="info"
 
   if [[ -n "$readme_line" ]]; then
     readme_line_json="$readme_line"
   fi
+  if [[ "$decision" != "passed" ]]; then
+    severity="error"
+  fi
 
   jq -nc \
+    --arg schema_version "$PROOF_ARTIFACT_EVENT_SCHEMA_VERSION" \
+    --arg event_name "readme_cli_workflow.step_completed" \
+    --arg severity "$severity" \
     --arg workflow_id "$workflow_id" \
     --arg step_name "$step_name" \
     --arg readme_section "$readme_section" \
@@ -145,6 +153,11 @@ write_event() {
     --arg link_signature "$link_signature" \
     --arg signed_link "$signed_link" \
     '{
+      schema_version: $schema_version,
+      event_name: $event_name,
+      severity: $severity,
+      step_id: $step_name,
+      command_id: $step_name,
       workflow_id: $workflow_id,
       step_name: $step_name,
       readme_section: $readme_section,
@@ -227,6 +240,10 @@ run_step() {
   local remediation=""
   local artifact_path
   local artifact_sha256=""
+  local artifact_path_for_event
+  local stdout_path_for_event
+  local stderr_path_for_event
+  local workspace_dir_for_event
   local link_signature
   local signed_link
 
@@ -279,23 +296,27 @@ run_step() {
   elif [[ -d "$artifact_path" ]]; then
     artifact_sha256="$(printf '%s' "directory:${artifact_path}" | sha256_text)"
   fi
+  artifact_path_for_event="$(proof_contract_repo_relative_path "$artifact_path")"
+  stdout_path_for_event="$(proof_contract_repo_relative_path "$stdout_path")"
+  stderr_path_for_event="$(proof_contract_repo_relative_path "$stderr_path")"
+  workspace_dir_for_event="$(proof_contract_repo_relative_path "$workspace_dir")"
   link_signature="$(
-    printf '%s' "${workflow_id}|${step_name}|${readme_section}|${readme_line}|${artifact_path}|${artifact_sha256}" \
+    printf '%s' "${workflow_id}|${step_name}|${readme_section}|${readme_line}|${artifact_path_for_event}|${artifact_sha256}" \
       | sha256_text
   )"
-  signed_link="sha256:${link_signature}:${artifact_path}"
+  signed_link="sha256:${link_signature}:${artifact_path_for_event}"
 
   write_event \
     "$step_name" \
     "$readme_command" \
     "$command_name" \
     "$args_as_json" \
-    "$workspace_dir" \
-    "$artifact_path" \
+    "$workspace_dir_for_event" \
+    "$artifact_path_for_event" \
     "$artifact_schema" \
     "$exit_code" \
-    "$stdout_path" \
-    "$stderr_path" \
+    "$stdout_path_for_event" \
+    "$stderr_path_for_event" \
     "$duration_ms" \
     "$decision" \
     "$error_code" \
@@ -431,5 +452,18 @@ run_step 7 replay_run \
   "$frankenctl_bin" replay run --trace ./examples/05_replay_demo/sample_trace.json --mode strict --out ./artifacts/replay_report.json
 
 write_manifest
+frankenctl_bin_rel="$(proof_contract_repo_relative_path "$frankenctl_bin")"
+proof_contract_write_standard_bundle \
+  "$run_dir" \
+  "readme_cli_workflow_smoke" \
+  "pass" \
+  "FRANKENCTL_BIN=${frankenctl_bin_rel} ./scripts/e2e/readme_cli_workflow_smoke.sh" \
+  "$manifest_path" \
+  "$events_path" \
+  "$commands_path" \
+  "bd-1k59y" \
+  "README-CLI-CONTRACT" \
+  "0"
 
 echo "README CLI workflow smoke manifest: ${manifest_path}"
+echo "README CLI workflow proof manifest: ${run_dir}/manifest.json"

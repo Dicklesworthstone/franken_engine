@@ -76,6 +76,22 @@ command = "./scripts/run_claim_to_proof_matrix_gate.sh ci"
 needs_rch = false
 generates_manifest = true
 
+[gates.containment_latency_metric_gate]
+name = "containment_latency_metric_gate"
+description = "Containment latency metric artifact from signal-to-action traces"
+artifact_root = "artifacts/containment_latency_metric"
+command = "./scripts/run_containment_latency_metric_gate.sh ci"
+needs_rch = false
+generates_manifest = true
+
+[gates.proof_artifact_contract_smoke]
+name = "proof_artifact_contract_smoke"
+description = "Shared proof artifact contract bundle smoke test"
+artifact_root = "artifacts/proof_artifact_contract_smoke"
+command = "./scripts/e2e/proof_artifact_contract_smoke.sh"
+needs_rch = false
+generates_manifest = true
+
 [gates.replay_coverage_metric_gate]
 name = "replay_coverage_metric_gate"
 description = "Replay coverage metric artifact for security-critical decisions"

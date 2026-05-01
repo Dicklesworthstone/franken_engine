@@ -28,7 +28,10 @@ impl fmt::Display for ProofArtifactError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::UnknownSchema { expected, actual } => {
-                write!(f, "unknown schema version: expected {expected}, got {actual}")
+                write!(
+                    f,
+                    "unknown schema version: expected {expected}, got {actual}"
+                )
             }
             Self::MissingField(field) => write!(f, "missing required field: {field}"),
             Self::InvalidPath(path) => write!(f, "invalid artifact path: {path}"),

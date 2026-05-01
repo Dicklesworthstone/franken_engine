@@ -26,7 +26,10 @@ use frankenengine_engine::ts_normalization::{
     ingest_typescript_to_pipeline_artifacts, ingest_typescript_to_pipeline_artifacts_default,
     normalize_typescript_to_es2020, prepare_source_entry_for_public_entrypoints,
 };
-use frankenengine_engine::{ast::ParseGoal, parser::ParserOptions};
+use frankenengine_engine::{
+    ast::ParseGoal,
+    parser::{CanonicalEs2020Parser, ParserOptions},
+};
 
 // ===========================================================================
 // Helpers
@@ -1242,6 +1245,42 @@ fn prepare_source_entry_js_preserves_source_label() {
     )
     .unwrap();
     assert_eq!(prepared.source_label, "my_script.js");
+}
+
+#[test]
+fn prepare_source_entry_js_hashbang_is_normalized_before_parse() {
+    let source = "#! /usr/bin/env node\n\"use strict\";\nconst value = 1;";
+    let prepared = prepare_source_entry_for_public_entrypoints(
+        source,
+        "red_team_payload.js",
+        "t-hashbang",
+        "d-hashbang",
+        "p-hashbang",
+    )
+    .unwrap();
+
+    assert_eq!(
+        prepared.source_ingestion.source_language,
+        SourceLanguage::JavaScript
+    );
+    assert!(prepared.source_ingestion.normalization_applied);
+    assert!(prepared.normalization_output.is_none());
+    assert_ne!(
+        prepared.source_ingestion.original_source_hash,
+        prepared.source_ingestion.normalized_source_hash
+    );
+    assert!(prepared.prepared_source.starts_with("// hashbang stripped"));
+    assert!(!prepared.prepared_source.starts_with("#!"));
+    assert!(prepared.prepared_source.contains("\n\"use strict\";"));
+
+    let parser = CanonicalEs2020Parser;
+    parser
+        .parse_with_options(
+            prepared.prepared_source.as_str(),
+            ParseGoal::Script,
+            &ParserOptions::default(),
+        )
+        .expect("hashbang-normalized JavaScript should parse");
 }
 
 #[test]

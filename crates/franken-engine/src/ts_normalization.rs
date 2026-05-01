@@ -300,23 +300,32 @@ pub fn prepare_source_entry_for_public_entrypoints(
 ) -> Result<PreparedSourceEntry, TsNormalizationError> {
     let source_language = classify_source_language(Some(source_label), source);
     let original_source_hash = sha256_hex(source);
+    let (hashbang_prepared_source, hashbang_normalized) =
+        normalize_hashbang_for_es2020_parser(source);
     match source_language {
-        SourceLanguage::JavaScript => Ok(PreparedSourceEntry {
-            source_label: source_label.to_string(),
-            prepared_source: source.to_string(),
-            source_ingestion: SourceIngestionSummary {
-                source_language,
-                normalization_applied: false,
-                original_source_hash: original_source_hash.clone(),
-                normalized_source_hash: original_source_hash,
-                ts_decision_count: 0,
-                ts_capability_intent_count: 0,
-            },
-            normalization_output: None,
-        }),
+        SourceLanguage::JavaScript => {
+            let normalized_source_hash = if hashbang_normalized {
+                sha256_hex(&hashbang_prepared_source)
+            } else {
+                original_source_hash.clone()
+            };
+            Ok(PreparedSourceEntry {
+                source_label: source_label.to_string(),
+                prepared_source: hashbang_prepared_source,
+                source_ingestion: SourceIngestionSummary {
+                    source_language,
+                    normalization_applied: hashbang_normalized,
+                    original_source_hash,
+                    normalized_source_hash,
+                    ts_decision_count: 0,
+                    ts_capability_intent_count: 0,
+                },
+                normalization_output: None,
+            })
+        }
         SourceLanguage::TypeScript => {
             let normalization_output = normalize_typescript_to_es2020(
-                source,
+                &hashbang_prepared_source,
                 &TsNormalizationConfig::default(),
                 trace_id,
                 decision_id,
@@ -337,6 +346,22 @@ pub fn prepare_source_entry_for_public_entrypoints(
                 normalization_output: Some(normalization_output),
             })
         }
+    }
+}
+
+fn normalize_hashbang_for_es2020_parser(source: &str) -> (String, bool) {
+    if !source.starts_with("#!") {
+        return (source.to_string(), false);
+    }
+
+    let replacement = "// hashbang stripped for ES2020 parser compatibility";
+    if let Some(newline_index) = source.find('\n') {
+        let mut normalized = String::with_capacity(replacement.len() + source.len());
+        normalized.push_str(replacement);
+        normalized.push_str(&source[newline_index..]);
+        (normalized, true)
+    } else {
+        (replacement.to_string(), true)
     }
 }
 

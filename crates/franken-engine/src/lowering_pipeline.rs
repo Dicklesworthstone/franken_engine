@@ -4157,6 +4157,7 @@ pub fn lower_ir2_to_ir3(
         let mut fn_label_targets = BTreeMap::<u32, u32>::new();
         let mut fn_pending_jumps = Vec::<PendingJump>::new();
         let mut fn_catch_entry_labels = BTreeSet::<u32>::new();
+        let mut fn_iterator_cleanup_labels = BTreeMap::<u32, Reg>::new();
 
         // Allocate parameter registers r0..rN-1.
         for (i, _pname) in param_names.iter().enumerate() {
@@ -4458,6 +4459,12 @@ pub fn lower_ir2_to_ir3(
                         let dst = alloc_register(&mut fn_reg);
                         ir3.instructions.push(Ir3Instruction::EnterCatch { dst });
                         fn_value_stack.push(dst);
+                    }
+                    if fn_iterator_cleanup_labels
+                        .get(id)
+                        .is_some_and(|expected| fn_value_stack.last() == Some(expected))
+                    {
+                        fn_value_stack.pop();
                     }
                 }
                 Ir1Op::Jump { label_id } => {
@@ -4877,21 +4884,62 @@ pub fn lower_ir2_to_ir3(
                 Ir1Op::EndFinally => {
                     ir3.instructions.push(Ir3Instruction::EndFinally);
                 }
-                // Iterator protocol not yet supported in function bodies
                 Ir1Op::ForInInit => {
-                    unreachable!("ForInInit not yet implemented in function body lowering");
+                    let src = pop_lowering_value(&mut fn_value_stack)?;
+                    let dst = alloc_register(&mut fn_reg);
+                    ir3.instructions
+                        .push(Ir3Instruction::ForInInit { src, dst });
+                    fn_value_stack.push(dst);
                 }
-                Ir1Op::ForInNext { .. } => {
-                    unreachable!("ForInNext not yet implemented in function body lowering");
+                Ir1Op::ForInNext { done_label } => {
+                    let iterator = peek_lowering_value(&fn_value_stack)?;
+                    let value_dst = alloc_register(&mut fn_reg);
+                    let instruction_index = ir3.instructions.len();
+                    ir3.instructions.push(Ir3Instruction::ForInNext {
+                        iterator,
+                        value_dst,
+                        done_target: 0,
+                    });
+                    fn_pending_jumps.push(PendingJump::IteratorDoneTarget {
+                        instruction_index,
+                        label_id: *done_label,
+                    });
+                    fn_iterator_cleanup_labels
+                        .entry(*done_label)
+                        .or_insert(iterator);
+                    fn_value_stack.push(value_dst);
                 }
                 Ir1Op::ForOfInit => {
-                    unreachable!("ForOfInit not yet implemented in function body lowering");
+                    let src = pop_lowering_value(&mut fn_value_stack)?;
+                    let dst = alloc_register(&mut fn_reg);
+                    ir3.instructions
+                        .push(Ir3Instruction::ForOfInit { src, dst });
+                    fn_value_stack.push(dst);
                 }
-                Ir1Op::ForOfNext { .. } => {
-                    unreachable!("ForOfNext not yet implemented in function body lowering");
+                Ir1Op::ForOfNext { done_label } => {
+                    let iterator = peek_lowering_value(&fn_value_stack)?;
+                    let value_dst = alloc_register(&mut fn_reg);
+                    let instruction_index = ir3.instructions.len();
+                    ir3.instructions.push(Ir3Instruction::ForOfNext {
+                        iterator,
+                        value_dst,
+                        done_target: 0,
+                    });
+                    fn_pending_jumps.push(PendingJump::IteratorDoneTarget {
+                        instruction_index,
+                        label_id: *done_label,
+                    });
+                    fn_iterator_cleanup_labels
+                        .entry(*done_label)
+                        .or_insert(iterator);
+                    fn_value_stack.push(value_dst);
                 }
-                Ir1Op::IteratorClose { .. } => {
-                    unreachable!("IteratorClose not yet implemented in function body lowering");
+                Ir1Op::IteratorClose { reason } => {
+                    let iterator = pop_lowering_value(&mut fn_value_stack)?;
+                    ir3.instructions.push(Ir3Instruction::IteratorClose {
+                        iterator,
+                        reason: *reason,
+                    });
                 }
                 // Hostcall operations should be handled at module level, not function level
                 Ir1Op::HostCall { .. } => {
@@ -4993,7 +5041,27 @@ pub fn lower_ir2_to_ir3(
                         finally_target,
                     };
                 }
-                PendingJump::IteratorDoneTarget { .. } => {}
+                PendingJump::IteratorDoneTarget {
+                    instruction_index,
+                    label_id,
+                } => {
+                    let target = *fn_label_targets.get(&label_id).ok_or(
+                        LoweringPipelineError::InvariantViolation {
+                            detail: "function iterator lowering references missing label",
+                        },
+                    )?;
+                    match &mut ir3.instructions[instruction_index] {
+                        Ir3Instruction::ForInNext { done_target, .. }
+                        | Ir3Instruction::ForOfNext { done_target, .. } => {
+                            *done_target = target;
+                        }
+                        _ => {
+                            return Err(LoweringPipelineError::InvariantViolation {
+                                detail: "function iterator lowering emitted unexpected instruction shape",
+                            });
+                        }
+                    }
+                }
             }
         }
 
@@ -10373,6 +10441,63 @@ mod tests {
                 .iter()
                 .any(|instruction| matches!(instruction, Ir3Instruction::TemplateLiteral { .. })),
             "arrow function body should retain TemplateLiteral lowering"
+        );
+    }
+
+    #[test]
+    fn lower_arrow_function_for_of_body_to_ir3() {
+        let ir0 = expr_ir0(Expression::ArrowFunction {
+            params: vec![],
+            body: ArrowBody::Block(BlockStatement {
+                body: vec![Statement::ForOf(ForOfStatement {
+                    binding: BindingPattern::Identifier("value".into()),
+                    binding_kind: Some(VariableDeclarationKind::Const),
+                    iterable: Expression::ArrayLiteral(vec![Some(Expression::NumericLiteral(1))]),
+                    body: Box::new(Statement::Expression(ExpressionStatement {
+                        expression: Expression::Identifier("value".into()),
+                        span: span(),
+                    })),
+                    span: span(),
+                })],
+                span: span(),
+            }),
+            is_async: false,
+        });
+        let ctx = LoweringContext::new("trace-for-of-fn", "decision-for-of-fn", "policy-for-of-fn");
+        let output =
+            lower_ir0_to_ir3(&ir0, &ctx).expect("function body for-of should lower to IR3");
+
+        let function_desc = output
+            .ir3
+            .instructions
+            .iter()
+            .find_map(|instruction| match instruction {
+                Ir3Instruction::CreateClosure { function_index, .. } => output
+                    .ir3
+                    .function_table
+                    .get(function_index.to_owned() as usize),
+                _ => None,
+            })
+            .expect("arrow function should create a deferred closure body");
+
+        let function_body = &output.ir3.instructions[function_desc.entry as usize..];
+        assert!(
+            function_body
+                .iter()
+                .any(|instruction| matches!(instruction, Ir3Instruction::ForOfInit { .. })),
+            "function body should retain ForOfInit lowering"
+        );
+        assert!(
+            function_body
+                .iter()
+                .any(|instruction| matches!(instruction, Ir3Instruction::ForOfNext { .. })),
+            "function body should retain ForOfNext lowering"
+        );
+        assert!(
+            function_body
+                .iter()
+                .any(|instruction| matches!(instruction, Ir3Instruction::IteratorClose { .. })),
+            "function body should retain IteratorClose lowering"
         );
     }
 

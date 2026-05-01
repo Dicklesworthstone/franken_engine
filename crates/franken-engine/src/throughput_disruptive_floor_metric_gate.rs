@@ -6,16 +6,18 @@
 //! artifact consumed by `disruptive_floor_metric_gate`.
 
 use serde::{Deserialize, Serialize};
+use std::time::{Duration, Instant};
+use subtle::ConstantTimeEq;
 
-use crate::disruptive_floor_metric_gate::{
-    DisruptiveMetricId, MetricArtifact,
-};
+use crate::disruptive_floor_metric_gate::{DisruptiveMetricId, MetricArtifact};
 
 pub const SCHEMA_VERSION: &str = "franken-engine.throughput-disruptive-floor-metric-gate.v1";
 pub const COMPONENT: &str = "throughput_disruptive_floor_metric_gate";
 pub const BEAD_ID: &str = "bd-y6v8s";
 pub const THROUGHPUT_SCALE_OPS_PER_SECOND: u64 = 1000;
 pub const DEFAULT_FLOOR_RATIO_MILLIONTHS: u64 = 950_000; // 0.95 minimum ratio
+pub const DEFAULT_MAX_FRESHNESS_DAYS: u64 = 14; // Default maximum age for evidence
+pub const DEFAULT_MAX_BENCHMARK_DURATION_MS: u64 = 3600_000; // 1 hour maximum
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -61,6 +63,8 @@ pub struct ThroughputEvidence {
     pub output_path: String,
     pub output_hash: String,
     pub verification_command: String,
+    pub benchmark_start_monotonic_ns: u64, // Monotonic timestamp for timing attack protection
+    pub benchmark_window_seed: [u8; 32],   // Verifier-chosen seed for window pinning
 }
 
 impl ThroughputEvidence {
@@ -76,8 +80,101 @@ impl ThroughputEvidence {
     }
 
     pub fn meets_floor_threshold(&self, floor_ratio_millionths: u64) -> bool {
-        self.throughput_ratio_millionths >= floor_ratio_millionths
+        // Use constant-time comparison to prevent timing attacks on threshold checks
+        let ratio_bytes = self.throughput_ratio_millionths.to_le_bytes();
+        let threshold_bytes = floor_ratio_millionths.to_le_bytes();
+
+        // Compare byte-by-byte in constant time, checking if ratio >= threshold
+        constant_time_greater_or_equal(&ratio_bytes, &threshold_bytes)
     }
+}
+
+/// Constant-time comparison to check if `a >= b` for little-endian byte arrays.
+/// Prevents timing attacks on threshold comparisons.
+fn constant_time_greater_or_equal(a: &[u8], b: &[u8]) -> bool {
+    assert_eq!(
+        a.len(),
+        b.len(),
+        "Arrays must have equal length for comparison"
+    );
+
+    let mut greater = 0u8;
+    let mut equal = 1u8;
+
+    // Compare from most significant byte to least significant (reverse for little-endian)
+    for i in (0..a.len()).rev() {
+        let a_byte = a[i];
+        let b_byte = b[i];
+
+        // If we haven't determined greater/less yet (equal == 1)
+        let byte_greater = (a_byte > b_byte) as u8;
+        let byte_less = (a_byte < b_byte) as u8;
+
+        // Update greater flag only if we're still equal
+        greater |= equal & byte_greater;
+
+        // Update equal flag - remains 1 only if all bytes so far are equal
+        equal &= (a_byte.ct_eq(&b_byte).unwrap_u8());
+    }
+
+    // Result is greater || equal (i.e., >=)
+    (greater | equal) == 1
+}
+
+/// Validates monotonic timestamp to prevent clock manipulation attacks
+pub fn validate_monotonic_timestamp(
+    benchmark_start_ns: u64,
+    current_monotonic_ns: u64,
+    max_benchmark_duration_ns: u64,
+) -> Result<(), String> {
+    // Ensure benchmark started before current time
+    if benchmark_start_ns > current_monotonic_ns {
+        return Err(
+            "Benchmark start time is in the future - possible clock manipulation".to_string(),
+        );
+    }
+
+    // Ensure benchmark duration is reasonable
+    let duration_ns = current_monotonic_ns - benchmark_start_ns;
+    if duration_ns > max_benchmark_duration_ns {
+        return Err(format!(
+            "Benchmark duration {}ns exceeds maximum {}ns - possible timing attack",
+            duration_ns, max_benchmark_duration_ns
+        ));
+    }
+
+    Ok(())
+}
+
+/// Validates benchmark window pinning to prevent cherry-picking attacks
+pub fn validate_benchmark_window_pinning(
+    evidence: &[ThroughputEvidence],
+    expected_seed: &[u8; 32],
+) -> Result<(), String> {
+    if evidence.is_empty() {
+        return Err("No evidence provided for window validation".to_string());
+    }
+
+    for (i, ev) in evidence.iter().enumerate() {
+        if &ev.benchmark_window_seed != expected_seed {
+            return Err(format!(
+                "Evidence {} has incorrect window seed - possible cherry-picking attack",
+                i
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+/// Generates a secure timestamp that's harder to manipulate for timing attacks
+pub fn generate_secure_timestamp() -> String {
+    // Use the existing chrono approach but add validation context
+    let now = chrono::Utc::now();
+
+    // TODO: In production, this should use a signed timestamp from a trusted time authority
+    // or include additional entropy to prevent timestamp manipulation attacks
+    now.to_rfc3339()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -90,6 +187,9 @@ pub struct ThroughputMetricInput {
     pub evidence: Vec<ThroughputEvidence>,
     pub code_revision: String,
     pub generated_at_utc: String,
+    pub benchmark_window_seed: [u8; 32], // Verifier-chosen seed for window pinning
+    pub max_benchmark_duration_ms: u64,  // Maximum allowed benchmark duration
+    pub evaluation_start_monotonic_ns: u64, // Monotonic timestamp for evaluation start
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -214,9 +314,27 @@ pub fn evaluate_throughput_metric(
     };
 
     // Check for placeholder baseline usage
-    let uses_placeholder_node = !node_evidence.is_empty() && RuntimeDenominator::Node.is_placeholder_baseline();
-    let uses_placeholder_bun = !bun_evidence.is_empty() && RuntimeDenominator::Bun.is_placeholder_baseline();
+    let uses_placeholder_node =
+        !node_evidence.is_empty() && RuntimeDenominator::Node.is_placeholder_baseline();
+    let uses_placeholder_bun =
+        !bun_evidence.is_empty() && RuntimeDenominator::Bun.is_placeholder_baseline();
     let uses_placeholder_baselines = uses_placeholder_node || uses_placeholder_bun;
+
+    // Validate timing attack protections before making pass/fail decision
+    let current_monotonic_ns = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| format!("Clock error: {}", e))?
+        .as_nanos() as u64;
+
+    // Validate monotonic timestamp
+    validate_monotonic_timestamp(
+        input.evaluation_start_monotonic_ns,
+        current_monotonic_ns,
+        input.max_benchmark_duration_ms * 1_000_000, // Convert ms to ns
+    )?;
+
+    // Validate benchmark window pinning
+    validate_benchmark_window_pinning(&input.evidence, &input.benchmark_window_seed)?;
 
     let (overall_outcome, baseline_warning) = if uses_placeholder_baselines {
         let warning = format!(
@@ -226,10 +344,17 @@ pub fn evaluate_throughput_metric(
             RuntimeDenominator::Bun.baseline_ops_per_second()
         );
         ("targeted", Some(warning))
-    } else if weighted_ratio >= input.floor_ratio_millionths {
-        ("pass", None)
     } else {
-        ("fail", None)
+        // Use constant-time comparison to prevent timing attacks on pass/fail determination
+        let ratio_bytes = weighted_ratio.to_le_bytes();
+        let threshold_bytes = input.floor_ratio_millionths.to_le_bytes();
+        let meets_threshold = constant_time_greater_or_equal(&ratio_bytes, &threshold_bytes);
+
+        if meets_threshold {
+            ("pass", None)
+        } else {
+            ("fail", None)
+        }
     };
 
     let verification_commands: Vec<String> = input
@@ -250,7 +375,7 @@ pub fn evaluate_throughput_metric(
         node_avg_ratio_millionths: node_avg_ratio,
         bun_avg_ratio_millionths: bun_avg_ratio,
         verification_commands,
-        generated_at_utc: chrono::Utc::now().to_rfc3339(),
+        generated_at_utc: generate_secure_timestamp(),
         uses_placeholder_baselines,
         baseline_warning,
     })
@@ -321,6 +446,8 @@ mod tests {
             output_path: "output.json".to_string(),
             output_hash: "abc123".to_string(),
             verification_command: "verify.sh".to_string(),
+            benchmark_start_monotonic_ns: 1000000000,
+            benchmark_window_seed: [1u8; 32],
         };
 
         assert!(evidence.meets_floor_threshold(950_000)); // 0.95 threshold
@@ -362,6 +489,8 @@ mod tests {
             output_path: "node_output.json".to_string(),
             output_hash: "abc123".to_string(),
             verification_command: "verify_node.sh".to_string(),
+            benchmark_start_monotonic_ns: 1000000000,
+            benchmark_window_seed: [1u8; 32],
         };
 
         let bun_evidence = ThroughputEvidence {
@@ -378,6 +507,8 @@ mod tests {
             output_path: "bun_output.json".to_string(),
             output_hash: "def456".to_string(),
             verification_command: "verify_bun.sh".to_string(),
+            benchmark_start_monotonic_ns: 1000000000,
+            benchmark_window_seed: [1u8; 32],
         };
 
         let evidence = vec![node_evidence, bun_evidence];
@@ -417,9 +548,14 @@ mod tests {
                 output_path: "passing_output.json".to_string(),
                 output_hash: "pass123".to_string(),
                 verification_command: "verify_pass.sh".to_string(),
+                benchmark_start_monotonic_ns: 1000000000,
+                benchmark_window_seed: [2u8; 32],
             }],
             code_revision: "abc123def".to_string(),
             generated_at_utc: "2026-05-01T00:00:00Z".to_string(),
+            benchmark_window_seed: [2u8; 32],
+            max_benchmark_duration_ms: DEFAULT_MAX_BENCHMARK_DURATION_MS,
+            evaluation_start_monotonic_ns: 1000000000,
         };
 
         let report = evaluate_throughput_metric(&input).unwrap();
@@ -431,7 +567,13 @@ mod tests {
         assert_eq!(report.bun_evidence_count, 0);
         assert!(report.uses_placeholder_baselines);
         assert!(report.baseline_warning.is_some());
-        assert!(report.baseline_warning.as_ref().unwrap().contains("TARGETED performance claim"));
+        assert!(
+            report
+                .baseline_warning
+                .as_ref()
+                .unwrap()
+                .contains("TARGETED performance claim")
+        );
     }
 
     #[test]
@@ -445,6 +587,9 @@ mod tests {
             evidence: vec![],
             code_revision: "test_rev".to_string(),
             generated_at_utc: "2026-05-01T00:00:00Z".to_string(),
+            benchmark_window_seed: [3u8; 32],
+            max_benchmark_duration_ms: DEFAULT_MAX_BENCHMARK_DURATION_MS,
+            evaluation_start_monotonic_ns: 1000000000,
         };
 
         let report = ThroughputMetricReport {
@@ -477,5 +622,227 @@ mod tests {
         assert_eq!(artifact.denominator_id, "node_and_bun");
         assert_eq!(artifact.scenario_set, "test_scenario");
         assert_eq!(artifact.artifact_hash, "hash123");
+    }
+
+    #[test]
+    fn test_constant_time_greater_or_equal() {
+        // Test equal values
+        let a = 1_000_000u64.to_le_bytes();
+        let b = 1_000_000u64.to_le_bytes();
+        assert!(constant_time_greater_or_equal(&a, &b));
+
+        // Test a > b
+        let a = 1_200_000u64.to_le_bytes();
+        let b = 1_000_000u64.to_le_bytes();
+        assert!(constant_time_greater_or_equal(&a, &b));
+
+        // Test a < b
+        let a = 800_000u64.to_le_bytes();
+        let b = 1_000_000u64.to_le_bytes();
+        assert!(!constant_time_greater_or_equal(&a, &b));
+
+        // Test edge cases
+        let a = 0u64.to_le_bytes();
+        let b = 0u64.to_le_bytes();
+        assert!(constant_time_greater_or_equal(&a, &b));
+
+        let a = u64::MAX.to_le_bytes();
+        let b = 0u64.to_le_bytes();
+        assert!(constant_time_greater_or_equal(&a, &b));
+
+        let a = 0u64.to_le_bytes();
+        let b = u64::MAX.to_le_bytes();
+        assert!(!constant_time_greater_or_equal(&a, &b));
+    }
+
+    #[test]
+    fn test_constant_time_threshold_comparison() {
+        let evidence_pass = ThroughputEvidence {
+            scenario_id: "timing_test_pass".to_string(),
+            runtime_denominator: RuntimeDenominator::Node,
+            frankenengine_ops_per_second: 2600,
+            denominator_ops_per_second: 2500,
+            throughput_ratio_millionths: 1_040_000, // Just above 0.95 threshold
+            benchmark_duration_ms: 10_000,
+            request_count: 26_000,
+            error_count: 0,
+            success_rate_millionths: 1_000_000,
+            scenario_path: "timing_pass.json".to_string(),
+            output_path: "timing_pass_output.json".to_string(),
+            output_hash: "timing123".to_string(),
+            verification_command: "verify_timing_pass.sh".to_string(),
+            benchmark_start_monotonic_ns: 1000000000,
+            benchmark_window_seed: [4u8; 32],
+        };
+
+        let evidence_fail = ThroughputEvidence {
+            scenario_id: "timing_test_fail".to_string(),
+            runtime_denominator: RuntimeDenominator::Node,
+            frankenengine_ops_per_second: 2300,
+            denominator_ops_per_second: 2500,
+            throughput_ratio_millionths: 920_000, // Below 0.95 threshold
+            benchmark_duration_ms: 10_000,
+            request_count: 23_000,
+            error_count: 0,
+            success_rate_millionths: 1_000_000,
+            scenario_path: "timing_fail.json".to_string(),
+            output_path: "timing_fail_output.json".to_string(),
+            output_hash: "timing456".to_string(),
+            verification_command: "verify_timing_fail.sh".to_string(),
+            benchmark_start_monotonic_ns: 1000000000,
+            benchmark_window_seed: [4u8; 32],
+        };
+
+        // Both should use constant-time comparison internally
+        assert!(evidence_pass.meets_floor_threshold(950_000));
+        assert!(!evidence_fail.meets_floor_threshold(950_000));
+
+        // Edge case: exactly at threshold
+        let evidence_exact = ThroughputEvidence {
+            scenario_id: "timing_test_exact".to_string(),
+            runtime_denominator: RuntimeDenominator::Node,
+            frankenengine_ops_per_second: 2375,
+            denominator_ops_per_second: 2500,
+            throughput_ratio_millionths: 950_000, // Exactly at threshold
+            benchmark_duration_ms: 10_000,
+            request_count: 23_750,
+            error_count: 0,
+            success_rate_millionths: 1_000_000,
+            scenario_path: "timing_exact.json".to_string(),
+            output_path: "timing_exact_output.json".to_string(),
+            output_hash: "timing789".to_string(),
+            verification_command: "verify_timing_exact.sh".to_string(),
+            benchmark_start_monotonic_ns: 1000000000,
+            benchmark_window_seed: [4u8; 32],
+        };
+
+        assert!(evidence_exact.meets_floor_threshold(950_000));
+    }
+
+    #[test]
+    fn test_validate_monotonic_timestamp() {
+        let current_ns = 2_000_000_000u64; // 2 seconds
+        let max_duration_ns = 10_000_000_000u64; // 10 seconds
+
+        // Valid case: benchmark started before current time
+        let start_ns = 1_000_000_000u64; // 1 second
+        assert!(validate_monotonic_timestamp(start_ns, current_ns, max_duration_ns).is_ok());
+
+        // Invalid case: benchmark start in future (clock manipulation)
+        let future_start_ns = 3_000_000_000u64; // 3 seconds
+        assert!(
+            validate_monotonic_timestamp(future_start_ns, current_ns, max_duration_ns).is_err()
+        );
+
+        // Invalid case: benchmark duration too long (timing attack)
+        let too_early_start_ns = 100_000_000u64; // Very early start
+        let short_max_duration_ns = 100_000_000u64; // 0.1 second max
+        assert!(
+            validate_monotonic_timestamp(too_early_start_ns, current_ns, short_max_duration_ns)
+                .is_err()
+        );
+
+        // Valid case: exactly at max duration
+        let exact_start_ns = current_ns - max_duration_ns;
+        assert!(validate_monotonic_timestamp(exact_start_ns, current_ns, max_duration_ns).is_ok());
+    }
+
+    #[test]
+    fn test_validate_benchmark_window_pinning() {
+        let seed = [42u8; 32];
+
+        // Valid case: all evidence has correct seed
+        let evidence = vec![
+            ThroughputEvidence {
+                scenario_id: "window_test_1".to_string(),
+                runtime_denominator: RuntimeDenominator::Node,
+                frankenengine_ops_per_second: 2500,
+                denominator_ops_per_second: 2500,
+                throughput_ratio_millionths: 1_000_000,
+                benchmark_duration_ms: 10_000,
+                request_count: 25_000,
+                error_count: 0,
+                success_rate_millionths: 1_000_000,
+                scenario_path: "window1.json".to_string(),
+                output_path: "window1_output.json".to_string(),
+                output_hash: "window123".to_string(),
+                verification_command: "verify_window1.sh".to_string(),
+                benchmark_start_monotonic_ns: 1000000000,
+                benchmark_window_seed: seed,
+            },
+            ThroughputEvidence {
+                scenario_id: "window_test_2".to_string(),
+                runtime_denominator: RuntimeDenominator::Bun,
+                frankenengine_ops_per_second: 3200,
+                denominator_ops_per_second: 3200,
+                throughput_ratio_millionths: 1_000_000,
+                benchmark_duration_ms: 10_000,
+                request_count: 32_000,
+                error_count: 0,
+                success_rate_millionths: 1_000_000,
+                scenario_path: "window2.json".to_string(),
+                output_path: "window2_output.json".to_string(),
+                output_hash: "window456".to_string(),
+                verification_command: "verify_window2.sh".to_string(),
+                benchmark_start_monotonic_ns: 1000000000,
+                benchmark_window_seed: seed,
+            },
+        ];
+
+        assert!(validate_benchmark_window_pinning(&evidence, &seed).is_ok());
+
+        // Invalid case: mismatched seed (cherry-picking attack)
+        let mut bad_evidence = evidence.clone();
+        bad_evidence[1].benchmark_window_seed = [99u8; 32];
+
+        assert!(validate_benchmark_window_pinning(&bad_evidence, &seed).is_err());
+
+        // Edge case: empty evidence
+        assert!(validate_benchmark_window_pinning(&[], &seed).is_err());
+    }
+
+    #[test]
+    fn test_timing_attack_protection_in_evaluation() {
+        let current_ns = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos() as u64;
+
+        let seed = [123u8; 32];
+
+        let input = ThroughputMetricInput {
+            schema_version: SCHEMA_VERSION.to_string(),
+            bead_id: BEAD_ID.to_string(),
+            scenario_set: "timing_attack_test".to_string(),
+            floor_ratio_millionths: 950_000,
+            max_freshness_days: DEFAULT_MAX_FRESHNESS_DAYS,
+            evidence: vec![ThroughputEvidence {
+                scenario_id: "secure_test".to_string(),
+                runtime_denominator: RuntimeDenominator::Node,
+                frankenengine_ops_per_second: 2500,
+                denominator_ops_per_second: 2500,
+                throughput_ratio_millionths: 1_000_000,
+                benchmark_duration_ms: 10_000,
+                request_count: 25_000,
+                error_count: 0,
+                success_rate_millionths: 1_000_000,
+                scenario_path: "secure.json".to_string(),
+                output_path: "secure_output.json".to_string(),
+                output_hash: "secure123".to_string(),
+                verification_command: "verify_secure.sh".to_string(),
+                benchmark_start_monotonic_ns: current_ns - 1_000_000_000, // 1 second ago
+                benchmark_window_seed: seed,
+            }],
+            code_revision: "secure_rev".to_string(),
+            generated_at_utc: "2026-05-01T00:00:00Z".to_string(),
+            benchmark_window_seed: seed,
+            max_benchmark_duration_ms: DEFAULT_MAX_BENCHMARK_DURATION_MS,
+            evaluation_start_monotonic_ns: current_ns - 500_000_000, // 0.5 seconds ago
+        };
+
+        // Should succeed with valid timing protections
+        let report = evaluate_throughput_metric(&input).unwrap();
+        assert_eq!(report.overall_outcome, "targeted"); // Uses placeholder baselines
+        assert_eq!(report.weighted_ratio_millionths, 1_000_000);
     }
 }

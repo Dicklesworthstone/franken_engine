@@ -214,7 +214,7 @@
       "source_span": {
         "start_line": 58,
         "end_line": 58,
-        "must_contain": ">= 10x reduction"
+        "must_contain": "`>= 10x` reduction"
       },
       "allowed_state": "target",
       "actual_wording_state": "target",
@@ -254,7 +254,7 @@
       "source_span": {
         "start_line": 60,
         "end_line": 60,
-        "must_contain": "100% deterministic replay coverage"
+        "must_contain": "`100%` deterministic replay coverage"
       },
       "allowed_state": "target",
       "actual_wording_state": "target",

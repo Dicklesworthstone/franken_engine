@@ -4147,10 +4147,10 @@ fn strip_trailing_line_comment(expression: &str) -> &str {
 
         match byte {
             b'\'' | b'"' | b'`' => quote = Some(byte),
-            b'/' if bytes[index + 1] == b'/' => {
-                if index == 0 || bytes[index.saturating_sub(1)].is_ascii_whitespace() {
-                    return &expression[..index];
-                }
+            b'/' if bytes[index + 1] == b'/'
+                && (index == 0 || bytes[index.saturating_sub(1)].is_ascii_whitespace()) =>
+            {
+                return &expression[..index];
             }
             _ => {}
         }

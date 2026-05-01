@@ -37,6 +37,7 @@ impl GoldenDiag {
     }
 
     /// Create diagnostics helper for React compilation golden tests.
+    #[allow(dead_code)]
     pub fn react() -> Self {
         Self {
             framework_name: "React golden",

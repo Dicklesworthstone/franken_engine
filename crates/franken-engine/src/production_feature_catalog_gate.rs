@@ -400,7 +400,7 @@ fn evaluate_feature(
                 | "missing_evidence_test_name"
         ) && feature.state == ProductionFeatureState::Observed
         {
-            return empty.with_reason(&format!(
+            return empty.with_reason(format!(
                 "{}: feature should be marked PROVISIONAL until proper evidence is provided",
                 reason
             ));
@@ -979,7 +979,7 @@ mod tests {
 
     #[test]
     fn fake_artifact_hash_detected_and_rejected() {
-        let mut input = ProductionFeatureCatalogInput::representative_fixture("rev-under-test");
+        let input = ProductionFeatureCatalogInput::representative_fixture("rev-under-test");
 
         // The representative fixture already has fake hashes, which should be detected
         let report = evaluate_production_feature_catalog(&input);
@@ -1092,7 +1092,7 @@ mod tests {
 
     #[test]
     fn invalid_evidence_format_rejected() {
-        let mut feature = observed_feature_with_evidence(
+        let feature = observed_feature_with_evidence(
             "bad_evidence_feature",
             "Bad Evidence Feature",
             "invalid-bead", // Invalid bead ID format

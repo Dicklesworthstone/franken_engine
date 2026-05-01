@@ -92,6 +92,16 @@ impl CompromiseRateEvidence {
         frankenengine_compromises: u64,
         trial_count: u64,
     ) -> Result<(), String> {
+        // Check for sentinel corruption before range validation so callers get
+        // the actionable corruption diagnosis instead of a generic bounds error.
+        if baseline_compromises == u64::MAX {
+            return Err("Baseline compromises value appears corrupted (u64::MAX)".to_string());
+        }
+
+        if frankenengine_compromises == u64::MAX {
+            return Err("FrankenEngine compromises value appears corrupted (u64::MAX)".to_string());
+        }
+
         if trial_count == 0 {
             return Err("Trial count cannot be zero".to_string());
         }
@@ -108,15 +118,6 @@ impl CompromiseRateEvidence {
                 "FrankenEngine compromises ({}) cannot exceed trial count ({})",
                 frankenengine_compromises, trial_count
             ));
-        }
-
-        // Check for overflow conditions that could indicate corrupted data
-        if baseline_compromises == u64::MAX {
-            return Err("Baseline compromises value appears corrupted (u64::MAX)".to_string());
-        }
-
-        if frankenengine_compromises == u64::MAX {
-            return Err("FrankenEngine compromises value appears corrupted (u64::MAX)".to_string());
         }
 
         Ok(())
@@ -189,11 +190,10 @@ impl CompromiseRateEvidence {
     }
 
     pub fn calculate_compromise_rate_millionths(compromises: u64, trials: u64) -> u64 {
-        if trials == 0 {
-            0
-        } else {
-            (compromises * 1_000_000) / trials
-        }
+        compromises
+            .saturating_mul(1_000_000)
+            .checked_div(trials)
+            .unwrap_or(0)
     }
 
     pub fn calculate_reduction_ratio_millionths(
@@ -206,7 +206,10 @@ impl CompromiseRateEvidence {
             // Perfect security - infinite reduction
             u64::MAX
         } else {
-            (baseline_rate_millionths * 1_000_000) / frankenengine_rate_millionths
+            baseline_rate_millionths
+                .saturating_mul(1_000_000)
+                .checked_div(frankenengine_rate_millionths)
+                .unwrap_or(0)
         }
     }
 
@@ -214,6 +217,7 @@ impl CompromiseRateEvidence {
         self.reduction_ratio_millionths >= (threshold_factor * 1_000_000)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         scenario_id: String,
         runtime_denominator: RuntimeDenominator,
@@ -258,6 +262,7 @@ impl CompromiseRateEvidence {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn new_validated(
         scenario_id: String,
         runtime_denominator: RuntimeDenominator,
@@ -365,20 +370,16 @@ pub fn compute_weighted_geometric_mean_reduction(evidence: &[CompromiseRateEvide
         .filter(|e| e.runtime_denominator == RuntimeDenominator::Bun)
         .collect();
 
-    let node_mean = if node_evidence.is_empty() {
-        1_000_000 // 1x reduction if no evidence
-    } else {
-        geometric_mean_reduction(&node_evidence)
-    };
-
-    let bun_mean = if bun_evidence.is_empty() {
-        1_000_000 // 1x reduction if no evidence
-    } else {
-        geometric_mean_reduction(&bun_evidence)
-    };
-
-    // Weighted geometric mean of the two denominators
-    geometric_mean_of_two(node_mean, bun_mean)
+    match (node_evidence.is_empty(), bun_evidence.is_empty()) {
+        (true, true) => 1_000_000,
+        (false, true) => geometric_mean_reduction(&node_evidence),
+        (true, false) => geometric_mean_reduction(&bun_evidence),
+        (false, false) => {
+            let node_mean = geometric_mean_reduction(&node_evidence);
+            let bun_mean = geometric_mean_reduction(&bun_evidence);
+            geometric_mean_of_two(node_mean, bun_mean)
+        }
+    }
 }
 
 fn geometric_mean_reduction(evidence: &[&CompromiseRateEvidence]) -> u64 {
@@ -841,7 +842,9 @@ mod tests {
             "run_phishing_campaign.sh --runtime node".to_string(), // Fictional script
         );
 
-        assert!(contains_fictional_scenarios(&[fictional_evidence.clone()]));
+        assert!(contains_fictional_scenarios(std::slice::from_ref(
+            &fictional_evidence,
+        )));
 
         let input = CompromiseRateMetricInput {
             schema_version: SCHEMA_VERSION.to_string(),
@@ -880,7 +883,9 @@ mod tests {
             "execute_cve_exploit --target node --iterations 100".to_string(), // Real-looking command
         );
 
-        assert!(!contains_fictional_scenarios(&[real_evidence.clone()]));
+        assert!(!contains_fictional_scenarios(std::slice::from_ref(
+            &real_evidence,
+        )));
 
         let input = CompromiseRateMetricInput {
             schema_version: SCHEMA_VERSION.to_string(),
@@ -964,7 +969,8 @@ mod tests {
         // Valid rates (0-100%) should pass
         assert!(CompromiseRateEvidence::validate_compromise_rates(0, 0).is_ok());
         assert!(CompromiseRateEvidence::validate_compromise_rates(500_000, 50_000).is_ok()); // 50% vs 5%
-        assert!(CompromiseRateEvidence::validate_compromise_rates(1_000_000, 0).is_ok()); // 100% vs 0%
+        assert!(CompromiseRateEvidence::validate_compromise_rates(1_000_000, 0).is_ok());
+        // 100% vs 0%
     }
 
     #[test]

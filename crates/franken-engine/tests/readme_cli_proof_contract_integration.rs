@@ -8,14 +8,12 @@
 #![forbid(unsafe_code)]
 
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
 
 use frankenengine_engine::proof_artifact::{
     PROOF_EVENT_SCHEMA_VERSION, PROOF_MANIFEST_SCHEMA_VERSION, PROOF_REPORT_SCHEMA_VERSION,
-    ProofArtifactError, ProofRunStatus, REDACTION_POLICY_SCHEMA_VERSION,
+    ProofArtifactError, REDACTION_POLICY_SCHEMA_VERSION,
 };
 
 // ---------------------------------------------------------------------------
@@ -117,7 +115,6 @@ pub struct RedactionPolicy {
 // Test Constants
 // ---------------------------------------------------------------------------
 
-const COMPONENT: &str = "readme_cli_proof_contract_integration";
 const README_CLI_WORKFLOW_ID: &str = "readme-cli-workflow-smoke-v1";
 
 // ---------------------------------------------------------------------------
@@ -178,6 +175,7 @@ fn validate_events_schema(events_path: &PathBuf) -> Result<Vec<ProofEvent>, Proo
     Ok(events)
 }
 
+#[allow(dead_code)]
 fn validate_report_schema(report_path: &PathBuf) -> Result<ProofReport, ProofArtifactError> {
     let content = fs::read_to_string(report_path)
         .map_err(|e| ProofArtifactError::Io(format!("Failed to read report: {}", e)))?;
@@ -332,7 +330,7 @@ fn test_structured_events_validation() {
     fs::create_dir_all(&test_dir).expect("Failed to create test directory");
 
     // Create valid events file
-    let events = vec![
+    let events = [
         ProofEvent {
             schema_version: PROOF_EVENT_SCHEMA_VERSION.to_string(),
             event_name: "readme_cli_workflow.step_completed".to_string(),
@@ -497,7 +495,6 @@ fn test_readme_cli_workflow_contract_integration() {
     println!("   • Missing artifact diagnostics");
     println!("   • Schema version validation");
 
-    // This test validates the proof contract integration patterns
-    // The actual README CLI smoke script validation would be done via E2E
-    assert!(true); // Integration validated through unit tests above
+    // This test validates the proof contract integration patterns.
+    // The actual README CLI smoke script validation is performed via E2E.
 }

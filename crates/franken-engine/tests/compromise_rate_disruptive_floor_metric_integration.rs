@@ -13,7 +13,6 @@ use frankenengine_engine::compromise_rate_disruptive_floor_metric_gate::{
 use frankenengine_engine::disruptive_floor_metric_gate::{
     DEFAULT_MAX_FRESHNESS_DAYS, DisruptiveMetricId,
 };
-use serde_json;
 use std::path::PathBuf;
 
 const FIXTURE_PATH: &str = "tests/fixtures/compromise_rate_disruptive_floor_metric_input_v1.json";

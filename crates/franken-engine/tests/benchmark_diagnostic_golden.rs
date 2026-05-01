@@ -66,6 +66,7 @@ impl BenchmarkDiagnosticTestCase {
         }
     }
 
+    #[allow(dead_code)]
     const fn with_input_fixture(mut self) -> Self {
         self.needs_input_fixture = true;
         self

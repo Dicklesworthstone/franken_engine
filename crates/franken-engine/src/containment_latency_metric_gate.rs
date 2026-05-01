@@ -61,9 +61,7 @@ pub fn is_fake_hash(hash: &str) -> bool {
         "feedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedface",
     ];
 
-    placeholder_patterns
-        .iter()
-        .any(|&pattern| hex_part == pattern)
+    placeholder_patterns.contains(&hex_part)
 }
 
 /// Validate evidence requirements for containment measurement claims
@@ -74,15 +72,15 @@ pub fn validate_measurement_evidence(evidence: &ContainmentLatencyEvidence) -> b
             evidence
                 .evidence_bead_id
                 .as_ref()
-                .map_or(false, |s| !s.trim().is_empty())
+                .is_some_and(|s| !s.trim().is_empty())
                 && evidence
                     .evidence_commit_hash
                     .as_ref()
-                    .map_or(false, |s| !s.trim().is_empty())
+                    .is_some_and(|s| !s.trim().is_empty())
                 && evidence
                     .evidence_test_name
                     .as_ref()
-                    .map_or(false, |s| !s.trim().is_empty())
+                    .is_some_and(|s| !s.trim().is_empty())
         }
         ContainmentMeasurementStatus::Provisional | ContainmentMeasurementStatus::Unmeasured => {
             // Provisional/unmeasured don't require evidence (but may have partial evidence)
@@ -630,7 +628,7 @@ pub const fn microseconds_to_milliseconds_floor(microseconds: u64) -> u64 {
 
 pub const fn ceil_microseconds_to_milliseconds(microseconds: u64) -> u64 {
     let whole = microseconds / MICROSECONDS_PER_MILLISECOND;
-    if microseconds % MICROSECONDS_PER_MILLISECOND == 0 {
+    if microseconds.is_multiple_of(MICROSECONDS_PER_MILLISECOND) {
         whole
     } else {
         whole + 1

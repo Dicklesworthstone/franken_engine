@@ -155,6 +155,7 @@ fn golden_file_path(test_case: &CliTestCase) -> PathBuf {
 }
 
 /// Load golden output from file if it exists.
+#[allow(dead_code)]
 fn load_golden_output(test_case: &CliTestCase) -> Option<CliOutput> {
     let path = golden_file_path(test_case);
     if !path.exists() {
@@ -166,6 +167,7 @@ fn load_golden_output(test_case: &CliTestCase) -> Option<CliOutput> {
 }
 
 /// Save golden output to file.
+#[allow(dead_code)]
 fn save_golden_output(
     test_case: &CliTestCase,
     output: &CliOutput,

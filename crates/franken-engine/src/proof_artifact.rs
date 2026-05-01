@@ -503,13 +503,13 @@ fn redact_sensitive_assignment(
     replacement: &str,
 ) -> Option<(String, bool)> {
     for separator in ['=', ':'] {
-        if let Some((key, value)) = token.split_once(separator) {
-            if contains_sensitive_fragment(&key.to_ascii_uppercase(), fragments) {
-                if value.is_empty() || is_literal_marker(value, literal_markers) {
-                    return Some((token.to_string(), true));
-                }
-                return Some((format!("{key}{separator}{replacement}"), false));
+        if let Some((key, value)) = token.split_once(separator)
+            && contains_sensitive_fragment(&key.to_ascii_uppercase(), fragments)
+        {
+            if value.is_empty() || is_literal_marker(value, literal_markers) {
+                return Some((token.to_string(), true));
             }
+            return Some((format!("{key}{separator}{replacement}"), false));
         }
     }
 
@@ -524,10 +524,10 @@ fn redact_inline_bearer(token: &str, replacement: &str) -> Option<String> {
         && scheme.eq_ignore_ascii_case(BEARER_SCHEME)
     {
         let rest = &token[BEARER_SCHEME.len()..];
-        if let Some(delimiter) = rest.chars().next() {
-            if delimiter == ':' || delimiter == '=' {
-                return Some(format!("{scheme}{delimiter}{replacement}"));
-            }
+        if let Some(delimiter) = rest.chars().next()
+            && (delimiter == ':' || delimiter == '=')
+        {
+            return Some(format!("{scheme}{delimiter}{replacement}"));
         }
         return Some(format!("{scheme}{replacement}"));
     }
@@ -556,7 +556,7 @@ fn contains_sensitive_fragment(value_upper: &str, fragments: &[String]) -> bool 
 
 fn is_literal_marker(token: &str, literal_markers: &[String]) -> bool {
     let normalized = token.trim_end_matches(':').to_ascii_uppercase();
-    literal_markers.iter().any(|marker| normalized == *marker)
+    literal_markers.contains(&normalized)
 }
 
 fn require_schema(
@@ -629,13 +629,13 @@ fn validate_json_structure(value: &Value, depth: usize) -> Result<(), ProofArtif
         }
         Value::Number(n) => {
             // Reject NaN and Infinity
-            if let Some(f) = n.as_f64() {
-                if !f.is_finite() {
-                    return Err(ProofArtifactError::JsonInvalidNumber(format!(
-                        "non-finite number: {}",
-                        f
-                    )));
-                }
+            if let Some(f) = n.as_f64()
+                && !f.is_finite()
+            {
+                return Err(ProofArtifactError::JsonInvalidNumber(format!(
+                    "non-finite number: {}",
+                    f
+                )));
             }
         }
         Value::Array(arr) => {
@@ -766,7 +766,7 @@ pub fn emit_event_jsonl_atomic(
     path: impl AsRef<Path>,
     event: &ProofEvent,
 ) -> Result<(), ProofArtifactError> {
-    append_events_jsonl_atomic(path, &[event.clone()])
+    append_events_jsonl_atomic(path, std::slice::from_ref(event))
 }
 
 #[cfg(test)]

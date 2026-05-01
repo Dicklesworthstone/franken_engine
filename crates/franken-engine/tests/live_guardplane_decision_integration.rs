@@ -7,8 +7,6 @@
 
 use std::path::PathBuf;
 
-use serde_json;
-
 // Use relative path to examples since it's outside the crate
 include!("../../../examples/live_guardplane_decision_example.rs");
 

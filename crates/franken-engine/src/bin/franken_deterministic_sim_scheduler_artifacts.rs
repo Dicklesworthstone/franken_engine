@@ -9,13 +9,13 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use frankenengine_engine::deterministic_sim_scheduler::{
-    SchedulerPolicy, SimEventKind, SimPriority, SimScheduler, SIM_SCHEDULER_BEAD_ID,
-    SIM_SCHEDULER_SCHEMA_VERSION,
+    SIM_SCHEDULER_BEAD_ID, SIM_SCHEDULER_SCHEMA_VERSION, SchedulerPolicy, SimEventKind,
+    SimPriority, SimScheduler,
 };
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::security_epoch::SecurityEpoch;
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 type DynError = Box<dyn Error>;
 
@@ -160,8 +160,7 @@ fn scenarios(base_seed: u64) -> Vec<Scenario> {
     vec![
         Scenario {
             id: "event_module_cache_controller",
-            description:
-                "mixed event-loop, module, cache, timer, hostcall, and controller interactions",
+            description: "mixed event-loop, module, cache, timer, hostcall, and controller interactions",
             policy: sparse_policy,
             events: vec![
                 ScenarioEvent {

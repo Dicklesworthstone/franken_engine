@@ -21,7 +21,7 @@ fn red_team_compromise_rate_script_detects_stubs_and_refuses_observed_status() {
     let output = Command::new("bash")
         .arg(&script_path)
         .arg("pass")
-        .current_dir(&project_root)
+        .current_dir(project_root)
         .env("CARGO_TARGET_DIR", test_target_dir)
         .env(
             "RED_TEAM_COMPROMISE_RATE_METRIC_ARTIFACT_ROOT",

@@ -1,4 +1,4 @@
-use frankenengine_engine::proof_artifact::{ProofArtifactError, validate_event_json_line};
+use frankenengine_engine::proof_artifact::validate_event_json_line;
 use std::time::Instant;
 
 /// Manual fuzzing harness for proof artifact JSON validation

@@ -981,7 +981,7 @@ impl ContentBinding {
             preimage_bytes,
             &self.binding_signature,
         )
-        .map_err(|e| ContentBindingError::SignatureVerificationFailed(e))?;
+        .map_err(ContentBindingError::SignatureVerificationFailed)?;
 
         Ok(())
     }
@@ -1574,6 +1574,7 @@ impl std::error::Error for IfcValidationError {}
 mod tests {
     use super::*;
     use crate::signature_preimage::SignatureError;
+    use std::sync::OnceLock;
 
     fn test_key() -> SigningKey {
         SigningKey::from_bytes([42u8; 32]).expect("serde deserialization should succeed")
@@ -1581,6 +1582,18 @@ mod tests {
 
     fn sentinel_sig() -> Signature {
         Signature::from_bytes(SIGNATURE_SENTINEL)
+    }
+
+    fn current_unix_time_ms_for_tests() -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be after Unix epoch")
+            .as_millis() as u64
+    }
+
+    fn receipt_anchor_ms() -> u64 {
+        static ANCHOR_MS: OnceLock<u64> = OnceLock::new();
+        *ANCHOR_MS.get_or_init(current_unix_time_ms_for_tests)
     }
 
     fn make_flow_policy() -> FlowPolicy {
@@ -1630,6 +1643,7 @@ mod tests {
     }
 
     fn make_receipt() -> DeclassificationReceipt {
+        let timestamp_ms = receipt_anchor_ms();
         DeclassificationReceipt {
             receipt_id: "receipt-001".to_string(),
             source_label: Label::Secret,
@@ -1642,9 +1656,9 @@ mod tests {
             decision: DeclassificationDecision::Allow,
             authorized_by: test_key().verification_key(),
             replay_linkage: "trace-abc".to_string(),
-            timestamp_ms: 1_700_000_000_000,
-            not_before_ms: 1_700_000_000_000 - 3600_000, // 1 hour before timestamp
-            not_after_ms: 1_700_000_000_000 + 3600_000,  // 1 hour after timestamp
+            timestamp_ms,
+            not_before_ms: timestamp_ms.saturating_sub(3_600_000), // 1 hour before timestamp
+            not_after_ms: timestamp_ms + 3_600_000,                // 1 hour after timestamp
             schema_version: IfcSchemaVersion::CURRENT,
             signature: sentinel_sig(),
         }
@@ -2065,8 +2079,8 @@ mod tests {
 
         let mut receipt = make_receipt();
         // Set receipt to be valid for 1 hour before and after current time
-        receipt.not_before_ms = current_time - 3600_000;
-        receipt.not_after_ms = current_time + 3600_000;
+        receipt.not_before_ms = current_time - 3_600_000;
+        receipt.not_after_ms = current_time + 3_600_000;
 
         // Should validate successfully since we're in the valid window
         assert!(receipt.validate_timestamp_bounds().is_ok());
@@ -2082,8 +2096,8 @@ mod tests {
 
         let mut receipt = make_receipt();
         // Set receipt to have expired 1 hour ago
-        receipt.not_before_ms = current_time - 7200_000; // 2 hours ago
-        receipt.not_after_ms = current_time - 3600_000; // 1 hour ago
+        receipt.not_before_ms = current_time - 7_200_000; // 2 hours ago
+        receipt.not_after_ms = current_time - 3_600_000; // 1 hour ago
 
         // Should fail validation because receipt is expired
         let err = receipt.validate_timestamp_bounds().unwrap_err();
@@ -2103,8 +2117,8 @@ mod tests {
 
         let mut receipt = make_receipt();
         // Set receipt to be valid starting 1 hour in the future
-        receipt.not_before_ms = current_time + 3600_000; // 1 hour from now
-        receipt.not_after_ms = current_time + 7200_000; // 2 hours from now
+        receipt.not_before_ms = current_time + 3_600_000; // 1 hour from now
+        receipt.not_after_ms = current_time + 7_200_000; // 2 hours from now
 
         // Should fail validation because receipt is not yet valid
         let err = receipt.validate_timestamp_bounds().unwrap_err();
@@ -2147,24 +2161,24 @@ mod tests {
         // Test exact boundary cases
         let mut receipt = make_receipt();
 
-        // Exactly at not_before boundary (should be valid)
-        receipt.not_before_ms = current_time;
-        receipt.not_after_ms = current_time + 3600_000;
+        // At or after the not_before boundary (should be valid)
+        receipt.not_before_ms = current_time.saturating_sub(1);
+        receipt.not_after_ms = current_time + 3_600_000;
         assert!(receipt.validate_timestamp_bounds().is_ok());
 
-        // Exactly at not_after boundary (should be valid)
-        receipt.not_before_ms = current_time - 3600_000;
-        receipt.not_after_ms = current_time;
+        // Before the not_after boundary (should be valid without racing wall clock)
+        receipt.not_before_ms = current_time - 3_600_000;
+        receipt.not_after_ms = current_time + 1_000;
         assert!(receipt.validate_timestamp_bounds().is_ok());
 
         // Just before not_before (should fail)
         receipt.not_before_ms = current_time + 1;
-        receipt.not_after_ms = current_time + 3600_000;
+        receipt.not_after_ms = current_time + 3_600_000;
         let err = receipt.validate_timestamp_bounds().unwrap_err();
         assert!(matches!(err, IfcValidationError::ReceiptNotYetValid { .. }));
 
         // Just after not_after (should fail)
-        receipt.not_before_ms = current_time - 3600_000;
+        receipt.not_before_ms = current_time - 3_600_000;
         receipt.not_after_ms = current_time - 1;
         let err = receipt.validate_timestamp_bounds().unwrap_err();
         assert!(matches!(err, IfcValidationError::ReceiptExpired { .. }));

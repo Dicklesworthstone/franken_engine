@@ -183,7 +183,7 @@ fn execute_with_frankenengine(
     let report_content = std::fs::read_to_string(&report_path).ok();
     if let Some(report) = &report_content {
         stderr.push_str("\n[frankenengine-structured-log]\n");
-        stderr.push_str(&report);
+        stderr.push_str(report);
     }
 
     let attack_succeeded = parse_attack_result(&stdout)

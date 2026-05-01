@@ -6,7 +6,6 @@
  */
 
 use super::*;
-use chrono::{DateTime, Utc};
 use serde_json::json;
 use std::fs;
 use tempfile::TempDir;
@@ -26,11 +25,14 @@ impl FixtureManager {
     pub fn create_valid_bundle(&self) -> Result<TempDir, Box<dyn std::error::Error>> {
         let temp_dir = TempDir::new()?;
         let bundle_path = temp_dir.path();
+        let run_dir = "test-bundle-20260501T123456Z";
+        let run_path = bundle_path.join(run_dir);
+        fs::create_dir_all(&run_path)?;
 
         // Create manifest.json
-        let manifest = json!({
+        let mut manifest = json!({
             "schema_version": PROOF_MANIFEST_SCHEMA_VERSION,
-            "bundle_id": "test-bundle-20260501T123456Z",
+            "bundle_id": run_dir,
             "gate_name": "test_conformance_gate",
             "status": "pass",
             "generated_utc": "2026-05-01T12:34:56Z",
@@ -56,7 +58,7 @@ impl FixtureManager {
                     "command_id": "cmd-1",
                     "display": "cargo build",
                     "redacted_display": "cargo build",
-                    "cwd": ".",
+                    "cwd": "workspace",
                     "exit_code": 0,
                     "duration_ms": 1250
                 }
@@ -98,11 +100,12 @@ impl FixtureManager {
 
         fs::write(
             bundle_path.join("manifest.json"),
-            serde_json::to_string_pretty(&manifest)?
+            serde_json::to_string_pretty(&manifest)?,
         )?;
 
         // Create commands.txt (empty for hash match)
         fs::write(bundle_path.join("commands.txt"), "")?;
+        fs::write(run_path.join("commands.txt"), "")?;
 
         // Create events.jsonl with valid events
         let event1 = json!({
@@ -138,7 +141,8 @@ impl FixtureManager {
             serde_json::to_string(&event1)?,
             serde_json::to_string(&event2)?
         );
-        fs::write(bundle_path.join("events.jsonl"), events_content)?;
+        fs::write(bundle_path.join("events.jsonl"), &events_content)?;
+        fs::write(run_path.join("events.jsonl"), &events_content)?;
 
         // Create report.json
         let report = json!({
@@ -154,15 +158,15 @@ impl FixtureManager {
             "report_md_path": "test-bundle-20260501T123456Z/report.md",
             "findings": []
         });
+        let report_json = serde_json::to_string_pretty(&report)?;
 
-        fs::write(
-            bundle_path.join("report.json"),
-            serde_json::to_string_pretty(&report)?
-        )?;
+        fs::write(bundle_path.join("report.json"), &report_json)?;
+        fs::write(run_path.join("report.json"), &report_json)?;
 
         // Create report.md
         let report_md = "# Proof Artifact Report\n\n- Bundle: `test-bundle-20260501T123456Z`\n- Gate: `test_conformance_gate`\n- Status: `Pass`\n- Events: `2`\n- Failures: `0`\n- Rerun: `cargo test --gate conformance_test`\n\nNo findings were emitted.\n";
         fs::write(bundle_path.join("report.md"), report_md)?;
+        fs::write(run_path.join("report.md"), report_md)?;
 
         // Create redaction_policy.json
         let redaction_policy = json!({
@@ -175,11 +179,26 @@ impl FixtureManager {
             ],
             "literal_patterns": ["Bearer "]
         });
+        let redaction_policy_json = serde_json::to_string_pretty(&redaction_policy)?;
 
         fs::write(
             bundle_path.join("redaction_policy.json"),
-            serde_json::to_string_pretty(&redaction_policy)?
+            &redaction_policy_json,
         )?;
+        fs::write(
+            run_path.join("redaction_policy.json"),
+            &redaction_policy_json,
+        )?;
+
+        manifest["generated_artifacts"][0]["sha256"] = json!(sha256_hex(b""));
+        manifest["generated_artifacts"][1]["sha256"] = json!(sha256_hex(events_content.as_bytes()));
+        manifest["generated_artifacts"][2]["sha256"] = json!(sha256_hex(report_json.as_bytes()));
+        manifest["generated_artifacts"][3]["sha256"] =
+            json!(sha256_hex(redaction_policy_json.as_bytes()));
+        let manifest_json = serde_json::to_string_pretty(&manifest)?;
+
+        fs::write(bundle_path.join("manifest.json"), &manifest_json)?;
+        fs::write(run_path.join("manifest.json"), &manifest_json)?;
 
         Ok(temp_dir)
     }
@@ -222,7 +241,7 @@ impl FixtureManager {
 
         fs::write(
             bundle_path.join("manifest.json"),
-            serde_json::to_string_pretty(&invalid_manifest)?
+            serde_json::to_string_pretty(&invalid_manifest)?,
         )?;
 
         Ok(temp_dir)
@@ -255,7 +274,7 @@ impl FixtureManager {
 
         fs::write(
             bundle_path.join("events.jsonl"),
-            serde_json::to_string(&invalid_event)?
+            serde_json::to_string(&invalid_event)?,
         )?;
 
         Ok(temp_dir)

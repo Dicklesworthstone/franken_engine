@@ -10,7 +10,7 @@ mod conformance {
     pub mod proof_artifact;
 }
 
-use conformance::proof_artifact::{harness::ConformanceHarness, fixtures::FixtureManager};
+use conformance::proof_artifact::{fixtures::FixtureManager, harness::ConformanceHarness};
 use std::fs;
 
 #[test]
@@ -29,16 +29,14 @@ fn comprehensive_proof_artifact_conformance() {
         .expect("Failed to create provenance documentation");
 
     // Build and run comprehensive conformance harness
-    let harness = ConformanceHarness::new()
-        .register_all_tests(); // Register all cd3d2b4d requirements
+    let harness = ConformanceHarness::new().register_all_tests(); // Register all cd3d2b4d requirements
 
     let report = harness.run(&fixtures_dir);
 
     // Generate compliance report
     let markdown_report = report.to_markdown();
     let report_path = fixtures_dir.join("CONFORMANCE_REPORT.md");
-    fs::write(&report_path, &markdown_report)
-        .expect("Failed to write conformance report");
+    fs::write(&report_path, &markdown_report).expect("Failed to write conformance report");
 
     println!("{}", markdown_report);
 
@@ -46,7 +44,10 @@ fn comprehensive_proof_artifact_conformance() {
     println!("📊 Coverage Accounting Matrix:");
     println!("Overall Score: {:.1}%", report.overall_score * 100.0);
     println!("Total Requirements: {}", report.total_tests);
-    println!("MUST clause coverage: {:.1}%", calculate_must_coverage(&report));
+    println!(
+        "MUST clause coverage: {:.1}%",
+        calculate_must_coverage(&report)
+    );
 
     // Check minimum conformance threshold (95% for MUST clauses)
     let must_score = calculate_must_coverage(&report) / 100.0;
@@ -61,7 +62,10 @@ fn comprehensive_proof_artifact_conformance() {
 
     // Fail if any non-XFAIL failures exist
     if report.failed > 0 {
-        println!("❌ {} conformance tests failed (excluding expected failures)", report.failed);
+        println!(
+            "❌ {} conformance tests failed (excluding expected failures)",
+            report.failed
+        );
         println!("📋 Detailed failures:");
 
         for result in &report.results {
@@ -82,10 +86,12 @@ fn calculate_must_coverage(report: &conformance::proof_artifact::ConformanceRepo
     let must_tests: u32 = report
         .results
         .iter()
-        .filter(|r| matches!(
-            r.requirement_level,
-            conformance::proof_artifact::RequirementLevel::Must
-        ))
+        .filter(|r| {
+            matches!(
+                r.requirement_level,
+                conformance::proof_artifact::RequirementLevel::Must
+            )
+        })
         .count() as u32;
 
     let must_passed: u32 = report
@@ -146,12 +152,24 @@ fn conformance_harness_self_test() {
 
     struct MockTest;
     impl ConformanceTest for MockTest {
-        fn name(&self) -> &str { "mock_test" }
-        fn category(&self) -> TestCategory { TestCategory::Unit }
-        fn requirement_level(&self) -> RequirementLevel { RequirementLevel::Must }
-        fn requirement_id(&self) -> &str { "MOCK-1.1" }
-        fn description(&self) -> &str { "Mock test for harness validation" }
-        fn run(&self, _ctx: &TestContext) -> TestResult { TestResult::Pass }
+        fn name(&self) -> &str {
+            "mock_test"
+        }
+        fn category(&self) -> TestCategory {
+            TestCategory::Unit
+        }
+        fn requirement_level(&self) -> RequirementLevel {
+            RequirementLevel::Must
+        }
+        fn requirement_id(&self) -> &str {
+            "MOCK-1.1"
+        }
+        fn description(&self) -> &str {
+            "Mock test for harness validation"
+        }
+        fn run(&self, _ctx: &TestContext) -> TestResult {
+            TestResult::Pass
+        }
     }
 
     let harness = ConformanceHarness::new().add_test(MockTest);

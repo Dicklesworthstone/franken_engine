@@ -5,13 +5,15 @@
  * proof-artifact contract using the testing-conformance-harnesses methodology.
  */
 
+#![allow(dead_code)]
+
 use frankenengine_engine::proof_artifact::*;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-pub mod harness;
 pub mod fixtures;
+pub mod harness;
 pub mod tests;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -112,7 +114,10 @@ impl ConformanceReport {
         let mut output = String::new();
 
         output.push_str("# Proof Artifact Contract Conformance Report\n\n");
-        output.push_str(&format!("**Overall Score**: {:.1}%\n\n", self.overall_score * 100.0));
+        output.push_str(&format!(
+            "**Overall Score**: {:.1}%\n\n",
+            self.overall_score * 100.0
+        ));
 
         output.push_str("## Summary\n\n");
         output.push_str(&format!("- Total Tests: {}\n", self.total_tests));
@@ -122,8 +127,12 @@ impl ConformanceReport {
         output.push_str(&format!("- Expected Failures: {} ⚠\n\n", self.xfail));
 
         output.push_str("## Coverage Accounting Matrix\n\n");
-        output.push_str("| Section | MUST (pass/total) | SHOULD (pass/total) | MAY (pass/total) | Score |\n");
-        output.push_str("|---------|-------------------|---------------------|------------------|-------|\n");
+        output.push_str(
+            "| Section | MUST (pass/total) | SHOULD (pass/total) | MAY (pass/total) | Score |\n",
+        );
+        output.push_str(
+            "|---------|-------------------|---------------------|------------------|-------|\n",
+        );
 
         for (section, stats) in &self.coverage_by_section {
             let section_score = if stats.must_total + stats.should_total > 0 {
@@ -135,9 +144,18 @@ impl ConformanceReport {
             output.push_str(&format!(
                 "| {} | {}/{} | {}/{} | {}/{} | {:.1}% |\n",
                 section,
-                stats.passing.min(stats.must_total), stats.must_total,
-                stats.passing.saturating_sub(stats.must_total).min(stats.should_total), stats.should_total,
-                stats.passing.saturating_sub(stats.must_total + stats.should_total).min(stats.may_total), stats.may_total,
+                stats.passing.min(stats.must_total),
+                stats.must_total,
+                stats
+                    .passing
+                    .saturating_sub(stats.must_total)
+                    .min(stats.should_total),
+                stats.should_total,
+                stats
+                    .passing
+                    .saturating_sub(stats.must_total + stats.should_total)
+                    .min(stats.may_total),
+                stats.may_total,
                 section_score
             ));
         }
@@ -153,10 +171,7 @@ impl ConformanceReport {
 
             output.push_str(&format!(
                 "- {} **{}** ({:?}): {}\n",
-                status_icon,
-                result.requirement_id,
-                result.requirement_level,
-                result.test_name
+                status_icon, result.requirement_id, result.requirement_level, result.test_name
             ));
 
             if let TestResult::Fail { reason } = &result.result {

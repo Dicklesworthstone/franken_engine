@@ -266,8 +266,8 @@ fn validator_triad_mode_valid_produces_json_report() {
     let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
 
     // Parse and validate JSON structure
-    let report: Value =
-        serde_json::from_str(&stdout).expect(&format!("output should be valid JSON: {stdout}"));
+    let report: Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|_| panic!("output should be valid JSON: {stdout}"));
 
     // Golden test: validate report structure
     assert_eq!(
@@ -300,8 +300,8 @@ fn validator_bundle_mode_valid_produces_json_report() {
 
     let stdout = String::from_utf8(output.stdout).expect("stdout utf8");
 
-    let report: Value =
-        serde_json::from_str(&stdout).expect(&format!("output should be valid JSON: {stdout}"));
+    let report: Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|_| panic!("output should be valid JSON: {stdout}"));
 
     assert_eq!(
         report["report_kind"], "bundle",

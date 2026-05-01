@@ -668,6 +668,7 @@ pub const fn coverage_millionths(covered: u64, total: u64) -> u64 {
 
 /// Creates a properly evidenced replay coverage entry for testing (non-fake data)
 #[cfg(test)]
+#[allow(clippy::too_many_arguments)]
 fn replay_evidence_with_real_verification(
     decision_id: impl Into<String>,
     decision_kind: SecurityDecisionKind,
@@ -1040,7 +1041,7 @@ mod tests {
 
     #[test]
     fn invalid_evidence_format_rejected() {
-        let mut evidence = replay_evidence_with_real_verification(
+        let evidence = replay_evidence_with_real_verification(
             "bad-evidence-replay",
             SecurityDecisionKind::Deny,
             "invalid-bead", // Invalid bead ID format

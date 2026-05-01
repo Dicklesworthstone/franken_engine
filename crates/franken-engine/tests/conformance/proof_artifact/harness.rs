@@ -77,7 +77,10 @@ impl ConformanceHarness {
         let mut results = Vec::new();
         let start_time = Instant::now();
 
-        println!("Running {} proof-artifact conformance tests...\n", self.tests.len());
+        println!(
+            "Running {} proof-artifact conformance tests...\n",
+            self.tests.len()
+        );
 
         for test in &self.tests {
             let test_start = Instant::now();
@@ -91,7 +94,8 @@ impl ConformanceHarness {
                 TestResult::ExpectedFailure { .. } => "XFAIL",
             };
 
-            println!("{:<50} [{:>6}] ({} ms)",
+            println!(
+                "{:<50} [{:>6}] ({} ms)",
                 test.name(),
                 status_str,
                 duration_ms
@@ -133,14 +137,17 @@ impl ConformanceHarness {
             }
 
             // Extract section from requirement ID (e.g., "CD3D2B4D-3.1" -> "3")
-            let section = result.requirement_id
+            let section = result
+                .requirement_id
                 .split('-')
                 .nth(1)
                 .and_then(|s| s.split('.').next())
                 .unwrap_or("unknown")
                 .to_string();
 
-            let stats = coverage_by_section.entry(section).or_insert_with(SectionStats::default);
+            let stats = coverage_by_section
+                .entry(section)
+                .or_insert_with(SectionStats::default);
 
             match result.requirement_level {
                 RequirementLevel::Must => stats.must_total += 1,
@@ -159,13 +166,20 @@ impl ConformanceHarness {
         let total_tests = results.len() as u32;
 
         // Calculate overall score: (passed + xfail) / total for MUST clauses primarily
-        let must_tests: u32 = results.iter()
+        let must_tests: u32 = results
+            .iter()
             .filter(|r| matches!(r.requirement_level, RequirementLevel::Must))
             .count() as u32;
 
-        let must_passed: u32 = results.iter()
-            .filter(|r| matches!(r.requirement_level, RequirementLevel::Must)
-                && matches!(r.result, TestResult::Pass | TestResult::ExpectedFailure { .. }))
+        let must_passed: u32 = results
+            .iter()
+            .filter(|r| {
+                matches!(r.requirement_level, RequirementLevel::Must)
+                    && matches!(
+                        r.result,
+                        TestResult::Pass | TestResult::ExpectedFailure { .. }
+                    )
+            })
             .count() as u32;
 
         let overall_score = if must_tests > 0 {

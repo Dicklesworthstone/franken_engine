@@ -133,9 +133,7 @@ pub fn is_fake_hash(hash: &str) -> bool {
         "feedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedface",
     ];
 
-    placeholder_patterns
-        .iter()
-        .any(|&pattern| hex_part == pattern)
+    placeholder_patterns.contains(&hex_part)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -173,12 +171,11 @@ impl RuntimeDenominator {
 
     /// Get baseline operations per second, trying live measurements first, falling back to placeholders
     pub fn baseline_ops_per_second(self) -> u64 {
-        if let Ok(manifest) = load_baseline_manifest() {
-            if manifest.has_live_measurements {
-                if let Some(runtime_baseline) = manifest.runtimes.get(self.as_str()) {
-                    return runtime_baseline.baseline_ops_per_second;
-                }
-            }
+        if let Ok(manifest) = load_baseline_manifest()
+            && manifest.has_live_measurements
+            && let Some(runtime_baseline) = manifest.runtimes.get(self.as_str())
+        {
+            return runtime_baseline.baseline_ops_per_second;
         }
 
         // Fallback to placeholder values if manifest unavailable or no live measurements
@@ -190,12 +187,11 @@ impl RuntimeDenominator {
 
     /// Check if current baseline is a placeholder (not from live measurements)
     pub fn is_placeholder_baseline(self) -> bool {
-        if let Ok(manifest) = load_baseline_manifest() {
-            if manifest.has_live_measurements {
-                if let Some(_runtime_baseline) = manifest.runtimes.get(self.as_str()) {
-                    return false; // Has live measurements
-                }
-            }
+        if let Ok(manifest) = load_baseline_manifest()
+            && manifest.has_live_measurements
+            && manifest.runtimes.contains_key(self.as_str())
+        {
+            return false; // Has live measurements
         }
 
         // No live measurements available - using placeholder
@@ -231,11 +227,10 @@ impl ThroughputEvidence {
         frankenengine_ops_per_second: u64,
         denominator_ops_per_second: u64,
     ) -> u64 {
-        if denominator_ops_per_second == 0 {
-            0
-        } else {
-            (frankenengine_ops_per_second * 1_000_000) / denominator_ops_per_second
-        }
+        frankenengine_ops_per_second
+            .saturating_mul(1_000_000)
+            .checked_div(denominator_ops_per_second)
+            .unwrap_or(0)
     }
 
     pub fn meets_floor_threshold(&self, floor_ratio_millionths: u64) -> bool {
@@ -341,15 +336,15 @@ pub fn validate_measurement_evidence(evidence: &ThroughputEvidence) -> bool {
             evidence
                 .evidence_bead_id
                 .as_ref()
-                .map_or(false, |s| !s.trim().is_empty())
+                .is_some_and(|s| !s.trim().is_empty())
                 && evidence
                     .evidence_commit_hash
                     .as_ref()
-                    .map_or(false, |s| !s.trim().is_empty())
+                    .is_some_and(|s| !s.trim().is_empty())
                 && evidence
                     .evidence_test_name
                     .as_ref()
-                    .map_or(false, |s| !s.trim().is_empty())
+                    .is_some_and(|s| !s.trim().is_empty())
                 && !evidence.runtime_denominator.is_placeholder_baseline() // Must use real baselines
         }
         ThroughputMeasurementStatus::Targeted | ThroughputMeasurementStatus::Unmeasured => {
@@ -375,7 +370,7 @@ pub fn has_fake_measurement_data(evidence: &ThroughputEvidence) -> bool {
     }
 
     // Check for perfect ratios that are unlikely in real measurements
-    if evidence.throughput_ratio_millionths % 100_000 == 0 {
+    if evidence.throughput_ratio_millionths.is_multiple_of(100_000) {
         // Ratios that are exact multiples of 0.1 (100k millionths) are suspicious
         return true;
     }
@@ -1037,7 +1032,7 @@ mod tests {
 
         // Approximate test for geometric mean of 800k and 1200k
         let result = geometric_mean(&[800_000, 1_200_000]).unwrap();
-        assert!(result >= 970_000 && result <= 990_000); // ~sqrt(800k * 1200k) ≈ 980k
+        assert!((970_000..=990_000).contains(&result)); // ~sqrt(800k * 1200k) ≈ 980k
     }
 
     #[test]
@@ -1728,20 +1723,19 @@ mod tests {
         assert_eq!(node_is_placeholder, bun_is_placeholder);
 
         // If we can load a manifest with live measurements, placeholders should be false
-        if let Ok(manifest) = load_baseline_manifest() {
-            if manifest.has_live_measurements
-                && manifest.runtimes.contains_key("node")
-                && manifest.runtimes.contains_key("bun")
-            {
-                assert!(
-                    !node_is_placeholder,
-                    "Should detect live measurements when manifest has them"
-                );
-                assert!(
-                    !bun_is_placeholder,
-                    "Should detect live measurements when manifest has them"
-                );
-            }
+        if let Ok(manifest) = load_baseline_manifest()
+            && manifest.has_live_measurements
+            && manifest.runtimes.contains_key("node")
+            && manifest.runtimes.contains_key("bun")
+        {
+            assert!(
+                !node_is_placeholder,
+                "Should detect live measurements when manifest has them"
+            );
+            assert!(
+                !bun_is_placeholder,
+                "Should detect live measurements when manifest has them"
+            );
         }
     }
 

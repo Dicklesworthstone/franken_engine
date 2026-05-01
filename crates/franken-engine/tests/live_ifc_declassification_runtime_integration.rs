@@ -90,11 +90,10 @@ fn test_allowed_declassification_scenario() {
     assert_eq!(manifest["flow_scenarios_count"], 1);
     assert_eq!(manifest["status"], "completed");
     assert!(
-        manifest["flow_verification_evidence_hash"]
+        !manifest["flow_verification_evidence_hash"]
             .as_str()
             .unwrap()
-            .len()
-            > 0
+            .is_empty()
     );
 
     // Verify report structure
@@ -201,7 +200,7 @@ fn test_complete_ifc_demonstration() {
         let event: serde_json::Value =
             serde_json::from_str(line).expect("Event should be valid JSON");
         assert_eq!(event["event_type"], "scenario_execution");
-        assert!(event["scenario_id"].as_str().unwrap().len() > 0);
+        assert!(!event["scenario_id"].as_str().unwrap().is_empty());
         assert!(event["execution_time_ms"].is_u64());
     }
 

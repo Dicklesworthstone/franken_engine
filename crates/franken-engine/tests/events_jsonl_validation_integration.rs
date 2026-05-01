@@ -8,7 +8,7 @@ use tempfile::NamedTempFile;
 
 #[test]
 fn malformed_events_jsonl_is_rejected() {
-    let malformed_events = vec![
+    let malformed_events = [
         // Missing required fields
         r#"{"schema_version": "franken-engine.proof-artifact-event.v1"}"#,
         // Invalid schema version
@@ -80,7 +80,7 @@ fn oversized_json_line_is_rejected() {
 
 #[test]
 fn valid_events_jsonl_is_accepted() {
-    let valid_events = vec![
+    let valid_events = [
         r#"{"schema_version": "franken-engine.proof-artifact-event.v1", "event_name": "step.started", "severity": "info", "step_id": "step-001", "decision": "proceed"}"#,
         r#"{"schema_version": "franken-engine.proof-artifact-event.v1", "event_name": "step.completed", "severity": "info", "step_id": "step-001", "command_id": "cmd-001", "exit_code": 0, "duration_ms": 1000, "decision": "passed"}"#,
         r#"{"schema_version": "franken-engine.proof-artifact-event.v1", "event_name": "step.failed", "severity": "error", "step_id": "step-002", "decision": "failed", "remediation": "Check logs"}"#,
@@ -100,7 +100,7 @@ fn valid_events_jsonl_is_accepted() {
 #[test]
 fn bundle_doctor_detects_malformed_events_in_file() {
     // Create a temporary events.jsonl file with mixed valid/invalid content
-    let mut temp_file = NamedTempFile::new().expect("create temp file");
+    let temp_file = NamedTempFile::new().expect("create temp file");
     let temp_path = temp_file.path();
 
     let events_content = r#"{"schema_version": "franken-engine.proof-artifact-event.v1", "event_name": "valid", "severity": "info", "step_id": "step-001", "decision": "pass"}

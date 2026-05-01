@@ -17,8 +17,8 @@ use frankenengine_engine::expected_loss_selector::{
 };
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::proof_artifact::{
-    ProofArtifactPaths, ProofCommand, PROOF_EVENT_SCHEMA_VERSION, PROOF_MANIFEST_SCHEMA_VERSION,
-    PROOF_REPORT_SCHEMA_VERSION,
+    PROOF_EVENT_SCHEMA_VERSION, PROOF_MANIFEST_SCHEMA_VERSION, PROOF_REPORT_SCHEMA_VERSION,
+    ProofArtifactPaths, ProofCommand,
 };
 
 pub const EXAMPLE_BEAD_ID: &str = "bd-1ypps";
@@ -363,8 +363,9 @@ pub fn execute_guardplane_decision_with_proof(
             "{PROVISIONAL_PROOF_COMMAND_NOTE}; in-process guardplane decision generated artifacts for extension {} operation {}",
             input.extension_id, input.operation_type
         ),
-        redacted_display:
-            format!("{PROVISIONAL_PROOF_COMMAND_NOTE}; in-process guardplane decision generated artifacts for redacted extension and operation"),
+        redacted_display: format!(
+            "{PROVISIONAL_PROOF_COMMAND_NOTE}; in-process guardplane decision generated artifacts for redacted extension and operation"
+        ),
         cwd: "/data/projects/franken_engine".to_string(),
         exit_code: None,
         duration_ms: None,
@@ -521,8 +522,8 @@ pub fn execute_guardplane_decision_with_proof(
     println!("   📝 Human report: {}", manifest.artifacts.report_md);
     println!("   📋 Events: {}", manifest.artifacts.events_jsonl);
     println!(
-        "   🔍 Decision: {} (confidence: {:.1}%)",
-        format!("{:?}", decision.action),
+        "   🔍 Decision: {:?} (confidence: {:.1}%)",
+        decision.action,
         decision_event.confidence_millionths as f64 / 10_000.0
     );
 

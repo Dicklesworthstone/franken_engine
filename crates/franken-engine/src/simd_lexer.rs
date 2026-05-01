@@ -1627,7 +1627,7 @@ mod tests {
 
     #[test]
     fn byte_eq_mask_matches_target() {
-        let word = u64::from_le_bytes([b'a', b'b', b'a', b'c', b'a', b'd', b'a', b'e']);
+        let word = u64::from_le_bytes(*b"abacadae");
         let mask = byte_eq_mask(word, b'a');
         // Bytes 0, 2, 4, 6 should match (high bit set)
         assert_eq!(mask_popcount(mask), 4);
@@ -1636,7 +1636,7 @@ mod tests {
 
     #[test]
     fn byte_eq_mask_no_match() {
-        let word = u64::from_le_bytes([b'x', b'y', b'z', b'w', b'v', b'u', b't', b's']);
+        let word = u64::from_le_bytes(*b"xyzwvuts");
         let mask = byte_eq_mask(word, b'a');
         assert_eq!(mask_popcount(mask), 0);
         assert_eq!(mask_first_set(mask), 8);
@@ -1651,14 +1651,14 @@ mod tests {
 
     #[test]
     fn whitespace_mask_rejects_non_ws() {
-        let word = u64::from_le_bytes([b'a', b'b', b'c', b'd', b'1', b'2', b'3', b'4']);
+        let word = u64::from_le_bytes(*b"abcd1234");
         let mask = whitespace_mask(word);
         assert_eq!(mask_popcount(mask), 0);
     }
 
     #[test]
     fn digit_mask_detects_digits() {
-        let word = u64::from_le_bytes([b'0', b'5', b'9', b'a', b'z', b' ', b'1', b'8']);
+        let word = u64::from_le_bytes(*b"059az 18");
         let mask = digit_mask(word);
         // Positions 0,1,2,6,7 are digits
         assert_eq!(mask_popcount(mask), 5);
@@ -1666,7 +1666,7 @@ mod tests {
 
     #[test]
     fn alpha_mask_detects_letters() {
-        let word = u64::from_le_bytes([b'a', b'Z', b'0', b'_', b'M', b'q', b' ', b'\n']);
+        let word = u64::from_le_bytes(*b"aZ0_Mq \n");
         let mask = alpha_mask(word);
         // a, Z, M, q are alpha
         assert_eq!(mask_popcount(mask), 4);
@@ -1674,7 +1674,7 @@ mod tests {
 
     #[test]
     fn identifier_continue_mask_includes_dollar_underscore() {
-        let word = u64::from_le_bytes([b'$', b'_', b'a', b'Z', b'0', b' ', b'!', b'@']);
+        let word = u64::from_le_bytes(*b"$_aZ0 !@");
         let mask = identifier_continue_mask(word);
         // $, _, a, Z, 0 are ident continues; ' ', '!', '@' are not
         assert_eq!(mask_popcount(mask), 5);
@@ -1682,7 +1682,7 @@ mod tests {
 
     #[test]
     fn identifier_continue_mask_includes_digits() {
-        let word = u64::from_le_bytes([b'$', b'_', b'a', b'Z', b'0', b'9', b' ', b'!']);
+        let word = u64::from_le_bytes(*b"$_aZ09 !");
         let mask = identifier_continue_mask(word);
         // $, _, a, Z, 0, 9 are ident continues
         assert_eq!(mask_popcount(mask), 6);

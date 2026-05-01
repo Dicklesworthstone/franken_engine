@@ -800,6 +800,9 @@ fn frankenctl_react_cli_workflow_script_emits_expected_artifacts_and_routes() {
     assert!(script.contains("support_bundle/preflight_report.json"));
     assert!(script.contains("support_bundle/onboarding_scorecard.json"));
     assert!(script.contains("support_bundle/rollout_decision_artifact.json"));
+    assert!(script.contains("support_bundle/rollout_decision_packet.json"));
+    assert!(script.contains("support_bundle/rollout_decision_summary.md"));
+    assert!(script.contains("support_bundle/platform_risk_matrix.json"));
     assert!(script.contains("support_bundle/frankenctl_doctor_report.json"));
     assert!(
         script.contains("cargo run -q -p frankenengine-engine --bin frankenctl -- react contract")
@@ -840,6 +843,9 @@ fn frankenctl_react_example_app_workflow_script_emits_expected_artifacts_and_rou
     assert!(script.contains("support_bundle/preflight_report.json"));
     assert!(script.contains("support_bundle/onboarding_scorecard.json"));
     assert!(script.contains("support_bundle/rollout_decision_artifact.json"));
+    assert!(script.contains("support_bundle/rollout_decision_packet.json"));
+    assert!(script.contains("support_bundle/rollout_decision_summary.md"));
+    assert!(script.contains("support_bundle/platform_risk_matrix.json"));
     assert!(script.contains("support_bundle/frankenctl_doctor_report.json"));
     assert!(
         script.contains("cargo run -q -p frankenengine-engine --bin frankenctl -- react contract")
@@ -923,6 +929,9 @@ fn frankenctl_cli_workflow_script_emits_expected_artifacts_and_routes() {
     assert!(script.contains("support_bundle/preflight_report.json"));
     assert!(script.contains("support_bundle/onboarding_scorecard.json"));
     assert!(script.contains("support_bundle/rollout_decision_artifact.json"));
+    assert!(script.contains("support_bundle/rollout_decision_packet.json"));
+    assert!(script.contains("support_bundle/rollout_decision_summary.md"));
+    assert!(script.contains("support_bundle/platform_risk_matrix.json"));
     assert!(script.contains("support_bundle/frankenctl_doctor_report.json"));
     assert!(script.contains("cargo run -q -p frankenengine-engine --bin frankenctl -- doctor"));
     assert!(script.contains("rch exec"));
@@ -960,6 +969,9 @@ fn frankenctl_cli_workflow_script_pins_replay_contract() {
         "${candidate}/support_bundle/preflight_report.json",
         "${candidate}/support_bundle/onboarding_scorecard.json",
         "${candidate}/support_bundle/rollout_decision_artifact.json",
+        "${candidate}/support_bundle/rollout_decision_packet.json",
+        "${candidate}/support_bundle/rollout_decision_summary.md",
+        "${candidate}/support_bundle/platform_risk_matrix.json",
         "${candidate}/support_bundle/frankenctl_doctor_report.json",
     ] {
         assert!(
@@ -979,6 +991,9 @@ fn frankenctl_cli_workflow_script_pins_replay_contract() {
         "frankenctl workflow replay support bundle preflight: ${candidate}/support_bundle/preflight_report.json",
         "frankenctl workflow replay support bundle onboarding scorecard: ${candidate}/support_bundle/onboarding_scorecard.json",
         "frankenctl workflow replay support bundle rollout decision: ${candidate}/support_bundle/rollout_decision_artifact.json",
+        "frankenctl workflow replay support bundle rollout decision packet: ${candidate}/support_bundle/rollout_decision_packet.json",
+        "frankenctl workflow replay support bundle rollout decision summary: ${candidate}/support_bundle/rollout_decision_summary.md",
+        "frankenctl workflow replay support bundle platform risk matrix: ${candidate}/support_bundle/platform_risk_matrix.json",
         "frankenctl workflow replay support bundle doctor report: ${candidate}/support_bundle/frankenctl_doctor_report.json",
     ] {
         assert!(
@@ -2139,11 +2154,44 @@ fn frankenctl_doctor_outputs_json_and_writes_support_bundle() {
             .is_file(),
         "expected rollout decision artifact to be written"
     );
+    let rollout_packet_path = out_dir.join("support_bundle/rollout_decision_packet.json");
+    assert!(
+        rollout_packet_path.is_file(),
+        "expected rollout decision packet to be written"
+    );
+    assert!(
+        out_dir
+            .join("support_bundle/rollout_decision_summary.md")
+            .is_file(),
+        "expected rollout decision summary to be written"
+    );
+    let platform_risk_matrix_path = out_dir.join("support_bundle/platform_risk_matrix.json");
+    assert!(
+        platform_risk_matrix_path.is_file(),
+        "expected platform risk matrix to be written"
+    );
     assert!(
         out_dir
             .join("support_bundle/frankenctl_doctor_report.json")
             .is_file(),
         "expected doctor report to be written"
+    );
+    let rollout_packet: serde_json::Value = serde_json::from_slice(
+        &fs::read(&rollout_packet_path).expect("rollout packet should be readable"),
+    )
+    .expect("rollout packet should parse as json");
+    assert_eq!(rollout_packet["recommendation"].as_str(), Some("promote"));
+    let platform_risk_matrix: serde_json::Value = serde_json::from_slice(
+        &fs::read(&platform_risk_matrix_path).expect("platform risk matrix should be readable"),
+    )
+    .expect("platform risk matrix should parse as json");
+    assert_eq!(
+        platform_risk_matrix["schema_version"].as_str(),
+        Some("franken-engine.runtime-diagnostics.platform-risk-matrix.v1")
+    );
+    assert_eq!(
+        platform_risk_matrix["platform_signal_count"].as_u64(),
+        Some(0)
     );
 
     let _ = fs::remove_file(input_path);

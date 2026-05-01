@@ -33,6 +33,9 @@ support_index_path="${support_bundle_dir}/index.json"
 support_preflight_path="${support_bundle_dir}/preflight_report.json"
 support_scorecard_path="${support_bundle_dir}/onboarding_scorecard.json"
 support_rollout_path="${support_bundle_dir}/rollout_decision_artifact.json"
+support_rollout_packet_path="${support_bundle_dir}/rollout_decision_packet.json"
+support_rollout_summary_path="${support_bundle_dir}/rollout_decision_summary.md"
+support_platform_risk_matrix_path="${support_bundle_dir}/platform_risk_matrix.json"
 support_doctor_report_path="${support_bundle_dir}/frankenctl_doctor_report.json"
 compile_source_path="${fixtures_dir}/workflow_app.tsx"
 build_entry_path="${fixtures_dir}/workflow_entry.jsx"
@@ -74,6 +77,9 @@ run_dir_is_complete() {
   [[ -f "${candidate}/support_bundle/preflight_report.json" ]] || return 1
   [[ -f "${candidate}/support_bundle/onboarding_scorecard.json" ]] || return 1
   [[ -f "${candidate}/support_bundle/rollout_decision_artifact.json" ]] || return 1
+  [[ -f "${candidate}/support_bundle/rollout_decision_packet.json" ]] || return 1
+  [[ -f "${candidate}/support_bundle/rollout_decision_summary.md" ]] || return 1
+  [[ -f "${candidate}/support_bundle/platform_risk_matrix.json" ]] || return 1
   [[ -f "${candidate}/support_bundle/frankenctl_doctor_report.json" ]] || return 1
 }
 
@@ -114,6 +120,12 @@ replay_existing_run_dir() {
   cat "${candidate}/support_bundle/onboarding_scorecard.json"
   echo "frankenctl React CLI workflow replay support bundle rollout decision: ${candidate}/support_bundle/rollout_decision_artifact.json"
   cat "${candidate}/support_bundle/rollout_decision_artifact.json"
+  echo "frankenctl React CLI workflow replay support bundle rollout decision packet: ${candidate}/support_bundle/rollout_decision_packet.json"
+  cat "${candidate}/support_bundle/rollout_decision_packet.json"
+  echo "frankenctl React CLI workflow replay support bundle rollout decision summary: ${candidate}/support_bundle/rollout_decision_summary.md"
+  cat "${candidate}/support_bundle/rollout_decision_summary.md"
+  echo "frankenctl React CLI workflow replay support bundle platform risk matrix: ${candidate}/support_bundle/platform_risk_matrix.json"
+  cat "${candidate}/support_bundle/platform_risk_matrix.json"
   echo "frankenctl React CLI workflow replay support bundle doctor report: ${candidate}/support_bundle/frankenctl_doctor_report.json"
   cat "${candidate}/support_bundle/frankenctl_doctor_report.json"
 }
@@ -485,6 +497,9 @@ run_artifact_flow() {
     "${support_preflight_path}" \
     "${support_scorecard_path}" \
     "${support_rollout_path}" \
+    "${support_rollout_packet_path}" \
+    "${support_rollout_summary_path}" \
+    "${support_platform_risk_matrix_path}" \
     "${support_doctor_report_path}"; do
     if [[ ! -f "${required_path}" ]]; then
       echo "required artifact missing: ${required_path}" >&2
@@ -632,6 +647,9 @@ write_manifest() {
     echo '      "support_bundle/preflight_report.json",'
     echo '      "support_bundle/onboarding_scorecard.json",'
     echo '      "support_bundle/rollout_decision_artifact.json",'
+    echo '      "support_bundle/rollout_decision_packet.json",'
+    echo '      "support_bundle/rollout_decision_summary.md",'
+    echo '      "support_bundle/platform_risk_matrix.json",'
     echo '      "support_bundle/frankenctl_doctor_report.json"'
     echo '    ]'
     echo '  },'

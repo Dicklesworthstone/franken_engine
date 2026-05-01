@@ -853,6 +853,34 @@ pub struct RolloutDecisionArtifactOutput {
     pub logs: Vec<StructuredLogEvent>,
 }
 
+/// Per-platform risk row derived from platform-matrix rollout signals.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlatformRiskMatrixRow {
+    pub target_id: String,
+    pub signal_id: String,
+    pub severity: EvidenceSeverity,
+    pub summary: String,
+    pub remediation: String,
+    pub reproducible_command: String,
+    pub evidence_links: Vec<String>,
+    pub owner_hint: Option<String>,
+}
+
+/// Deterministic platform-risk matrix emitted next to rollout decision packets.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlatformRiskMatrixOutput {
+    pub schema_version: String,
+    pub workload_id: String,
+    pub package_name: String,
+    pub recommendation: RolloutRecommendation,
+    pub ga_gate_consumable: bool,
+    pub pilot_gate_consumable: bool,
+    pub platform_signal_count: u64,
+    pub highest_severity: Option<EvidenceSeverity>,
+    pub rows: Vec<PlatformRiskMatrixRow>,
+    pub logs: Vec<StructuredLogEvent>,
+}
+
 /// Evidence category required by the GA evidence package.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -2307,6 +2335,55 @@ pub fn render_rollout_decision_artifact_summary(output: &RolloutDecisionArtifact
     }
 
     lines.join("\n")
+}
+
+/// Build a deterministic platform-risk matrix from the consolidated rollout packet.
+pub fn build_platform_risk_matrix(
+    output: &RolloutDecisionArtifactOutput,
+) -> PlatformRiskMatrixOutput {
+    let mut rows = output
+        .merged_signals
+        .iter()
+        .filter(|signal| signal.source == "platform_matrix")
+        .map(|signal| {
+            let target_id = signal
+                .signal_id
+                .strip_prefix("matrix:")
+                .unwrap_or(signal.signal_id.as_str())
+                .to_string();
+            PlatformRiskMatrixRow {
+                target_id,
+                signal_id: signal.signal_id.clone(),
+                severity: signal.severity,
+                summary: signal.summary.clone(),
+                remediation: signal.remediation.clone(),
+                reproducible_command: signal.reproducible_command.clone(),
+                evidence_links: signal.evidence_links.clone(),
+                owner_hint: signal.owner_hint.clone(),
+            }
+        })
+        .collect::<Vec<_>>();
+    rows.sort_by(|left, right| {
+        right
+            .severity
+            .cmp(&left.severity)
+            .then(left.target_id.cmp(&right.target_id))
+            .then(left.signal_id.cmp(&right.signal_id))
+    });
+
+    let highest_severity = rows.first().map(|row| row.severity);
+    PlatformRiskMatrixOutput {
+        schema_version: "franken-engine.runtime-diagnostics.platform-risk-matrix.v1".to_string(),
+        workload_id: output.workload_id.clone(),
+        package_name: output.package_name.clone(),
+        recommendation: output.recommendation,
+        ga_gate_consumable: output.ga_gate_consumable,
+        pilot_gate_consumable: output.pilot_gate_consumable,
+        platform_signal_count: rows.len() as u64,
+        highest_severity,
+        rows,
+        logs: output.logs.clone(),
+    }
 }
 
 /// Build a deterministic GA evidence package over rollout-facing artifacts.

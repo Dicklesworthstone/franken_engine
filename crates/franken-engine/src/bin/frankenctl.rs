@@ -51,8 +51,9 @@ use frankenengine_engine::runtime_diagnostics_cli::{
     RolloutDecisionArtifactOutput, RolloutRecommendation, RuntimeDiagnosticsCliInput,
     SupportBundleFile, SupportBundleOutput, SupportBundleRedactionPolicy,
     build_compatibility_advisories, build_onboarding_owner_routing, build_onboarding_scorecard,
-    build_rollout_decision_artifact, parse_decision_type, parse_evidence_severity,
-    render_onboarding_scorecard_markdown, run_preflight_doctor,
+    build_platform_risk_matrix, build_rollout_decision_artifact, parse_decision_type,
+    parse_evidence_severity, render_onboarding_scorecard_markdown,
+    render_rollout_decision_artifact_summary, run_preflight_doctor,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
 use frankenengine_engine::third_party_verifier::{
@@ -2658,10 +2659,7 @@ fn execute_doctor(args: DoctorArgs) -> Result<i32, String> {
             &out_dir.join("support_bundle/owner_routing.json"),
             &build_onboarding_owner_routing(&output.onboarding_scorecard),
         )?;
-        write_json_file(
-            &out_dir.join("support_bundle/rollout_decision_artifact.json"),
-            &output.rollout_decision,
-        )?;
+        write_rollout_decision_reports(out_dir, &output.rollout_decision)?;
         write_json_file(
             &out_dir.join("support_bundle/frankenctl_doctor_report.json"),
             &output,
@@ -5684,6 +5682,28 @@ fn write_materialized_files(files: &[SupportBundleFile], out_dir: &Path) -> Resu
 
 fn write_support_bundle_files(output: &SupportBundleOutput, out_dir: &Path) -> Result<(), String> {
     write_materialized_files(&output.files, out_dir)
+}
+
+fn write_rollout_decision_reports(
+    out_dir: &Path,
+    artifact: &RolloutDecisionArtifactOutput,
+) -> Result<(), String> {
+    write_json_file(
+        &out_dir.join("support_bundle/rollout_decision_artifact.json"),
+        artifact,
+    )?;
+    write_json_file(
+        &out_dir.join("support_bundle/rollout_decision_packet.json"),
+        artifact,
+    )?;
+    write_bytes_file(
+        &out_dir.join("support_bundle/rollout_decision_summary.md"),
+        render_rollout_decision_artifact_summary(artifact).as_bytes(),
+    )?;
+    write_json_file(
+        &out_dir.join("support_bundle/platform_risk_matrix.json"),
+        &build_platform_risk_matrix(artifact),
+    )
 }
 
 fn render_doctor_summary(output: &DoctorCommandOutput) -> String {

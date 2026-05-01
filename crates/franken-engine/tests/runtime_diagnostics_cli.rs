@@ -36,9 +36,10 @@ use frankenengine_engine::runtime_diagnostics_cli::{
     PreflightVerdict, ReplayArtifactRecord, RolloutDecisionArtifactInput, RolloutRecommendation,
     RuntimeDiagnosticsCliInput, RuntimeExtensionState, RuntimeStateInput, SchedulerLaneSample,
     SupportBundleRedactionPolicy, build_ga_evidence_package, build_onboarding_owner_routing,
-    build_onboarding_scorecard, build_rollout_decision_artifact, collect_runtime_diagnostics,
-    export_evidence_bundle, export_support_bundle, parse_decision_type, parse_evidence_severity,
-    render_diagnostics_summary, render_evidence_summary, render_ga_evidence_package_summary,
+    build_onboarding_scorecard, build_platform_risk_matrix, build_rollout_decision_artifact,
+    collect_runtime_diagnostics, export_evidence_bundle, export_support_bundle,
+    parse_decision_type, parse_evidence_severity, render_diagnostics_summary,
+    render_evidence_summary, render_ga_evidence_package_summary,
     render_onboarding_scorecard_markdown, render_onboarding_scorecard_summary,
     render_preflight_summary, render_rollout_decision_artifact_summary,
     render_support_bundle_summary, run_preflight_doctor, signal_from_compatibility_advisory,
@@ -675,6 +676,24 @@ fn ga_evidence_package_command_outputs_json_and_writes_files() {
             .join("support_bundle/preflight_report.json")
             .exists(),
         "preflight report should be written"
+    );
+    assert!(
+        out_dir
+            .join("support_bundle/rollout_decision_packet.json")
+            .exists(),
+        "rollout decision packet should be written"
+    );
+    assert!(
+        out_dir
+            .join("support_bundle/rollout_decision_summary.md")
+            .exists(),
+        "rollout decision summary should be written"
+    );
+    assert!(
+        out_dir
+            .join("support_bundle/platform_risk_matrix.json")
+            .exists(),
+        "platform risk matrix should be written"
     );
     assert!(
         out_dir.join("ga_evidence_package/index.json").exists(),
@@ -1337,6 +1356,88 @@ fn lib_rollout_artifact_rollback_for_platform_critical() {
         }],
     });
     assert_eq!(artifact.recommendation, RolloutRecommendation::Rollback);
+}
+
+#[test]
+fn lib_platform_risk_matrix_extracts_platform_signals_deterministically() {
+    let input = clean_input();
+    let preflight = run_preflight_doctor(
+        &input,
+        EvidenceExportFilter::default(),
+        SupportBundleRedactionPolicy::default(),
+    );
+    let onboarding = build_onboarding_scorecard(&OnboardingScorecardInput {
+        workload_id: "pkg/platform-risk".to_string(),
+        package_name: "platform-risk".to_string(),
+        target_platforms: vec!["linux-x64".to_string(), "macos-arm64".to_string()],
+        preflight,
+        external_signals: vec![OnboardingScorecardSignal {
+            signal_id: "compat:node-globals".to_string(),
+            source: "compatibility_advisory".to_string(),
+            severity: EvidenceSeverity::Warning,
+            summary: "node global drift".to_string(),
+            remediation: "route through compatibility advisory owner".to_string(),
+            reproducible_command: "frankenctl compatibility-advisories".to_string(),
+            evidence_links: vec!["artifacts/compatibility/advisory.json".to_string()],
+            owner_hint: Some("compatibility-lane".to_string()),
+        }],
+    });
+    let artifact = build_rollout_decision_artifact(&RolloutDecisionArtifactInput {
+        onboarding_scorecard: onboarding,
+        compatibility_advisories: Vec::new(),
+        platform_matrix_signals: vec![
+            OnboardingScorecardSignal {
+                signal_id: "matrix:macos-arm64".to_string(),
+                source: "platform_matrix".to_string(),
+                severity: EvidenceSeverity::Warning,
+                summary: "line ending drift".to_string(),
+                remediation: "normalize emitted artifacts".to_string(),
+                reproducible_command: "scripts/run_rgc_cross_platform_matrix_gate.sh ci"
+                    .to_string(),
+                evidence_links: vec![
+                    "artifacts/rgc_cross_platform_matrix/latest/matrix_summary.json".to_string(),
+                ],
+                owner_hint: Some("platform-matrix-lane".to_string()),
+            },
+            OnboardingScorecardSignal {
+                signal_id: "matrix:linux-x64".to_string(),
+                source: "platform_matrix".to_string(),
+                severity: EvidenceSeverity::Critical,
+                summary: "baseline drift".to_string(),
+                remediation: "block promotion".to_string(),
+                reproducible_command: "scripts/run_rgc_cross_platform_matrix_gate.sh matrix"
+                    .to_string(),
+                evidence_links: vec![
+                    "artifacts/rgc_cross_platform_matrix/latest/linux-x64.json".to_string(),
+                ],
+                owner_hint: Some("platform-matrix-lane".to_string()),
+            },
+        ],
+    });
+
+    let matrix = build_platform_risk_matrix(&artifact);
+    assert_eq!(
+        matrix.schema_version,
+        "franken-engine.runtime-diagnostics.platform-risk-matrix.v1"
+    );
+    assert_eq!(matrix.workload_id, "pkg/platform-risk");
+    assert_eq!(matrix.platform_signal_count, 2);
+    assert_eq!(matrix.highest_severity, Some(EvidenceSeverity::Critical));
+    assert_eq!(matrix.rows[0].target_id, "linux-x64");
+    assert_eq!(matrix.rows[0].severity, EvidenceSeverity::Critical);
+    assert_eq!(matrix.rows[1].target_id, "macos-arm64");
+    assert!(
+        matrix
+            .rows
+            .iter()
+            .all(|row| row.signal_id.starts_with("matrix:"))
+    );
+    assert_eq!(matrix.logs, artifact.logs);
+
+    let first_json = serde_json::to_string(&matrix).expect("matrix serializes");
+    let second_json = serde_json::to_string(&build_platform_risk_matrix(&artifact))
+        .expect("matrix serializes again");
+    assert_eq!(first_json, second_json);
 }
 
 #[test]

@@ -136,6 +136,9 @@ This command emits a top-level doctor report plus:
 - `support_bundle/preflight_report.json`
 - `support_bundle/onboarding_scorecard.json`
 - `support_bundle/rollout_decision_artifact.json`
+- `support_bundle/rollout_decision_packet.json`
+- `support_bundle/rollout_decision_summary.md`
+- `support_bundle/platform_risk_matrix.json`
 - `support_bundle/frankenctl_doctor_report.json`
 
 `--signals`, `--advisories`, and `--platform-signals` accept either:

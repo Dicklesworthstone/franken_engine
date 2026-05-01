@@ -8,11 +8,12 @@ use frankenengine_engine::runtime_diagnostics_cli::{
     CompatibilityAdvisoryInput, CompatibilityAdvisoryOutput, EvidenceExportFilter,
     GaEvidenceArtifactCategory, GaEvidenceArtifactLink, GaEvidencePackageInput,
     OnboardingScorecardInput, OnboardingScorecardOutput, OnboardingScorecardSignal,
-    PreflightDoctorOutput, RolloutDecisionArtifactInput, RuntimeDiagnosticsCliInput,
-    SupportBundleFile, SupportBundleOutput, SupportBundleRedactionPolicy,
-    build_compatibility_advisories, build_ga_evidence_package, build_onboarding_owner_routing,
-    build_onboarding_scorecard, build_rollout_decision_artifact, collect_runtime_diagnostics,
-    export_evidence_bundle, export_support_bundle, parse_decision_type, parse_evidence_severity,
+    PreflightDoctorOutput, RolloutDecisionArtifactInput, RolloutDecisionArtifactOutput,
+    RuntimeDiagnosticsCliInput, SupportBundleFile, SupportBundleOutput,
+    SupportBundleRedactionPolicy, build_compatibility_advisories, build_ga_evidence_package,
+    build_onboarding_owner_routing, build_onboarding_scorecard, build_platform_risk_matrix,
+    build_rollout_decision_artifact, collect_runtime_diagnostics, export_evidence_bundle,
+    export_support_bundle, parse_decision_type, parse_evidence_severity,
     render_compatibility_advisory_summary, render_diagnostics_summary, render_evidence_summary,
     render_ga_evidence_package_summary, render_onboarding_scorecard_markdown,
     render_onboarding_scorecard_summary, render_preflight_summary,
@@ -876,27 +877,7 @@ fn run_rollout_decision_artifact(args: &[String]) -> Result<(), String> {
     if let Some(out_dir) = out_dir {
         write_support_bundle_files(&preflight.support_bundle, &out_dir)?;
         write_onboarding_scorecard_reports(&out_dir, &preflight, &scorecard)?;
-
-        let artifact_path = out_dir.join("support_bundle/rollout_decision_artifact.json");
-        if let Some(parent) = artifact_path.parent() {
-            fs::create_dir_all(parent).map_err(|error| {
-                format!(
-                    "failed to create rollout decision artifact directory '{}': {error}",
-                    parent.display()
-                )
-            })?;
-        }
-        fs::write(
-            &artifact_path,
-            serde_json::to_vec_pretty(&artifact)
-                .map_err(|error| format!("failed to encode rollout decision artifact: {error}"))?,
-        )
-        .map_err(|error| {
-            format!(
-                "failed to write rollout decision artifact '{}': {error}",
-                artifact_path.display()
-            )
-        })?;
+        write_rollout_decision_reports(&out_dir, &artifact)?;
     }
 
     if summary {
@@ -1146,12 +1127,7 @@ fn run_ga_evidence_package(args: &[String]) -> Result<(), String> {
     if let Some(out_dir) = out_dir {
         write_support_bundle_files(&preflight.support_bundle, &out_dir)?;
         write_onboarding_scorecard_reports(&out_dir, &preflight, &scorecard)?;
-        write_json_file(
-            &out_dir,
-            "support_bundle/rollout_decision_artifact.json",
-            &artifact,
-            "rollout decision artifact",
-        )?;
+        write_rollout_decision_reports(&out_dir, &artifact)?;
         write_materialized_files(&output.files, &out_dir)?;
     }
 
@@ -1340,6 +1316,36 @@ fn write_onboarding_scorecard_reports(
         "support_bundle/owner_routing.json",
         &build_onboarding_owner_routing(scorecard),
         "owner routing report",
+    )
+}
+
+fn write_rollout_decision_reports(
+    out_dir: &Path,
+    artifact: &RolloutDecisionArtifactOutput,
+) -> Result<(), String> {
+    write_json_file(
+        out_dir,
+        "support_bundle/rollout_decision_artifact.json",
+        artifact,
+        "rollout decision artifact",
+    )?;
+    write_json_file(
+        out_dir,
+        "support_bundle/rollout_decision_packet.json",
+        artifact,
+        "rollout decision packet",
+    )?;
+    write_text_file(
+        out_dir,
+        "support_bundle/rollout_decision_summary.md",
+        &render_rollout_decision_artifact_summary(artifact),
+        "rollout decision summary",
+    )?;
+    write_json_file(
+        out_dir,
+        "support_bundle/platform_risk_matrix.json",
+        &build_platform_risk_matrix(artifact),
+        "platform risk matrix",
     )
 }
 

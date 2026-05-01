@@ -803,6 +803,9 @@ fn frankenctl_react_cli_workflow_script_emits_expected_artifacts_and_routes() {
     assert!(script.contains("support_bundle/rollout_decision_packet.json"));
     assert!(script.contains("support_bundle/rollout_decision_summary.md"));
     assert!(script.contains("support_bundle/platform_risk_matrix.json"));
+    assert!(script.contains("support_bundle/redaction_audit_report.json"));
+    assert!(script.contains("support_bundle/leak_fixture_matrix.json"));
+    assert!(script.contains("support_bundle/privacy_verdict_summary.md"));
     assert!(script.contains("support_bundle/frankenctl_doctor_report.json"));
     assert!(
         script.contains("cargo run -q -p frankenengine-engine --bin frankenctl -- react contract")
@@ -846,6 +849,9 @@ fn frankenctl_react_example_app_workflow_script_emits_expected_artifacts_and_rou
     assert!(script.contains("support_bundle/rollout_decision_packet.json"));
     assert!(script.contains("support_bundle/rollout_decision_summary.md"));
     assert!(script.contains("support_bundle/platform_risk_matrix.json"));
+    assert!(script.contains("support_bundle/redaction_audit_report.json"));
+    assert!(script.contains("support_bundle/leak_fixture_matrix.json"));
+    assert!(script.contains("support_bundle/privacy_verdict_summary.md"));
     assert!(script.contains("support_bundle/frankenctl_doctor_report.json"));
     assert!(
         script.contains("cargo run -q -p frankenengine-engine --bin frankenctl -- react contract")
@@ -932,6 +938,9 @@ fn frankenctl_cli_workflow_script_emits_expected_artifacts_and_routes() {
     assert!(script.contains("support_bundle/rollout_decision_packet.json"));
     assert!(script.contains("support_bundle/rollout_decision_summary.md"));
     assert!(script.contains("support_bundle/platform_risk_matrix.json"));
+    assert!(script.contains("support_bundle/redaction_audit_report.json"));
+    assert!(script.contains("support_bundle/leak_fixture_matrix.json"));
+    assert!(script.contains("support_bundle/privacy_verdict_summary.md"));
     assert!(script.contains("support_bundle/frankenctl_doctor_report.json"));
     assert!(script.contains("cargo run -q -p frankenengine-engine --bin frankenctl -- doctor"));
     assert!(script.contains("rch exec"));
@@ -972,6 +981,9 @@ fn frankenctl_cli_workflow_script_pins_replay_contract() {
         "${candidate}/support_bundle/rollout_decision_packet.json",
         "${candidate}/support_bundle/rollout_decision_summary.md",
         "${candidate}/support_bundle/platform_risk_matrix.json",
+        "${candidate}/support_bundle/redaction_audit_report.json",
+        "${candidate}/support_bundle/leak_fixture_matrix.json",
+        "${candidate}/support_bundle/privacy_verdict_summary.md",
         "${candidate}/support_bundle/frankenctl_doctor_report.json",
     ] {
         assert!(
@@ -994,6 +1006,9 @@ fn frankenctl_cli_workflow_script_pins_replay_contract() {
         "frankenctl workflow replay support bundle rollout decision packet: ${candidate}/support_bundle/rollout_decision_packet.json",
         "frankenctl workflow replay support bundle rollout decision summary: ${candidate}/support_bundle/rollout_decision_summary.md",
         "frankenctl workflow replay support bundle platform risk matrix: ${candidate}/support_bundle/platform_risk_matrix.json",
+        "frankenctl workflow replay support bundle redaction audit: ${candidate}/support_bundle/redaction_audit_report.json",
+        "frankenctl workflow replay support bundle leak fixture matrix: ${candidate}/support_bundle/leak_fixture_matrix.json",
+        "frankenctl workflow replay support bundle privacy verdict summary: ${candidate}/support_bundle/privacy_verdict_summary.md",
         "frankenctl workflow replay support bundle doctor report: ${candidate}/support_bundle/frankenctl_doctor_report.json",
     ] {
         assert!(
@@ -2170,6 +2185,23 @@ fn frankenctl_doctor_outputs_json_and_writes_support_bundle() {
         platform_risk_matrix_path.is_file(),
         "expected platform risk matrix to be written"
     );
+    let redaction_audit_path = out_dir.join("support_bundle/redaction_audit_report.json");
+    assert!(
+        redaction_audit_path.is_file(),
+        "expected redaction audit report to be written"
+    );
+    assert!(
+        out_dir
+            .join("support_bundle/leak_fixture_matrix.json")
+            .is_file(),
+        "expected leak fixture matrix to be written"
+    );
+    assert!(
+        out_dir
+            .join("support_bundle/privacy_verdict_summary.md")
+            .is_file(),
+        "expected privacy verdict summary to be written"
+    );
     assert!(
         out_dir
             .join("support_bundle/frankenctl_doctor_report.json")
@@ -2192,6 +2224,17 @@ fn frankenctl_doctor_outputs_json_and_writes_support_bundle() {
     assert_eq!(
         platform_risk_matrix["platform_signal_count"].as_u64(),
         Some(0)
+    );
+    let redaction_audit: serde_json::Value = serde_json::from_slice(
+        &fs::read(&redaction_audit_path).expect("redaction audit should be readable"),
+    )
+    .expect("redaction audit should parse as json");
+    assert_eq!(redaction_audit["verdict"].as_str(), Some("pass"));
+    assert_eq!(
+        json["preflight"]["support_bundle"]["privacy_verification"]["redaction_audit_report"]
+            ["verdict"]
+            .as_str(),
+        Some("pass")
     );
 
     let _ = fs::remove_file(input_path);

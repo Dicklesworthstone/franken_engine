@@ -19,6 +19,8 @@ use crate::expected_loss_selector::ContainmentAction;
 use crate::hostcall_telemetry::{HostcallResult, HostcallTelemetryRecord};
 use crate::module_compatibility_matrix::{CompatibilityScenarioReport, DivergenceCategory};
 use crate::security_epoch::SecurityEpoch;
+use crate::support_bundle_export::{is_sensitive, prefixed_sha256};
+use crate::test_logging_schema::detect_secret_patterns;
 
 const COMPONENT: &str = "runtime_diagnostics_cli";
 const SUPPORT_BUNDLE_SCHEMA_VERSION: &str = "franken-engine.runtime-diagnostics.support-bundle.v1";
@@ -36,6 +38,9 @@ const ROLLOUT_DECISION_FAILURE_CODE: &str = "FE-RUNTIME-DIAGNOSTICS-ROLLOUT-0001
 const GA_EVIDENCE_PACKAGE_SCHEMA_VERSION: &str =
     "franken-engine.runtime-diagnostics.ga-evidence-package.v1";
 const GA_EVIDENCE_PACKAGE_FAILURE_CODE: &str = "FE-RUNTIME-DIAGNOSTICS-GA-0001";
+const PRIVACY_VERIFICATION_SCHEMA_VERSION: &str =
+    "franken-engine.runtime-diagnostics.privacy-verification.v1";
+const PRIVACY_VERIFICATION_FAILURE_CODE: &str = "FE-RUNTIME-DIAGNOSTICS-PRIVACY-0001";
 
 #[track_caller]
 fn serialize_json_value<T: ?Sized + Serialize>(value: &T, _context: &str) -> Value {
@@ -533,6 +538,93 @@ pub struct SupportBundleFile {
     pub bytes: u64,
 }
 
+/// Privacy-verification pass/fail state for user-shareable artifacts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PrivacyVerificationVerdict {
+    Pass,
+    Fail,
+}
+
+impl PrivacyVerificationVerdict {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Pass => "pass",
+            Self::Fail => "fail",
+        }
+    }
+}
+
+impl fmt::Display for PrivacyVerificationVerdict {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str((*self).as_str())
+    }
+}
+
+/// User-facing artifact content scanned by the privacy verifier.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PrivacyVerificationArtifact {
+    pub artifact_path: String,
+    pub content: String,
+}
+
+/// Deterministic privacy-verification input contract.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PrivacyVerificationInput {
+    pub trace_id: String,
+    pub decision_id: String,
+    pub policy_id: String,
+    pub artifact_scope: String,
+    pub redaction_policy: SupportBundleRedactionPolicy,
+    pub artifacts: Vec<PrivacyVerificationArtifact>,
+}
+
+/// One privacy finding with only hashed sensitive values.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RedactionAuditFinding {
+    pub finding_id: String,
+    pub detector: String,
+    pub artifact_path: String,
+    pub field_path: String,
+    pub severity: EvidenceSeverity,
+    pub value_hash: String,
+    pub rationale: String,
+    pub remediation: String,
+}
+
+/// Deterministic leak-fixture matrix row for operator and CI review.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LeakFixtureMatrixRow {
+    pub fixture_id: String,
+    pub detector: String,
+    pub description: String,
+    pub status: PrivacyVerificationVerdict,
+    pub matched_count: u64,
+    pub matched_paths: Vec<String>,
+}
+
+/// Machine-readable redaction audit report.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RedactionAuditReportOutput {
+    pub schema_version: String,
+    pub artifact_scope: String,
+    pub verdict: PrivacyVerificationVerdict,
+    pub scanned_artifacts: Vec<String>,
+    pub total_findings: u64,
+    pub detector_counts: BTreeMap<String, u64>,
+    pub findings: Vec<RedactionAuditFinding>,
+    pub logs: Vec<StructuredLogEvent>,
+}
+
+/// Full privacy-verification output with report, matrix, and summary payload.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PrivacyVerificationOutput {
+    pub redaction_audit_report: RedactionAuditReportOutput,
+    pub leak_fixture_matrix: Vec<LeakFixtureMatrixRow>,
+    pub privacy_verdict_summary_md: String,
+}
+
 /// Deterministic support-bundle export output.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SupportBundleOutput {
@@ -540,6 +632,7 @@ pub struct SupportBundleOutput {
     pub redaction_policy: SupportBundleRedactionPolicy,
     pub index: SupportBundleIndex,
     pub files: Vec<SupportBundleFile>,
+    pub privacy_verification: PrivacyVerificationOutput,
     pub logs: Vec<StructuredLogEvent>,
 }
 
@@ -1246,6 +1339,18 @@ pub fn export_support_bundle(
     ];
 
     files.sort_by(|left, right| left.path.cmp(&right.path));
+    let privacy_verification = build_privacy_verification_report(&PrivacyVerificationInput {
+        trace_id: input.trace_id.clone(),
+        decision_id: input.decision_id.clone(),
+        policy_id: input.policy_id.clone(),
+        artifact_scope: "support_bundle".to_string(),
+        redaction_policy: redaction_policy.clone(),
+        artifacts: privacy_artifacts_from_support_bundle_files(&files),
+    });
+    files.extend(materialize_privacy_verification_files(
+        &privacy_verification,
+    ));
+    files.sort_by(|left, right| left.path.cmp(&right.path));
     let file_index_entries = files
         .iter()
         .map(|file| SupportBundleFileIndexEntry {
@@ -1279,6 +1384,7 @@ pub fn export_support_bundle(
         redaction_policy,
         index,
         files,
+        privacy_verification,
         logs,
     }
 }
@@ -1295,6 +1401,17 @@ pub fn render_support_bundle_summary(output: &SupportBundleOutput) -> String {
     lines.push(format!(
         "total_redacted_fields: {}",
         output.index.total_redacted_fields
+    ));
+    lines.push(format!(
+        "privacy_verdict: {}",
+        output.privacy_verification.redaction_audit_report.verdict
+    ));
+    lines.push(format!(
+        "privacy_findings: {}",
+        output
+            .privacy_verification
+            .redaction_audit_report
+            .total_findings
     ));
     lines.push("files:".to_string());
     for file in &output.index.files {
@@ -1343,6 +1460,30 @@ pub fn run_preflight_doctor(
                 "support_bundle/run_manifest.json".to_string(),
                 "support_bundle/index.json".to_string(),
                 "support_bundle/events.jsonl".to_string(),
+            ],
+        });
+    }
+    if support_bundle
+        .privacy_verification
+        .redaction_audit_report
+        .verdict
+        == PrivacyVerificationVerdict::Fail
+    {
+        blockers.push(PreflightBlocker {
+            blocker_id: "privacy_redaction_contract".to_string(),
+            severity: EvidenceSeverity::Critical,
+            rationale: "shareable diagnostics contain unresolved secret or sensitive-key findings"
+                .to_string(),
+            remediation:
+                "inspect support_bundle/redaction_audit_report.json and update redaction policy"
+                    .to_string(),
+            reproducible_command:
+                "runtime_diagnostics support-bundle --input <path> --summary --out-dir <path>"
+                    .to_string(),
+            evidence_links: vec![
+                "support_bundle/redaction_audit_report.json".to_string(),
+                "support_bundle/leak_fixture_matrix.json".to_string(),
+                "support_bundle/privacy_verdict_summary.md".to_string(),
             ],
         });
     }
@@ -3106,6 +3247,9 @@ fn validate_preflight_mandatory_fields(
         "support_bundle/runtime_diagnostics.json",
         "support_bundle/evidence_records.jsonl",
         "support_bundle/summary.md",
+        "support_bundle/redaction_audit_report.json",
+        "support_bundle/leak_fixture_matrix.json",
+        "support_bundle/privacy_verdict_summary.md",
         "support_bundle/index.json",
     ];
     for path in required_paths {
@@ -3139,6 +3283,444 @@ fn validate_preflight_mandatory_fields(
         valid: missing_fields.is_empty() && inconsistent_fields.is_empty(),
         missing_fields,
         inconsistent_fields,
+    }
+}
+
+const PRIVACY_DETECTOR_FIXTURES: [(&str, &str, &str); 9] = [
+    (
+        "rgc-065-sensitive-key-redaction",
+        "sensitive_key_unredacted",
+        "Sensitive artifact fields must contain an approved redaction marker or hash.",
+    ),
+    (
+        "rgc-065-password-inline",
+        "secret_pattern:password_inline",
+        "Inline password assignments must not appear in shareable artifacts.",
+    ),
+    (
+        "rgc-065-secret-inline",
+        "secret_pattern:secret_inline",
+        "Inline secret assignments must not appear in shareable artifacts.",
+    ),
+    (
+        "rgc-065-api-key-inline",
+        "secret_pattern:api_key_inline",
+        "Inline API key assignments must not appear in shareable artifacts.",
+    ),
+    (
+        "rgc-065-access-token-inline",
+        "secret_pattern:access_token_inline",
+        "Inline access-token assignments must not appear in shareable artifacts.",
+    ),
+    (
+        "rgc-065-bearer-token",
+        "secret_pattern:bearer_token",
+        "Bearer credentials must not appear in shareable artifacts.",
+    ),
+    (
+        "rgc-065-aws-access-key-id",
+        "secret_pattern:aws_access_key_id",
+        "AWS access-key identifiers must not appear in shareable artifacts.",
+    ),
+    (
+        "rgc-065-github-personal-token",
+        "secret_pattern:github_personal_token",
+        "GitHub personal-access tokens must not appear in shareable artifacts.",
+    ),
+    (
+        "rgc-065-slack-token",
+        "secret_pattern:slack_token",
+        "Slack tokens must not appear in shareable artifacts.",
+    ),
+];
+
+/// Build deterministic privacy-verification artifacts for user-shareable files.
+pub fn build_privacy_verification_report(
+    input: &PrivacyVerificationInput,
+) -> PrivacyVerificationOutput {
+    let mut scanned_artifacts = input
+        .artifacts
+        .iter()
+        .map(|artifact| artifact.artifact_path.trim())
+        .filter(|path| !path.is_empty())
+        .map(std::string::ToString::to_string)
+        .collect::<Vec<_>>();
+    scanned_artifacts.sort();
+    scanned_artifacts.dedup();
+
+    let mut flattened = BTreeMap::<String, String>::new();
+    for artifact in &input.artifacts {
+        flatten_privacy_artifact(artifact, &mut flattened);
+    }
+
+    let mut findings = Vec::new();
+    for detected in detect_secret_patterns(&flattened) {
+        let artifact_path = artifact_path_from_field_path(&detected.field_path);
+        let detector = format!("secret_pattern:{}", detected.pattern_id);
+        findings.push(redaction_audit_finding(
+            &detector,
+            &artifact_path,
+            &detected.field_path,
+            &detected.value_hash,
+            "secret pattern detector matched an unresolved artifact value",
+            "redact, hash, or remove the matched value before exporting diagnostics",
+        ));
+    }
+
+    for (field_path, value) in &flattened {
+        if should_flag_unredacted_sensitive_field(field_path, value, &input.redaction_policy) {
+            let artifact_path = artifact_path_from_field_path(field_path);
+            findings.push(redaction_audit_finding(
+                "sensitive_key_unredacted",
+                &artifact_path,
+                field_path,
+                &prefixed_sha256(value.as_bytes()),
+                "sensitive field path contains a non-redacted value",
+                "route this field through the support-bundle redaction policy before export",
+            ));
+        }
+    }
+
+    findings.sort_by(|left, right| {
+        left.detector
+            .cmp(&right.detector)
+            .then(left.artifact_path.cmp(&right.artifact_path))
+            .then(left.field_path.cmp(&right.field_path))
+            .then(left.value_hash.cmp(&right.value_hash))
+    });
+    findings.dedup();
+
+    let mut detector_counts = BTreeMap::new();
+    for finding in &findings {
+        *detector_counts.entry(finding.detector.clone()).or_insert(0) += 1;
+    }
+
+    let verdict = if findings.is_empty() {
+        PrivacyVerificationVerdict::Pass
+    } else {
+        PrivacyVerificationVerdict::Fail
+    };
+    let logs = vec![StructuredLogEvent {
+        trace_id: input.trace_id.clone(),
+        decision_id: input.decision_id.clone(),
+        policy_id: input.policy_id.clone(),
+        component: COMPONENT.to_string(),
+        event: "privacy_verification".to_string(),
+        outcome: verdict.to_string(),
+        error_code: if verdict == PrivacyVerificationVerdict::Pass {
+            None
+        } else {
+            Some(PRIVACY_VERIFICATION_FAILURE_CODE.to_string())
+        },
+    }];
+
+    let leak_fixture_matrix = build_leak_fixture_matrix(&findings);
+    let redaction_audit_report = RedactionAuditReportOutput {
+        schema_version: PRIVACY_VERIFICATION_SCHEMA_VERSION.to_string(),
+        artifact_scope: normalize_or_default(&input.artifact_scope, "runtime_diagnostics"),
+        verdict,
+        scanned_artifacts,
+        total_findings: findings.len() as u64,
+        detector_counts,
+        findings,
+        logs,
+    };
+    let privacy_verdict_summary_md =
+        render_privacy_verdict_summary_parts(&redaction_audit_report, &leak_fixture_matrix);
+
+    PrivacyVerificationOutput {
+        redaction_audit_report,
+        leak_fixture_matrix,
+        privacy_verdict_summary_md,
+    }
+}
+
+/// Render privacy-verification output in deterministic human-readable form.
+pub fn render_privacy_verdict_summary(output: &PrivacyVerificationOutput) -> String {
+    render_privacy_verdict_summary_parts(
+        &output.redaction_audit_report,
+        &output.leak_fixture_matrix,
+    )
+}
+
+fn redaction_audit_finding(
+    detector: &str,
+    artifact_path: &str,
+    field_path: &str,
+    value_hash: &str,
+    rationale: &str,
+    remediation: &str,
+) -> RedactionAuditFinding {
+    let material = format!("{detector}\n{artifact_path}\n{field_path}\n{value_hash}");
+    let finding_hash = compute_sha256_hex(material.as_bytes());
+    RedactionAuditFinding {
+        finding_id: format!(
+            "privacy-finding-{}",
+            finding_hash.get(..16).unwrap_or(&finding_hash)
+        ),
+        detector: detector.to_string(),
+        artifact_path: artifact_path.to_string(),
+        field_path: field_path.to_string(),
+        severity: EvidenceSeverity::Critical,
+        value_hash: value_hash.to_string(),
+        rationale: rationale.to_string(),
+        remediation: remediation.to_string(),
+    }
+}
+
+fn build_leak_fixture_matrix(findings: &[RedactionAuditFinding]) -> Vec<LeakFixtureMatrixRow> {
+    let mut rows = Vec::new();
+    for (fixture_id, detector, description) in PRIVACY_DETECTOR_FIXTURES {
+        let mut matched_paths = findings
+            .iter()
+            .filter(|finding| finding.detector == detector)
+            .map(|finding| finding.field_path.clone())
+            .collect::<Vec<_>>();
+        matched_paths.sort();
+        matched_paths.dedup();
+        rows.push(LeakFixtureMatrixRow {
+            fixture_id: fixture_id.to_string(),
+            detector: detector.to_string(),
+            description: description.to_string(),
+            status: if matched_paths.is_empty() {
+                PrivacyVerificationVerdict::Pass
+            } else {
+                PrivacyVerificationVerdict::Fail
+            },
+            matched_count: matched_paths.len() as u64,
+            matched_paths,
+        });
+    }
+
+    let known_detectors = PRIVACY_DETECTOR_FIXTURES
+        .iter()
+        .map(|(_, detector, _)| (*detector).to_string())
+        .collect::<BTreeSet<_>>();
+    let mut extra_detectors = findings
+        .iter()
+        .filter(|finding| !known_detectors.contains(&finding.detector))
+        .map(|finding| finding.detector.clone())
+        .collect::<BTreeSet<_>>();
+    for detector in std::mem::take(&mut extra_detectors) {
+        let mut matched_paths = findings
+            .iter()
+            .filter(|finding| finding.detector == detector)
+            .map(|finding| finding.field_path.clone())
+            .collect::<Vec<_>>();
+        matched_paths.sort();
+        matched_paths.dedup();
+        rows.push(LeakFixtureMatrixRow {
+            fixture_id: format!("rgc-065-extra-{}", stable_label_fragment(&detector)),
+            detector,
+            description: "Additional privacy detector matched a shareable artifact.".to_string(),
+            status: PrivacyVerificationVerdict::Fail,
+            matched_count: matched_paths.len() as u64,
+            matched_paths,
+        });
+    }
+
+    rows.sort_by(|left, right| left.fixture_id.cmp(&right.fixture_id));
+    rows
+}
+
+fn render_privacy_verdict_summary_parts(
+    report: &RedactionAuditReportOutput,
+    matrix: &[LeakFixtureMatrixRow],
+) -> String {
+    let mut lines = Vec::new();
+    lines.push("# Privacy Verification Summary".to_string());
+    lines.push(String::new());
+    lines.push(format!("- schema_version: `{}`", report.schema_version));
+    lines.push(format!("- artifact_scope: `{}`", report.artifact_scope));
+    lines.push(format!("- verdict: `{}`", report.verdict));
+    lines.push(format!(
+        "- scanned_artifacts: `{}`",
+        report.scanned_artifacts.len()
+    ));
+    lines.push(format!("- total_findings: `{}`", report.total_findings));
+    lines.push(String::new());
+    lines.push("## Leak Fixture Matrix".to_string());
+    lines.push(String::new());
+    for row in matrix {
+        lines.push(format!(
+            "- `{}` detector=`{}` status=`{}` matched_count=`{}`",
+            row.fixture_id, row.detector, row.status, row.matched_count
+        ));
+    }
+    if !report.findings.is_empty() {
+        lines.push(String::new());
+        lines.push("## Findings".to_string());
+        lines.push(String::new());
+        for finding in &report.findings {
+            lines.push(format!(
+                "- `{}` detector=`{}` artifact=`{}` field=`{}`",
+                finding.finding_id, finding.detector, finding.artifact_path, finding.field_path
+            ));
+        }
+    }
+    lines.join("\n")
+}
+
+fn privacy_artifacts_from_support_bundle_files(
+    files: &[SupportBundleFile],
+) -> Vec<PrivacyVerificationArtifact> {
+    files
+        .iter()
+        .map(|file| PrivacyVerificationArtifact {
+            artifact_path: file.path.clone(),
+            content: file.content.clone(),
+        })
+        .collect()
+}
+
+fn materialize_privacy_verification_files(
+    output: &PrivacyVerificationOutput,
+) -> Vec<SupportBundleFile> {
+    vec![
+        make_support_bundle_file(
+            "support_bundle/redaction_audit_report.json",
+            serialize_pretty_json_string(
+                &output.redaction_audit_report,
+                "privacy redaction audit report should serialize",
+            ),
+        ),
+        make_support_bundle_file(
+            "support_bundle/leak_fixture_matrix.json",
+            serialize_pretty_json_string(
+                &output.leak_fixture_matrix,
+                "privacy leak fixture matrix should serialize",
+            ),
+        ),
+        make_support_bundle_file(
+            "support_bundle/privacy_verdict_summary.md",
+            output.privacy_verdict_summary_md.clone(),
+        ),
+    ]
+}
+
+fn flatten_privacy_artifact(
+    artifact: &PrivacyVerificationArtifact,
+    flattened: &mut BTreeMap<String, String>,
+) {
+    let artifact_path = artifact.artifact_path.trim();
+    if artifact_path.is_empty() {
+        return;
+    }
+    let trimmed = artifact.content.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+
+    if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
+        flatten_json_value_for_privacy(artifact_path, &value, flattened);
+        return;
+    }
+
+    for (index, line) in artifact.content.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let field_path = format!("{artifact_path}.line_{index:03}");
+        if let Ok(value) = serde_json::from_str::<Value>(line) {
+            flatten_json_value_for_privacy(&field_path, &value, flattened);
+        } else {
+            flattened.insert(field_path, line.to_string());
+        }
+    }
+}
+
+fn flatten_json_value_for_privacy(
+    path: &str,
+    value: &Value,
+    flattened: &mut BTreeMap<String, String>,
+) {
+    match value {
+        Value::Object(map) => {
+            let mut entries = map.iter().collect::<Vec<_>>();
+            entries.sort_by(|left, right| left.0.cmp(right.0));
+            for (key, nested) in entries {
+                let child = format!("{path}.{key}");
+                flatten_json_value_for_privacy(&child, nested, flattened);
+            }
+        }
+        Value::Array(values) => {
+            for (index, nested) in values.iter().enumerate() {
+                let child = format!("{path}[{index:03}]");
+                flatten_json_value_for_privacy(&child, nested, flattened);
+            }
+        }
+        Value::String(value) => {
+            flattened.insert(path.to_string(), value.clone());
+        }
+        Value::Bool(value) => {
+            flattened.insert(path.to_string(), value.to_string());
+        }
+        Value::Number(value) => {
+            flattened.insert(path.to_string(), value.to_string());
+        }
+        Value::Null => {}
+    }
+}
+
+fn should_flag_unredacted_sensitive_field(
+    field_path: &str,
+    value: &str,
+    redaction_policy: &SupportBundleRedactionPolicy,
+) -> bool {
+    if is_approved_redacted_value(value) {
+        return false;
+    }
+
+    redaction_policy.should_redact_key(field_path) || is_sensitive(field_path)
+}
+
+fn is_approved_redacted_value(value: &str) -> bool {
+    let trimmed = value.trim();
+    trimmed.is_empty()
+        || trimmed == DEFAULT_SUPPORT_BUNDLE_REDACTION_MARKER
+        || trimmed == "[REDACTED]"
+        || trimmed.starts_with("sha256:")
+}
+
+fn artifact_path_from_field_path(field_path: &str) -> String {
+    if let Some((path, _)) = field_path.split_once(".line_") {
+        return path.to_string();
+    }
+    for marker in [".json.", ".jsonl.", ".md.", ".txt."] {
+        if let Some(position) = field_path.find(marker) {
+            return field_path[..position + marker.len() - 1].to_string();
+        }
+    }
+    field_path.to_string()
+}
+
+fn stable_label_fragment(raw: &str) -> String {
+    let mut label = String::new();
+    let mut previous_separator = false;
+    for ch in raw.chars() {
+        let normalized = if ch.is_ascii_alphanumeric() {
+            ch.to_ascii_lowercase()
+        } else {
+            '_'
+        };
+        if normalized == '_' {
+            if !previous_separator && !label.is_empty() {
+                label.push('_');
+            }
+            previous_separator = true;
+        } else {
+            label.push(normalized);
+            previous_separator = false;
+        }
+    }
+    while label.ends_with('_') {
+        label.pop();
+    }
+    if label.is_empty() {
+        "detector".to_string()
+    } else {
+        label
     }
 }
 

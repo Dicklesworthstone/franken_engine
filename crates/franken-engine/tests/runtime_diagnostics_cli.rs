@@ -33,17 +33,19 @@ use frankenengine_engine::runtime_diagnostics_cli::{
     EvidenceSeverity, GaEvidenceArtifactCategory, GaEvidenceArtifactLink, GaEvidencePackageInput,
     GcPressureSample, HostcallTelemetryEnvelope, OnboardingReadinessClass,
     OnboardingRemediationEffort, OnboardingScorecardInput, OnboardingScorecardSignal,
-    PreflightVerdict, ReplayArtifactRecord, RolloutDecisionArtifactInput, RolloutRecommendation,
-    RuntimeDiagnosticsCliInput, RuntimeExtensionState, RuntimeStateInput, SchedulerLaneSample,
-    SupportBundleRedactionPolicy, build_ga_evidence_package, build_onboarding_owner_routing,
-    build_onboarding_scorecard, build_platform_risk_matrix, build_rollout_decision_artifact,
+    PreflightVerdict, PrivacyVerificationArtifact, PrivacyVerificationInput,
+    PrivacyVerificationVerdict, ReplayArtifactRecord, RolloutDecisionArtifactInput,
+    RolloutRecommendation, RuntimeDiagnosticsCliInput, RuntimeExtensionState, RuntimeStateInput,
+    SchedulerLaneSample, SupportBundleRedactionPolicy, build_ga_evidence_package,
+    build_onboarding_owner_routing, build_onboarding_scorecard, build_platform_risk_matrix,
+    build_privacy_verification_report, build_rollout_decision_artifact,
     collect_runtime_diagnostics, export_evidence_bundle, export_support_bundle,
     parse_decision_type, parse_evidence_severity, render_diagnostics_summary,
     render_evidence_summary, render_ga_evidence_package_summary,
     render_onboarding_scorecard_markdown, render_onboarding_scorecard_summary,
-    render_preflight_summary, render_rollout_decision_artifact_summary,
-    render_support_bundle_summary, run_preflight_doctor, signal_from_compatibility_advisory,
-    signals_from_compatibility_advisories,
+    render_preflight_summary, render_privacy_verdict_summary,
+    render_rollout_decision_artifact_summary, render_support_bundle_summary, run_preflight_doctor,
+    signal_from_compatibility_advisory, signals_from_compatibility_advisories,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
 
@@ -427,6 +429,10 @@ fn support_bundle_command_redacts_sensitive_values_and_writes_files() {
         .expect("evidence file content should be a string");
     assert!(!evidence_content.contains("secret-token-value"));
     assert!(evidence_content.contains("sha256:REDACTED"));
+    assert_eq!(
+        json["privacy_verification"]["redaction_audit_report"]["verdict"].as_str(),
+        Some("pass")
+    );
 
     let mut out_dir = std::env::temp_dir();
     let nonce = SystemTime::now()
@@ -454,8 +460,28 @@ fn support_bundle_command_redacts_sensitive_values_and_writes_files() {
 
     let written_index = out_dir.join("support_bundle/index.json");
     let written_summary = out_dir.join("support_bundle/summary.md");
+    let written_redaction_audit = out_dir.join("support_bundle/redaction_audit_report.json");
+    let written_leak_matrix = out_dir.join("support_bundle/leak_fixture_matrix.json");
+    let written_privacy_summary = out_dir.join("support_bundle/privacy_verdict_summary.md");
     assert!(written_index.exists(), "index file should be written");
     assert!(written_summary.exists(), "summary file should be written");
+    assert!(
+        written_redaction_audit.exists(),
+        "redaction audit report should be written"
+    );
+    assert!(
+        written_leak_matrix.exists(),
+        "leak fixture matrix should be written"
+    );
+    assert!(
+        written_privacy_summary.exists(),
+        "privacy verdict summary should be written"
+    );
+    let audit: serde_json::Value = serde_json::from_slice(
+        &fs::read(&written_redaction_audit).expect("redaction audit should be readable"),
+    )
+    .expect("redaction audit should parse as json");
+    assert_eq!(audit["verdict"].as_str(), Some("pass"));
 
     let _ = fs::remove_file(input_path);
     let _ = fs::remove_dir_all(out_dir);
@@ -537,10 +563,25 @@ fn doctor_command_writes_support_bundle_and_preflight_report() {
 
     let written_index = out_dir.join("support_bundle/index.json");
     let written_report = out_dir.join("support_bundle/preflight_report.json");
+    let written_redaction_audit = out_dir.join("support_bundle/redaction_audit_report.json");
+    let written_leak_matrix = out_dir.join("support_bundle/leak_fixture_matrix.json");
+    let written_privacy_summary = out_dir.join("support_bundle/privacy_verdict_summary.md");
     assert!(written_index.exists(), "index file should be written");
     assert!(
         written_report.exists(),
         "preflight report should be written"
+    );
+    assert!(
+        written_redaction_audit.exists(),
+        "redaction audit report should be written"
+    );
+    assert!(
+        written_leak_matrix.exists(),
+        "leak fixture matrix should be written"
+    );
+    assert!(
+        written_privacy_summary.exists(),
+        "privacy verdict summary should be written"
     );
 
     let report_content = fs::read_to_string(&written_report).expect("report should be readable");
@@ -550,6 +591,10 @@ fn doctor_command_writes_support_bundle_and_preflight_report() {
     assert_eq!(
         report_json["support_bundle"]["index"]["schema_version"],
         "franken-engine.runtime-diagnostics.support-bundle.v1"
+    );
+    assert_eq!(
+        report_json["support_bundle"]["privacy_verification"]["redaction_audit_report"]["verdict"],
+        "pass"
     );
 
     let _ = fs::remove_file(input_path);
@@ -967,10 +1012,17 @@ fn lib_export_support_bundle_produces_required_files() {
         "support_bundle/runtime_diagnostics.json",
         "support_bundle/evidence_records.jsonl",
         "support_bundle/summary.md",
+        "support_bundle/redaction_audit_report.json",
+        "support_bundle/leak_fixture_matrix.json",
+        "support_bundle/privacy_verdict_summary.md",
         "support_bundle/index.json",
     ] {
         assert!(paths.contains(required), "missing file: {required}");
     }
+    assert_eq!(
+        output.privacy_verification.redaction_audit_report.verdict,
+        PrivacyVerificationVerdict::Pass
+    );
 }
 
 #[test]
@@ -1000,6 +1052,77 @@ fn lib_export_support_bundle_redacts_custom_fragments() {
         SupportBundleRedactionPolicy::with_additional_fragments(vec!["custom_key".to_string()]);
     let output = export_support_bundle(&input, EvidenceExportFilter::default(), policy);
     assert!(output.index.total_redacted_fields >= 1);
+}
+
+#[test]
+fn lib_privacy_verification_fails_closed_for_unredacted_advisory_secret() {
+    let artifact = PrivacyVerificationArtifact {
+        artifact_path: "support_bundle/compatibility_advisory.json".to_string(),
+        content: serde_json::json!({
+            "advisory": {
+                "message": "migration guidance leaked Authorization: Bearer live-token-value",
+                "remediation": "rotate the credential before sharing"
+            }
+        })
+        .to_string(),
+    };
+    let output = build_privacy_verification_report(&PrivacyVerificationInput {
+        trace_id: "trace-privacy".to_string(),
+        decision_id: "decision-privacy".to_string(),
+        policy_id: "policy-privacy".to_string(),
+        artifact_scope: "compatibility_advisories".to_string(),
+        redaction_policy: SupportBundleRedactionPolicy::default(),
+        artifacts: vec![artifact],
+    });
+
+    assert_eq!(
+        output.redaction_audit_report.verdict,
+        PrivacyVerificationVerdict::Fail
+    );
+    assert!(
+        output
+            .redaction_audit_report
+            .findings
+            .iter()
+            .any(|finding| finding.detector == "secret_pattern:bearer_token")
+    );
+    assert!(
+        output
+            .redaction_audit_report
+            .findings
+            .iter()
+            .all(|finding| !finding.value_hash.contains("live-token-value")),
+        "findings must carry only hashes, not raw leaked values"
+    );
+    let summary = render_privacy_verdict_summary(&output);
+    assert!(summary.contains("verdict: `fail`"));
+    assert!(summary.contains("rgc-065-bearer-token"));
+}
+
+#[test]
+fn lib_privacy_verification_accepts_redacted_support_bundle_payloads() {
+    let mut input = build_sample_input();
+    input.evidence_entries[0].metadata.insert(
+        "api_token".to_string(),
+        "access_token=live-token-value".to_string(),
+    );
+    let output = export_support_bundle(
+        &input,
+        EvidenceExportFilter::default(),
+        SupportBundleRedactionPolicy::default(),
+    );
+
+    assert_eq!(
+        output.privacy_verification.redaction_audit_report.verdict,
+        PrivacyVerificationVerdict::Pass
+    );
+    let redaction_audit = output
+        .files
+        .iter()
+        .find(|file| file.path == "support_bundle/redaction_audit_report.json")
+        .expect("redaction audit report should be materialized");
+    assert!(!redaction_audit.content.contains("live-token-value"));
+    assert!(redaction_audit.content.contains("\"verdict\": \"pass\""));
 }
 
 // ── render_support_bundle_summary ───────────────────────────────────────

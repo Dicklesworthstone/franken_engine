@@ -1,0 +1,6 @@
+{
+  "exit_code": 0,
+  "stdout": "frankenctl 0.1.0\n",
+  "stderr": "",
+  "command": "frankenctl version"
+}

@@ -1,0 +1,6 @@
+{
+  "exit_code": 0,
+  "stdout": "franken-architecture-inventory usage:\n\n  franken-architecture-inventory [--stdout|--check|--help]\n\nOptions:\n  --stdout   Print the generated architecture inventory markdown to stdout\n  --check    Fail if docs/ARCHITECTURE_INVENTORY.md is stale\n  --help     Print this help text\n\nDefault behavior writes docs/ARCHITECTURE_INVENTORY.md.\n",
+  "stderr": "",
+  "command": "franken-architecture-inventory --help"
+}

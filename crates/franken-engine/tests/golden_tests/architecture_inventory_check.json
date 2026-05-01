@@ -1,0 +1,6 @@
+{
+  "exit_code": 0,
+  "stdout": "[PROJECT_PATH] is up to date\n",
+  "stderr": "",
+  "command": "franken-architecture-inventory --check"
+}

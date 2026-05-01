@@ -111,6 +111,14 @@ fn trusted_demo_metadata() -> BTreeMap<String, String> {
 }
 
 fn main() {
+    if std::env::args()
+        .skip(1)
+        .any(|arg| arg == "--help" || arg == "-h")
+    {
+        print_usage();
+        return;
+    }
+
     let runtime_config = RuntimeConfig::default();
     let prior = Posterior::from_prior_config(&runtime_config.guardplane.priors);
     let mut updater = BayesianPosteriorUpdater::new(prior, EXTENSION_ID);
@@ -171,5 +179,16 @@ fn main() {
     println!(
         "{}",
         serde_json::to_string_pretty(&receipt).expect("demo receipt should serialize")
+    );
+}
+
+fn print_usage() {
+    println!(
+        "\
+franken-decision-demo usage:
+
+  franken-decision-demo [--help]
+
+Runs the deterministic guardplane decision demo and prints a signed JSON receipt."
     );
 }

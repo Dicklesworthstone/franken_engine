@@ -1,0 +1,6 @@
+{
+  "exit_code": 0,
+  "stdout": "franken-decision-demo usage:\n\n  franken-decision-demo [--help]\n\nRuns the deterministic guardplane decision demo and prints a signed JSON receipt.\n",
+  "stderr": "",
+  "command": "franken-decision-demo --help"
+}

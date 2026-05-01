@@ -8,10 +8,9 @@
 
 #![forbid(unsafe_code)]
 
-use std::collections::BTreeMap;
 use std::fs;
-use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::path::PathBuf;
+use std::process::Command;
 use std::str;
 
 use serde::{Deserialize, Serialize};
@@ -51,11 +50,6 @@ impl CliTestCase {
             expect_success: true,
         }
     }
-
-    const fn expect_failure(mut self) -> Self {
-        self.expect_success = false;
-        self
-    }
 }
 
 /// Test cases for CLI binaries
@@ -65,8 +59,7 @@ const CLI_TEST_CASES: &[CliTestCase] = &[
         "franken-architecture-inventory",
         &["--help"],
         "architecture_inventory_help",
-    )
-    .expect_failure(),
+    ),
     CliTestCase::new(
         "franken-architecture-inventory",
         &["--stdout"],
@@ -76,13 +69,12 @@ const CLI_TEST_CASES: &[CliTestCase] = &[
         "franken-architecture-inventory",
         &["--check"],
         "architecture_inventory_check",
-    )
-    .expect_failure(),
+    ),
     // FrankenCtl tests
     CliTestCase::new("frankenctl", &["--help"], "frankenctl_help"),
-    CliTestCase::new("frankenctl", &["--version"], "frankenctl_version").expect_failure(),
+    CliTestCase::new("frankenctl", &["version"], "frankenctl_version"),
     // Decision demo tests
-    CliTestCase::new("franken-decision-demo", &["--help"], "decision_demo_help").expect_failure(),
+    CliTestCase::new("franken-decision-demo", &["--help"], "decision_demo_help"),
 ];
 
 /// Scrub timestamps, paths, and other non-deterministic content from CLI output
@@ -124,9 +116,13 @@ fn capture_cli_output(test_case: &CliTestCase) -> Result<CliOutput, Box<dyn std:
     let target_dir =
         std::env::var("CARGO_TARGET_DIR").unwrap_or_else(|_| format!("{}/target", manifest_dir));
 
-    let binary_path = PathBuf::from(target_dir)
-        .join("debug")
-        .join(test_case.binary);
+    let binary_path = std::env::var("CLI_GOLDEN_BIN_DIR")
+        .map(|bin_dir| PathBuf::from(bin_dir).join(test_case.binary))
+        .unwrap_or_else(|_| {
+            PathBuf::from(target_dir)
+                .join("debug")
+                .join(test_case.binary)
+        });
 
     if !binary_path.exists() {
         return Err(format!("Binary not found: {}", binary_path.display()).into());

@@ -15,6 +15,11 @@ fn main() {
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mode = Mode::from_args(env::args().skip(1));
+    if mode == Mode::Help {
+        print_usage();
+        return Ok(());
+    }
+
     let repo_root = default_repo_root();
     let inventory = collect_workspace_inventory(&repo_root)?;
     let markdown = inventory.render_markdown();
@@ -39,6 +44,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         Mode::Stdout => {
             print!("{markdown}");
         }
+        Mode::Help => unreachable!("help mode returns before inventory collection"),
     }
 
     Ok(())
@@ -49,6 +55,7 @@ enum Mode {
     Write,
     Check,
     Stdout,
+    Help,
 }
 
 impl Mode {
@@ -56,6 +63,7 @@ impl Mode {
         let mut mode = Self::Write;
         for arg in args {
             match arg.as_str() {
+                "--help" | "-h" => mode = Self::Help,
                 "--check" => mode = Self::Check,
                 "--stdout" => mode = Self::Stdout,
                 _ => {}
@@ -63,4 +71,20 @@ impl Mode {
         }
         mode
     }
+}
+
+fn print_usage() {
+    println!(
+        "\
+franken-architecture-inventory usage:
+
+  franken-architecture-inventory [--stdout|--check|--help]
+
+Options:
+  --stdout   Print the generated architecture inventory markdown to stdout
+  --check    Fail if docs/ARCHITECTURE_INVENTORY.md is stale
+  --help     Print this help text
+
+Default behavior writes docs/ARCHITECTURE_INVENTORY.md."
+    );
 }

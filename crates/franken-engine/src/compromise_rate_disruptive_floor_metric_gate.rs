@@ -47,14 +47,19 @@ pub fn contains_fictional_scenarios(evidence: &[CompromiseRateEvidence]) -> bool
         // Check for fictional paths commonly used in test fixtures
         if e.scenario_path.starts_with("/test/scenarios/")
             || e.output_path.starts_with("/test/output/")
-            || e.verification_command.contains("verify_compromise_results.sh")
+            || e.verification_command
+                .contains("verify_compromise_results.sh")
             || e.verification_command.contains("verify_malware_results.sh")
-            || e.verification_command.contains("verify_prototype_results.sh")
-            || e.verification_command.contains("verify_supply_chain_results.sh")
-            || e.reproducibility_command.contains("run_phishing_campaign.sh")
+            || e.verification_command
+                .contains("verify_prototype_results.sh")
+            || e.verification_command
+                .contains("verify_supply_chain_results.sh")
+            || e.reproducibility_command
+                .contains("run_phishing_campaign.sh")
             || e.reproducibility_command.contains("inject_malware.sh")
             || e.reproducibility_command.contains("pollute_prototypes.sh")
-            || e.reproducibility_command.contains("deploy_malicious_packages.sh")
+            || e.reproducibility_command
+                .contains("deploy_malicious_packages.sh")
         {
             return true;
         }
@@ -690,7 +695,7 @@ mod tests {
             75,
             5,
             "/data/red_team/scenarios/cve_2023_001/config.json".to_string(), // Real-looking path
-            "/data/red_team/results/scenario_001_results.json".to_string(), // Real-looking path
+            "/data/red_team/results/scenario_001_results.json".to_string(),  // Real-looking path
             "sha256:realoutputhash123".to_string(),
             "validate_scenario_results --scenario cve_2023_001".to_string(), // Real-looking command
             "privilege_escalation_success".to_string(),

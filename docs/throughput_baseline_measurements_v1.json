@@ -1,0 +1,43 @@
+{
+  "schema_version": "franken-engine.throughput-baselines.v1",
+  "generated_at": "2026-05-01T09:11:44Z",
+  "measurement_duration_ms": 1000,
+  "workloads": ["fibonacci","strings","arrays","objects","functions"],
+  "runtimes": {
+    "node": {
+      "version": "v20.19.4",
+      "baseline_ops_per_second": 442413,
+      "workload_results": {
+        "fibonacci": 12063,
+        "strings": 1195520,
+        "arrays": 937289,
+        "objects": 1019145,
+        "functions": 15014585
+      }
+    },
+    "bun": {
+      "version": "1.3.13",
+      "baseline_ops_per_second": 1202604,
+      "workload_results": {
+        "fibonacci": 18110,
+        "strings": 2394402,
+        "arrays": 7699605,
+        "objects": 22170933,
+        "functions": 16595182
+      }
+    },
+    "frankenengine": {
+      "version": "development",
+      "baseline_ops_per_second": 1096,
+      "workload_results": {
+        "fibonacci": 1800,
+        "strings": 1800,
+        "arrays": 1800,
+        "objects": 1800,
+        "functions": 1800
+      }
+    }
+  },
+  "has_live_measurements": true,
+  "notes": "FrankenEngine measurements are placeholder until JS execution is fully implemented."
+}

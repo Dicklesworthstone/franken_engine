@@ -7,6 +7,9 @@
 
 use serde::{Deserialize, Serialize};
 use subtle::ConstantTimeEq;
+use std::collections::HashMap;
+use std::fs;
+use std::path::Path;
 
 use crate::disruptive_floor_metric_gate::{DisruptiveMetricId, MetricArtifact};
 
@@ -17,6 +20,51 @@ pub const THROUGHPUT_SCALE_OPS_PER_SECOND: u64 = 1000;
 pub const DEFAULT_FLOOR_RATIO_MILLIONTHS: u64 = 950_000; // 0.95 minimum ratio
 pub const DEFAULT_MAX_FRESHNESS_DAYS: u64 = 14; // Default maximum age for evidence
 pub const DEFAULT_MAX_BENCHMARK_DURATION_MS: u64 = 3600_000; // 1 hour maximum
+
+/// Baseline manifest file path relative to project root
+pub const BASELINE_MANIFEST_PATH: &str = "docs/throughput_baseline_measurements_v1.json";
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BaselineManifest {
+    pub schema_version: String,
+    pub generated_at: String,
+    pub measurement_duration_ms: u64,
+    pub workloads: Vec<String>,
+    pub runtimes: HashMap<String, RuntimeBaseline>,
+    pub has_live_measurements: bool,
+    pub notes: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeBaseline {
+    pub version: String,
+    pub baseline_ops_per_second: u64,
+    pub workload_results: HashMap<String, u64>,
+}
+
+/// Load baseline manifest from file system or return error if unavailable
+pub fn load_baseline_manifest() -> Result<BaselineManifest, String> {
+    // First try to find the manifest relative to the project root
+    let potential_paths = [
+        BASELINE_MANIFEST_PATH,
+        "../../docs/throughput_baseline_measurements_v1.json", // From crates/franken-engine/
+        "../../../docs/throughput_baseline_measurements_v1.json", // From crates/franken-engine/target/
+    ];
+
+    for path in &potential_paths {
+        if Path::new(path).exists() {
+            let content = fs::read_to_string(path)
+                .map_err(|e| format!("Failed to read baseline manifest {}: {}", path, e))?;
+
+            let manifest: BaselineManifest = serde_json::from_str(&content)
+                .map_err(|e| format!("Failed to parse baseline manifest {}: {}", path, e))?;
+
+            return Ok(manifest);
+        }
+    }
+
+    Err(format!("Baseline manifest not found at any of: {}", potential_paths.join(", ")))
+}
 
 /// Detect fake SHA256 hash patterns that indicate placeholder/test data rather than real measurements
 pub fn is_fake_hash(hash: &str) -> bool {
@@ -93,16 +141,34 @@ impl RuntimeDenominator {
         }
     }
 
-    pub const fn baseline_ops_per_second(self) -> u64 {
+    /// Get baseline operations per second, trying live measurements first, falling back to placeholders
+    pub fn baseline_ops_per_second(self) -> u64 {
+        if let Ok(manifest) = load_baseline_manifest() {
+            if manifest.has_live_measurements {
+                if let Some(runtime_baseline) = manifest.runtimes.get(self.as_str()) {
+                    return runtime_baseline.baseline_ops_per_second;
+                }
+            }
+        }
+
+        // Fallback to placeholder values if manifest unavailable or no live measurements
         match self {
-            // TODO: Replace with live measurement integration
             Self::Node => 2500, // Placeholder baseline: Node.js ops/sec
             Self::Bun => 3200,  // Placeholder baseline: Bun ops/sec
         }
     }
 
-    pub const fn is_placeholder_baseline(self) -> bool {
-        // All current baselines are placeholder until real measurement integration
+    /// Check if current baseline is a placeholder (not from live measurements)
+    pub fn is_placeholder_baseline(self) -> bool {
+        if let Ok(manifest) = load_baseline_manifest() {
+            if manifest.has_live_measurements {
+                if let Some(_runtime_baseline) = manifest.runtimes.get(self.as_str()) {
+                    return false; // Has live measurements
+                }
+            }
+        }
+
+        // No live measurements available - using placeholder
         true
     }
 }
@@ -632,10 +698,22 @@ mod tests {
 
     #[test]
     fn test_runtime_denominator_baselines() {
-        assert_eq!(RuntimeDenominator::Node.baseline_ops_per_second(), 2500);
-        assert_eq!(RuntimeDenominator::Bun.baseline_ops_per_second(), 3200);
+        // Test string conversion (const function)
         assert_eq!(RuntimeDenominator::Node.as_str(), "node");
         assert_eq!(RuntimeDenominator::Bun.as_str(), "bun");
+
+        // Test baseline values (may use live measurements if available, otherwise placeholders)
+        let node_baseline = RuntimeDenominator::Node.baseline_ops_per_second();
+        let bun_baseline = RuntimeDenominator::Bun.baseline_ops_per_second();
+
+        // Live measurements should be significantly higher than placeholders
+        // If live measurements are available, Node should be ~442k, Bun should be ~1.2M
+        // If placeholders, Node should be 2.5k, Bun should be 3.2k
+        assert!(node_baseline > 0);
+        assert!(bun_baseline > 0);
+
+        // Bun should always be faster than Node (both in live and placeholder measurements)
+        assert!(bun_baseline > node_baseline);
     }
 
     #[test]
@@ -1256,6 +1334,69 @@ mod tests {
                 .unwrap()
                 .contains("placeholder baselines")
         );
+    }
+
+    #[test]
+    fn test_baseline_manifest_loading() {
+        // Test loading the baseline manifest (may succeed or fail depending on test environment)
+        match load_baseline_manifest() {
+            Ok(manifest) => {
+                // If manifest loads successfully, validate its structure
+                assert_eq!(manifest.schema_version, "franken-engine.throughput-baselines.v1");
+                assert!(manifest.runtimes.contains_key("node"));
+                assert!(manifest.runtimes.contains_key("bun"));
+                assert!(manifest.runtimes.contains_key("frankenengine"));
+
+                // Check that Node and Bun have reasonable baseline values
+                if let Some(node_runtime) = manifest.runtimes.get("node") {
+                    assert!(node_runtime.baseline_ops_per_second > 0);
+                }
+                if let Some(bun_runtime) = manifest.runtimes.get("bun") {
+                    assert!(bun_runtime.baseline_ops_per_second > 0);
+                }
+
+                // If we have live measurements, they should be much higher than placeholders
+                if manifest.has_live_measurements {
+                    if let Some(node_runtime) = manifest.runtimes.get("node") {
+                        // Live Node measurements should be significantly higher than 2500 placeholder
+                        assert!(node_runtime.baseline_ops_per_second > 10_000);
+                    }
+                    if let Some(bun_runtime) = manifest.runtimes.get("bun") {
+                        // Live Bun measurements should be significantly higher than 3200 placeholder
+                        assert!(bun_runtime.baseline_ops_per_second > 10_000);
+                    }
+                }
+            }
+            Err(_) => {
+                // If manifest can't be loaded, that's expected in some test environments
+                // The function should gracefully fall back to placeholder values
+                assert_eq!(RuntimeDenominator::Node.baseline_ops_per_second(), 2500);
+                assert_eq!(RuntimeDenominator::Bun.baseline_ops_per_second(), 3200);
+                assert!(RuntimeDenominator::Node.is_placeholder_baseline());
+                assert!(RuntimeDenominator::Bun.is_placeholder_baseline());
+            }
+        }
+    }
+
+    #[test]
+    fn test_placeholder_vs_live_baseline_detection() {
+        // Test that placeholder detection works correctly
+        let node_is_placeholder = RuntimeDenominator::Node.is_placeholder_baseline();
+        let bun_is_placeholder = RuntimeDenominator::Bun.is_placeholder_baseline();
+
+        // Both should have the same placeholder status (either both placeholder or both live)
+        assert_eq!(node_is_placeholder, bun_is_placeholder);
+
+        // If we can load a manifest with live measurements, placeholders should be false
+        if let Ok(manifest) = load_baseline_manifest() {
+            if manifest.has_live_measurements
+                && manifest.runtimes.contains_key("node")
+                && manifest.runtimes.contains_key("bun")
+            {
+                assert!(!node_is_placeholder, "Should detect live measurements when manifest has them");
+                assert!(!bun_is_placeholder, "Should detect live measurements when manifest has them");
+            }
+        }
     }
 
     #[test]

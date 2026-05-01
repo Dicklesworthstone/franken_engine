@@ -29,10 +29,10 @@ proof lacks exact downgrade text.
 | Claim | Scope | Source | State | Decision | Owner |
 |---|---|---|---|---|---|
 | `FE-CLAIM-001` | runtime | `README.md:16` | `observed` | allow observed native-runtime wording with release-gate caveat | `bd-1qkrc` |
-| `FE-CLAIM-002` | security | `README.md:38-45` | `target` | downgrade until live guardplane decision artifact exists | `bd-1ypps` |
+| `FE-CLAIM-002` | security | `README.md:38-45` | `observed` | allow observed probabilistic guardplane with live decision artifacts | `bd-1ypps` |
 | `FE-CLAIM-003` | replay | `README.md:46` | `target` | downgrade until replay coverage proof exists | `bd-2488a` |
 | `FE-CLAIM-004` | security | `README.md:47` | `hypothesis` | split receipt, transparency-log, and TEE proof before release | `bd-1qkrc` |
-| `FE-CLAIM-005` | operations | `README.md:48` | `target` | downgrade until live propagation/convergence proof exists | `bd-1py8v` |
+| `FE-CLAIM-005` | operations | `README.md:48` | `observed` | allow observed fleet quarantine propagation with convergence SLOs | `bd-1py8v` |
 | `FE-CLAIM-006` | security | `README.md:49` | `target` | downgrade until ambient-authority rejection proof exists | `bd-1bao8` |
 | `FE-CLAIM-007` | operations | `README.md:55-92` | `observed` | allow documented CLI smoke workflow reference | `bd-3tsah` |
 | `FE-CLAIM-008` | operations | `README.md:922-955` | `observed` | allow unsupported-surfaces support policy wording | `bd-1qkrc` |
@@ -42,7 +42,7 @@ proof lacks exact downgrade text.
 | `FE-CLAIM-012` | security | `PLAN_TO_CREATE_FRANKEN_ENGINE.md:59-60` | `target` | require signal-to-action timestamp proof | `bd-38mby` |
 | `FE-CLAIM-013` | replay | `PLAN_TO_CREATE_FRANKEN_ENGINE.md:60` | `target` | require replay coverage class enumeration | `bd-2488a` |
 | `FE-CLAIM-014` | capability | `PLAN_TO_CREATE_FRANKEN_ENGINE.md:61` | `target` | require three named production feature proof bundles | `bd-1qkrc` |
-| `FE-CLAIM-015` | ifc | `PLAN_TO_CREATE_FRANKEN_ENGINE.md:94` | `target` | require live declassification source-to-sink proof | `bd-dpfvh` |
+| `FE-CLAIM-015` | ifc | `PLAN_TO_CREATE_FRANKEN_ENGINE.md:94` | `observed` | allow observed IFC with signed declassification receipts | `bd-dpfvh` |
 
 ## Failure Output
 

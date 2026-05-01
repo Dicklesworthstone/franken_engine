@@ -30,6 +30,8 @@ structured_reduction_operator_catalog_path="$run_dir/structured_reduction_operat
 minimized_structured_repros_path="$run_dir/minimized_structured_repros.jsonl"
 reduction_stability_matrix_path="$run_dir/reduction_stability_matrix.json"
 triage_report_path="$run_dir/triage_report.json"
+campaign_triage_report_path="$run_dir/campaign_triage_report.json"
+minimized_repros_path="$run_dir/minimized_repros.jsonl"
 governance_actions_path="$run_dir/repro_governance_actions.json"
 trace_ids_path="$run_dir/trace_ids.json"
 env_path="$run_dir/env.json"
@@ -343,6 +345,8 @@ write_manifest() {
     echo "    \"minimized_structured_repros\": \"${minimized_structured_repros_path}\"," 
     echo "    \"reduction_stability_matrix\": \"${reduction_stability_matrix_path}\"," 
     echo "    \"triage_report\": \"${triage_report_path}\"," 
+    echo "    \"campaign_triage_report\": \"${campaign_triage_report_path}\"," 
+    echo "    \"minimized_repros\": \"${minimized_repros_path}\"," 
     echo "    \"governance_actions\": \"${governance_actions_path}\"," 
     echo "    \"trace_ids\": \"${trace_ids_path}\"," 
     echo "    \"env\": \"${env_path}\"," 
@@ -367,6 +371,8 @@ write_manifest() {
     echo "    \"cat ${minimized_structured_repros_path}\"," 
     echo "    \"cat ${reduction_stability_matrix_path}\"," 
     echo "    \"cat ${triage_report_path}\"," 
+    echo "    \"cat ${campaign_triage_report_path}\"," 
+    echo "    \"cat ${minimized_repros_path}\"," 
     echo "    \"cat ${governance_actions_path}\"," 
     echo "    \"cat ${trace_ids_path}\"," 
     echo "    \"cat ${env_path}\"," 
@@ -545,6 +551,8 @@ write_repro_lock() {
     emit_repro_output "$minimized_structured_repros_path" "minimized_structured_repros" true
     emit_repro_output "$reduction_stability_matrix_path" "reduction_stability_matrix" true
     emit_repro_output "$triage_report_path" "triage_report" true
+    emit_repro_output "$campaign_triage_report_path" "campaign_triage_report" true
+    emit_repro_output "$minimized_repros_path" "minimized_repros" true
     emit_repro_output "$governance_actions_path" "repro_governance_actions" true
     emit_repro_output "$trace_ids_path" "trace_ids" true
     emit_repro_output "$env_path" "env" false
@@ -690,6 +698,14 @@ write_bundle_manifest() {
     echo '    {'
     echo "      \"path\": \"${reduction_stability_matrix_path}\","
     echo "      \"sha256\": $(file_sha256_json "$reduction_stability_matrix_path")"
+    echo '    },'
+    echo '    {'
+    echo "      \"path\": \"${campaign_triage_report_path}\","
+    echo "      \"sha256\": $(file_sha256_json "$campaign_triage_report_path")"
+    echo '    },'
+    echo '    {'
+    echo "      \"path\": \"${minimized_repros_path}\","
+    echo "      \"sha256\": $(file_sha256_json "$minimized_repros_path")"
     echo '    }'
     echo '  ],'
     echo '  "canonicalization": {'
@@ -767,6 +783,24 @@ hydrate_local_metamorphic_artifacts() {
   fi
 }
 
+write_campaign_alias_artifacts() {
+  if [[ -f "$triage_report_path" && ! -e "$campaign_triage_report_path" ]]; then
+    cp "$triage_report_path" "$campaign_triage_report_path"
+  fi
+
+  if [[ ! -e "$minimized_repros_path" ]] && \
+    { [[ -f "$minimized_counterexamples_path" ]] || [[ -f "$minimized_structured_repros_path" ]]; }; then
+    {
+      if [[ -f "$minimized_counterexamples_path" ]]; then
+        cat "$minimized_counterexamples_path"
+      fi
+      if [[ -f "$minimized_structured_repros_path" ]]; then
+        cat "$minimized_structured_repros_path"
+      fi
+    } >"$minimized_repros_path"
+  fi
+}
+
 metamorphic_artifacts_complete() {
   local required
   for required in \
@@ -783,6 +817,8 @@ metamorphic_artifacts_complete() {
     "$minimized_structured_repros_path" \
     "$reduction_stability_matrix_path" \
     "$triage_report_path" \
+    "$campaign_triage_report_path" \
+    "$minimized_repros_path" \
     "$governance_actions_path"; do
     if [[ ! -f "$required" ]]; then
       return 1
@@ -866,11 +902,14 @@ sync_metamorphic_artifacts_from_remote() {
 
 ensure_metamorphic_artifacts_complete() {
   hydrate_local_metamorphic_artifacts
+  write_campaign_alias_artifacts
   if metamorphic_artifacts_complete; then
     return 0
   fi
 
   sync_metamorphic_artifacts_from_remote || true
+  hydrate_local_metamorphic_artifacts
+  write_campaign_alias_artifacts
   metamorphic_artifacts_complete
 }
 

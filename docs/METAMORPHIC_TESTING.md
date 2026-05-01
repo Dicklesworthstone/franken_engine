@@ -75,7 +75,9 @@ Each run writes deterministic metadata under:
 - `artifacts/metamorphic/<timestamp>/generator_choice_stream_schema.json`
 - `artifacts/metamorphic/<timestamp>/shrinker_verdict_report.json`
 - `artifacts/metamorphic/<timestamp>/minimized_property_counterexamples.jsonl`
+- `artifacts/metamorphic/<timestamp>/minimized_repros.jsonl`
 - `artifacts/metamorphic/<timestamp>/triage_report.json`
+- `artifacts/metamorphic/<timestamp>/campaign_triage_report.json`
 - `artifacts/metamorphic/<timestamp>/repro_governance_actions.json`
 - `artifacts/metamorphic/<timestamp>/trace_ids.json`
 - `artifacts/metamorphic/<timestamp>/env.json`
@@ -219,7 +221,9 @@ cat artifacts/metamorphic/<timestamp>/property_generator_catalog.json
 cat artifacts/metamorphic/<timestamp>/generator_choice_stream_schema.json
 cat artifacts/metamorphic/<timestamp>/shrinker_verdict_report.json
 cat artifacts/metamorphic/<timestamp>/minimized_property_counterexamples.jsonl
+cat artifacts/metamorphic/<timestamp>/minimized_repros.jsonl
 cat artifacts/metamorphic/<timestamp>/triage_report.json
+cat artifacts/metamorphic/<timestamp>/campaign_triage_report.json
 cat artifacts/metamorphic/<timestamp>/repro_governance_actions.json
 cat artifacts/metamorphic/<timestamp>/trace_ids.json
 cat artifacts/metamorphic/<timestamp>/env.json

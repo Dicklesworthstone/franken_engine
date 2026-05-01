@@ -88,6 +88,7 @@ pub mod compatibility_advisory;
 pub mod compiler_policy;
 pub mod component_shape_catalog;
 pub mod composable_gate_framework;
+pub mod compromise_rate_disruptive_floor_metric_gate;
 pub mod compression_residual_gate;
 pub mod conformance_catalog;
 pub mod conformance_harness;

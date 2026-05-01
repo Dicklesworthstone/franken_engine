@@ -628,6 +628,8 @@ fn test_content_binding_prevents_content_swapping_attack() {
         authorized_by: verification_key.clone(),
         replay_linkage: "test-trace-123".to_string(),
         timestamp_ms: 1735689000000, // 2024-12-31 example
+        not_before_ms: 0,
+        not_after_ms: u64::MAX,
         schema_version: IfcSchemaVersion::CURRENT,
         signature: frankenengine_engine::signature_preimage::Signature::from_bytes([0u8; 64]), // Placeholder
     };
@@ -683,6 +685,8 @@ fn test_high_security_labels_require_content_binding() {
         authorized_by: SigningKey::generate().verification_key(),
         replay_linkage: "test-trace-123".to_string(),
         timestamp_ms: 1735689000000,
+        not_before_ms: 0,
+        not_after_ms: u64::MAX,
         schema_version: IfcSchemaVersion::CURRENT,
         signature: frankenengine_engine::signature_preimage::Signature::from_bytes([0u8; 64]),
     };

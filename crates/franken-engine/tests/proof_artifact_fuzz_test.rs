@@ -1,6 +1,5 @@
-use frankenengine_engine::proof_artifact::{ProofArtifactError, validate_event_json_line};
+use frankenengine_engine::proof_artifact::{validate_event_json_line, ProofArtifactError};
 use proptest::prelude::*;
-use serde_json::Value;
 
 // Custom strategy for generating potentially problematic JSON strings
 fn json_fuzz_strategy() -> impl Strategy<Value = String> {
@@ -140,20 +139,20 @@ mod focused_tests {
             // Depth limits
             format!("{}\"x\":1{}", "{".repeat(30), "}".repeat(30)), // Too deep
             // Invalid JSON
-            "{",
-            "}",
-            "null",
-            "",
-            "{\"key\":}",
-            "{,}",
+            "{".to_string(),
+            "}".to_string(),
+            "null".to_string(),
+            "".to_string(),
+            "{\"key\":}".to_string(),
+            "{,}".to_string(),
             // Valid minimal cases
-            "{}",
-            r#"{"test":"value"}"#,
-            "[]",
-            r#"[1,2,3]"#,
+            "{}".to_string(),
+            r#"{"test":"value"}"#.to_string(),
+            "[]".to_string(),
+            r#"[1,2,3]"#.to_string(),
             // Numbers
-            r#"{"num":1.7976931348623157e+308}"#, // Large number
-            r#"{"num":null}"#,
+            r#"{"num":1.7976931348623157e+308}"#.to_string(), // Large number
+            r#"{"num":null}"#.to_string(),
         ];
 
         for test_case in test_cases {

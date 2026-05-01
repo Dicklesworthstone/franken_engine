@@ -22,7 +22,7 @@ use frankenengine_engine::ifc_artifacts::{
     FlowAuthorizationAdvisory, FlowCheckResult, FlowEnvelope, FlowPolicy, FlowProof, FlowRule,
     IfcSchemaVersion, IfcValidationError, Ir2LabelSource, Label, ProofMethod,
 };
-use frankenengine_engine::signature_preimage::{SIGNATURE_SENTINEL, Signature, SigningKey};
+use frankenengine_engine::signature_preimage::{Signature, SigningKey, SIGNATURE_SENTINEL};
 
 // ── helpers ──────────────────────────────────────────────────────────────
 
@@ -86,6 +86,7 @@ fn make_receipt() -> DeclassificationReceipt {
         receipt_id: "rcpt-001".into(),
         source_label: Label::Secret,
         sink_clearance: Label::Internal,
+        content_binding: None,
         declassification_route_ref: "declass-1".into(),
         decision_contract_id: "decision-contract-1".into(),
         policy_evaluation_summary: "OK".into(),
@@ -94,6 +95,8 @@ fn make_receipt() -> DeclassificationReceipt {
         authorized_by: key.verification_key(),
         replay_linkage: "trace-001".into(),
         timestamp_ms: 1_700_000_000_000,
+        not_before_ms: 0,
+        not_after_ms: u64::MAX,
         schema_version: IfcSchemaVersion::CURRENT,
         signature: sentinel_sig(),
     }

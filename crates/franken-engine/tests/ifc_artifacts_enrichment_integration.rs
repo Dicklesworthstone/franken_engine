@@ -20,7 +20,7 @@
 use std::collections::BTreeSet;
 
 use frankenengine_engine::ifc_artifacts::*;
-use frankenengine_engine::signature_preimage::{SIGNATURE_SENTINEL, Signature, SigningKey};
+use frankenengine_engine::signature_preimage::{Signature, SigningKey, SIGNATURE_SENTINEL};
 
 // ===========================================================================
 // Helpers
@@ -85,6 +85,7 @@ fn make_receipt() -> DeclassificationReceipt {
         receipt_id: "receipt-e-001".into(),
         source_label: Label::Secret,
         sink_clearance: Label::Internal,
+        content_binding: None,
         declassification_route_ref: "declass-e-1".into(),
         decision_contract_id: "dc-e-1".into(),
         policy_evaluation_summary: "approved".into(),
@@ -93,6 +94,8 @@ fn make_receipt() -> DeclassificationReceipt {
         authorized_by: test_key().verification_key(),
         replay_linkage: "trace-e".into(),
         timestamp_ms: 1_700_000_000_000,
+        not_before_ms: 0,
+        not_after_ms: u64::MAX,
         schema_version: IfcSchemaVersion::CURRENT,
         signature: sentinel_sig(),
     }

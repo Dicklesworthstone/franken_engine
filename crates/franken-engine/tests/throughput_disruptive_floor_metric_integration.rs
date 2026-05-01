@@ -7,11 +7,12 @@ use std::fs;
 use std::path::PathBuf;
 
 use frankenengine_engine::disruptive_floor_metric_gate::{
-    BEAD_ID as PARENT_BEAD_ID, DisruptiveMetricId, MetricArtifact,
+    DisruptiveMetricId, MetricArtifact, BEAD_ID as PARENT_BEAD_ID,
 };
 use frankenengine_engine::throughput_disruptive_floor_metric_gate::{
-    BEAD_ID, RuntimeDenominator, SCHEMA_VERSION, ThroughputEvidence, ThroughputMetricInput,
-    create_throughput_metric_artifact, evaluate_throughput_metric,
+    create_throughput_metric_artifact, evaluate_throughput_metric, RuntimeDenominator,
+    ThroughputEvidence, ThroughputMeasurementStatus, ThroughputMetricInput, BEAD_ID,
+    DEFAULT_MAX_BENCHMARK_DURATION_MS, SCHEMA_VERSION,
 };
 
 fn repo_root() -> PathBuf {
@@ -58,7 +59,7 @@ fn test_fixture_loads_and_validates() {
 #[test]
 fn test_throughput_metric_evaluation() {
     let input = load_fixture_input();
-    let report = evaluate_throughput_metric(&input).expect("Failed to evaluate throughput metric");
+    let report = evaluate_throughput_metric(&input);
 
     // Basic validation
     assert_eq!(report.schema_version, SCHEMA_VERSION);
@@ -81,7 +82,7 @@ fn test_throughput_metric_evaluation() {
 #[test]
 fn test_create_metric_artifact_for_parent_integrator() {
     let input = load_fixture_input();
-    let report = evaluate_throughput_metric(&input).expect("Failed to evaluate throughput metric");
+    let report = evaluate_throughput_metric(&input);
 
     let artifact_path = "test_throughput_metric_report.json";
     let artifact_hash = "test_hash_123abc";
@@ -106,11 +107,9 @@ fn test_create_metric_artifact_for_parent_integrator() {
     assert_eq!(artifact.freshness_days, input.max_freshness_days);
     assert_eq!(artifact.confidence_millionths, 950_000);
     assert_eq!(artifact.coverage_millionths, 900_000);
-    assert!(
-        artifact
-            .verification_command
-            .contains("run_throughput_disruptive_floor_metric_gate.sh")
-    );
+    assert!(artifact
+        .verification_command
+        .contains("run_throughput_disruptive_floor_metric_gate.sh"));
     assert_eq!(artifact.redaction_status, "none");
 }
 
@@ -152,7 +151,7 @@ fn test_script_exists_and_executable() {
 #[test]
 fn test_artifact_schema_compatibility() {
     let input = load_fixture_input();
-    let report = evaluate_throughput_metric(&input).unwrap();
+    let report = evaluate_throughput_metric(&input);
     let artifact = create_throughput_metric_artifact(&input, &report, "test.json", "hash123");
 
     // Verify the artifact can be serialized and deserialized
@@ -181,6 +180,12 @@ fn test_edge_case_single_denominator() {
         output_path: "node_output.json".to_string(),
         output_hash: "node123".to_string(),
         verification_command: "verify_node.sh".to_string(),
+        benchmark_start_monotonic_ns: 1_000_000_000,
+        benchmark_window_seed: [7_u8; 32],
+        measurement_status: ThroughputMeasurementStatus::Targeted,
+        evidence_bead_id: None,
+        evidence_commit_hash: None,
+        evidence_test_name: None,
     }];
 
     let input = ThroughputMetricInput {
@@ -192,9 +197,12 @@ fn test_edge_case_single_denominator() {
         evidence: node_only_evidence,
         code_revision: "test123".to_string(),
         generated_at_utc: "2026-05-01T00:00:00Z".to_string(),
+        benchmark_window_seed: [7_u8; 32],
+        max_benchmark_duration_ms: DEFAULT_MAX_BENCHMARK_DURATION_MS,
+        evaluation_start_monotonic_ns: 1_000_000_000,
     };
 
-    let report = evaluate_throughput_metric(&input).unwrap();
+    let report = evaluate_throughput_metric(&input);
     assert_eq!(report.overall_outcome, "pass");
     assert_eq!(report.node_evidence_count, 1);
     assert_eq!(report.bun_evidence_count, 0);
@@ -218,6 +226,12 @@ fn test_failing_throughput_scenario() {
         output_path: "failing_output.json".to_string(),
         output_hash: "fail123".to_string(),
         verification_command: "verify_fail.sh".to_string(),
+        benchmark_start_monotonic_ns: 1_000_000_000,
+        benchmark_window_seed: [8_u8; 32],
+        measurement_status: ThroughputMeasurementStatus::Targeted,
+        evidence_bead_id: None,
+        evidence_commit_hash: None,
+        evidence_test_name: None,
     }];
 
     let input = ThroughputMetricInput {
@@ -229,9 +243,12 @@ fn test_failing_throughput_scenario() {
         evidence: failing_evidence,
         code_revision: "test123".to_string(),
         generated_at_utc: "2026-05-01T00:00:00Z".to_string(),
+        benchmark_window_seed: [8_u8; 32],
+        max_benchmark_duration_ms: DEFAULT_MAX_BENCHMARK_DURATION_MS,
+        evaluation_start_monotonic_ns: 1_000_000_000,
     };
 
-    let report = evaluate_throughput_metric(&input).unwrap();
+    let report = evaluate_throughput_metric(&input);
     assert_eq!(report.overall_outcome, "fail");
     assert_eq!(report.passing_evidence_count, 0);
     assert!(report.weighted_ratio_millionths < 950_000);

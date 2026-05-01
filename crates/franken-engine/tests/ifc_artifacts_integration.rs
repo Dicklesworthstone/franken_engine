@@ -30,7 +30,7 @@ use frankenengine_engine::ifc_artifacts::{
     IfcSchemaVersion, IfcValidationError, Ir2LabelSource, Label, ProofMethod,
 };
 use frankenengine_engine::signature_preimage::{
-    SIGNATURE_SENTINEL, Signature, SignatureError, SigningKey,
+    Signature, SignatureError, SigningKey, SIGNATURE_SENTINEL,
 };
 
 // ---------------------------------------------------------------------------
@@ -96,6 +96,7 @@ fn make_receipt() -> DeclassificationReceipt {
         receipt_id: "receipt-integ-001".to_string(),
         source_label: Label::Secret,
         sink_clearance: Label::Internal,
+        content_binding: None,
         declassification_route_ref: "declass-integ-1".to_string(),
         decision_contract_id: "decision-contract-integ-1".to_string(),
         policy_evaluation_summary: "approved by security team".to_string(),
@@ -104,6 +105,8 @@ fn make_receipt() -> DeclassificationReceipt {
         authorized_by: test_key().verification_key(),
         replay_linkage: "trace-integ-abc".to_string(),
         timestamp_ms: 1_700_000_000_000,
+        not_before_ms: 0,
+        not_after_ms: u64::MAX,
         schema_version: IfcSchemaVersion::CURRENT,
         signature: sentinel_sig(),
     }

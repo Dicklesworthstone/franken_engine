@@ -578,6 +578,7 @@ impl DeclassificationPipeline {
             receipt_id: format!("rcpt-{}", request.request_id),
             source_label: request.source_label.clone(),
             sink_clearance: request.sink_clearance.clone(),
+            content_binding: None, // Backward compatibility: existing pipeline doesn't create content bindings
             declassification_route_ref: route_ref.to_string(),
             decision_contract_id: request.decision_contract_id.clone(),
             policy_evaluation_summary: summary.to_string(),

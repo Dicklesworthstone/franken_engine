@@ -934,7 +934,7 @@ impl ContentBinding {
 
         // Create signature over the binding hash
         let binding_signature = {
-            let preimage = format!("ifc-content-binding:{}", binding_hash.as_hex());
+            let preimage = format!("ifc-content-binding:{}", binding_hash.to_hex());
             let preimage_bytes = preimage.as_bytes();
             crate::signature_preimage::sign_preimage(signing_key, preimage_bytes)?
         };
@@ -973,7 +973,7 @@ impl ContentBinding {
         }
 
         // Verify signature over binding hash
-        let preimage = format!("ifc-content-binding:{}", self.binding_hash.as_hex());
+        let preimage = format!("ifc-content-binding:{}", self.binding_hash.to_hex());
         let preimage_bytes = preimage.as_bytes();
         crate::signature_preimage::verify_signature(
             verification_key,
@@ -1019,16 +1019,16 @@ impl fmt::Display for ContentBindingError {
                 write!(
                     f,
                     "Content hash mismatch: expected {}, computed {}",
-                    expected.as_hex(),
-                    computed.as_hex()
+                    expected.to_hex(),
+                    computed.to_hex()
                 )
             }
             Self::BindingHashMismatch { expected, computed } => {
                 write!(
                     f,
                     "Binding hash mismatch: expected {}, computed {}",
-                    expected.as_hex(),
-                    computed.as_hex()
+                    expected.to_hex(),
+                    computed.to_hex()
                 )
             }
             Self::SignatureVerificationFailed(e) => {
@@ -1124,17 +1124,19 @@ impl DeclassificationReceipt {
         if let Some(binding) = &self.content_binding {
             // Verify the content binding is cryptographically valid
             binding.verify(content, verification_key).map_err(|e| {
-                IfcValidationError::InvalidFieldValue {
-                    field: "content_binding".to_string(),
-                    value: format!("binding verification failed: {}", e),
+                IfcValidationError::EmptyRequiredField {
+                    artifact_kind: "content_binding_verification".to_string(),
+                    artifact_id: self.receipt_id.clone(),
+                    field_name: format!("binding verification failed: {}", e),
                 }
             })?;
 
             // Verify the binding's label matches the receipt's source label
             if binding.content_label != self.source_label {
-                return Err(IfcValidationError::InvalidFieldValue {
-                    field: "content_binding.content_label".to_string(),
-                    value: format!(
+                return Err(IfcValidationError::EmptyRequiredField {
+                    artifact_kind: "content_binding_label_mismatch".to_string(),
+                    artifact_id: self.receipt_id.clone(),
+                    field_name: format!(
                         "Content binding label {:?} does not match receipt source label {:?}",
                         binding.content_label, self.source_label
                     ),
@@ -1156,9 +1158,10 @@ impl DeclassificationReceipt {
         if (self.source_label.level() >= 3 || self.sink_clearance.level() >= 3)
             && self.content_binding.is_none()
         {
-            return Err(IfcValidationError::InvalidFieldValue {
-                field: "content_binding".to_string(),
-                value: format!(
+            return Err(IfcValidationError::EmptyRequiredField {
+                artifact_kind: "security_critical_content_binding".to_string(),
+                artifact_id: self.receipt_id.clone(),
+                field_name: format!(
                     "Content binding is required for security-critical labels (source: {:?}, sink: {:?})",
                     self.source_label, self.sink_clearance
                 ),

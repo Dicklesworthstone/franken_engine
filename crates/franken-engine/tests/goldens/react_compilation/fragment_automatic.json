@@ -1,0 +1,122 @@
+{
+  "test_name": "fragment_automatic",
+  "input_jsx": {
+    "type": "fragment",
+    "children": [
+      {
+        "type": "text",
+        "value": "One Two",
+        "span": {
+          "start_offset": 2,
+          "end_offset": 9,
+          "start_line": 1,
+          "start_column": 3,
+          "end_line": 1,
+          "end_column": 10
+        }
+      }
+    ],
+    "span": {
+      "start_offset": 0,
+      "end_offset": 12,
+      "start_line": 1,
+      "start_column": 1,
+      "end_line": 1,
+      "end_column": 13
+    }
+  },
+  "config": {
+    "runtime_mode": "automatic",
+    "build_mode": "production",
+    "source_file": null,
+    "emit_self": true,
+    "emit_source": true,
+    "classic_pragma": null,
+    "classic_fragment_pragma": null,
+    "automatic_import_source": null,
+    "max_depth": 100
+  },
+  "result": {
+    "element": {
+      "element_type": {
+        "type": "fragment"
+      },
+      "props": {
+        "entries": [
+          {
+            "type": "named",
+            "name": "children",
+            "value": {
+              "type": "string_literal",
+              "value": "One Two"
+            },
+            "span": null
+          }
+        ],
+        "has_spreads": false,
+        "extracted_key": null,
+        "extracted_ref": null
+      },
+      "children": [],
+      "call_convention": {
+        "type": "automatic",
+        "factory": "jsx",
+        "import_source": "react/jsx-runtime"
+      },
+      "source_location": null,
+      "is_static_children": false,
+      "depth": 0,
+      "span": {
+        "start_offset": 0,
+        "end_offset": 12,
+        "start_line": 1,
+        "start_column": 1,
+        "end_line": 1,
+        "end_column": 13
+      }
+    },
+    "diagnostics": [
+      {
+        "code": "CHILDREN_IN_PROPS",
+        "severity": "info",
+        "message": "Children (1 total) folded into props for automatic runtime",
+        "span": {
+          "start_offset": 0,
+          "end_offset": 12,
+          "start_line": 1,
+          "start_column": 1,
+          "end_line": 1,
+          "end_column": 13
+        }
+      }
+    ],
+    "required_imports": [
+      {
+        "source": "react/jsx-runtime",
+        "name": "Fragment",
+        "is_default": false
+      },
+      {
+        "source": "react/jsx-runtime",
+        "name": "jsx",
+        "is_default": false
+      }
+    ],
+    "feature_families_used": [
+      "fragment",
+      "text_child"
+    ],
+    "stats": {
+      "elements_lowered": 0,
+      "fragments_lowered": 1,
+      "text_children": 1,
+      "expression_children": 0,
+      "spread_attributes": 0,
+      "max_depth_reached": 0,
+      "total_props": 0,
+      "keys_extracted": 0,
+      "refs_extracted": 0
+    }
+  },
+  "schema_version": "franken-engine.react-compilation-golden.v1"
+}

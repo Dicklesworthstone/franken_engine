@@ -1,0 +1,155 @@
+{
+  "test_name": "component_with_props_classic",
+  "input_jsx": {
+    "type": "element",
+    "name": {
+      "type": "identifier",
+      "name": "button",
+      "span": {
+        "start_offset": 1,
+        "end_offset": 7,
+        "start_line": 1,
+        "start_column": 2,
+        "end_line": 1,
+        "end_column": 8
+      }
+    },
+    "attributes": [
+      {
+        "type": "named",
+        "name": "type",
+        "value": {
+          "type": "string_literal",
+          "value": "submit"
+        },
+        "span": {
+          "start_offset": 8,
+          "end_offset": 21,
+          "start_line": 1,
+          "start_column": 9,
+          "end_line": 1,
+          "end_column": 22
+        }
+      },
+      {
+        "type": "named",
+        "name": "disabled",
+        "value": {
+          "type": "string_literal",
+          "value": "true"
+        },
+        "span": {
+          "start_offset": 22,
+          "end_offset": 37,
+          "start_line": 1,
+          "start_column": 23,
+          "end_line": 1,
+          "end_column": 38
+        }
+      }
+    ],
+    "children": [],
+    "self_closing": true,
+    "span": {
+      "start_offset": 0,
+      "end_offset": 40,
+      "start_line": 1,
+      "start_column": 1,
+      "end_line": 1,
+      "end_column": 41
+    }
+  },
+  "config": {
+    "runtime_mode": "classic",
+    "build_mode": "production",
+    "source_file": null,
+    "emit_self": true,
+    "emit_source": true,
+    "classic_pragma": null,
+    "classic_fragment_pragma": null,
+    "automatic_import_source": null,
+    "max_depth": 100
+  },
+  "result": {
+    "element": {
+      "element_type": {
+        "type": "intrinsic",
+        "tag": "button"
+      },
+      "props": {
+        "entries": [
+          {
+            "type": "named",
+            "name": "type",
+            "value": {
+              "type": "string_literal",
+              "value": "submit"
+            },
+            "span": {
+              "start_offset": 8,
+              "end_offset": 21,
+              "start_line": 1,
+              "start_column": 9,
+              "end_line": 1,
+              "end_column": 22
+            }
+          },
+          {
+            "type": "named",
+            "name": "disabled",
+            "value": {
+              "type": "string_literal",
+              "value": "true"
+            },
+            "span": {
+              "start_offset": 22,
+              "end_offset": 37,
+              "start_line": 1,
+              "start_column": 23,
+              "end_line": 1,
+              "end_column": 38
+            }
+          }
+        ],
+        "has_spreads": false,
+        "extracted_key": null,
+        "extracted_ref": null
+      },
+      "children": [],
+      "call_convention": {
+        "type": "classic",
+        "object": "React",
+        "method": "createElement"
+      },
+      "source_location": null,
+      "is_static_children": false,
+      "depth": 0,
+      "span": {
+        "start_offset": 0,
+        "end_offset": 40,
+        "start_line": 1,
+        "start_column": 1,
+        "end_line": 1,
+        "end_column": 41
+      }
+    },
+    "diagnostics": [],
+    "required_imports": [],
+    "feature_families_used": [
+      "self_closing",
+      "string_attribute"
+    ],
+    "stats": {
+      "elements_lowered": 1,
+      "fragments_lowered": 0,
+      "text_children": 0,
+      "expression_children": 0,
+      "spread_attributes": 0,
+      "max_depth_reached": 0,
+      "total_props": 2,
+      "keys_extracted": 0,
+      "refs_extracted": 0
+    }
+  },
+  "schema_version": "franken-engine.react-compilation-golden.v1"
+}

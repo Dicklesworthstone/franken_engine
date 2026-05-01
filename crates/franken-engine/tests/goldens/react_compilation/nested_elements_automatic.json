@@ -1,0 +1,209 @@
+{
+  "test_name": "nested_elements_automatic",
+  "input_jsx": {
+    "type": "element",
+    "name": {
+      "type": "identifier",
+      "name": "div",
+      "span": {
+        "start_offset": 1,
+        "end_offset": 4,
+        "start_line": 1,
+        "start_column": 2,
+        "end_line": 1,
+        "end_column": 5
+      }
+    },
+    "attributes": [],
+    "children": [
+      {
+        "type": "element",
+        "name": {
+          "type": "identifier",
+          "name": "span",
+          "span": {
+            "start_offset": 6,
+            "end_offset": 10,
+            "start_line": 1,
+            "start_column": 7,
+            "end_line": 1,
+            "end_column": 11
+          }
+        },
+        "attributes": [],
+        "children": [
+          {
+            "type": "text",
+            "value": "Nested",
+            "span": {
+              "start_offset": 11,
+              "end_offset": 17,
+              "start_line": 1,
+              "start_column": 12,
+              "end_line": 1,
+              "end_column": 18
+            }
+          }
+        ],
+        "self_closing": false,
+        "span": {
+          "start_offset": 5,
+          "end_offset": 24,
+          "start_line": 1,
+          "start_column": 6,
+          "end_line": 1,
+          "end_column": 25
+        }
+      }
+    ],
+    "self_closing": false,
+    "span": {
+      "start_offset": 0,
+      "end_offset": 30,
+      "start_line": 1,
+      "start_column": 1,
+      "end_line": 1,
+      "end_column": 31
+    }
+  },
+  "config": {
+    "runtime_mode": "automatic",
+    "build_mode": "production",
+    "source_file": null,
+    "emit_self": true,
+    "emit_source": true,
+    "classic_pragma": null,
+    "classic_fragment_pragma": null,
+    "automatic_import_source": null,
+    "max_depth": 100
+  },
+  "result": {
+    "element": {
+      "element_type": {
+        "type": "intrinsic",
+        "tag": "div"
+      },
+      "props": {
+        "entries": [
+          {
+            "type": "named",
+            "name": "children",
+            "value": {
+              "type": "element",
+              "element_type": {
+                "type": "intrinsic",
+                "tag": "span"
+              },
+              "props": {
+                "entries": [
+                  {
+                    "type": "named",
+                    "name": "children",
+                    "value": {
+                      "type": "string_literal",
+                      "value": "Nested"
+                    },
+                    "span": null
+                  }
+                ],
+                "has_spreads": false,
+                "extracted_key": null,
+                "extracted_ref": null
+              },
+              "children": [],
+              "call_convention": {
+                "type": "automatic",
+                "factory": "jsx",
+                "import_source": "react/jsx-runtime"
+              },
+              "source_location": null,
+              "is_static_children": false,
+              "depth": 1,
+              "span": {
+                "start_offset": 5,
+                "end_offset": 24,
+                "start_line": 1,
+                "start_column": 6,
+                "end_line": 1,
+                "end_column": 25
+              }
+            },
+            "span": null
+          }
+        ],
+        "has_spreads": false,
+        "extracted_key": null,
+        "extracted_ref": null
+      },
+      "children": [],
+      "call_convention": {
+        "type": "automatic",
+        "factory": "jsx",
+        "import_source": "react/jsx-runtime"
+      },
+      "source_location": null,
+      "is_static_children": false,
+      "depth": 0,
+      "span": {
+        "start_offset": 0,
+        "end_offset": 30,
+        "start_line": 1,
+        "start_column": 1,
+        "end_line": 1,
+        "end_column": 31
+      }
+    },
+    "diagnostics": [
+      {
+        "code": "CHILDREN_IN_PROPS",
+        "severity": "info",
+        "message": "Children (1 total) folded into props for automatic runtime",
+        "span": {
+          "start_offset": 5,
+          "end_offset": 24,
+          "start_line": 1,
+          "start_column": 6,
+          "end_line": 1,
+          "end_column": 25
+        }
+      },
+      {
+        "code": "CHILDREN_IN_PROPS",
+        "severity": "info",
+        "message": "Children (1 total) folded into props for automatic runtime",
+        "span": {
+          "start_offset": 0,
+          "end_offset": 30,
+          "start_line": 1,
+          "start_column": 1,
+          "end_line": 1,
+          "end_column": 31
+        }
+      }
+    ],
+    "required_imports": [
+      {
+        "source": "react/jsx-runtime",
+        "name": "jsx",
+        "is_default": false
+      }
+    ],
+    "feature_families_used": [
+      "element",
+      "text_child",
+      "nested_element"
+    ],
+    "stats": {
+      "elements_lowered": 2,
+      "fragments_lowered": 0,
+      "text_children": 1,
+      "expression_children": 0,
+      "spread_attributes": 0,
+      "max_depth_reached": 1,
+      "total_props": 0,
+      "keys_extracted": 0,
+      "refs_extracted": 0
+    }
+  },
+  "schema_version": "franken-engine.react-compilation-golden.v1"
+}

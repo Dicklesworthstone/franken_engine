@@ -136,6 +136,55 @@ fn react_compilation_test_cases() -> Vec<ReactCompilationTestCase> {
             JsxRuntimeMode::Automatic,
             true,
         ),
+        // Spread props - automatic mode
+        ReactCompilationTestCase::new(
+            "spread_props_automatic",
+            r#"<Foo {...rest} bar="baz" />"#,
+            JsxRuntimeMode::Automatic,
+            false,
+        ),
+        // Conditional rendering with && - automatic mode
+        ReactCompilationTestCase::new(
+            "conditional_and_automatic",
+            r#"<div>{isVisible && <span>Show me</span>}</div>"#,
+            JsxRuntimeMode::Automatic,
+            false,
+        ),
+        // Conditional rendering with ternary - automatic mode
+        ReactCompilationTestCase::new(
+            "conditional_ternary_automatic",
+            r#"<div>{isActive ? <span>Active</span> : <span>Inactive</span>}</div>"#,
+            JsxRuntimeMode::Automatic,
+            false,
+        ),
+        // JSX in array/map output - automatic mode
+        ReactCompilationTestCase::new(
+            "jsx_array_automatic",
+            r#"<ul>{items.map(item => <li key={item.id}>{item.name}</li>)}</ul>"#,
+            JsxRuntimeMode::Automatic,
+            false,
+        ),
+        // Boolean/null/undefined children - automatic mode
+        ReactCompilationTestCase::new(
+            "falsy_children_automatic",
+            r#"<div>{true}{false}{null}{undefined}</div>"#,
+            JsxRuntimeMode::Automatic,
+            false,
+        ),
+        // dangerouslySetInnerHTML - automatic mode
+        ReactCompilationTestCase::new(
+            "dangerous_html_automatic",
+            r#"<div dangerouslySetInnerHTML={{__html: "<em>raw html</em>"}} />"#,
+            JsxRuntimeMode::Automatic,
+            false,
+        ),
+        // Member expression components - automatic mode
+        ReactCompilationTestCase::new(
+            "member_expression_automatic",
+            r#"<UI.Button variant="primary">Click me</UI.Button>"#,
+            JsxRuntimeMode::Automatic,
+            false,
+        ),
     ]
 }
 
@@ -399,5 +448,47 @@ mod tests {
     fn test_simple_dev_automatic() {
         let test_cases = react_compilation_test_cases();
         test_react_compilation_golden(&test_cases[9]);
+    }
+
+    #[test]
+    fn test_spread_props_automatic() {
+        let test_cases = react_compilation_test_cases();
+        test_react_compilation_golden(&test_cases[10]);
+    }
+
+    #[test]
+    fn test_conditional_and_automatic() {
+        let test_cases = react_compilation_test_cases();
+        test_react_compilation_golden(&test_cases[11]);
+    }
+
+    #[test]
+    fn test_conditional_ternary_automatic() {
+        let test_cases = react_compilation_test_cases();
+        test_react_compilation_golden(&test_cases[12]);
+    }
+
+    #[test]
+    fn test_jsx_array_automatic() {
+        let test_cases = react_compilation_test_cases();
+        test_react_compilation_golden(&test_cases[13]);
+    }
+
+    #[test]
+    fn test_falsy_children_automatic() {
+        let test_cases = react_compilation_test_cases();
+        test_react_compilation_golden(&test_cases[14]);
+    }
+
+    #[test]
+    fn test_dangerous_html_automatic() {
+        let test_cases = react_compilation_test_cases();
+        test_react_compilation_golden(&test_cases[15]);
+    }
+
+    #[test]
+    fn test_member_expression_automatic() {
+        let test_cases = react_compilation_test_cases();
+        test_react_compilation_golden(&test_cases[16]);
     }
 }

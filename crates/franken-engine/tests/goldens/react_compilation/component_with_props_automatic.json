@@ -1,0 +1,161 @@
+{
+  "test_name": "component_with_props_automatic",
+  "input_jsx": {
+    "type": "element",
+    "name": {
+      "type": "identifier",
+      "name": "input",
+      "span": {
+        "start_offset": 1,
+        "end_offset": 6,
+        "start_line": 1,
+        "start_column": 2,
+        "end_line": 1,
+        "end_column": 7
+      }
+    },
+    "attributes": [
+      {
+        "type": "named",
+        "name": "type",
+        "value": {
+          "type": "string_literal",
+          "value": "text"
+        },
+        "span": {
+          "start_offset": 7,
+          "end_offset": 18,
+          "start_line": 1,
+          "start_column": 8,
+          "end_line": 1,
+          "end_column": 19
+        }
+      },
+      {
+        "type": "named",
+        "name": "placeholder",
+        "value": {
+          "type": "string_literal",
+          "value": "Enter text"
+        },
+        "span": {
+          "start_offset": 19,
+          "end_offset": 43,
+          "start_line": 1,
+          "start_column": 20,
+          "end_line": 1,
+          "end_column": 44
+        }
+      }
+    ],
+    "children": [],
+    "self_closing": true,
+    "span": {
+      "start_offset": 0,
+      "end_offset": 46,
+      "start_line": 1,
+      "start_column": 1,
+      "end_line": 1,
+      "end_column": 47
+    }
+  },
+  "config": {
+    "runtime_mode": "automatic",
+    "build_mode": "production",
+    "source_file": null,
+    "emit_self": true,
+    "emit_source": true,
+    "classic_pragma": null,
+    "classic_fragment_pragma": null,
+    "automatic_import_source": null,
+    "max_depth": 100
+  },
+  "result": {
+    "element": {
+      "element_type": {
+        "type": "intrinsic",
+        "tag": "input"
+      },
+      "props": {
+        "entries": [
+          {
+            "type": "named",
+            "name": "type",
+            "value": {
+              "type": "string_literal",
+              "value": "text"
+            },
+            "span": {
+              "start_offset": 7,
+              "end_offset": 18,
+              "start_line": 1,
+              "start_column": 8,
+              "end_line": 1,
+              "end_column": 19
+            }
+          },
+          {
+            "type": "named",
+            "name": "placeholder",
+            "value": {
+              "type": "string_literal",
+              "value": "Enter text"
+            },
+            "span": {
+              "start_offset": 19,
+              "end_offset": 43,
+              "start_line": 1,
+              "start_column": 20,
+              "end_line": 1,
+              "end_column": 44
+            }
+          }
+        ],
+        "has_spreads": false,
+        "extracted_key": null,
+        "extracted_ref": null
+      },
+      "children": [],
+      "call_convention": {
+        "type": "automatic",
+        "factory": "jsx",
+        "import_source": "react/jsx-runtime"
+      },
+      "source_location": null,
+      "is_static_children": false,
+      "depth": 0,
+      "span": {
+        "start_offset": 0,
+        "end_offset": 46,
+        "start_line": 1,
+        "start_column": 1,
+        "end_line": 1,
+        "end_column": 47
+      }
+    },
+    "diagnostics": [],
+    "required_imports": [
+      {
+        "source": "react/jsx-runtime",
+        "name": "jsx",
+        "is_default": false
+      }
+    ],
+    "feature_families_used": [
+      "self_closing",
+      "string_attribute"
+    ],
+    "stats": {
+      "elements_lowered": 1,
+      "fragments_lowered": 0,
+      "text_children": 0,
+      "expression_children": 0,
+      "spread_attributes": 0,
+      "max_depth_reached": 0,
+      "total_props": 2,
+      "keys_extracted": 0,
+      "refs_extracted": 0
+    }
+  },
+  "schema_version": "franken-engine.react-compilation-golden.v1"
+}

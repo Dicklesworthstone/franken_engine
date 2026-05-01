@@ -1,0 +1,170 @@
+{
+  "test_name": "member_expression_automatic",
+  "input_jsx": {
+    "type": "element",
+    "name": {
+      "type": "member_expression",
+      "segments": [
+        "UI",
+        "Button"
+      ],
+      "span": {
+        "start_offset": 1,
+        "end_offset": 10,
+        "start_line": 1,
+        "start_column": 2,
+        "end_line": 1,
+        "end_column": 11
+      }
+    },
+    "attributes": [
+      {
+        "type": "named",
+        "name": "variant",
+        "value": {
+          "type": "string_literal",
+          "value": "primary"
+        },
+        "span": {
+          "start_offset": 11,
+          "end_offset": 28,
+          "start_line": 1,
+          "start_column": 12,
+          "end_line": 1,
+          "end_column": 29
+        }
+      }
+    ],
+    "children": [
+      {
+        "type": "text",
+        "value": "Click me",
+        "span": {
+          "start_offset": 29,
+          "end_offset": 37,
+          "start_line": 1,
+          "start_column": 30,
+          "end_line": 1,
+          "end_column": 38
+        }
+      }
+    ],
+    "self_closing": false,
+    "span": {
+      "start_offset": 0,
+      "end_offset": 49,
+      "start_line": 1,
+      "start_column": 1,
+      "end_line": 1,
+      "end_column": 50
+    }
+  },
+  "config": {
+    "runtime_mode": "automatic",
+    "build_mode": "production",
+    "source_file": null,
+    "emit_self": true,
+    "emit_source": true,
+    "classic_pragma": null,
+    "classic_fragment_pragma": null,
+    "automatic_import_source": null,
+    "max_depth": 100
+  },
+  "result": {
+    "element": {
+      "element_type": {
+        "type": "component",
+        "name": "UI.Button"
+      },
+      "props": {
+        "entries": [
+          {
+            "type": "named",
+            "name": "variant",
+            "value": {
+              "type": "string_literal",
+              "value": "primary"
+            },
+            "span": {
+              "start_offset": 11,
+              "end_offset": 28,
+              "start_line": 1,
+              "start_column": 12,
+              "end_line": 1,
+              "end_column": 29
+            }
+          },
+          {
+            "type": "named",
+            "name": "children",
+            "value": {
+              "type": "string_literal",
+              "value": "Click me"
+            },
+            "span": null
+          }
+        ],
+        "has_spreads": false,
+        "extracted_key": null,
+        "extracted_ref": null
+      },
+      "children": [],
+      "call_convention": {
+        "type": "automatic",
+        "factory": "jsx",
+        "import_source": "react/jsx-runtime"
+      },
+      "source_location": null,
+      "is_static_children": false,
+      "depth": 0,
+      "span": {
+        "start_offset": 0,
+        "end_offset": 49,
+        "start_line": 1,
+        "start_column": 1,
+        "end_line": 1,
+        "end_column": 50
+      }
+    },
+    "diagnostics": [
+      {
+        "code": "CHILDREN_IN_PROPS",
+        "severity": "info",
+        "message": "Children (1 total) folded into props for automatic runtime",
+        "span": {
+          "start_offset": 0,
+          "end_offset": 49,
+          "start_line": 1,
+          "start_column": 1,
+          "end_line": 1,
+          "end_column": 50
+        }
+      }
+    ],
+    "required_imports": [
+      {
+        "source": "react/jsx-runtime",
+        "name": "jsx",
+        "is_default": false
+      }
+    ],
+    "feature_families_used": [
+      "element",
+      "string_attribute",
+      "text_child",
+      "member_expression_name"
+    ],
+    "stats": {
+      "elements_lowered": 1,
+      "fragments_lowered": 0,
+      "text_children": 1,
+      "expression_children": 0,
+      "spread_attributes": 0,
+      "max_depth_reached": 0,
+      "total_props": 1,
+      "keys_extracted": 0,
+      "refs_extracted": 0
+    }
+  },
+  "schema_version": "franken-engine.react-compilation-golden.v1"
+}

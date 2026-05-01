@@ -1,5 +1,5 @@
 {
-  "test_name": "simple_div_classic",
+  "test_name": "simple_div_automatic",
   "input_jsx": {
     "type": "element",
     "name": {
@@ -40,7 +40,7 @@
     }
   },
   "config": {
-    "runtime_mode": "classic",
+    "runtime_mode": "automatic",
     "build_mode": "production",
     "source_file": null,
     "emit_self": true,
@@ -57,29 +57,26 @@
         "tag": "div"
       },
       "props": {
-        "entries": [],
+        "entries": [
+          {
+            "type": "named",
+            "name": "children",
+            "value": {
+              "type": "string_literal",
+              "value": "Hello"
+            },
+            "span": null
+          }
+        ],
         "has_spreads": false,
         "extracted_key": null,
         "extracted_ref": null
       },
-      "children": [
-        {
-          "type": "text",
-          "value": "Hello",
-          "span": {
-            "start_offset": 5,
-            "end_offset": 10,
-            "start_line": 1,
-            "start_column": 6,
-            "end_line": 1,
-            "end_column": 11
-          }
-        }
-      ],
+      "children": [],
       "call_convention": {
-        "type": "classic",
-        "object": "React",
-        "method": "createElement"
+        "type": "automatic",
+        "factory": "jsx",
+        "import_source": "react/jsx-runtime"
       },
       "source_location": null,
       "is_static_children": false,
@@ -93,8 +90,28 @@
         "end_column": 17
       }
     },
-    "diagnostics": [],
-    "required_imports": [],
+    "diagnostics": [
+      {
+        "code": "CHILDREN_IN_PROPS",
+        "severity": "info",
+        "message": "Children (1 total) folded into props for automatic runtime",
+        "span": {
+          "start_offset": 0,
+          "end_offset": 16,
+          "start_line": 1,
+          "start_column": 1,
+          "end_line": 1,
+          "end_column": 17
+        }
+      }
+    ],
+    "required_imports": [
+      {
+        "source": "react/jsx-runtime",
+        "name": "jsx",
+        "is_default": false
+      }
+    ],
     "feature_families_used": [
       "element",
       "text_child"

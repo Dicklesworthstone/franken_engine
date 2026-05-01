@@ -1,46 +1,46 @@
 {
-  "test_name": "simple_div_classic",
+  "test_name": "react_component_automatic",
   "input_jsx": {
     "type": "element",
     "name": {
       "type": "identifier",
-      "name": "div",
+      "name": "UserProfile",
       "span": {
         "start_offset": 1,
-        "end_offset": 4,
+        "end_offset": 12,
         "start_line": 1,
         "start_column": 2,
         "end_line": 1,
-        "end_column": 5
+        "end_column": 13
       }
     },
     "attributes": [],
     "children": [
       {
         "type": "text",
-        "value": "Hello",
+        "value": "Profile",
         "span": {
-          "start_offset": 5,
-          "end_offset": 10,
+          "start_offset": 13,
+          "end_offset": 20,
           "start_line": 1,
-          "start_column": 6,
+          "start_column": 14,
           "end_line": 1,
-          "end_column": 11
+          "end_column": 21
         }
       }
     ],
     "self_closing": false,
     "span": {
       "start_offset": 0,
-      "end_offset": 16,
+      "end_offset": 34,
       "start_line": 1,
       "start_column": 1,
       "end_line": 1,
-      "end_column": 17
+      "end_column": 35
     }
   },
   "config": {
-    "runtime_mode": "classic",
+    "runtime_mode": "automatic",
     "build_mode": "production",
     "source_file": null,
     "emit_self": true,
@@ -53,48 +53,65 @@
   "result": {
     "element": {
       "element_type": {
-        "type": "intrinsic",
-        "tag": "div"
+        "type": "component",
+        "name": "UserProfile"
       },
       "props": {
-        "entries": [],
+        "entries": [
+          {
+            "type": "named",
+            "name": "children",
+            "value": {
+              "type": "string_literal",
+              "value": "Profile"
+            },
+            "span": null
+          }
+        ],
         "has_spreads": false,
         "extracted_key": null,
         "extracted_ref": null
       },
-      "children": [
-        {
-          "type": "text",
-          "value": "Hello",
-          "span": {
-            "start_offset": 5,
-            "end_offset": 10,
-            "start_line": 1,
-            "start_column": 6,
-            "end_line": 1,
-            "end_column": 11
-          }
-        }
-      ],
+      "children": [],
       "call_convention": {
-        "type": "classic",
-        "object": "React",
-        "method": "createElement"
+        "type": "automatic",
+        "factory": "jsx",
+        "import_source": "react/jsx-runtime"
       },
       "source_location": null,
       "is_static_children": false,
       "depth": 0,
       "span": {
         "start_offset": 0,
-        "end_offset": 16,
+        "end_offset": 34,
         "start_line": 1,
         "start_column": 1,
         "end_line": 1,
-        "end_column": 17
+        "end_column": 35
       }
     },
-    "diagnostics": [],
-    "required_imports": [],
+    "diagnostics": [
+      {
+        "code": "CHILDREN_IN_PROPS",
+        "severity": "info",
+        "message": "Children (1 total) folded into props for automatic runtime",
+        "span": {
+          "start_offset": 0,
+          "end_offset": 34,
+          "start_line": 1,
+          "start_column": 1,
+          "end_line": 1,
+          "end_column": 35
+        }
+      }
+    ],
+    "required_imports": [
+      {
+        "source": "react/jsx-runtime",
+        "name": "jsx",
+        "is_default": false
+      }
+    ],
     "feature_families_used": [
       "element",
       "text_child"

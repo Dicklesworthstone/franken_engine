@@ -1,0 +1,10 @@
+Classification: Confidential
+Source: Internal security audit
+Data: API endpoint performance metrics for internal optimization
+
+Endpoint /api/users/list: 245ms avg, 99th percentile 890ms
+Endpoint /api/orders/recent: 128ms avg, 99th percentile 650ms
+Endpoint /api/inventory/check: 78ms avg, 99th percentile 320ms
+
+Internal recommendation: cache user list responses, optimize orders query.
+Note: This data requires declassification before public release.

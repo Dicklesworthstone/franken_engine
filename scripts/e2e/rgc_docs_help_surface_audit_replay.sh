@@ -29,6 +29,7 @@ latest_complete_run_dir() {
     [[ -f "${candidate}/commands.txt" ]] || continue
     [[ -f "${candidate}/docs_help_surface_report.json" ]] || continue
     [[ -f "${candidate}/frankenctl_help.txt" ]] || continue
+    [[ -f "${candidate}/readme_claim_sensitivity_checks.jsonl" ]] || continue
     [[ -f "${candidate}/step_logs/step_000.log" ]] || continue
     printf '%s\n' "${candidate}"
   done | tail -n 1
@@ -67,6 +68,8 @@ echo "[rgc-docs-help-surface-audit] latest commands: ${latest_run_dir}/commands.
 cat "${latest_run_dir}/commands.txt"
 echo "[rgc-docs-help-surface-audit] latest report: ${latest_run_dir}/docs_help_surface_report.json"
 cat "${latest_run_dir}/docs_help_surface_report.json"
+echo "[rgc-docs-help-surface-audit] latest README claim checks: ${latest_run_dir}/readme_claim_sensitivity_checks.jsonl"
+cat "${latest_run_dir}/readme_claim_sensitivity_checks.jsonl"
 echo "[rgc-docs-help-surface-audit] latest help output: ${latest_run_dir}/frankenctl_help.txt"
 cat "${latest_run_dir}/frankenctl_help.txt"
 echo "[rgc-docs-help-surface-audit] latest first step log: ${latest_run_dir}/step_logs/step_000.log"

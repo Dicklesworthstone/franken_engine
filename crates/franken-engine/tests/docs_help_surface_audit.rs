@@ -35,6 +35,7 @@ struct DocsHelpSurfaceAuditContract {
     required_readme_fragments: Vec<String>,
     banned_readme_fragments: Vec<String>,
     audited_claims: Vec<AuditedClaim>,
+    readme_claim_sensitivity_checks: Vec<ReadmeClaimSensitivityCheck>,
     required_log_keys: Vec<String>,
     required_artifacts: Vec<String>,
     gate_runner: GateRunner,
@@ -47,6 +48,17 @@ struct AuditedClaim {
     surface: String,
     status: String,
     rationale: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+struct ReadmeClaimSensitivityCheck {
+    check_id: String,
+    section_start: String,
+    section_end: String,
+    proof_state: String,
+    claim_terms: Vec<String>,
+    required_qualifiers: Vec<String>,
+    banned_fragments: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -73,6 +85,22 @@ fn parse_contract() -> DocsHelpSurfaceAuditContract {
 fn read_gate_script() -> String {
     let path = repo_root().join("scripts/run_rgc_docs_help_surface_audit.sh");
     read_to_string(&path)
+}
+
+fn readme_section_between(contents: &str, start: &str, end: &str) -> String {
+    let start_idx = contents
+        .find(start)
+        .unwrap_or_else(|| panic!("README missing claim-sensitive start marker: {start}"));
+    let tail = &contents[start_idx..];
+    if end.is_empty() {
+        return tail.to_owned();
+    }
+
+    let search_start = start.len().min(tail.len());
+    match tail[search_start..].find(end) {
+        Some(end_idx) => tail[..search_start + end_idx].to_owned(),
+        None => tail.to_owned(),
+    }
 }
 
 fn actual_top_level_commands_from_help(stdout: &str) -> BTreeSet<String> {
@@ -162,6 +190,13 @@ fn rgc_911a_contract_is_versioned_and_classifies_audited_claims() {
             .any(|claim| claim.status == "narrowed"),
         "expected at least one narrowed claim classification"
     );
+    assert!(
+        contract
+            .readme_claim_sensitivity_checks
+            .iter()
+            .any(|check| check.check_id == "readme-full-integration-mode"),
+        "expected README Full Integration Mode claim-sensitivity check"
+    );
 
     let required_log_keys: BTreeSet<_> = contract
         .required_log_keys
@@ -247,6 +282,52 @@ fn rgc_911a_readme_matches_contract_fragments() {
             "README still contains unsupported command fragment in {}: {fragment}",
             path.display()
         );
+    }
+}
+
+#[test]
+fn rgc_911a_readme_claim_sensitive_sections_are_truth_qualified() {
+    let contract = parse_contract();
+    let path = repo_root().join("README.md");
+    let readme = read_to_string(&path);
+
+    assert!(
+        !contract.readme_claim_sensitivity_checks.is_empty(),
+        "contract must define README claim-sensitivity checks"
+    );
+
+    for check in &contract.readme_claim_sensitivity_checks {
+        assert!(
+            matches!(check.proof_state.as_str(), "HYPOTHESIS/TARGETED"),
+            "unexpected proof-state class for {}: {}",
+            check.check_id,
+            check.proof_state
+        );
+
+        let section = readme_section_between(&readme, &check.section_start, &check.section_end);
+        for term in &check.claim_terms {
+            assert!(
+                section.contains(term),
+                "README claim-sensitive section {} missing claim term {term}",
+                check.check_id
+            );
+        }
+
+        for qualifier in &check.required_qualifiers {
+            assert!(
+                section.contains(qualifier),
+                "README claim-sensitive section {} missing proof-state qualifier {qualifier}",
+                check.check_id
+            );
+        }
+
+        for banned in &check.banned_fragments {
+            assert!(
+                !section.contains(banned),
+                "README claim-sensitive section {} still contains banned production guarantee: {banned}",
+                check.check_id
+            );
+        }
     }
 }
 
@@ -359,6 +440,7 @@ fn rgc_911a_replay_wrapper_resolves_latest_complete_bundle_and_prints_artifacts(
         "latest_complete_run_dir",
         "newest directory ${latest_artifact_dir_path} is incomplete",
         "docs_help_surface_report.json",
+        "readme_claim_sensitivity_checks.jsonl",
         "frankenctl_help.txt",
         "step_logs/step_000.log",
         "run_manifest.json",
@@ -381,6 +463,7 @@ fn rgc_911a_doc_mentions_replay_wrapper_bundle_outputs() {
     for fragment in [
         "latest complete run directory",
         "docs_help_surface_report.json",
+        "readme_claim_sensitivity_checks.jsonl",
         "frankenctl_help.txt",
         "step_logs/step_000.log",
     ] {

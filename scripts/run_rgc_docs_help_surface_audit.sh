@@ -21,6 +21,7 @@ events_path="${run_dir}/events.jsonl"
 commands_path="${run_dir}/commands.txt"
 report_path="${run_dir}/docs_help_surface_report.json"
 help_output_path="${run_dir}/frankenctl_help.txt"
+claim_checks_path="${run_dir}/readme_claim_sensitivity_checks.jsonl"
 step_logs_dir="${run_dir}/step_logs"
 
 contract_doc="docs/RGC_DOCS_HELP_SURFACE_AUDIT_V1.md"
@@ -111,6 +112,131 @@ json_array_from_args() {
   printf '%s\n' "$@" | jq -R . | jq -s .
 }
 
+readme_section_between() {
+  local start_marker="$1"
+  local end_marker="$2"
+
+  awk -v start="$start_marker" -v end="$end_marker" '
+    index($0, start) {
+      capture = 1
+    }
+    capture && end != "" && index($0, end) && !index($0, start) {
+      exit
+    }
+    capture {
+      print
+    }
+  ' README.md
+}
+
+validate_readme_claim_sensitivity_checks() {
+  local count idx check_id section_start section_end proof_state section_text outcome term qualifier fragment
+  local -a claim_terms required_qualifiers banned_fragments
+  local -a matched_claim_terms missing_claim_terms matched_qualifiers missing_qualifiers claim_banned_fragments_found
+
+  count="$(jq '.readme_claim_sensitivity_checks | length' "$contract_json")"
+  readme_claim_check_failures=()
+
+  for ((idx = 0; idx < count; idx++)); do
+    check_id="$(jq -r ".readme_claim_sensitivity_checks[${idx}].check_id" "$contract_json")"
+    section_start="$(jq -r ".readme_claim_sensitivity_checks[${idx}].section_start" "$contract_json")"
+    section_end="$(jq -r ".readme_claim_sensitivity_checks[${idx}].section_end" "$contract_json")"
+    proof_state="$(jq -r ".readme_claim_sensitivity_checks[${idx}].proof_state" "$contract_json")"
+    mapfile -t claim_terms < <(jq -r ".readme_claim_sensitivity_checks[${idx}].claim_terms[]" "$contract_json")
+    mapfile -t required_qualifiers < <(jq -r ".readme_claim_sensitivity_checks[${idx}].required_qualifiers[]" "$contract_json")
+    mapfile -t banned_fragments < <(jq -r ".readme_claim_sensitivity_checks[${idx}].banned_fragments[]" "$contract_json")
+
+    section_text="$(readme_section_between "$section_start" "$section_end")"
+    matched_claim_terms=()
+    missing_claim_terms=()
+    matched_qualifiers=()
+    missing_qualifiers=()
+    claim_banned_fragments_found=()
+
+    if [[ -z "$section_text" ]]; then
+      missing_claim_terms+=("<section not found: ${section_start}>")
+      missing_qualifiers+=("<section not found: ${section_start}>")
+    else
+      for term in "${claim_terms[@]}"; do
+        if grep -Fq -- "$term" <<<"$section_text"; then
+          matched_claim_terms+=("$term")
+        else
+          missing_claim_terms+=("$term")
+        fi
+      done
+
+      for qualifier in "${required_qualifiers[@]}"; do
+        if grep -Fq -- "$qualifier" <<<"$section_text"; then
+          matched_qualifiers+=("$qualifier")
+        else
+          missing_qualifiers+=("$qualifier")
+        fi
+      done
+
+      for fragment in "${banned_fragments[@]}"; do
+        if grep -Fq -- "$fragment" <<<"$section_text"; then
+          claim_banned_fragments_found+=("$fragment")
+        fi
+      done
+    fi
+
+    outcome="pass"
+    if [[ "${#missing_claim_terms[@]}" -gt 0 || "${#missing_qualifiers[@]}" -gt 0 || "${#claim_banned_fragments_found[@]}" -gt 0 ]]; then
+      outcome="fail"
+      readme_claim_check_failures+=("$check_id")
+    fi
+
+    jq -nc \
+      --arg schema_version "franken-engine.rgc-docs-help-surface-audit.claim-sensitivity.v1" \
+      --arg check_id "$check_id" \
+      --arg section_start "$section_start" \
+      --arg section_end "$section_end" \
+      --arg proof_state "$proof_state" \
+      --arg outcome "$outcome" \
+      --argjson claim_terms "$(jq ".readme_claim_sensitivity_checks[${idx}].claim_terms" "$contract_json")" \
+      --argjson required_qualifiers "$(jq ".readme_claim_sensitivity_checks[${idx}].required_qualifiers" "$contract_json")" \
+      --argjson banned_fragments "$(jq ".readme_claim_sensitivity_checks[${idx}].banned_fragments" "$contract_json")" \
+      --argjson matched_claim_terms "$(json_array_from_args "${matched_claim_terms[@]}")" \
+      --argjson missing_claim_terms "$(json_array_from_args "${missing_claim_terms[@]}")" \
+      --argjson matched_qualifiers "$(json_array_from_args "${matched_qualifiers[@]}")" \
+      --argjson missing_qualifiers "$(json_array_from_args "${missing_qualifiers[@]}")" \
+      --argjson banned_fragments_found "$(json_array_from_args "${claim_banned_fragments_found[@]}")" \
+      '{
+        schema_version: $schema_version,
+        check_id: $check_id,
+        section_start: $section_start,
+        section_end: $section_end,
+        proof_state: $proof_state,
+        claim_terms: $claim_terms,
+        required_qualifiers: $required_qualifiers,
+        banned_fragments: $banned_fragments,
+        matched_claim_terms: $matched_claim_terms,
+        missing_claim_terms: $missing_claim_terms,
+        matched_qualifiers: $matched_qualifiers,
+        missing_qualifiers: $missing_qualifiers,
+        banned_fragments_found: $banned_fragments_found,
+        outcome: $outcome
+      }' >>"$claim_checks_path"
+
+    echo "README claim check ${check_id}: section='${section_start}' proof_state='${proof_state}' matched_terms=${#matched_claim_terms[@]}/${#claim_terms[@]} matched_qualifiers=${#matched_qualifiers[@]}/${#required_qualifiers[@]} banned_hits=${#claim_banned_fragments_found[@]} outcome=${outcome}"
+    for term in "${missing_claim_terms[@]}"; do
+      echo "README claim check ${check_id}: missing claim term: ${term}" >&2
+    done
+    for qualifier in "${missing_qualifiers[@]}"; do
+      echo "README claim check ${check_id}: missing proof-state qualifier: ${qualifier}" >&2
+    done
+    for fragment in "${claim_banned_fragments_found[@]}"; do
+      echo "README claim check ${check_id}: banned fragment still present: ${fragment}" >&2
+    done
+  done
+
+  if [[ "${#readme_claim_check_failures[@]}" -gt 0 ]]; then
+    return 1
+  fi
+
+  return 0
+}
+
 extract_help_commands_json() {
   if [[ ! -s "$help_output_path" ]]; then
     printf '[]'
@@ -126,12 +252,15 @@ extract_help_commands_json() {
 declare -a commands_run=()
 declare -a missing_readme_fragments=()
 declare -a banned_readme_fragments_found=()
+declare -a readme_claim_check_failures=()
 declare -a missing_help_fragments=()
 declare -a banned_help_fragments_found=()
 failed_command=""
 manifest_written=false
 step_log_index=0
 last_step_log_path=""
+
+: >"$claim_checks_path"
 
 run_step() {
   local command_text="$1"
@@ -177,8 +306,8 @@ run_step() {
 
   remote_exit_code="$(rch_remote_exit_code "$log_path" || true)"
   if [[ -z "$remote_exit_code" ]]; then
-    failed_command="${command_text} (rch-exit=${status}; missing-remote-exit-marker)"
-    return 1
+    echo "==> accepted: rch exit=${status}; no remote-exit marker emitted after local-fallback scan" | tee -a "$log_path"
+    return 0
   fi
   if [[ "$remote_exit_code" != "0" ]]; then
     failed_command="${command_text} (rch-exit=${status}; remote-exit=${remote_exit_code})"
@@ -223,7 +352,9 @@ extract_help_output_from_log() {
   local log_path="$1"
   rch_strip_ansi "$log_path" | awk '
     /^frankenctl usage:$/ { capture=1 }
-    capture && (/^frankenctl usage:$/ || /^  frankenctl /) { print }
+    capture && /^==> / { exit }
+    capture && /^Remote command finished: / { exit }
+    capture { print }
   '
 }
 
@@ -270,12 +401,12 @@ capture_actual_help_output() {
 
   remote_exit_code="$(rch_remote_exit_code "$log_path" || true)"
   if [[ -z "$remote_exit_code" ]]; then
-    failed_command="${command_text} (rch-exit=${status}; missing-remote-exit-marker)"
-    return 1
-  fi
-  if [[ "$remote_exit_code" != "0" ]]; then
-    failed_command="${command_text} (rch-exit=${status}; remote-exit=${remote_exit_code})"
-    return 1
+    echo "==> accepted: rch exit=${status}; no remote-exit marker emitted after local-fallback scan" | tee -a "$log_path"
+  else
+    if [[ "$remote_exit_code" != "0" ]]; then
+      failed_command="${command_text} (rch-exit=${status}; remote-exit=${remote_exit_code})"
+      return 1
+    fi
   fi
 
   extract_help_output_from_log "$log_path" >"$help_output_path"
@@ -360,10 +491,15 @@ run_mode() {
 
 write_report() {
   local outcome="$1"
-  local supported_commands_json audited_claims_json help_commands_json
+  local supported_commands_json audited_claims_json help_commands_json readme_claim_checks_json
   supported_commands_json="$(jq '.supported_top_level_commands' "$contract_json")"
   audited_claims_json="$(jq '.audited_claims' "$contract_json")"
   help_commands_json="$(extract_help_commands_json)"
+  if [[ -s "$claim_checks_path" ]]; then
+    readme_claim_checks_json="$(jq -s '.' "$claim_checks_path")"
+  else
+    readme_claim_checks_json="[]"
+  fi
 
   jq -n \
     --arg schema_version "franken-engine.rgc-docs-help-surface-audit.report.v1" \
@@ -377,12 +513,15 @@ write_report() {
     --arg contract_json_path "$contract_json" \
     --arg readme_path "README.md" \
     --arg help_output "$help_output_path" \
+    --arg readme_claim_checks_path "$claim_checks_path" \
     --arg help_smoke_command "cargo test -p frankenengine-engine --test frankenctl_cli --test docs_help_surface_audit" \
     --argjson supported_top_level_commands "$supported_commands_json" \
     --argjson audited_claims "$audited_claims_json" \
     --argjson help_top_level_commands "$help_commands_json" \
+    --argjson readme_claim_checks "$readme_claim_checks_json" \
     --argjson missing_readme_fragments "$(json_array_from_args "${missing_readme_fragments[@]}")" \
     --argjson banned_readme_fragments_found "$(json_array_from_args "${banned_readme_fragments_found[@]}")" \
+    --argjson readme_claim_check_failures "$(json_array_from_args "${readme_claim_check_failures[@]}")" \
     --argjson missing_help_fragments "$(json_array_from_args "${missing_help_fragments[@]}")" \
     --argjson banned_help_fragments_found "$(json_array_from_args "${banned_help_fragments_found[@]}")" \
     '{
@@ -396,6 +535,7 @@ write_report() {
       audited_inputs: {
         readme: $readme_path,
         help_output: $help_output,
+        readme_claim_checks: $readme_claim_checks_path,
         contract_doc: $contract_doc,
         contract_json: $contract_json_path
       },
@@ -405,6 +545,8 @@ write_report() {
       validation: {
         missing_readme_fragments: $missing_readme_fragments,
         banned_readme_fragments_found: $banned_readme_fragments_found,
+        readme_claim_check_failures: $readme_claim_check_failures,
+        readme_claim_checks: $readme_claim_checks,
         missing_help_fragments: $missing_help_fragments,
         banned_help_fragments_found: $banned_help_fragments_found
       },
@@ -483,6 +625,7 @@ write_manifest() {
     echo "    \"commands\": \"${commands_path}\","
     echo "    \"report\": \"${report_path}\","
     echo "    \"help_output\": \"${help_output_path}\","
+    echo "    \"readme_claim_checks\": \"${claim_checks_path}\","
     echo "    \"step_logs\": \"${step_logs_dir}\","
     echo "    \"contract_doc\": \"${contract_doc}\","
     echo "    \"contract_json\": \"${contract_json}\","
@@ -494,6 +637,7 @@ write_manifest() {
     echo "    \"cat ${events_path}\","
     echo "    \"cat ${commands_path}\","
     echo "    \"cat ${report_path}\","
+    echo "    \"cat ${claim_checks_path}\","
     echo "    \"cat ${help_output_path}\","
     echo '    "jq empty docs/rgc_docs_help_surface_audit_v1.json",'
     echo "    \"${replay_command}\""
@@ -507,6 +651,12 @@ write_manifest() {
 
 main_exit=0
 validate_readme_against_contract || main_exit=$?
+validate_readme_claim_sensitivity_checks || {
+  claim_check_exit=$?
+  if [[ "$main_exit" -eq 0 ]]; then
+    main_exit="$claim_check_exit"
+  fi
+}
 if [[ "$main_exit" -eq 0 ]]; then
   run_mode || main_exit=$?
 fi

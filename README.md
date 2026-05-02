@@ -13,7 +13,7 @@
 
 </div>
 
-Native Rust runtime for adversarial extension workloads, with deterministic replay, cryptographic decision receipts, and fleet-scale containment.
+Native Rust runtime for adversarial extension workloads, with deterministic replay surfaces, signed evidence contracts, and explicit proof-state tracking for cryptographic decision receipts and fleet-scale containment.
 
 <div align="center">
 <h3>Quick Start From Source</h3>
@@ -141,8 +141,8 @@ Reproducibility bundle templates (`env.json`, `manifest.json`, `repro.lock`) are
 | Core execution ownership | Native Rust baseline interpreter + profile router | V8 embedding | JavaScriptCore + Zig runtime |
 | Deterministic replay for high-severity decisions | Built in, mandatory release gate | External tooling only | External tooling only |
 | Probabilistic containment policy | Built in guardplane | Not default runtime behavior | Not default runtime behavior |
-| Cryptographic decision receipts | First-class runtime artifact | Not a core runtime primitive | Not a core runtime primitive |
-| Fleet quarantine convergence model | Explicit SLO + fault-injection gates | App-specific integration | App-specific integration |
+| Cryptographic decision receipts | HYPOTHESIS until transparency-log and optional TEE proof artifacts promote the claim | Not a core runtime primitive | Not a core runtime primitive |
+| Fleet quarantine convergence model | TARGETED/provisional SLO and fault-injection gates; live bounded convergence is not yet an observed production claim | App-specific integration | App-specific integration |
 | Capability-typed extension contract | Selected runtime capability gates; compile-time TS-to-IR contract not shipped | Not native to runtime | Not native to runtime |
 | Cross-runtime lockstep oracle | Built in Node/Bun differential harness | N/A | N/A |
 
@@ -196,8 +196,8 @@ cargo test --all-features
 In full integration mode:
 - Complete governance and policy enforcement
 - Cross-repository coordination enabled
-- TEE attestation and fleet quarantine available
-- Cryptographic decision receipts with audit trails
+- TEE attestation bindings and bounded fleet quarantine remain HYPOTHESIS/TARGETED security claims until promoted by live proof artifacts
+- Cryptographic decision receipts compile their integration seams and validation gates, but transparency-log and TEE-backed production guarantees remain governed by the claim-to-proof matrix
 
 ### Verifying Build Modes
 
@@ -593,6 +593,8 @@ jq empty docs/rgc_docs_help_surface_audit_v1.json
 ```
 
 The replay wrapper resolves the latest complete audit bundle, warns on incomplete runs, and validates that help output matches the audited contract surface.
+
+Each run also emits `readme_claim_sensitivity_checks.jsonl`, which logs every claim-sensitive README section, matched terms, required proof-state qualifiers, and pass/fail verdict.
 
 Audit artifacts are generated at `artifacts/rgc_docs_help_surface_audit/<timestamp>/docs_help_surface_report.json` for each verification run.
 

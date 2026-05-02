@@ -57,8 +57,33 @@ stale audit text.
   called out explicitly
 - `readme-troubleshooting`: narrowed from non-existent subcommands to supported
   `doctor`, `verify`, `benchmark`, and `replay` remediation flows
+- `readme-claim-sensitive-build-mode`: narrowed cryptographic decision receipt,
+  TEE attestation, and fleet quarantine language so all-features describes
+  integration seams and proof gates rather than unobserved production guarantees
 - `frankenctl-top-level-help`: accurate and treated as the authoritative command
   source of truth
+
+## Claim-Sensitivity Checks
+
+The audit also scans README sections that mention HYPOTHESIS or TARGETED
+security capabilities. Each check records:
+
+- `check_id`
+- `section_start`
+- `section_end`
+- `proof_state`
+- `claim_terms`
+- `matched_claim_terms`
+- `required_qualifiers`
+- `matched_qualifiers`
+- `banned_fragments_found`
+- `outcome`
+
+The current checked sections are the top security-posture tagline, the
+comparison rows for cryptographic receipts and fleet quarantine, and the Full
+Integration Mode build section. The gate fails closed if those sections restate
+cryptographic decision receipts, TEE attestation, or fleet quarantine as shipped
+production guarantees without proof-state qualifiers.
 
 ## Structured Logging Contract
 
@@ -91,6 +116,7 @@ the newest artifact directory is incomplete, and print:
 - `events.jsonl`
 - `commands.txt`
 - `docs_help_surface_report.json`
+- `readme_claim_sensitivity_checks.jsonl`
 - `frankenctl_help.txt`
 - `step_logs/step_000.log`
 
@@ -113,6 +139,7 @@ Each run emits:
 - `events.jsonl`
 - `commands.txt`
 - `docs_help_surface_report.json`
+- `readme_claim_sensitivity_checks.jsonl`
 - `frankenctl_help.txt`
 - `step_logs/step_*.log`
 

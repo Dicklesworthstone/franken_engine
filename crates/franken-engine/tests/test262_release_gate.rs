@@ -18,10 +18,13 @@ use std::fs;
 use std::path::PathBuf;
 
 use test262_release_gate::{
-    ProfileDecision, Test262EvidenceCollector, Test262GateError, Test262GateRun, Test262GateRunner,
-    Test262HighWaterMark, Test262ObservedOutcome, Test262ObservedResult, Test262PinSet,
-    Test262Profile, Test262RunnerConfig, Test262WaiverReason, Test262WaiverSet,
-    deterministic_worker_assignments, next_high_water_mark,
+    ProfileDecision, Test262CompatibilityPassRateArtifact,
+    Test262CompatibilityPassRateMetadata, Test262CompatibilityProofState,
+    Test262CompatibilityVectorSource, Test262EvidenceCollector, Test262GateError, Test262GateRun,
+    Test262GateRunner, Test262HighWaterMark, Test262ObservedOutcome, Test262ObservedResult,
+    Test262PinSet, Test262Profile, Test262RunnerConfig, Test262WaiverReason, Test262WaiverSet,
+    build_test262_compatibility_pass_rate_artifact, deterministic_worker_assignments,
+    next_high_water_mark,
 };
 
 fn fixture(path: &str) -> PathBuf {
@@ -639,6 +642,195 @@ fn test262_gate_run_serde_round_trip() {
     assert_eq!(run.run_id, recovered.run_id);
     assert_eq!(run.blocked, recovered.blocked);
     assert_eq!(run.summary.passed, recovered.summary.passed);
+}
+
+#[test]
+fn compatibility_artifact_validates_checked_in_observed_results() {
+    let profile = load_profile();
+    let pins = load_pins();
+    let waivers = load_waivers();
+    let run = runner("2026-02-22", false)
+        .run(
+            &pins,
+            &profile,
+            &waivers,
+            &[
+                observed(
+                    "language/expressions/optional-chaining/pass.js",
+                    "13.3.1",
+                    Test262ObservedOutcome::Pass,
+                ),
+                observed(
+                    "language/expressions/optional-chaining/short-circuiting.js",
+                    "13.3.1",
+                    Test262ObservedOutcome::Fail,
+                ),
+                observed(
+                    "built-ins/Array/prototype/map/basic.js",
+                    "23.1.3",
+                    Test262ObservedOutcome::Pass,
+                ),
+            ],
+            None,
+        )
+        .expect("gate run");
+
+    let artifact = build_test262_compatibility_pass_rate_artifact(
+        &run,
+        &pins,
+        &profile,
+        Test262CompatibilityPassRateMetadata::checked_in_observed_results(
+            "crates/franken-engine/tests/test262_observed_results.jsonl",
+            "cargo test -p frankenengine-engine --test test262_release_gate",
+            "2026-05-02T11:37:43Z",
+        ),
+    )
+    .expect("compatibility artifact");
+
+    assert_eq!(artifact.denominator, 3);
+    assert_eq!(artifact.passed, 2);
+    assert_eq!(artifact.waived, 1);
+    assert_eq!(artifact.failed, 0);
+    assert_eq!(artifact.pass_rate_millionths, 666_666);
+    assert!(!artifact.full_suite_claim_allowed);
+    assert_eq!(
+        artifact.proof_state,
+        Test262CompatibilityProofState::CheckedInVectorsProvisional
+    );
+}
+
+#[test]
+fn compatibility_artifact_rejects_zero_denominator() {
+    let profile = load_profile();
+    let pins = load_pins();
+    let waivers = load_waivers();
+    let run = runner("2026-02-22", false)
+        .run(
+            &pins,
+            &profile,
+            &waivers,
+            &[observed(
+                "harness/assert.js",
+                "N/A",
+                Test262ObservedOutcome::Pass,
+            )],
+            None,
+        )
+        .expect("gate run");
+
+    let err = build_test262_compatibility_pass_rate_artifact(
+        &run,
+        &pins,
+        &profile,
+        Test262CompatibilityPassRateMetadata::checked_in_observed_results(
+            "crates/franken-engine/tests/test262_observed_results.jsonl",
+            "cargo test -p frankenengine-engine --test test262_release_gate",
+            "2026-05-02T11:37:43Z",
+        ),
+    )
+    .expect_err("zero denominator must fail closed");
+
+    assert!(err.to_string().contains("denominator"));
+}
+
+#[test]
+fn compatibility_artifact_rejects_full_suite_label_for_precomputed_vectors() {
+    let profile = load_profile();
+    let pins = load_pins();
+    let waivers = load_waivers();
+    let run = runner("2026-02-22", false)
+        .run(
+            &pins,
+            &profile,
+            &waivers,
+            &[observed(
+                "language/expressions/optional-chaining/pass.js",
+                "13.3.1",
+                Test262ObservedOutcome::Pass,
+            )],
+            None,
+        )
+        .expect("gate run");
+
+    let err = build_test262_compatibility_pass_rate_artifact(
+        &run,
+        &pins,
+        &profile,
+        Test262CompatibilityPassRateMetadata {
+            proof_state: Test262CompatibilityProofState::FullOfficialSuite,
+            vector_source: Test262CompatibilityVectorSource::PrecomputedObservedResults,
+            claim_scope: "full_official_test262".to_string(),
+            source_provenance: "crates/franken-engine/tests/test262_observed_results.jsonl"
+                .to_string(),
+            runner_command: "cargo test -p frankenengine-engine --test test262_release_gate"
+                .to_string(),
+            generated_at_utc: "2026-05-02T11:37:43Z".to_string(),
+            skipped: 0,
+            limitations: Vec::new(),
+        },
+    )
+    .expect_err("precomputed vectors must not claim full suite coverage");
+
+    assert!(err.to_string().contains("official"));
+}
+
+#[test]
+fn compatibility_artifact_accepts_pinned_subset_without_full_claim() {
+    let profile = load_profile();
+    let pins = load_pins();
+    let waivers = load_waivers();
+    let run = runner("2026-02-22", false)
+        .run(
+            &pins,
+            &profile,
+            &waivers,
+            &[observed(
+                "language/expressions/optional-chaining/pass.js",
+                "13.3.1",
+                Test262ObservedOutcome::Pass,
+            )],
+            None,
+        )
+        .expect("gate run");
+
+    let artifact = build_test262_compatibility_pass_rate_artifact(
+        &run,
+        &pins,
+        &profile,
+        Test262CompatibilityPassRateMetadata {
+            proof_state: Test262CompatibilityProofState::PinnedSubset,
+            vector_source: Test262CompatibilityVectorSource::PinnedSubsetRunner,
+            claim_scope: "pinned_es2020_subset".to_string(),
+            source_provenance: "tests/test262_case_vectors.jsonl".to_string(),
+            runner_command: "cargo test -p frankenengine-engine --test test262_release_gate"
+                .to_string(),
+            generated_at_utc: "2026-05-02T11:37:43Z".to_string(),
+            skipped: 0,
+            limitations: vec!["pinned subset only".to_string()],
+        },
+    )
+    .expect("pinned subset artifact");
+
+    assert_eq!(artifact.proof_state, Test262CompatibilityProofState::PinnedSubset);
+    assert!(!artifact.full_suite_claim_allowed);
+    artifact.validate().expect("artifact validates");
+}
+
+#[test]
+fn current_published_test262_pass_rate_artifact_validates() {
+    let artifact_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join("docs/test262_compatibility_pass_rate_v1.json");
+    let artifact: Test262CompatibilityPassRateArtifact =
+        serde_json::from_str(&fs::read_to_string(artifact_path).expect("read artifact"))
+            .expect("parse artifact");
+
+    artifact.validate().expect("published artifact validates");
+    assert_eq!(
+        artifact.proof_state,
+        Test262CompatibilityProofState::CheckedInVectorsProvisional
+    );
+    assert!(!artifact.full_suite_claim_allowed);
 }
 
 #[test]

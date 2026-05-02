@@ -277,15 +277,52 @@ pub struct ParserArena {
     bytes_used: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ArenaCapacityHint {
+    statements: usize,
+    nodes: usize,
+    expressions: usize,
+    spans: usize,
+}
+
+impl ArenaCapacityHint {
+    fn from_syntax_tree(tree: &SyntaxTree, budget: ArenaBudget) -> Self {
+        let statement_count = tree.body.len();
+        let variable_declarator_count = tree
+            .body
+            .iter()
+            .map(estimate_statement_variable_declarators)
+            .fold(0usize, usize::saturating_add);
+        let expression_count = tree
+            .body
+            .iter()
+            .map(estimate_statement_expression_slots)
+            .fold(0usize, usize::saturating_add);
+
+        Self {
+            statements: bounded_capacity(statement_count, budget.max_nodes),
+            nodes: bounded_capacity(statement_count, budget.max_nodes),
+            expressions: bounded_capacity(expression_count, budget.max_expressions),
+            spans: bounded_capacity(
+                1usize
+                    .saturating_add(statement_count)
+                    .saturating_add(variable_declarator_count),
+                budget.max_spans,
+            ),
+        }
+    }
+}
+
 impl ParserArena {
     pub fn from_syntax_tree(tree: &SyntaxTree, budget: ArenaBudget) -> Result<Self, ArenaError> {
+        let capacity_hint = ArenaCapacityHint::from_syntax_tree(tree, budget);
         let mut arena = Self {
             goal: tree.goal,
             tree_span: SpanHandle::new(0),
-            statements: Vec::new(),
-            nodes: Vec::new(),
-            expressions: Vec::new(),
-            spans: Vec::new(),
+            statements: Vec::with_capacity(capacity_hint.statements),
+            nodes: Vec::with_capacity(capacity_hint.nodes),
+            expressions: Vec::with_capacity(capacity_hint.expressions),
+            spans: Vec::with_capacity(capacity_hint.spans),
             budget,
             bytes_used: 0,
         };
@@ -730,6 +767,53 @@ fn usize_to_index(value: usize, kind: ArenaBudgetKind) -> Result<u32, ArenaError
 
 const fn index_to_usize(value: u32) -> usize {
     value as usize
+}
+
+fn bounded_capacity(estimate: usize, max_slots: u32) -> usize {
+    estimate.min(max_slots as usize)
+}
+
+fn estimate_statement_variable_declarators(statement: &Statement) -> usize {
+    match statement {
+        Statement::VariableDeclaration(variable_declaration) => {
+            variable_declaration.declarations.len()
+        }
+        _ => 0,
+    }
+}
+
+fn estimate_statement_expression_slots(statement: &Statement) -> usize {
+    match statement {
+        Statement::Export(export) => match &export.kind {
+            ExportKind::Default(expression) => estimate_expression_slots(expression),
+            ExportKind::NamedClause(_) => 0,
+        },
+        Statement::Expression(expression_statement) => {
+            estimate_expression_slots(&expression_statement.expression)
+        }
+        Statement::VariableDeclaration(variable_declaration) => variable_declaration
+            .declarations
+            .iter()
+            .filter_map(|declarator| declarator.initializer.as_ref())
+            .map(estimate_expression_slots)
+            .fold(0usize, usize::saturating_add),
+        _ => 0,
+    }
+}
+
+fn estimate_expression_slots(expression: &Expression) -> usize {
+    match expression {
+        Expression::Identifier(_)
+        | Expression::StringLiteral(_)
+        | Expression::NumericLiteral(_)
+        | Expression::FloatLiteral(_)
+        | Expression::BooleanLiteral(_)
+        | Expression::NullLiteral
+        | Expression::UndefinedLiteral
+        | Expression::Raw(_) => 1,
+        Expression::Await(inner) => 1usize.saturating_add(estimate_expression_slots(inner)),
+        _ => 0,
+    }
 }
 
 fn string_bytes(value: &str) -> u64 {

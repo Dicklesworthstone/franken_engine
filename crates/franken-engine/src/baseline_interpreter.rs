@@ -558,7 +558,7 @@ pub struct ObjectId(pub u32);
 // ---------------------------------------------------------------------------
 
 /// A heap-allocated object with string-keyed properties.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HeapObject {
     /// Property storage (BTreeMap for deterministic ordering).
     pub properties: BTreeMap<String, Value>,
@@ -568,6 +568,20 @@ pub struct HeapObject {
     pub constructor_function: Option<u32>,
     /// Whether this object was created as a true Array instance.
     pub is_array: bool,
+    /// Cached dense length for arrays (None = sparse, compute from properties).
+    pub cached_dense_length: Option<u32>,
+}
+
+impl Default for HeapObject {
+    fn default() -> Self {
+        Self {
+            properties: BTreeMap::new(),
+            prototype: None,
+            constructor_function: None,
+            is_array: false,
+            cached_dense_length: None,
+        }
+    }
 }
 
 impl HeapObject {
@@ -4846,12 +4860,18 @@ impl InterpreterCore {
                         let next_idx = self
                             .heap
                             .get(arr_id.0 as usize)
-                            .map(|obj| {
-                                obj.properties.keys().fold(0u32, |current, key| {
-                                    key.parse::<u32>()
-                                        .ok()
-                                        .map_or(current, |n| current.max(n + 1))
-                                })
+                            .and_then(|obj| {
+                                // Fast path: use cached dense length if available
+                                if let Some(cached_len) = obj.cached_dense_length {
+                                    Some(cached_len)
+                                } else {
+                                    // Sparse fallback: scan all properties (original slow path)
+                                    Some(obj.properties.keys().fold(0u32, |current, key| {
+                                        key.parse::<u32>()
+                                            .ok()
+                                            .map_or(current, |n| current.max(n + 1))
+                                    }))
+                                }
                             })
                             .unwrap_or(0);
                         let next_len = next_idx.saturating_add(1);
@@ -4861,6 +4881,12 @@ impl InterpreterCore {
                             "length".to_string(),
                             Value::Int(i64::from(next_len)),
                         )?;
+                        // Update cached dense length for arrays
+                        if let Some(obj) = self.heap.get_mut(arr_id.0 as usize) {
+                            if obj.is_array && obj.cached_dense_length.is_some() {
+                                obj.cached_dense_length = Some(next_len);
+                            }
+                        }
                     }
                     self.ip += 1;
                 }
@@ -6844,7 +6870,12 @@ impl InterpreterCore {
         for (index, value) in values.iter().cloned().enumerate() {
             self.set_object_property(id, index.to_string(), value)?;
         }
-        self.set_object_property(id, "length".to_string(), Value::Int(values.len() as i64))?;
+        let length = values.len() as i64;
+        self.set_object_property(id, "length".to_string(), Value::Int(length))?;
+        // Update cached dense length
+        if let Some(obj) = self.heap.get_mut(id.0 as usize) {
+            obj.cached_dense_length = Some(length as u32);
+        }
         Ok(id)
     }
 
@@ -17421,6 +17452,8 @@ impl InterpreterCore {
         let mut object = HeapObject::new();
         object.prototype = prototype;
         object.is_array = is_array;
+        // Initialize cached dense length for arrays
+        object.cached_dense_length = if is_array { Some(0) } else { None };
         let object_size = Self::estimate_heap_object_bytes(&object);
         let requested_bytes = self.estimated_memory_bytes.saturating_add(object_size);
         if requested_bytes > self.config.max_total_memory_bytes {
@@ -17559,6 +17592,21 @@ impl InterpreterCore {
                 .heap
                 .get_mut(object_id.0 as usize)
                 .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+
+            // Check if setting this property would make array sparse
+            if object.is_array && key != "length" && object.cached_dense_length.is_some() {
+                if let Ok(index) = key.parse::<u32>() {
+                    let current_len = object.cached_dense_length.unwrap_or(0);
+                    // If setting an index that skips elements, array becomes sparse
+                    if index > current_len {
+                        object.cached_dense_length = None;
+                    }
+                } else {
+                    // Non-numeric property on array, could be sparse
+                    object.cached_dense_length = None;
+                }
+            }
+
             object.properties.insert(key.clone(), value)
         };
         if let Err(err) = self.sync_estimated_memory_bytes() {
@@ -17582,12 +17630,22 @@ impl InterpreterCore {
         object_id: ObjectId,
         key: &str,
     ) -> Result<bool, InterpreterError> {
-        let removed = self
-            .heap
-            .get_mut(object_id.0 as usize)
-            .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?
-            .properties
-            .remove(key);
+        let removed = {
+            let object = self
+                .heap
+                .get_mut(object_id.0 as usize)
+                .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+
+            // Removing properties from arrays makes them sparse
+            if object.is_array && key != "length" && object.cached_dense_length.is_some() {
+                if key.parse::<u32>().is_ok() {
+                    // Removing a numeric index makes array sparse
+                    object.cached_dense_length = None;
+                }
+            }
+
+            object.properties.remove(key)
+        };
         self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
         Ok(removed.is_some())
     }

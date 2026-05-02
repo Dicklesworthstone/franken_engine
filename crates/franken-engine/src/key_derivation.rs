@@ -18,6 +18,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+use crate::epoch_barrier::{CriticalOpKind, EpochBarrier};
 use crate::hash_tiers::ContentHash;
 use crate::security_epoch::SecurityEpoch;
 
@@ -467,6 +468,37 @@ impl<D: KeyDeriver> EpochKeyCache<D> {
             })
     }
 
+    /// Derive or retrieve a key under an epoch-transition read barrier.
+    ///
+    /// This is the production entry point for security-critical session/key
+    /// establishment. If the runtime is draining or finalizing an epoch
+    /// transition, derivation fails closed before any key material is minted.
+    pub fn get_or_derive_with_epoch_barrier(
+        &mut self,
+        barrier: &mut EpochBarrier,
+        domain: KeyDomain,
+        context: &DerivationContext,
+        trace_id: &str,
+    ) -> Result<&DerivedKey, KeyDerivationError> {
+        let guard = barrier
+            .enter_critical(CriticalOpKind::KeyDerivation, trace_id)
+            .map_err(|err| KeyDerivationError::DerivationFailed {
+                reason: format!("epoch barrier rejected key derivation: {err}"),
+            })?;
+
+        if guard.epoch != self.current_epoch {
+            let _ = barrier.release_guard(&guard);
+            return Err(KeyDerivationError::EpochMismatch {
+                key_epoch: self.current_epoch,
+                current_epoch: guard.epoch,
+            });
+        }
+
+        let result = self.get_or_derive(domain, context, trace_id);
+        let _ = barrier.release_guard(&guard);
+        result
+    }
+
     /// Validate that a derived key is still valid for the current epoch.
     pub fn validate_key(&self, key: &DerivedKey) -> Result<(), KeyDerivationError> {
         if key.epoch != self.current_epoch {
@@ -496,6 +528,8 @@ impl<D: KeyDeriver> EpochKeyCache<D> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::epoch_barrier::{BarrierConfig, EpochBarrier};
+    use crate::security_epoch::TransitionReason;
 
     fn test_master_key() -> Vec<u8> {
         b"test-master-key-32-bytes-long!!!".to_vec()
@@ -923,6 +957,66 @@ mod tests {
         assert_eq!(events[1].domain, KeyDomain::Session);
         assert_eq!(events[1].algorithm, "DeterministicTestDeriver");
         assert_eq!(events[1].trace_id, "trace-def");
+    }
+
+    #[test]
+    fn guarded_derivation_rejects_during_epoch_transition() {
+        let mut cache = EpochKeyCache::new(
+            DeterministicTestDeriver,
+            test_master_key(),
+            SecurityEpoch::from_raw(1),
+            32,
+        );
+        let mut barrier =
+            EpochBarrier::new(SecurityEpoch::from_raw(1), BarrierConfig::deterministic());
+        barrier
+            .begin_transition(
+                SecurityEpoch::from_raw(2),
+                TransitionReason::PolicyKeyRotation,
+                "epoch-transition",
+            )
+            .expect("begin transition");
+
+        let err = cache
+            .get_or_derive_with_epoch_barrier(
+                &mut barrier,
+                KeyDomain::Session,
+                &DerivationContext::with("ext", "blocked"),
+                "trace-blocked",
+            )
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            KeyDerivationError::DerivationFailed { ref reason }
+                if reason.contains("epoch barrier rejected key derivation")
+        ));
+        assert_eq!(cache.cached_count(), 0);
+        assert_eq!(barrier.in_flight(), 0);
+    }
+
+    #[test]
+    fn guarded_derivation_releases_epoch_guard_after_success() {
+        let mut cache = EpochKeyCache::new(
+            DeterministicTestDeriver,
+            test_master_key(),
+            SecurityEpoch::from_raw(3),
+            32,
+        );
+        let mut barrier =
+            EpochBarrier::new(SecurityEpoch::from_raw(3), BarrierConfig::deterministic());
+
+        cache
+            .get_or_derive_with_epoch_barrier(
+                &mut barrier,
+                KeyDomain::Session,
+                &DerivationContext::with("ext", "allowed"),
+                "trace-allowed",
+            )
+            .expect("guarded derivation");
+
+        assert_eq!(cache.cached_count(), 1);
+        assert_eq!(barrier.in_flight(), 0);
     }
 
     #[derive(Debug)]

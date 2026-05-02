@@ -19,6 +19,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+use crate::epoch_barrier::{CriticalOpKind, EpochBarrier};
 use crate::security_epoch::SecurityEpoch;
 use crate::self_replacement::{GateResult, GateVerdict, RiskLevel};
 use crate::slot_registry::{AuthorityEnvelope, SlotCapability, SlotId};
@@ -658,6 +659,74 @@ pub fn run_promotion_gates(config: &GateRunnerConfig, input: &GateRunnerInput) -
     }
 }
 
+/// Run all promotion gates under an epoch-transition read barrier.
+///
+/// Promotion is a security-critical decision: a native candidate must not be
+/// approved while the runtime is draining or finalizing a security epoch. This
+/// wrapper returns a deterministic denied result when the barrier cannot be
+/// acquired or when the runner config's epoch differs from the guard epoch.
+pub fn run_promotion_gates_with_epoch_barrier(
+    barrier: &mut EpochBarrier,
+    config: &GateRunnerConfig,
+    input: &GateRunnerInput,
+    trace_id: &str,
+) -> GateRunnerOutput {
+    let guard = match barrier.enter_critical(CriticalOpKind::DecisionEval, trace_id) {
+        Ok(guard) => guard,
+        Err(err) => {
+            return promotion_barrier_denial(
+                config,
+                format!("epoch barrier rejected promotion gate run: {err}"),
+            );
+        }
+    };
+
+    if guard.epoch != config.epoch {
+        let detail = format!(
+            "epoch barrier rejected promotion gate run: guard epoch {} != config epoch {}",
+            guard.epoch, config.epoch
+        );
+        let _ = barrier.release_guard(&guard);
+        return promotion_barrier_denial(config, detail);
+    }
+
+    let output = run_promotion_gates(config, input);
+    let _ = barrier.release_guard(&guard);
+    output
+}
+
+fn promotion_barrier_denial(config: &GateRunnerConfig, detail: String) -> GateRunnerOutput {
+    let evaluation = GateEvaluation {
+        gate: GateKind::CapabilityPreservation,
+        passed: false,
+        required: true,
+        evidence: vec!["epoch_barrier".to_string()],
+        summary: detail.clone(),
+    };
+
+    GateRunnerOutput {
+        run_id: format!("gate-run-{:016x}-epoch-blocked", config.seed),
+        slot_id: config.slot_id.clone(),
+        candidate_digest: config.candidate_digest.clone(),
+        evaluations: vec![evaluation],
+        verdict: GateVerdict::Denied,
+        risk_level: RiskLevel::Critical,
+        rollback_verified: false,
+        seed: config.seed,
+        evidence_bundle: EvidenceBundle {
+            artifacts: vec![EvidenceArtifact {
+                artifact_id: format!("{}/epoch_barrier", config.slot_id),
+                gate: GateKind::CapabilityPreservation,
+                content_hash: format!("{:016x}", config.seed ^ 0xe90c_ba77_1e55_0001),
+                description: detail,
+            }],
+            total_test_cases: 1,
+            total_passed: 0,
+            total_failed: 1,
+        },
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Structured logging events
 // ---------------------------------------------------------------------------
@@ -712,6 +781,8 @@ pub fn log_gate_evaluation(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::epoch_barrier::{BarrierConfig, EpochBarrier};
+    use crate::security_epoch::TransitionReason;
     use crate::slot_registry::SlotCapability;
 
     fn test_slot_id() -> SlotId {
@@ -1200,6 +1271,49 @@ mod tests {
         assert_eq!(out1.verdict, out2.verdict);
         assert_eq!(out1.run_id, out2.run_id);
         assert_eq!(out1.evidence_bundle, out2.evidence_bundle);
+    }
+
+    #[test]
+    fn guarded_run_denies_during_epoch_transition() {
+        let config = GateRunnerConfig::standard(test_slot_id(), "candidate-blocked".to_string(), 7);
+        let input = all_passing_input();
+        let mut barrier = EpochBarrier::new(config.epoch, BarrierConfig::deterministic());
+        barrier
+            .begin_transition(
+                SecurityEpoch::from_raw(config.epoch.as_u64() + 1),
+                TransitionReason::PolicyKeyRotation,
+                "epoch-transition",
+            )
+            .expect("begin transition");
+
+        let output =
+            run_promotion_gates_with_epoch_barrier(&mut barrier, &config, &input, "t-block");
+
+        assert_eq!(output.verdict, GateVerdict::Denied);
+        assert_eq!(output.risk_level, RiskLevel::Critical);
+        assert!(!output.rollback_verified);
+        assert_eq!(output.evidence_bundle.total_failed, 1);
+        assert!(
+            output.evaluations[0]
+                .summary
+                .contains("epoch barrier rejected promotion gate run")
+        );
+        assert_eq!(barrier.in_flight(), 0);
+    }
+
+    #[test]
+    fn guarded_run_allows_open_matching_epoch() {
+        let config = GateRunnerConfig::standard(test_slot_id(), "candidate-open".to_string(), 8);
+        let input = all_passing_input();
+        let mut barrier = EpochBarrier::new(config.epoch, BarrierConfig::deterministic());
+
+        let output =
+            run_promotion_gates_with_epoch_barrier(&mut barrier, &config, &input, "t-open");
+
+        assert_eq!(output.verdict, GateVerdict::Approved);
+        assert_eq!(output.risk_level, RiskLevel::Low);
+        assert_eq!(output.evaluations.len(), 4);
+        assert_eq!(barrier.in_flight(), 0);
     }
 
     // ── gate runner config ───────────────────────────────────────────

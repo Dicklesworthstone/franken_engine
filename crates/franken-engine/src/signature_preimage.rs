@@ -47,6 +47,7 @@ mod serde_bytes {
 
 use crate::deterministic_serde::{self, CanonicalValue, SchemaHash};
 use crate::engine_object_id::ObjectDomain;
+use crate::epoch_barrier::{CriticalOpKind, EpochBarrier};
 use crate::hash_tiers::ContentHash;
 
 // ---------------------------------------------------------------------------
@@ -545,6 +546,28 @@ impl SignatureContext {
         Ok(signature)
     }
 
+    /// Sign an object under an epoch-transition read barrier.
+    ///
+    /// Signing emits new trust evidence. When an epoch transition is draining,
+    /// this path fails closed before computing canonical preimages or producing
+    /// a signature that could straddle epochs.
+    pub fn sign_with_epoch_barrier<T: SignaturePreimage>(
+        &mut self,
+        barrier: &mut EpochBarrier,
+        object: &T,
+        signing_key: &SigningKey,
+        trace_id: &str,
+    ) -> Result<Signature, SignatureError> {
+        let guard = barrier
+            .enter_critical(CriticalOpKind::EvidenceEmission, trace_id)
+            .map_err(|err| SignatureError::PreimageError {
+                detail: format!("epoch barrier rejected signature emission: {err}"),
+            })?;
+        let result = self.sign(object, signing_key, trace_id);
+        let _ = barrier.release_guard(&guard);
+        result
+    }
+
     /// Verify a signature and track the event.
     pub fn verify<T: SignaturePreimage>(
         &mut self,
@@ -582,6 +605,29 @@ impl SignatureContext {
             }
         }
 
+        result
+    }
+
+    /// Verify a signature under an epoch-transition read barrier.
+    ///
+    /// Verification is a security decision over signed state. During a
+    /// transition, validation fails closed instead of accepting data under a
+    /// potentially mixed epoch configuration.
+    pub fn verify_with_epoch_barrier<T: SignaturePreimage>(
+        &mut self,
+        barrier: &mut EpochBarrier,
+        object: &T,
+        verification_key: &VerificationKey,
+        signature: &Signature,
+        trace_id: &str,
+    ) -> Result<(), SignatureError> {
+        let guard = barrier
+            .enter_critical(CriticalOpKind::DecisionEval, trace_id)
+            .map_err(|err| SignatureError::PreimageError {
+                detail: format!("epoch barrier rejected signature verification: {err}"),
+            })?;
+        let result = self.verify(object, verification_key, signature, trace_id);
+        let _ = barrier.release_guard(&guard);
         result
     }
 
@@ -635,6 +681,8 @@ impl Default for SignatureContext {
 mod tests {
     use super::*;
     use crate::deterministic_serde::SchemaHash;
+    use crate::epoch_barrier::{BarrierConfig, EpochBarrier};
+    use crate::security_epoch::{SecurityEpoch, TransitionReason};
 
     // -- Test signable object --
 
@@ -816,6 +864,49 @@ mod tests {
             .sign(&obj, &sk, "t-001")
             .expect("serde deserialization should succeed");
         assert!(ctx.verify(&obj, &vk, &sig, "t-001").is_ok());
+    }
+
+    #[test]
+    fn guarded_sign_rejects_during_epoch_transition() {
+        let mut ctx = SignatureContext::new();
+        let mut barrier =
+            EpochBarrier::new(SecurityEpoch::from_raw(1), BarrierConfig::deterministic());
+        barrier
+            .begin_transition(
+                SecurityEpoch::from_raw(2),
+                TransitionReason::PolicyKeyRotation,
+                "epoch-transition",
+            )
+            .expect("begin transition");
+
+        let err = ctx
+            .sign_with_epoch_barrier(&mut barrier, &test_object(), &test_signing_key(), "t-block")
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            SignatureError::PreimageError { ref detail }
+                if detail.contains("epoch barrier rejected signature emission")
+        ));
+        assert_eq!(ctx.sign_count(), 0);
+        assert_eq!(barrier.in_flight(), 0);
+    }
+
+    #[test]
+    fn guarded_verify_releases_epoch_guard_after_success() {
+        let mut ctx = SignatureContext::new();
+        let mut barrier =
+            EpochBarrier::new(SecurityEpoch::from_raw(1), BarrierConfig::deterministic());
+        let sk = test_signing_key();
+        let vk = sk.verification_key();
+        let obj = test_object();
+        let sig = ctx.sign(&obj, &sk, "t-sign").expect("sign");
+
+        ctx.verify_with_epoch_barrier(&mut barrier, &obj, &vk, &sig, "t-verify")
+            .expect("guarded verify");
+
+        assert_eq!(ctx.verify_count(), 1);
+        assert_eq!(barrier.in_flight(), 0);
     }
 
     #[test]

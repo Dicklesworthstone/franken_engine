@@ -24,6 +24,7 @@ use serde::{Deserialize, Serialize};
 use crate::capability_token::PrincipalId;
 use crate::deterministic_serde::{self, CanonicalValue, SchemaHash};
 use crate::engine_object_id::{self, EngineObjectId, ObjectDomain, SchemaId};
+use crate::epoch_barrier::{CriticalOpKind, EpochBarrier};
 use crate::hash_tiers::ContentHash;
 use crate::policy_checkpoint::DeterministicTimestamp;
 use crate::signature_preimage::{
@@ -713,6 +714,28 @@ impl RevocationChain {
         Ok(event_seq)
     }
 
+    /// Append a revocation under an epoch-transition read barrier.
+    ///
+    /// Revocation-chain mutation advances security state. If an epoch
+    /// transition is draining, the append is rejected before the chain head,
+    /// index, or signatures are touched.
+    pub fn append_with_epoch_barrier(
+        &mut self,
+        barrier: &mut EpochBarrier,
+        revocation: Revocation,
+        head_signing_key: &SigningKey,
+        trace_id: &str,
+    ) -> Result<u64, ChainError> {
+        let guard = barrier
+            .enter_critical(CriticalOpKind::RevocationCheck, trace_id)
+            .map_err(|err| ChainError::ChainIntegrity {
+                detail: format!("epoch barrier rejected revocation append: {err}"),
+            })?;
+        let result = self.append(revocation, head_signing_key, trace_id);
+        let _ = barrier.release_guard(&guard);
+        result
+    }
+
     /// Verify incremental append: validate that a new event correctly
     /// links to the current head.
     pub fn verify_append(&self, event: &RevocationEvent) -> Result<(), ChainError> {
@@ -919,6 +942,23 @@ impl RevocationChain {
             trace_id: trace_id.to_string(),
         });
         result
+    }
+
+    /// Audited revocation lookup under an epoch-transition read barrier.
+    pub fn is_revoked_audited_with_epoch_barrier(
+        &mut self,
+        barrier: &mut EpochBarrier,
+        target_id: &EngineObjectId,
+        trace_id: &str,
+    ) -> Result<bool, ChainError> {
+        let guard = barrier
+            .enter_critical(CriticalOpKind::RevocationCheck, trace_id)
+            .map_err(|err| ChainError::ChainIntegrity {
+                detail: format!("epoch barrier rejected revocation lookup: {err}"),
+            })?;
+        let result = self.is_revoked_audited(target_id, trace_id);
+        let _ = barrier.release_guard(&guard);
+        Ok(result)
     }
 
     /// Rebuild the chain from a list of events (e.g. after loading from
@@ -1167,6 +1207,8 @@ impl RevocationChain {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::epoch_barrier::{BarrierConfig, EpochBarrier};
+    use crate::security_epoch::{SecurityEpoch, TransitionReason};
     use crate::signature_preimage::SigningKey;
 
     const TEST_ZONE: &str = "test-zone";
@@ -1266,6 +1308,62 @@ mod tests {
             .expect("serde deserialization should succeed");
         assert!(event.prev_event.is_none());
         assert_eq!(event.event_seq, 0);
+    }
+
+    #[test]
+    fn guarded_append_rejects_during_epoch_transition() {
+        let mut chain = RevocationChain::new(TEST_ZONE);
+        let mut barrier =
+            EpochBarrier::new(SecurityEpoch::from_raw(1), BarrierConfig::deterministic());
+        barrier
+            .begin_transition(
+                SecurityEpoch::from_raw(2),
+                TransitionReason::RevocationFrontierAdvance,
+                "epoch-transition",
+            )
+            .expect("begin transition");
+        let sk = test_signing_key();
+        let rev = make_revocation(
+            RevocationTargetType::Key,
+            RevocationReason::Compromised,
+            [0xEE; 32],
+            &test_revocation_key(),
+        );
+
+        let err = chain
+            .append_with_epoch_barrier(&mut barrier, rev, &sk, "t-block")
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            ChainError::ChainIntegrity { ref detail }
+                if detail.contains("epoch barrier rejected revocation append")
+        ));
+        assert_eq!(chain.len(), 0);
+        assert_eq!(barrier.in_flight(), 0);
+    }
+
+    #[test]
+    fn guarded_lookup_releases_epoch_guard_after_success() {
+        let mut chain = RevocationChain::new(TEST_ZONE);
+        let sk = test_signing_key();
+        let rev = make_revocation(
+            RevocationTargetType::Token,
+            RevocationReason::Expired,
+            [0xAB; 32],
+            &test_revocation_key(),
+        );
+        let target_id = rev.target_id.clone();
+        chain.append(rev, &sk, "t-append").expect("append");
+        let mut barrier =
+            EpochBarrier::new(SecurityEpoch::from_raw(1), BarrierConfig::deterministic());
+
+        let revoked = chain
+            .is_revoked_audited_with_epoch_barrier(&mut barrier, &target_id, "t-lookup")
+            .expect("guarded lookup");
+
+        assert!(revoked);
+        assert_eq!(barrier.in_flight(), 0);
     }
 
     #[test]

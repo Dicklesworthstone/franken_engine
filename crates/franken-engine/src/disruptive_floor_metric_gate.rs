@@ -567,6 +567,47 @@ mod tests {
     }
 
     #[test]
+    fn parent_rejects_provisional_replay_child_artifact() {
+        let child_report = crate::replay_coverage_metric_gate::evaluate_replay_coverage_metric(
+            &crate::replay_coverage_metric_gate::ReplayCoverageMetricInput::provisional_fixture(
+                "rev-under-test",
+            ),
+        );
+        assert_eq!(
+            child_report.decision,
+            crate::replay_coverage_metric_gate::ReplayCoverageDecision::FailClosed
+        );
+
+        let mut artifacts = passing_artifacts();
+        let replay_slot = artifacts
+            .iter_mut()
+            .find(|artifact| {
+                artifact.metric_id == DisruptiveMetricId::SecurityDecisionReplayCoverage
+            })
+            .unwrap();
+        *replay_slot = child_report.metric_artifact;
+
+        let report = evaluate_disruptive_floor_gate(&config(), &artifacts);
+        let replay_decision = report
+            .metric_decisions
+            .iter()
+            .find(|decision| {
+                decision.metric_id == DisruptiveMetricId::SecurityDecisionReplayCoverage
+            })
+            .unwrap();
+
+        assert_eq!(report.decision, GateDecisionState::FailClosed);
+        assert!(!report.observed_disruptive_floor_wording_allowed);
+        assert_eq!(replay_decision.decision, MetricDecisionState::Fail);
+        assert!(replay_decision.reason.contains("coverage_below_threshold"));
+        assert!(
+            replay_decision
+                .reason
+                .contains("observed_value_misses_threshold")
+        );
+    }
+
+    #[test]
     fn parent_accepts_containment_latency_child_artifact() {
         let child_report =
             crate::containment_latency_metric_gate::evaluate_containment_latency_metric(

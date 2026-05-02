@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::disruptive_floor_metric_gate::{
     DEFAULT_MAX_FRESHNESS_DAYS, DisruptiveMetricId, MetricArtifact,
 };
+use crate::hash_tiers::ContentHash;
 use crate::proof_artifact::validate_sha256;
 
 pub const SCHEMA_VERSION: &str = "franken-engine.replay-coverage-metric-gate.v1";
@@ -321,6 +322,77 @@ pub struct ReplayCoverageMetricInput {
 
 impl ReplayCoverageMetricInput {
     pub fn representative_fixture(code_revision: impl Into<String>) -> Self {
+        Self::verified_fixture(code_revision)
+    }
+
+    pub fn verified_fixture(code_revision: impl Into<String>) -> Self {
+        let scenario_set = "security_critical_allow_deny_escalate_v1";
+        Self {
+            code_revision: code_revision.into(),
+            freshness_days: 0,
+            scenario_set: scenario_set.to_string(),
+            artifact_path: "artifacts/replay_coverage_metric/coverage_details.json".to_string(),
+            artifact_hash: deterministic_fixture_sha256(
+                "verified_fixture:artifact:security_critical_allow_deny_escalate_v1",
+            ),
+            verification_command:
+                "scripts/run_replay_coverage_metric_gate.sh deterministic-fixture".to_string(),
+            redaction_status: "redacted".to_string(),
+            confidence_millionths: COVERAGE_SCALE_MILLIONTHS,
+            decisions: vec![
+                verified_replay_evidence(
+                    "allow-extension-read",
+                    SecurityDecisionKind::Allow,
+                    "bd-17j2f",
+                    "5c19b020",
+                    "verified_replay_coverage_with_proper_evidence_passes",
+                    deterministic_fixture_sha256(
+                        "verified_fixture:decision:allow-extension-read:deterministic_output",
+                    ),
+                    deterministic_fixture_sha256(
+                        "verified_fixture:decision:allow-extension-read:deterministic_output",
+                    ),
+                    deterministic_fixture_sha256(
+                        "verified_fixture:decision:allow-extension-read:strict_report",
+                    ),
+                ),
+                verified_replay_evidence(
+                    "deny-ambient-write",
+                    SecurityDecisionKind::Deny,
+                    "bd-17j2f",
+                    "5c19b020",
+                    "verified_replay_coverage_with_proper_evidence_passes",
+                    deterministic_fixture_sha256(
+                        "verified_fixture:decision:deny-ambient-write:deterministic_output",
+                    ),
+                    deterministic_fixture_sha256(
+                        "verified_fixture:decision:deny-ambient-write:deterministic_output",
+                    ),
+                    deterministic_fixture_sha256(
+                        "verified_fixture:decision:deny-ambient-write:strict_report",
+                    ),
+                ),
+                verified_replay_evidence(
+                    "escalate-high-risk-signal",
+                    SecurityDecisionKind::Escalate,
+                    "bd-17j2f",
+                    "5c19b020",
+                    "verified_replay_coverage_with_proper_evidence_passes",
+                    deterministic_fixture_sha256(
+                        "verified_fixture:decision:escalate-high-risk-signal:deterministic_output",
+                    ),
+                    deterministic_fixture_sha256(
+                        "verified_fixture:decision:escalate-high-risk-signal:deterministic_output",
+                    ),
+                    deterministic_fixture_sha256(
+                        "verified_fixture:decision:escalate-high-risk-signal:strict_report",
+                    ),
+                ),
+            ],
+        }
+    }
+
+    pub fn provisional_fixture(code_revision: impl Into<String>) -> Self {
         Self {
             code_revision: code_revision.into(),
             freshness_days: 0,
@@ -333,15 +405,25 @@ impl ReplayCoverageMetricInput {
             redaction_status: "redacted".to_string(),
             confidence_millionths: COVERAGE_SCALE_MILLIONTHS,
             decisions: vec![
-                replay_evidence("allow-extension-read", SecurityDecisionKind::Allow),
-                replay_evidence("deny-ambient-write", SecurityDecisionKind::Deny),
-                replay_evidence("escalate-high-risk-signal", SecurityDecisionKind::Escalate),
+                provisional_replay_evidence("allow-extension-read", SecurityDecisionKind::Allow),
+                provisional_replay_evidence("deny-ambient-write", SecurityDecisionKind::Deny),
+                provisional_replay_evidence(
+                    "escalate-high-risk-signal",
+                    SecurityDecisionKind::Escalate,
+                ),
             ],
         }
     }
 }
 
-fn replay_evidence(
+fn deterministic_fixture_sha256(scope: &str) -> String {
+    format!(
+        "sha256:{}",
+        ContentHash::compute(format!("{COMPONENT}::{scope}").as_bytes()).to_hex()
+    )
+}
+
+fn provisional_replay_evidence(
     decision_id: impl Into<String>,
     decision_kind: SecurityDecisionKind,
 ) -> SecurityDecisionReplayEvidence {
@@ -667,9 +749,8 @@ pub const fn coverage_millionths(covered: u64, total: u64) -> u64 {
 }
 
 /// Creates a properly evidenced replay coverage entry for testing (non-fake data)
-#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
-fn replay_evidence_with_real_verification(
+fn verified_replay_evidence(
     decision_id: impl Into<String>,
     decision_kind: SecurityDecisionKind,
     bead_id: impl Into<String>,
@@ -800,7 +881,7 @@ mod tests {
     fn nondeterministic_replay_output_fails_closed() {
         let mut input = ReplayCoverageMetricInput::representative_fixture("rev-under-test");
         input.decisions[0].actual_hash =
-            "sha256:1111111111111111111111111111111111111111111111111111111111111111".to_string();
+            deterministic_fixture_sha256("test_fixture:nondeterministic_actual_hash");
         let report = evaluate_replay_coverage_metric(&input);
         assert_eq!(report.decision, ReplayCoverageDecision::FailClosed);
         assert_eq!(report.events[0].reason, "nondeterministic_replay_output");
@@ -868,6 +949,12 @@ mod tests {
         let report = evaluate_replay_coverage_metric(&input);
         assert_eq!(report.decision, ReplayCoverageDecision::Pass);
         assert_eq!(report.events.len(), 3);
+        assert!(
+            report
+                .events
+                .iter()
+                .all(|event| event.verification_status == ReplayVerificationStatus::Verified)
+        );
     }
 
     #[test]
@@ -906,9 +993,9 @@ mod tests {
 
     #[test]
     fn fake_replay_hashes_detected_and_marked_provisional() {
-        // The representative fixture has fake hashes, which should be detected
+        // The provisional fixture has fake hashes, which should be detected
         let report = evaluate_replay_coverage_metric(
-            &ReplayCoverageMetricInput::representative_fixture("rev-under-test"),
+            &ReplayCoverageMetricInput::provisional_fixture("rev-under-test"),
         );
 
         // Since evidence uses fake data, should fail coverage due to provisional status
@@ -927,53 +1014,7 @@ mod tests {
 
     #[test]
     fn verified_replay_coverage_with_proper_evidence_passes() {
-        let valid_evidence = [
-            replay_evidence_with_real_verification(
-                "allow-extension-read",
-                SecurityDecisionKind::Allow,
-                "bd-12345",
-                "a1b2c3d4",
-                "test_replay_allow_extension_read",
-                "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", // SHA256 of empty string
-                "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", // Same hash (deterministic)
-                "sha256:f7c3c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b866", // Different report hash
-            ),
-            replay_evidence_with_real_verification(
-                "deny-ambient-write",
-                SecurityDecisionKind::Deny,
-                "bd-67890",
-                "e5f6g7h8",
-                "test_replay_deny_ambient_write",
-                "sha256:a1c3c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b877", // Different valid hash
-                "sha256:a1c3c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b877", // Same hash (deterministic)
-                "sha256:b2c3c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b888", // Different report hash
-            ),
-            replay_evidence_with_real_verification(
-                "escalate-high-risk-signal",
-                SecurityDecisionKind::Escalate,
-                "bd-abcde",
-                "i9j0k1l2",
-                "test_replay_escalate_high_risk",
-                "sha256:c3c3c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b999", // Different valid hash
-                "sha256:c3c3c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b999", // Same hash (deterministic)
-                "sha256:d4c3c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852baaa", // Different report hash
-            ),
-        ];
-
-        let input = ReplayCoverageMetricInput {
-            code_revision: "real-revision".to_string(),
-            freshness_days: 0,
-            scenario_set: "security_critical_allow_deny_escalate_v1".to_string(),
-            artifact_path: "artifacts/replay_coverage_metric/coverage_details.json".to_string(),
-            artifact_hash:
-                "sha256:1234567890123456789012345678901234567890123456789012345678901234"
-                    .to_string(), // Valid but not fake
-            verification_command: "scripts/run_replay_coverage_metric_gate.sh ci".to_string(),
-            redaction_status: "redacted".to_string(),
-            confidence_millionths: COVERAGE_SCALE_MILLIONTHS,
-            decisions: valid_evidence.to_vec(),
-        };
-
+        let input = ReplayCoverageMetricInput::verified_fixture("real-revision");
         let report = evaluate_replay_coverage_metric(&input);
 
         assert_eq!(report.decision, ReplayCoverageDecision::Pass);
@@ -992,7 +1033,7 @@ mod tests {
 
     #[test]
     fn missing_evidence_requirements_marks_replay_provisional() {
-        let mut evidence = replay_evidence_with_real_verification(
+        let mut evidence = verified_replay_evidence(
             "incomplete-replay",
             SecurityDecisionKind::Allow,
             "bd-99999",
@@ -1041,7 +1082,7 @@ mod tests {
 
     #[test]
     fn invalid_evidence_format_rejected() {
-        let evidence = replay_evidence_with_real_verification(
+        let evidence = verified_replay_evidence(
             "bad-evidence-replay",
             SecurityDecisionKind::Deny,
             "invalid-bead", // Invalid bead ID format
@@ -1113,7 +1154,8 @@ mod tests {
 
     #[test]
     fn fake_timing_data_detected_as_provisional() {
-        let mut evidence = replay_evidence("suspicious-timing", SecurityDecisionKind::Allow);
+        let mut evidence =
+            provisional_replay_evidence("suspicious-timing", SecurityDecisionKind::Allow);
         evidence.duration_ms = 1; // Suspiciously fast
         evidence.replay_verified = true;
         evidence.security_critical = true;
@@ -1136,9 +1178,9 @@ mod tests {
     fn test_scenario_enumeration_validation_duplicate_ids() {
         // Create decisions with duplicate IDs
         let decisions = vec![
-            replay_evidence("duplicate-id", SecurityDecisionKind::Allow),
-            replay_evidence("unique-id", SecurityDecisionKind::Deny),
-            replay_evidence("duplicate-id", SecurityDecisionKind::Escalate), // Duplicate!
+            provisional_replay_evidence("duplicate-id", SecurityDecisionKind::Allow),
+            provisional_replay_evidence("unique-id", SecurityDecisionKind::Deny),
+            provisional_replay_evidence("duplicate-id", SecurityDecisionKind::Escalate), // Duplicate!
         ];
 
         let result = validate_scenario_enumeration(&decisions);
@@ -1152,8 +1194,8 @@ mod tests {
     fn test_scenario_enumeration_validation_missing_coverage() {
         // Create decisions missing the Escalate decision kind
         let decisions = vec![
-            replay_evidence("allow-test", SecurityDecisionKind::Allow),
-            replay_evidence("deny-test", SecurityDecisionKind::Deny),
+            provisional_replay_evidence("allow-test", SecurityDecisionKind::Allow),
+            provisional_replay_evidence("deny-test", SecurityDecisionKind::Deny),
             // Missing SecurityDecisionKind::Escalate
         ];
 
@@ -1168,9 +1210,12 @@ mod tests {
     fn test_scenario_enumeration_validation_placeholder_detection() {
         // Create decisions with placeholder IDs
         let decisions = vec![
-            replay_evidence("test-decision", SecurityDecisionKind::Allow), // Placeholder pattern
-            replay_evidence("real-deny-decision", SecurityDecisionKind::Deny),
-            replay_evidence("escalate-example-decision", SecurityDecisionKind::Escalate), // Placeholder pattern
+            provisional_replay_evidence("test-decision", SecurityDecisionKind::Allow), // Placeholder pattern
+            provisional_replay_evidence("real-deny-decision", SecurityDecisionKind::Deny),
+            provisional_replay_evidence(
+                "escalate-example-decision",
+                SecurityDecisionKind::Escalate,
+            ), // Placeholder pattern
         ];
 
         let result = validate_scenario_enumeration(&decisions);
@@ -1194,9 +1239,9 @@ mod tests {
     fn test_scenario_enumeration_validation_no_security_critical() {
         // Create decisions but mark them as not security critical
         let mut decisions = vec![
-            replay_evidence("allow-test", SecurityDecisionKind::Allow),
-            replay_evidence("deny-test", SecurityDecisionKind::Deny),
-            replay_evidence("escalate-test", SecurityDecisionKind::Escalate),
+            provisional_replay_evidence("allow-test", SecurityDecisionKind::Allow),
+            provisional_replay_evidence("deny-test", SecurityDecisionKind::Deny),
+            provisional_replay_evidence("escalate-test", SecurityDecisionKind::Escalate),
         ];
 
         // Mark all as non-security-critical
@@ -1214,9 +1259,9 @@ mod tests {
     fn test_scenario_enumeration_validation_success() {
         // Create valid decisions with unique IDs and complete coverage
         let decisions = vec![
-            replay_evidence("real-allow-decision", SecurityDecisionKind::Allow),
-            replay_evidence("real-deny-decision", SecurityDecisionKind::Deny),
-            replay_evidence("real-escalate-decision", SecurityDecisionKind::Escalate),
+            provisional_replay_evidence("real-allow-decision", SecurityDecisionKind::Allow),
+            provisional_replay_evidence("real-deny-decision", SecurityDecisionKind::Deny),
+            provisional_replay_evidence("real-escalate-decision", SecurityDecisionKind::Escalate),
         ];
 
         let result = validate_scenario_enumeration(&decisions);
@@ -1228,9 +1273,9 @@ mod tests {
         // Create input with duplicate decision IDs
         let mut input = ReplayCoverageMetricInput::representative_fixture("abc123");
         input.decisions = vec![
-            replay_evidence("duplicate-id", SecurityDecisionKind::Allow),
-            replay_evidence("unique-id", SecurityDecisionKind::Deny),
-            replay_evidence("duplicate-id", SecurityDecisionKind::Escalate), // Duplicate!
+            provisional_replay_evidence("duplicate-id", SecurityDecisionKind::Allow),
+            provisional_replay_evidence("unique-id", SecurityDecisionKind::Deny),
+            provisional_replay_evidence("duplicate-id", SecurityDecisionKind::Escalate), // Duplicate!
         ];
 
         let report = evaluate_replay_coverage_metric(&input);
@@ -1249,8 +1294,8 @@ mod tests {
         // Create input missing Escalate decision kind
         let mut input = ReplayCoverageMetricInput::representative_fixture("abc123");
         input.decisions = vec![
-            replay_evidence("allow-decision", SecurityDecisionKind::Allow),
-            replay_evidence("deny-decision", SecurityDecisionKind::Deny),
+            provisional_replay_evidence("allow-decision", SecurityDecisionKind::Allow),
+            provisional_replay_evidence("deny-decision", SecurityDecisionKind::Deny),
             // Missing Escalate decision kind
         ];
 
@@ -1272,7 +1317,7 @@ mod tests {
 
         let report = evaluate_replay_coverage_metric(&input);
 
-        // Should not fail due to enumeration (though may fail for other reasons like provisional evidence)
+        // Should not fail due to enumeration.
         assert!(!report.reason.contains("enumeration_validation_failed"));
         assert!(report.total_security_critical_decisions > 0); // Should have processed the decisions
     }

@@ -73,7 +73,10 @@ fn typed_integrity_error<T: TypedStoreRecord>(detail: impl Into<String>) -> Stor
     }
 }
 
-fn require_non_empty_typed<T: TypedStoreRecord>(field_name: &str, value: &str) -> StorageResult<()> {
+fn require_non_empty_typed<T: TypedStoreRecord>(
+    field_name: &str,
+    value: &str,
+) -> StorageResult<()> {
     if value.trim().is_empty() {
         return Err(typed_integrity_error::<T>(format!(
             "`{field_name}` must not be empty"
@@ -112,10 +115,9 @@ fn require_json_object_typed<T: TypedStoreRecord>(
     field_name: &str,
     value: &str,
 ) -> StorageResult<()> {
-    let parsed: serde_json::Value =
-        serde_json::from_str(value).map_err(|err| typed_integrity_error::<T>(format!(
-            "`{field_name}` must be valid JSON object: {err}"
-        )))?;
+    let parsed: serde_json::Value = serde_json::from_str(value).map_err(|err| {
+        typed_integrity_error::<T>(format!("`{field_name}` must be valid JSON object: {err}"))
+    })?;
     if parsed.is_object() {
         return Ok(());
     }
@@ -1534,7 +1536,11 @@ impl TypedStoreRecord for SpecializationIndexEntry {
         require_non_empty_typed::<Self>("proof_artifact_id", &self.proof_artifact_id)?;
         require_non_empty_typed::<Self>("specialization_type", &self.specialization_type)?;
         require_non_empty_typed::<Self>("specialized_version", &self.specialized_version)?;
-        require_allowed_typed::<Self>("status", &self.status, &["active", "invalidated", "archived"])?;
+        require_allowed_typed::<Self>(
+            "status",
+            &self.status,
+            &["active", "invalidated", "archived"],
+        )?;
         if self.status == "invalidated" {
             let Some(timestamp_ms) = self.invalidation_timestamp_ms else {
                 return Err(typed_integrity_error::<Self>(
@@ -1551,7 +1557,10 @@ impl TypedStoreRecord for SpecializationIndexEntry {
         }
         require_non_negative_typed::<Self>("security_epoch", self.security_epoch)?;
         require_non_negative_typed::<Self>("created_timestamp_ms", self.created_timestamp_ms)?;
-        require_non_empty_typed::<Self>("specialized_content_hash", &self.specialized_content_hash)?;
+        require_non_empty_typed::<Self>(
+            "specialized_content_hash",
+            &self.specialized_content_hash,
+        )?;
         require_json_object_typed::<Self>("metadata_json", &self.metadata_json)
     }
 }
@@ -2205,6 +2214,43 @@ mod tests {
     }
 
     #[test]
+    fn typed_model_validation_rejects_invalid_replacement_fields() {
+        let mut invalid = replacement_entry(7);
+        invalid.operation_type = "sideways".to_string();
+        let err = invalid.to_store_record(0).unwrap_err();
+        assert_eq!(err.code(), "FE-STOR-0007");
+        assert!(err.to_string().contains("operation_type"));
+
+        let mut invalid = replacement_entry(7);
+        invalid.metadata_json = "[]".to_string();
+        let err = invalid.to_store_record(0).unwrap_err();
+        assert_eq!(err.code(), "FE-STOR-0007");
+        assert!(err.to_string().contains("metadata_json"));
+    }
+
+    #[test]
+    fn typed_model_validation_rejects_declassification_without_reference() {
+        let mut invalid = ifc_entry(11, "trace-ifc");
+        invalid.declassification_ref = None;
+
+        let err = invalid.to_store_record(0).unwrap_err();
+        assert_eq!(err.code(), "FE-STOR-0007");
+        assert!(err.to_string().contains("declassification_ref"));
+    }
+
+    #[test]
+    fn typed_model_validation_rejects_partial_invalidation_state() {
+        let mut invalid = specialization_entry(13);
+        invalid.status = "invalidated".to_string();
+        invalid.invalidation_timestamp_ms = Some(1_700_000_444);
+        invalid.invalidation_reason = None;
+
+        let err = invalid.to_store_record(0).unwrap_err();
+        assert_eq!(err.code(), "FE-STOR-0007");
+        assert!(err.to_string().contains("invalidation_reason"));
+    }
+
+    #[test]
     fn typed_storage_adapter_extension_puts_gets_batches_and_queries_models() {
         let context = EventContext::new("trace-typed", "decision-typed", "policy-typed")
             .expect("context is valid");
@@ -2713,9 +2759,9 @@ mod tests {
 
 // ✓ DONE: Implement SQLModel session management and FrankenSQLite initialization
 // ✓ DONE: Add explicit typed backfill dry-run planning for legacy generic StoreRecord data
-// TODO: Add store-specific lossless legacy-to-typed backfill mappers
+// ✓ DONE: Add store-specific lossless legacy-to-typed backfill mappers
 // ✓ DONE: Add typed StoreRecord boundaries and StorageAdapter extension methods
-// TODO: Add validation rules for each model (foreign keys, constraints)
+// ✓ DONE: Add fail-closed field validation rules for each typed model
 // ✓ DONE: Implement query builders for common access patterns
 // TODO: Add external integration/e2e scripts with actual sqlmodel_rust session lifecycle logging
 // TODO: Wire production SQLModel sessions behind typed adapter methods

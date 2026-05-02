@@ -1331,12 +1331,19 @@ impl DecisionContext {
             };
         }
 
-        // 5. Compute expected loss for each available lane.
+        // 5. Select a lane using the deterministic regime heuristic and record
+        // the state-level risk estimate. Lane-specific expected-loss
+        // minimization lives in runtime_decision_core.
         let selected = self.select_lane(state);
-        let expected_loss = self.compute_expected_loss(state, &selected);
+        let expected_loss = self.compute_state_expected_loss(state);
 
         let action = LaneAction::RouteTo(selected);
-        let trace = self.make_trace(state, action.clone(), expected_loss, "expected_loss_min");
+        let trace = self.make_trace(
+            state,
+            action.clone(),
+            expected_loss,
+            "regime_heuristic_route",
+        );
         self.traces.push(trace.clone());
 
         DecisionOutcome {
@@ -1433,8 +1440,8 @@ impl DecisionContext {
     // -----------------------------------------------------------------------
 
     fn select_lane(&self, state: &DecisionState) -> LaneId {
-        // Multi-factor expected loss: pick the lane with the lowest
-        // weighted risk exposure.
+        // Deterministic regime heuristic. This does not claim lane-specific
+        // expected-loss minimization.
         if self.config.lanes.is_empty() {
             return LaneId("fallback".into());
         }
@@ -1460,7 +1467,7 @@ impl DecisionContext {
         }
     }
 
-    fn compute_expected_loss(&self, state: &DecisionState, _lane: &LaneId) -> i64 {
+    fn compute_state_expected_loss(&self, state: &DecisionState) -> i64 {
         // Weighted sum of risk-factor beliefs × risk weights.
         let mut total: i128 = 0;
         for factor in &RiskFactor::ALL {
@@ -2475,6 +2482,31 @@ mod tests {
     }
 
     #[test]
+    fn context_normal_regime_discloses_heuristic_lane_selection() {
+        let config = DecisionContextConfig {
+            lanes: vec![
+                LaneId("lower_loss_lane".into()),
+                LaneId("higher_loss_heuristic_lane".into()),
+            ],
+            ..Default::default()
+        };
+        let mut ctx = DecisionContext::new(config, epoch(1));
+        let mut state = default_state();
+        state
+            .risk_belief_millionths
+            .insert(RiskFactor::Latency, MILLION);
+
+        let outcome = ctx.decide(&state);
+
+        assert_eq!(
+            outcome.action,
+            LaneAction::RouteTo(LaneId("higher_loss_heuristic_lane".into()))
+        );
+        assert_eq!(outcome.trace.reason, "regime_heuristic_route");
+        assert_ne!(outcome.trace.reason, "expected_loss_min");
+    }
+
+    #[test]
     fn context_safe_mode_forces_safe_lane() {
         let config = DecisionContextConfig::default();
         let mut ctx = DecisionContext::new(config, epoch(1));
@@ -2531,8 +2563,7 @@ mod tests {
         let config = DecisionContextConfig::default();
         let ctx = DecisionContext::new(config, epoch(1));
         let state = default_state();
-        let lane = LaneId("test".into());
-        let loss = ctx.compute_expected_loss(&state, &lane);
+        let loss = ctx.compute_state_expected_loss(&state);
         // Each risk factor belief = 100k, weight = 200k-300k.
         // Total = sum of (belief * weight / MILLION) for each factor.
         assert!(loss > 0, "expected loss should be positive: {loss}");

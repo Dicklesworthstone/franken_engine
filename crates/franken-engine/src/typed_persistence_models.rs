@@ -12,7 +12,7 @@
 #![forbid(unsafe_code)]
 
 use serde::{Deserialize, Serialize};
-use sqlmodel::{SQLModel, Field};
+use sqlmodel::prelude::*;
 
 // ---------------------------------------------------------------------------
 // ReplacementLineage: sqlmodel_rust typed model
@@ -23,15 +23,14 @@ use sqlmodel::{SQLModel, Field};
 /// Tracks slot promotion/demotion lineage with signed receipts for audit
 /// replay. Maps to `frankensqlite::replacement::lineage_log` integration point
 /// with compile-time schema validation.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, SQLModel)]
-#[sqlmodel(table_name = "replacement_lineage")]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Model)]
+#[sqlmodel(table = "replacement_lineage")]
 pub struct ReplacementLineageEntry {
     /// Unique sequence ID for this lineage entry.
-    #[sqlmodel(primary_key = true)]
+    #[sqlmodel(primary_key)]
     pub sequence_id: i64,
 
     /// Slot identifier being promoted/demoted.
-    #[sqlmodel(index = true)]
     pub slot_id: String,
 
     /// Type of lineage operation (promotion, demotion, transfer).
@@ -65,19 +64,17 @@ pub struct ReplacementLineageEntry {
 /// Tracks label-flow provenance edges and declassification references for
 /// non-interference enforcement traceability. Maps to
 /// `frankensqlite::control_plane::ifc_provenance` with typed boundaries.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, SQLModel)]
-#[sqlmodel(table_name = "ifc_provenance")]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Model)]
+#[sqlmodel(table = "ifc_provenance")]
 pub struct IfcProvenanceEntry {
     /// Unique provenance entry ID.
-    #[sqlmodel(primary_key = true)]
+    #[sqlmodel(primary_key)]
     pub provenance_id: i64,
 
     /// Source label/entity in the flow.
-    #[sqlmodel(index = true)]
     pub source_label: String,
 
     /// Target label/entity in the flow.
-    #[sqlmodel(index = true)]
     pub target_label: String,
 
     /// Type of provenance edge (flow, declassification, aggregation).
@@ -111,15 +108,14 @@ pub struct IfcProvenanceEntry {
 /// Tracks proof-specialization mapping and invalidation markers for
 /// fallback/invalidation replay determinism. Maps to
 /// `frankensqlite::control_plane::specialization_index` with typed safety.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, SQLModel)]
-#[sqlmodel(table_name = "specialization_index")]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Model)]
+#[sqlmodel(table = "specialization_index")]
 pub struct SpecializationIndexEntry {
     /// Unique specialization entry ID.
-    #[sqlmodel(primary_key = true)]
+    #[sqlmodel(primary_key)]
     pub specialization_id: i64,
 
     /// Proof artifact ID being specialized.
-    #[sqlmodel(index = true)]
     pub proof_artifact_id: String,
 
     /// Type of specialization (optimization, validation, fallback).
@@ -129,7 +125,6 @@ pub struct SpecializationIndexEntry {
     pub specialized_version: String,
 
     /// Status of the specialization (active, invalidated, archived).
-    #[sqlmodel(index = true)]
     pub status: String,
 
     /// Invalidation marker timestamp (if invalidated).

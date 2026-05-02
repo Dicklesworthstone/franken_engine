@@ -29,6 +29,7 @@ use serde::{Deserialize, Serialize};
 use crate::control_plane::{
     ContextAdapter, DecisionId, EvidenceLedger, EvidenceLedgerBuilder, PolicyId, TraceId,
 };
+use crate::evidence_ledger::Witness;
 use crate::hash_tiers::ContentHash;
 use crate::security_epoch::SecurityEpoch;
 
@@ -179,6 +180,8 @@ pub struct EvidenceEmissionRequest {
     pub fallback_active: bool,
     /// Top features influencing the decision.
     pub top_features: Vec<(String, f64)>,
+    /// Witnesses providing evidence for this decision.
+    pub witnesses: Vec<Witness>,
     /// Arbitrary metadata for this evidence entry.
     pub metadata: BTreeMap<String, String>,
 }
@@ -290,6 +293,59 @@ pub struct EvidenceEmissionEvent {
 }
 
 // ---------------------------------------------------------------------------
+// Helper functions for consistent witness generation
+// ---------------------------------------------------------------------------
+
+/// Create a standard witness for compromise-rate gates.
+pub fn create_compromise_rate_witness(gate_id: &str, rate: f64, threshold: f64) -> Witness {
+    Witness {
+        witness_id: format!("compromise_rate_{}", gate_id),
+        witness_type: "compromise_rate_measurement".to_string(),
+        value: format!("rate={:.6},threshold={:.6}", rate, threshold),
+    }
+}
+
+/// Create a witness for extension lifecycle events.
+pub fn create_extension_lifecycle_witness(
+    extension_id: &str,
+    event_type: &str,
+    state: &str
+) -> Witness {
+    Witness {
+        witness_id: format!("extension_lifecycle_{}_{}", extension_id, event_type),
+        witness_type: "extension_state_transition".to_string(),
+        value: format!("extension_id={},event={},state={}", extension_id, event_type, state),
+    }
+}
+
+/// Create a witness for parser operation results.
+pub fn create_parser_witness(operation: &str, success: bool, error_code: Option<&str>) -> Witness {
+    let value = match error_code {
+        Some(code) => format!("operation={},success={},error_code={}", operation, success, code),
+        None => format!("operation={},success={}", operation, success),
+    };
+
+    Witness {
+        witness_id: format!("parser_{}", operation),
+        witness_type: "parser_operation_result".to_string(),
+        value,
+    }
+}
+
+/// Create a witness for decision artifacts.
+pub fn create_decision_artifact_witness(
+    decision_id: &str,
+    artifact_type: &str,
+    integrity_hash: &str
+) -> Witness {
+    Witness {
+        witness_id: format!("decision_artifact_{}", decision_id),
+        witness_type: "decision_artifact_integrity".to_string(),
+        value: format!("decision_id={},artifact_type={},hash={}",
+                      decision_id, artifact_type, integrity_hash),
+    }
+}
+
 // CanonicalEvidenceEmitter — the main emitter
 // ---------------------------------------------------------------------------
 
@@ -576,6 +632,11 @@ impl CanonicalEvidenceEmitter {
 
         for (name, weight) in &request.top_features {
             builder = builder.top_feature(name, *weight);
+        }
+
+        // Add all witnesses from the request
+        for witness in &request.witnesses {
+            builder = builder.witness(witness.clone());
         }
 
         builder

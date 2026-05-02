@@ -1106,6 +1106,7 @@ mod tests {
             calibration_score: 0.85,
             fallback_active: false,
             top_features: vec![("severity".to_string(), 0.6)],
+            witnesses: Vec::new(),
             metadata: BTreeMap::new(),
         }
     }

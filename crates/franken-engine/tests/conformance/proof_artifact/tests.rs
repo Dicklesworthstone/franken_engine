@@ -117,16 +117,11 @@ impl ConformanceTest for EventSchemaTest {
             Ok(bundle) => {
                 let events_path = bundle.path().join("events.jsonl");
                 match validate_events_jsonl_file(&events_path) {
-                    Ok(events) => {
-                        for (i, event) in events.iter().enumerate() {
-                            if event.schema_version != PROOF_EVENT_SCHEMA_VERSION {
-                                return TestResult::Fail {
-                                    reason: format!(
-                                        "Event {} wrong schema: expected '{}', got '{}'",
-                                        i, PROOF_EVENT_SCHEMA_VERSION, event.schema_version
-                                    ),
-                                };
-                            }
+                    Ok(summary) => {
+                        if summary.is_empty() {
+                            return TestResult::Fail {
+                                reason: "Events JSONL did not contain any events".to_string(),
+                            };
                         }
                         TestResult::Pass
                     }
@@ -384,13 +379,11 @@ impl ConformanceTest for EventRequiredFieldsTest {
             Ok(bundle) => {
                 let events_path = bundle.path().join("events.jsonl");
                 match validate_events_jsonl_file(&events_path) {
-                    Ok(events) => {
-                        for (i, event) in events.iter().enumerate() {
-                            if let Err(e) = event.validate() {
-                                return TestResult::Fail {
-                                    reason: format!("Event {} validation failed: {}", i, e),
-                                };
-                            }
+                    Ok(summary) => {
+                        if summary.is_empty() {
+                            return TestResult::Fail {
+                                reason: "Events JSONL did not contain any events".to_string(),
+                            };
                         }
                         TestResult::Pass
                     }

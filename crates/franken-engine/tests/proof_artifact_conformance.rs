@@ -6,8 +6,7 @@
  */
 
 use frankenengine_engine::proof_artifact::{
-    PROOF_EVENT_SCHEMA_VERSION, PROOF_MANIFEST_SCHEMA_VERSION, REDACTION_POLICY_SCHEMA_VERSION,
-    validate_events_jsonl_file,
+    PROOF_MANIFEST_SCHEMA_VERSION, REDACTION_POLICY_SCHEMA_VERSION, validate_events_jsonl_file,
 };
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -212,21 +211,11 @@ fn validate_events_jsonl(events_path: &Path) -> Result<(), String> {
         return Err("events.jsonl not found".to_string());
     }
 
-    let events = validate_events_jsonl_file(events_path)
+    let summary = validate_events_jsonl_file(events_path)
         .map_err(|e| format!("Events JSONL validation error: {}", e))?;
 
-    if events.is_empty() {
+    if summary.is_empty() {
         return Err("Events JSONL file is empty".to_string());
-    }
-
-    // Validate all events have required schema version
-    for (i, event) in events.iter().enumerate() {
-        if event.schema_version != PROOF_EVENT_SCHEMA_VERSION {
-            return Err(format!(
-                "Event {} has invalid schema version: expected '{}', got '{}'",
-                i, PROOF_EVENT_SCHEMA_VERSION, event.schema_version
-            ));
-        }
     }
 
     Ok(())

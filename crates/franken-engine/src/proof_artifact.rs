@@ -5,7 +5,7 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
-use std::io::{BufReader, Read, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Component, Path};
 
 pub const PROOF_MANIFEST_SCHEMA_VERSION: &str = "franken-engine.proof-artifact-manifest.v1";
@@ -253,6 +253,31 @@ impl ProofEvent {
             validate_sha256(sha256)?;
         }
         Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProofEventsJsonlSummary {
+    pub line_count: usize,
+    pub blank_line_count: usize,
+    pub event_count: usize,
+    pub first_event_name: Option<String>,
+    pub last_event_name: Option<String>,
+}
+
+impl ProofEventsJsonlSummary {
+    fn empty() -> Self {
+        Self {
+            line_count: 0,
+            blank_line_count: 0,
+            event_count: 0,
+            first_event_name: None,
+            last_event_name: None,
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.event_count == 0
     }
 }
 
@@ -659,17 +684,28 @@ fn validate_json_structure(value: &Value, depth: usize) -> Result<(), ProofArtif
 /// Validates an entire events.jsonl file
 pub fn validate_events_jsonl_file(
     path: impl AsRef<Path>,
-) -> Result<Vec<ProofEvent>, ProofArtifactError> {
-    let content = fs::read_to_string(path).map_err(|e| ProofArtifactError::Io(e.to_string()))?;
+) -> Result<ProofEventsJsonlSummary, ProofArtifactError> {
+    let file = File::open(path).map_err(|e| ProofArtifactError::Io(e.to_string()))?;
+    let reader = BufReader::new(file);
 
-    let mut events = Vec::new();
-    for (line_num, line) in content.lines().enumerate() {
+    let mut summary = ProofEventsJsonlSummary::empty();
+    for (line_num, line_result) in reader.lines().enumerate() {
+        let line = line_result.map_err(|e| ProofArtifactError::Io(e.to_string()))?;
+        summary.line_count += 1;
+
         if line.trim().is_empty() {
+            summary.blank_line_count += 1;
             continue; // Skip empty lines
         }
 
-        match validate_event_json_line(line) {
-            Ok(event) => events.push(event),
+        match validate_event_json_line(&line) {
+            Ok(event) => {
+                summary.event_count += 1;
+                if summary.first_event_name.is_none() {
+                    summary.first_event_name = Some(event.event_name.clone());
+                }
+                summary.last_event_name = Some(event.event_name);
+            }
             Err(e) => {
                 return Err(ProofArtifactError::JsonMalformed(format!(
                     "line {}: {}",
@@ -680,7 +716,7 @@ pub fn validate_events_jsonl_file(
         }
     }
 
-    Ok(events)
+    Ok(summary)
 }
 
 /// Atomically writes multiple events to a JSONL file, creating or truncating the file
@@ -1173,6 +1209,47 @@ mod tests {
     }
 
     #[test]
+    fn validate_events_jsonl_file_streams_summary_and_line_errors() {
+        use tempfile::NamedTempFile;
+
+        let event = ProofEvent {
+            schema_version: PROOF_EVENT_SCHEMA_VERSION.to_string(),
+            event_name: "streamed.event".to_string(),
+            severity: ProofEventSeverity::Info,
+            step_id: "step-streamed".to_string(),
+            command_id: None,
+            artifact_path: None,
+            artifact_sha256: None,
+            exit_code: Some(0),
+            duration_ms: Some(1),
+            decision: "validated".to_string(),
+            remediation: None,
+        };
+        let event_line = serde_json::to_string(&event).expect("serialize event");
+
+        let valid_file = NamedTempFile::new().expect("create valid temp file");
+        std::fs::write(valid_file.path(), format!("\n{event_line}\n   \n"))
+            .expect("write valid events");
+
+        let summary = validate_events_jsonl_file(valid_file.path()).expect("validate events");
+        assert_eq!(summary.line_count, 3);
+        assert_eq!(summary.blank_line_count, 2);
+        assert_eq!(summary.event_count, 1);
+        assert_eq!(summary.first_event_name.as_deref(), Some("streamed.event"));
+        assert_eq!(summary.last_event_name.as_deref(), Some("streamed.event"));
+
+        let invalid_file = NamedTempFile::new().expect("create invalid temp file");
+        std::fs::write(invalid_file.path(), format!("{event_line}\n{{\"broken\":"))
+            .expect("write invalid events");
+
+        let err = validate_events_jsonl_file(invalid_file.path()).expect_err("line 2 fails");
+        assert!(
+            err.to_string().contains("line 2:"),
+            "expected line-numbered error, got {err}"
+        );
+    }
+
+    #[test]
     fn write_events_jsonl_atomic_creates_valid_jsonl() {
         use tempfile::NamedTempFile;
 
@@ -1212,10 +1289,10 @@ mod tests {
         write_events_jsonl_atomic(temp_path, &events).expect("write events");
 
         // Validate by reading back
-        let read_events = validate_events_jsonl_file(temp_path).expect("read back events");
-        assert_eq!(read_events.len(), 2);
-        assert_eq!(read_events[0].event_name, "test1.completed");
-        assert_eq!(read_events[1].event_name, "test2.completed");
+        let summary = validate_events_jsonl_file(temp_path).expect("read back events");
+        assert_eq!(summary.event_count, 2);
+        assert_eq!(summary.first_event_name.as_deref(), Some("test1.completed"));
+        assert_eq!(summary.last_event_name.as_deref(), Some("test2.completed"));
 
         // Verify JSONL format by reading raw content
         let content = std::fs::read_to_string(temp_path).expect("read content");
@@ -1267,10 +1344,10 @@ mod tests {
         append_events_jsonl_atomic(temp_path, &appended_events).expect("append events");
 
         // Validate all events are present
-        let read_events = validate_events_jsonl_file(temp_path).expect("read all events");
-        assert_eq!(read_events.len(), 2);
-        assert_eq!(read_events[0].event_name, "initial.event");
-        assert_eq!(read_events[1].event_name, "appended.event");
+        let summary = validate_events_jsonl_file(temp_path).expect("read all events");
+        assert_eq!(summary.event_count, 2);
+        assert_eq!(summary.first_event_name.as_deref(), Some("initial.event"));
+        assert_eq!(summary.last_event_name.as_deref(), Some("appended.event"));
     }
 
     #[test]
@@ -1301,14 +1378,15 @@ mod tests {
         emit_event_jsonl_atomic(temp_path, &event).expect("emit second event");
 
         // Validate both events are present
-        let read_events = validate_events_jsonl_file(temp_path).expect("read events");
-        assert_eq!(read_events.len(), 2);
-        assert_eq!(read_events[0].event_name, "single.emission");
-        assert_eq!(read_events[1].event_name, "single.emission");
+        let summary = validate_events_jsonl_file(temp_path).expect("read events");
+        assert_eq!(summary.event_count, 2);
+        assert_eq!(summary.first_event_name.as_deref(), Some("single.emission"));
+        assert_eq!(summary.last_event_name.as_deref(), Some("single.emission"));
     }
 
     #[test]
     fn concurrent_event_emission_preserves_jsonl_integrity() {
+        use std::io::BufRead;
         use std::sync::Arc;
         use std::thread;
         use tempfile::NamedTempFile;
@@ -1349,12 +1427,19 @@ mod tests {
         }
 
         // Validate that all events were written correctly and JSONL is not corrupted
-        let read_events = validate_events_jsonl_file(&*temp_path).expect("read concurrent events");
-        assert_eq!(read_events.len(), 80); // 8 threads * 10 events each
+        let summary = validate_events_jsonl_file(&*temp_path).expect("read concurrent events");
+        assert_eq!(summary.event_count, 80); // 8 threads * 10 events each
 
         // Verify all events are valid and no corruption occurred
         let mut thread_event_counts = std::collections::BTreeMap::new();
-        for event in &read_events {
+        let file = std::fs::File::open(&*temp_path).expect("open concurrent events");
+        for line_result in std::io::BufReader::new(file).lines() {
+            let line = line_result.expect("read concurrent event line");
+            if line.trim().is_empty() {
+                continue;
+            }
+            let event = validate_event_json_line(&line).expect("valid concurrent event");
+
             assert!(event.event_name.starts_with("thread"));
             assert!(event.event_name.contains(".event"));
             assert_eq!(event.decision, "concurrent");

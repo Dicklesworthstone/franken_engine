@@ -69,6 +69,24 @@ Use Cargo only.
 - For service/API control surfaces, prefer reuse from `/dp/fastapi_rust` when relevant.
 - Do not build parallel local replacements without explicit user approval.
 
+### Current Deviations (Requiring Follow-up)
+
+**DEVIATION**: Typed-heavy persistence stores are implemented through generic `storage_adapter.rs` 
+`StoreRecord/StoreQuery` interfaces instead of `/dp/sqlmodel_rust` typed model/schema layers as 
+mandated above. Specifically:
+
+- `ReplacementLineage`, `IfcProvenance`, and `SpecializationIndex` stores use raw frankensqlite 
+  integration points (`frankensqlite::replacement::lineage_log`, etc.) instead of sqlmodel_rust 
+  typed boundaries as documented in `docs/FRANKENSQLITE_PERSISTENCE_INVENTORY.md`.
+
+**Impact**: Type safety and schema validation expected from sqlmodel_rust typed layers is bypassed. 
+Store invariants that should be enforced at compile-time through typed boundaries can drift into 
+runtime validation or be missed entirely.
+
+**Required Fix**: **P0 Follow-up Bead Filed** - Replace generic `StoreRecord` implementations with 
+concrete `/dp/sqlmodel_rust` model/schema APIs for inventory rows marked "sqlmodel_rust on 
+frankensqlite", or add policy guards that reject raw implementations for typed-heavy stores.
+
 ---
 
 ## Code Editing Discipline

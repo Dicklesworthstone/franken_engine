@@ -27,6 +27,8 @@ fn test_policy_bundle_deterministic_serialization() {
         .expect("PolicyBundle should serialize to JSON");
 
     println!("Generated PolicyBundle JSON:\n{}", json_output);
+    let json_value: serde_json::Value =
+        serde_json::from_str(&json_output).expect("PolicyBundle pretty JSON should parse");
 
     // Test determinism: multiple serializations should be identical
     for iteration in 1..=5 {
@@ -46,8 +48,8 @@ fn test_policy_bundle_deterministic_serialization() {
     assert!(json_output.contains(r#""epoch": 1"#)); // SecurityEpoch::from_raw(1)
     assert!(json_output.contains(r#"baseline_deterministic_profile"#));
     assert!(json_output.contains(r#"baseline_throughput_profile"#));
-    assert!(json_output.contains(r#""alpha_millionths": 950000"#)); // Default CVaR
-    assert!(json_output.contains(r#""miscoverage_target_millionths": 100000"#)); // Default conformal
+    assert_eq!(json_value["cvar_config"]["alpha_millionths"], 950_000);
+    assert_eq!(json_value["conformal_config"]["alpha_millionths"], 100_000);
 
     println!("✅ PolicyBundle serialization is deterministic");
 }
@@ -148,6 +150,8 @@ fn test_policy_bundle_golden_snapshot() {
 
     let bundle = create_test_policy_bundle();
     let actual_json = serde_json::to_string_pretty(&bundle).expect("Should serialize PolicyBundle");
+    let actual_value: serde_json::Value =
+        serde_json::from_str(&actual_json).expect("PolicyBundle pretty JSON should parse");
 
     // Expected golden JSON structure (deterministic)
     let expected_json_structure = vec![
@@ -179,10 +183,15 @@ fn test_policy_bundle_golden_snapshot() {
     }
 
     // Verify deterministic field values
-    assert!(actual_json.contains(r#""300000"#)); // Risk weights (30%)
-    assert!(actual_json.contains(r#""200000"#)); // Risk weights (20%)
-    assert!(actual_json.contains(r#""950000"#)); // CVaR alpha (95%)
-    assert!(actual_json.contains(r#""100000"#)); // Conformal alpha (10%)
+    assert_eq!(actual_value["risk_weights"]["Compatibility"], 300_000);
+    assert_eq!(actual_value["risk_weights"]["Latency"], 300_000);
+    assert_eq!(actual_value["risk_weights"]["Memory"], 200_000);
+    assert_eq!(actual_value["risk_weights"]["IncidentSeverity"], 200_000);
+    assert_eq!(actual_value["cvar_config"]["alpha_millionths"], 950_000);
+    assert_eq!(
+        actual_value["conformal_config"]["alpha_millionths"],
+        100_000
+    );
 
     println!("✅ PolicyBundle matches expected golden snapshot structure");
 }

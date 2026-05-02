@@ -30,6 +30,9 @@ use frankenengine_engine::ir_contract::{
     CapabilityTag, Ir3Instruction, Ir3Module, IrHeader, IrLevel, IrSchemaVersion,
     IteratorCloseReason, RegRange,
 };
+use frankenengine_engine::iterator_protocol::{
+    CloseReason, IterationKind, IterationOperation, IteratorValue,
+};
 use std::collections::BTreeSet;
 
 // ============================================================================
@@ -392,8 +395,72 @@ fn enrichment_for_in_both_lanes_same() {
     assert_eq!(qjs.value, v8.value);
 }
 
+#[test]
+fn enrichment_for_in_emits_iteration_trace_events() {
+    let m = test_module_with_pool(
+        vec![
+            Ir3Instruction::NewObject { dst: 1 },
+            Ir3Instruction::LoadStr {
+                dst: 4,
+                pool_index: 0,
+            },
+            Ir3Instruction::LoadInt { dst: 5, value: 10 },
+            Ir3Instruction::SetProperty {
+                obj: 1,
+                key: 4,
+                val: 5,
+            },
+            Ir3Instruction::ForInInit { src: 1, dst: 2 },
+            Ir3Instruction::ForInNext {
+                iterator: 2,
+                value_dst: 0,
+                done_target: 7,
+            },
+            Ir3Instruction::Jump { target: 5 },
+            Ir3Instruction::Halt,
+        ],
+        vec!["key".to_string()],
+    );
+
+    let result = qjs_run(&m).unwrap();
+    assert_eq!(result.value, Value::Str("key".to_string()));
+    assert_eq!(result.iteration_traces.len(), 1);
+
+    let trace = &result.iteration_traces[0];
+    assert_eq!(trace.kind, IterationKind::ForIn);
+    assert!(trace.completed);
+    assert_eq!(trace.values_produced, 1);
+    assert_eq!(trace.events.len(), 6);
+    assert!(matches!(
+        &trace.events[0].operation,
+        IterationOperation::EnumerateProperties { keys, .. } if keys == &vec!["key".to_string()]
+    ));
+    assert!(matches!(
+        &trace.events[1].operation,
+        IterationOperation::IteratorNext { result }
+            if !result.done && result.value == IteratorValue::String("key".to_string())
+    ));
+    assert!(matches!(
+        &trace.events[2].operation,
+        IterationOperation::IteratorComplete { done: false }
+    ));
+    assert!(matches!(
+        &trace.events[3].operation,
+        IterationOperation::IteratorValue { value }
+            if value == &IteratorValue::String("key".to_string())
+    ));
+    assert!(matches!(
+        &trace.events[4].operation,
+        IterationOperation::IteratorNext { result } if result.done
+    ));
+    assert!(matches!(
+        &trace.events[5].operation,
+        IterationOperation::IteratorComplete { done: true }
+    ));
+}
+
 // ============================================================================
-// 6. ForOf iterator (4 tests)
+// 6. ForOf iterator (5 tests)
 // ============================================================================
 
 #[test]
@@ -512,8 +579,65 @@ fn enrichment_for_of_no_indices_type_error() {
     }
 }
 
+#[test]
+fn enrichment_for_of_emits_iteration_trace_events() {
+    let m = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 1,
+                pool_index: 0,
+            },
+            Ir3Instruction::ForOfInit { src: 1, dst: 2 },
+            Ir3Instruction::ForOfNext {
+                iterator: 2,
+                value_dst: 0,
+                done_target: 4,
+            },
+            Ir3Instruction::Jump { target: 2 },
+            Ir3Instruction::Halt,
+        ],
+        vec!["a".to_string()],
+    );
+
+    let result = qjs_run(&m).unwrap();
+    assert_eq!(result.value, Value::Str("a".to_string()));
+    assert_eq!(result.iteration_traces.len(), 1);
+
+    let trace = &result.iteration_traces[0];
+    assert_eq!(trace.kind, IterationKind::ForOf);
+    assert!(trace.completed);
+    assert_eq!(trace.values_produced, 1);
+    assert_eq!(trace.events.len(), 6);
+    assert!(matches!(
+        &trace.events[0].operation,
+        IterationOperation::GetIterator { .. }
+    ));
+    assert!(matches!(
+        &trace.events[1].operation,
+        IterationOperation::IteratorNext { result }
+            if !result.done && result.value == IteratorValue::String("a".to_string())
+    ));
+    assert!(matches!(
+        &trace.events[2].operation,
+        IterationOperation::IteratorComplete { done: false }
+    ));
+    assert!(matches!(
+        &trace.events[3].operation,
+        IterationOperation::IteratorValue { value }
+            if value == &IteratorValue::String("a".to_string())
+    ));
+    assert!(matches!(
+        &trace.events[4].operation,
+        IterationOperation::IteratorNext { result } if result.done
+    ));
+    assert!(matches!(
+        &trace.events[5].operation,
+        IterationOperation::IteratorComplete { done: true }
+    ));
+}
+
 // ============================================================================
-// 7. IteratorClose (2 tests)
+// 7. IteratorClose (3 tests)
 // ============================================================================
 
 #[test]
@@ -583,6 +707,44 @@ fn enrichment_iterator_close_stops_for_of() {
     );
     let result = qjs_run(&m).unwrap();
     assert_eq!(result.value, Value::Int(77));
+}
+
+#[test]
+fn enrichment_iterator_close_emits_iteration_trace_event() {
+    let m = test_module_with_pool(
+        vec![
+            Ir3Instruction::LoadStr {
+                dst: 1,
+                pool_index: 0,
+            },
+            Ir3Instruction::ForOfInit { src: 1, dst: 2 },
+            Ir3Instruction::IteratorClose {
+                iterator: 2,
+                reason: IteratorCloseReason::Break,
+            },
+            Ir3Instruction::Halt,
+        ],
+        vec!["abc".to_string()],
+    );
+
+    let result = qjs_run(&m).unwrap();
+    assert_eq!(result.iteration_traces.len(), 1);
+
+    let trace = &result.iteration_traces[0];
+    assert_eq!(trace.kind, IterationKind::ForOf);
+    assert!(trace.completed);
+    assert_eq!(trace.events.len(), 2);
+    assert!(matches!(
+        &trace.events[0].operation,
+        IterationOperation::GetIterator { .. }
+    ));
+    assert!(matches!(
+        &trace.events[1].operation,
+        IterationOperation::IteratorClose {
+            reason: CloseReason::Break,
+            return_called: false,
+        }
+    ));
 }
 
 // ============================================================================

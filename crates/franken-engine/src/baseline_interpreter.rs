@@ -61,8 +61,8 @@ use crate::ir_contract::{
 };
 use crate::iterator_protocol::{
     CloseReason, IterationCompletion, IterationEvent, IterationKind, IterationOperation,
-    IterationTrace, IteratorResult, IteratorSymbolKind, IteratorValue, make_enumerate_event,
-    make_get_iterator_event, make_next_event,
+    IterationTrace, IteratorResult, IteratorSymbolKind, IteratorValue, make_close_event,
+    make_enumerate_event, make_get_iterator_event, make_next_event,
 };
 use crate::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
 use crate::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
@@ -6746,12 +6746,18 @@ impl InterpreterCore {
         module: Option<&Ir3Module>,
         iterator: Value,
     ) -> Result<Option<Value>, InterpreterError> {
+        enum ForOfStep {
+            Done,
+            Value(Value),
+            Custom { receiver: Value, next_method: Value },
+        }
+
         let handle = self.expect_iterator_handle(iterator)?;
-        let (trace_index, custom_step) = match self.iterator_state_mut(handle)? {
+        let (trace_index, step) = match self.iterator_state_mut(handle)? {
             RuntimeIteratorState::ForOf(state) => {
                 if state.closed || state.done {
                     state.done = true;
-                    (state.trace_index, None)
+                    (state.trace_index, ForOfStep::Done)
                 } else if let Some(next_method) = state.next_method.clone() {
                     let iterator_object =
                         state
@@ -6762,18 +6768,17 @@ impl InterpreterCore {
                             })?;
                     (
                         state.trace_index,
-                        Some((Value::Object(iterator_object), next_method)),
+                        ForOfStep::Custom {
+                            receiver: Value::Object(iterator_object),
+                            next_method,
+                        },
                     )
                 } else if let Some(value) = state.values.get(state.next_index).cloned() {
                     state.next_index += 1;
-                    let trace_index = state.trace_index;
-                    self.record_iteration_next_result(trace_index, Some(value.clone()));
-                    return Ok(Some(value));
+                    (state.trace_index, ForOfStep::Value(value))
                 } else {
                     state.done = true;
-                    let trace_index = state.trace_index;
-                    self.record_iteration_next_result(trace_index, None);
-                    return Ok(None);
+                    (state.trace_index, ForOfStep::Done)
                 }
             }
             RuntimeIteratorState::ForIn(_) => {
@@ -6784,8 +6789,19 @@ impl InterpreterCore {
             }
         };
 
-        let Some((receiver, next_method)) = custom_step else {
-            return Ok(None);
+        let (receiver, next_method) = match step {
+            ForOfStep::Done => {
+                self.record_iteration_next_result(trace_index, None);
+                return Ok(None);
+            }
+            ForOfStep::Value(value) => {
+                self.record_iteration_next_result(trace_index, Some(value.clone()));
+                return Ok(Some(value));
+            }
+            ForOfStep::Custom {
+                receiver,
+                next_method,
+            } => (receiver, next_method),
         };
         let module = module.ok_or_else(|| InterpreterError::TypeError {
             expected: "module-backed iterator.next dispatch".to_string(),
@@ -6845,14 +6861,14 @@ impl InterpreterCore {
         &mut self,
         module: &Ir3Module,
         iterator: Value,
-        _reason: IteratorCloseReason,
+        reason: IteratorCloseReason,
     ) -> Result<(), InterpreterError> {
         let handle = self.expect_iterator_handle(iterator)?;
-        let return_target = match self.iterator_state_mut(handle)? {
+        let (trace_index, return_target) = match self.iterator_state_mut(handle)? {
             RuntimeIteratorState::ForIn(state) => {
                 state.closed = true;
                 state.done = true;
-                None
+                (state.trace_index, None)
             }
             RuntimeIteratorState::ForOf(state) => {
                 let return_target = if state.return_called {
@@ -6862,11 +6878,15 @@ impl InterpreterCore {
                 };
                 state.closed = true;
                 state.done = true;
-                return_target
+                (state.trace_index, return_target)
             }
         };
+        let close_reason = Self::close_reason_from_ir(reason);
 
         let Some(iterator_object) = return_target else {
+            self.record_iteration_event(trace_index, |record_id, step_index| {
+                make_close_event(record_id, step_index, close_reason, false)
+            });
             return Ok(());
         };
         let receiver = Value::Object(iterator_object);
@@ -6877,6 +6897,9 @@ impl InterpreterCore {
             receiver.clone(),
         )?
         else {
+            self.record_iteration_event(trace_index, |record_id, step_index| {
+                make_close_event(record_id, step_index, close_reason, false)
+            });
             return Ok(());
         };
 
@@ -6891,6 +6914,9 @@ impl InterpreterCore {
                 got: result.type_name().to_string(),
             });
         }
+        self.record_iteration_event(trace_index, |record_id, step_index| {
+            make_close_event(record_id, step_index, close_reason, true)
+        });
         Ok(())
     }
 
@@ -8597,6 +8623,19 @@ impl InterpreterCore {
                     .unwrap_or_else(|| "non_object".to_string())
             ),
         );
+        let iterable_ref = array_id
+            .map(|object_id| self.iteration_ref_for_object(object_id))
+            .unwrap_or_else(|| {
+                self.derive_iteration_engine_id("array_iterator_receiver", "non_object".to_string())
+            });
+        self.record_iteration_event(trace_index, |record_id, step_index| {
+            make_get_iterator_event(
+                record_id,
+                step_index,
+                IteratorSymbolKind::Iterator,
+                iterable_ref,
+            )
+        });
         let handle = self.alloc_iterator(RuntimeIteratorState::ForOf(RuntimeForOfState {
             values,
             next_index: 0,
@@ -18816,6 +18855,8 @@ mod active_builtin_regressions {
             .expect("test iterator object allocation should succeed");
         core.set_object_property(iterator_object, "return".to_string(), Value::Function(0))
             .expect("test iterator return method write should succeed");
+        let trace_index =
+            core.start_iteration_trace(IterationKind::ForOf, "test:iterator-return".to_string());
         let handle = core
             .alloc_iterator(RuntimeIteratorState::ForOf(RuntimeForOfState {
                 values: vec![Value::Int(1)],
@@ -18825,7 +18866,7 @@ mod active_builtin_regressions {
                 done: false,
                 closed: false,
                 return_called: false,
-                trace_index: 0,
+                trace_index,
             }))
             .expect("test iterator allocation should succeed");
 

@@ -16,6 +16,7 @@ use std::collections::BTreeMap;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use sqlmodel::prelude::*;
+use sqlmodel::{Connection, Cx, Outcome, Session, SessionConfig, SessionDebugInfo, create_table};
 
 use crate::storage_adapter::{
     BatchPutEntry, EventContext, StorageAdapter, StorageError, StoreKind, StoreQuery, StoreRecord,
@@ -267,6 +268,119 @@ pub trait TypedStorageAdapterExt: StorageAdapter {
 }
 
 impl<A: StorageAdapter + ?Sized> TypedStorageAdapterExt for A {}
+
+/// Session config used for deterministic typed persistence operations.
+pub fn typed_sqlmodel_session_config() -> SessionConfig {
+    SessionConfig {
+        auto_begin: true,
+        auto_flush: false,
+        // Keep committed audit rows inspectable; callers may opt into expiration explicitly.
+        expire_on_commit: false,
+    }
+}
+
+/// SQLModel CREATE TABLE statements for all typed persistence models.
+pub fn typed_persistence_create_table_sql() -> Vec<String> {
+    vec![
+        create_table::<ReplacementLineageEntry>()
+            .if_not_exists()
+            .build(),
+        create_table::<IfcProvenanceEntry>().if_not_exists().build(),
+        create_table::<SpecializationIndexEntry>()
+            .if_not_exists()
+            .build(),
+    ]
+}
+
+/// Thin typed wrapper around the real SQLModel ORM session.
+pub struct TypedSqlModelSession<C: Connection> {
+    inner: Session<C>,
+}
+
+impl<C: Connection> TypedSqlModelSession<C> {
+    /// Initialize a typed SQLModel session with deterministic FrankenEngine defaults.
+    pub fn new(connection: C) -> Self {
+        Self::with_config(connection, typed_sqlmodel_session_config())
+    }
+
+    /// Initialize a typed SQLModel session with caller-supplied SQLModel config.
+    pub fn with_config(connection: C, config: SessionConfig) -> Self {
+        Self {
+            inner: Session::with_config(connection, config),
+        }
+    }
+
+    /// Return the SQL statements required before using this typed session.
+    pub fn create_table_sql() -> Vec<String> {
+        typed_persistence_create_table_sql()
+    }
+
+    /// Borrow the underlying SQLModel session.
+    pub fn inner(&self) -> &Session<C> {
+        &self.inner
+    }
+
+    /// Mutably borrow the underlying SQLModel session for advanced callers.
+    pub fn inner_mut(&mut self) -> &mut Session<C> {
+        &mut self.inner
+    }
+
+    /// Current SQLModel session config.
+    pub fn config(&self) -> &SessionConfig {
+        self.inner.config()
+    }
+
+    /// Current SQLModel session debug state.
+    pub fn debug_state(&self) -> SessionDebugInfo {
+        self.inner.debug_state()
+    }
+
+    /// Add any typed persistence model to the SQLModel unit of work.
+    pub fn add_typed<T>(&mut self, record: &T)
+    where
+        T: TypedStoreRecord + Model + Clone + Send + Sync + 'static,
+    {
+        self.inner.add(record);
+    }
+
+    /// Check whether a typed persistence model is tracked by the unit of work.
+    pub fn contains_typed<T>(&self, record: &T) -> bool
+    where
+        T: TypedStoreRecord + Model + 'static,
+    {
+        self.inner.contains(record)
+    }
+
+    /// Add a replacement-lineage row to the SQLModel unit of work.
+    pub fn add_replacement_lineage(&mut self, record: &ReplacementLineageEntry) {
+        self.add_typed(record);
+    }
+
+    /// Add an IFC provenance row to the SQLModel unit of work.
+    pub fn add_ifc_provenance(&mut self, record: &IfcProvenanceEntry) {
+        self.add_typed(record);
+    }
+
+    /// Add a specialization-index row to the SQLModel unit of work.
+    pub fn add_specialization_index(&mut self, record: &SpecializationIndexEntry) {
+        self.add_typed(record);
+    }
+
+    /// Flush pending typed rows through the underlying SQLModel session.
+    pub async fn flush(&mut self, cx: &Cx) -> Outcome<(), sqlmodel::Error> {
+        self.inner.flush(cx).await
+    }
+
+    /// Commit pending typed rows through the underlying SQLModel session.
+    pub async fn commit(&mut self, cx: &Cx) -> Outcome<(), sqlmodel::Error> {
+        self.inner.commit(cx).await
+    }
+
+    /// Roll back pending typed rows through the underlying SQLModel session.
+    pub async fn rollback(&mut self, cx: &Cx) -> Outcome<(), sqlmodel::Error> {
+        self.inner.rollback(cx).await
+    }
+}
 
 // ---------------------------------------------------------------------------
 // ReplacementLineage: sqlmodel_rust typed model
@@ -570,10 +684,14 @@ impl TypedStoreRecord for SpecializationIndexEntry {
 }
 
 #[cfg(test)]
+#[allow(clippy::manual_async_fn)] // Mock trait impls must match sqlmodel_core::Connection signatures.
 mod tests {
     use super::*;
     use crate::storage_adapter::InMemoryStorageAdapter;
     use sqlmodel::{FieldInfo, Model, Row, SqlType, Value};
+    use sqlmodel_core::{
+        Connection, Dialect, Error, IsolationLevel, PreparedStatement, TransactionOps,
+    };
 
     fn field<T: Model>(field_name: &str) -> &'static FieldInfo {
         T::fields()
@@ -641,6 +759,191 @@ mod tests {
             created_timestamp_ms: 1_700_000_000_013,
             specialized_content_hash: "sha256:abc123".to_string(),
             metadata_json: r#"{"fallback":"deterministic"}"#.to_string(),
+        }
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    struct NoopConnection;
+
+    #[derive(Debug, Clone, Copy)]
+    struct NoopTransaction;
+
+    fn noop_error(operation: &str) -> Error {
+        Error::Custom(format!(
+            "noop typed session test connection does not execute {operation}"
+        ))
+    }
+
+    impl Connection for NoopConnection {
+        type Tx<'conn>
+            = NoopTransaction
+        where
+            Self: 'conn;
+
+        fn dialect(&self) -> Dialect {
+            Dialect::Sqlite
+        }
+
+        fn query(
+            &self,
+            _cx: &Cx,
+            sql: &str,
+            _params: &[Value],
+        ) -> impl Future<Output = Outcome<Vec<Row>, Error>> + Send {
+            let operation = format!("query `{sql}`");
+            async move { Outcome::Err(noop_error(&operation)) }
+        }
+
+        fn query_one(
+            &self,
+            _cx: &Cx,
+            sql: &str,
+            _params: &[Value],
+        ) -> impl Future<Output = Outcome<Option<Row>, Error>> + Send {
+            let operation = format!("query_one `{sql}`");
+            async move { Outcome::Err(noop_error(&operation)) }
+        }
+
+        fn execute(
+            &self,
+            _cx: &Cx,
+            sql: &str,
+            _params: &[Value],
+        ) -> impl Future<Output = Outcome<u64, Error>> + Send {
+            let operation = format!("execute `{sql}`");
+            async move { Outcome::Err(noop_error(&operation)) }
+        }
+
+        fn insert(
+            &self,
+            _cx: &Cx,
+            sql: &str,
+            _params: &[Value],
+        ) -> impl Future<Output = Outcome<i64, Error>> + Send {
+            let operation = format!("insert `{sql}`");
+            async move { Outcome::Err(noop_error(&operation)) }
+        }
+
+        fn batch(
+            &self,
+            _cx: &Cx,
+            statements: &[(String, Vec<Value>)],
+        ) -> impl Future<Output = Outcome<Vec<u64>, Error>> + Send {
+            let operation = format!("batch with {} statements", statements.len());
+            async move { Outcome::Err(noop_error(&operation)) }
+        }
+
+        fn begin(&self, _cx: &Cx) -> impl Future<Output = Outcome<Self::Tx<'_>, Error>> + Send {
+            async { Outcome::Ok(NoopTransaction) }
+        }
+
+        fn begin_with(
+            &self,
+            _cx: &Cx,
+            _isolation: IsolationLevel,
+        ) -> impl Future<Output = Outcome<Self::Tx<'_>, Error>> + Send {
+            async { Outcome::Ok(NoopTransaction) }
+        }
+
+        fn prepare(
+            &self,
+            _cx: &Cx,
+            sql: &str,
+        ) -> impl Future<Output = Outcome<PreparedStatement, Error>> + Send {
+            let sql = sql.to_string();
+            async move { Outcome::Ok(PreparedStatement::new(1, sql, 0)) }
+        }
+
+        fn query_prepared(
+            &self,
+            _cx: &Cx,
+            stmt: &PreparedStatement,
+            _params: &[Value],
+        ) -> impl Future<Output = Outcome<Vec<Row>, Error>> + Send {
+            let operation = format!("query_prepared `{}`", stmt.sql());
+            async move { Outcome::Err(noop_error(&operation)) }
+        }
+
+        fn execute_prepared(
+            &self,
+            _cx: &Cx,
+            stmt: &PreparedStatement,
+            _params: &[Value],
+        ) -> impl Future<Output = Outcome<u64, Error>> + Send {
+            let operation = format!("execute_prepared `{}`", stmt.sql());
+            async move { Outcome::Err(noop_error(&operation)) }
+        }
+
+        fn ping(&self, _cx: &Cx) -> impl Future<Output = Outcome<(), Error>> + Send {
+            async { Outcome::Ok(()) }
+        }
+
+        fn close(self, _cx: &Cx) -> impl Future<Output = sqlmodel_core::Result<()>> + Send {
+            async { Ok(()) }
+        }
+    }
+
+    impl TransactionOps for NoopTransaction {
+        fn query(
+            &self,
+            _cx: &Cx,
+            sql: &str,
+            _params: &[Value],
+        ) -> impl Future<Output = Outcome<Vec<Row>, Error>> + Send {
+            let operation = format!("transaction query `{sql}`");
+            async move { Outcome::Err(noop_error(&operation)) }
+        }
+
+        fn query_one(
+            &self,
+            _cx: &Cx,
+            sql: &str,
+            _params: &[Value],
+        ) -> impl Future<Output = Outcome<Option<Row>, Error>> + Send {
+            let operation = format!("transaction query_one `{sql}`");
+            async move { Outcome::Err(noop_error(&operation)) }
+        }
+
+        fn execute(
+            &self,
+            _cx: &Cx,
+            sql: &str,
+            _params: &[Value],
+        ) -> impl Future<Output = Outcome<u64, Error>> + Send {
+            let operation = format!("transaction execute `{sql}`");
+            async move { Outcome::Err(noop_error(&operation)) }
+        }
+
+        fn savepoint(
+            &self,
+            _cx: &Cx,
+            _name: &str,
+        ) -> impl Future<Output = Outcome<(), Error>> + Send {
+            async { Outcome::Ok(()) }
+        }
+
+        fn rollback_to(
+            &self,
+            _cx: &Cx,
+            _name: &str,
+        ) -> impl Future<Output = Outcome<(), Error>> + Send {
+            async { Outcome::Ok(()) }
+        }
+
+        fn release(
+            &self,
+            _cx: &Cx,
+            _name: &str,
+        ) -> impl Future<Output = Outcome<(), Error>> + Send {
+            async { Outcome::Ok(()) }
+        }
+
+        fn commit(self, _cx: &Cx) -> impl Future<Output = Outcome<(), Error>> + Send {
+            async { Outcome::Ok(()) }
+        }
+
+        fn rollback(self, _cx: &Cx) -> impl Future<Output = Outcome<(), Error>> + Send {
+            async { Outcome::Ok(()) }
         }
     }
 
@@ -784,6 +1087,69 @@ mod tests {
             r#"SELECT * FROM specialization_index WHERE "status" = $1 ORDER BY "invalidation_timestamp_ms" DESC, "specialization_id" ASC LIMIT 50"#
         );
         assert_eq!(params, vec![Value::Text("invalidated".to_string())]);
+    }
+
+    #[test]
+    fn typed_session_schema_sql_lists_all_typed_tables() {
+        let sql = typed_persistence_create_table_sql();
+        assert_eq!(sql.len(), 3);
+        assert!(
+            sql.iter()
+                .all(|statement| statement.starts_with("CREATE TABLE IF NOT EXISTS ")),
+            "all typed tables must be explicit CREATE TABLE statements: {sql:#?}"
+        );
+        assert!(
+            sql[0].contains("\"replacement_lineage\"")
+                && sql[0].contains("\"sequence_id\" BIGINT NOT NULL")
+                && sql[0].contains("PRIMARY KEY (\"sequence_id\")"),
+            "replacement lineage DDL should expose the typed primary key: {}",
+            sql[0]
+        );
+        assert!(
+            sql[1].contains("\"ifc_provenance\"")
+                && sql[1].contains("\"declassification_ref\" TEXT")
+                && sql[1].contains("PRIMARY KEY (\"provenance_id\")"),
+            "IFC provenance DDL should expose nullable declassification refs: {}",
+            sql[1]
+        );
+        assert!(
+            sql[2].contains("\"specialization_index\"")
+                && sql[2].contains("\"invalidation_reason\" TEXT")
+                && sql[2].contains("PRIMARY KEY (\"specialization_id\")"),
+            "specialization index DDL should expose nullable invalidation fields: {}",
+            sql[2]
+        );
+    }
+
+    #[test]
+    fn typed_sqlmodel_session_tracks_models_with_deterministic_defaults() {
+        let mut session = TypedSqlModelSession::new(NoopConnection);
+        assert!(session.config().auto_begin);
+        assert!(!session.config().auto_flush);
+        assert!(!session.config().expire_on_commit);
+        assert_eq!(
+            TypedSqlModelSession::<NoopConnection>::create_table_sql(),
+            typed_persistence_create_table_sql()
+        );
+
+        let replacement = replacement_entry(7);
+        let ifc = ifc_entry(11, "trace-ifc");
+        let specialization = specialization_entry(13);
+
+        session.add_replacement_lineage(&replacement);
+        session.add_ifc_provenance(&ifc);
+        session.add_specialization_index(&specialization);
+
+        assert!(session.contains_typed(&replacement));
+        assert!(session.contains_typed(&ifc));
+        assert!(session.contains_typed(&specialization));
+
+        let debug = session.debug_state();
+        assert_eq!(debug.tracked, 3);
+        assert_eq!(debug.pending_new, 3);
+        assert_eq!(debug.pending_delete, 0);
+        assert_eq!(debug.pending_dirty, 0);
+        assert!(!debug.in_transaction);
     }
 
     #[test]

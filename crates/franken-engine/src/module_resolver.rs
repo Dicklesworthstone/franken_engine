@@ -139,6 +139,12 @@ pub struct ExternalPackageDefinition {
     pub exports: BTreeMap<String, ExternalPackageExportTarget>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct ExternalPackageWildcardExport {
+    pattern: String,
+    specificity: usize,
+}
+
 impl ExternalPackageDefinition {
     pub fn new(package_name: impl Into<String>) -> Self {
         let package_name = package_name.into();
@@ -1114,6 +1120,8 @@ pub struct DeterministicModuleResolver {
     external_modules: BTreeMap<String, ModuleRecord>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     external_packages: BTreeMap<String, ExternalPackageDefinition>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    external_package_wildcard_exports: BTreeMap<String, Vec<ExternalPackageWildcardExport>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1138,6 +1146,7 @@ impl DeterministicModuleResolver {
             workspace_modules: BTreeMap::new(),
             external_modules: BTreeMap::new(),
             external_packages: BTreeMap::new(),
+            external_package_wildcard_exports: BTreeMap::new(),
         }
     }
 
@@ -1229,8 +1238,11 @@ impl DeterministicModuleResolver {
             })
             .collect();
 
-        self.external_packages
-            .insert(package.package_name.clone(), package);
+        let package_name = package.package_name.clone();
+        let wildcard_exports = build_package_wildcard_exports(&package.exports);
+        self.external_packages.insert(package_name.clone(), package);
+        self.external_package_wildcard_exports
+            .insert(package_name, wildcard_exports);
         Ok(())
     }
 
@@ -1632,10 +1644,14 @@ impl DeterministicModuleResolver {
     {
         let (package_name, export_key) = parse_package_specifier(specifier)?;
         let package = self.external_packages.get(&package_name)?;
+        let wildcard_exports = self
+            .external_package_wildcard_exports
+            .get(&package_name)
+            .map(Vec::as_slice);
 
         let mut probe_sequence = vec![specifier.to_string()];
         let Some((export_target, capture)) =
-            resolve_package_export_target(&package.exports, &export_key)
+            resolve_package_export_target(package, wildcard_exports, &export_key)
         else {
             return Some(Err(ExternalPackageResolutionError {
                 code: ResolutionErrorCode::UnsupportedSpecifier,
@@ -1959,13 +1975,33 @@ fn parse_package_specifier(specifier: &str) -> Option<(String, String)> {
 }
 
 fn resolve_package_export_target<'a>(
-    exports: &'a BTreeMap<String, ExternalPackageExportTarget>,
+    package: &'a ExternalPackageDefinition,
+    wildcard_exports: Option<&'a [ExternalPackageWildcardExport]>,
     export_key: &str,
 ) -> Option<(&'a ExternalPackageExportTarget, String)> {
-    if let Some(exact) = exports.get(export_key) {
+    if let Some(exact) = package.exports.get(export_key) {
         return Some((exact, String::new()));
     }
 
+    if let Some(wildcard_exports) = wildcard_exports {
+        for wildcard in wildcard_exports {
+            let Some(capture) = capture_single_wildcard(&wildcard.pattern, export_key) else {
+                continue;
+            };
+            if let Some(target) = package.exports.get(&wildcard.pattern) {
+                return Some((target, capture));
+            }
+        }
+        return None;
+    }
+
+    resolve_package_export_target_by_scanning(&package.exports, export_key)
+}
+
+fn resolve_package_export_target_by_scanning<'a>(
+    exports: &'a BTreeMap<String, ExternalPackageExportTarget>,
+    export_key: &str,
+) -> Option<(&'a ExternalPackageExportTarget, String)> {
     let mut wildcard_matches = Vec::new();
     for (pattern, target) in exports {
         let Some(capture) = capture_single_wildcard(pattern, export_key) else {
@@ -1979,6 +2015,33 @@ fn resolve_package_export_target<'a>(
         .into_iter()
         .next()
         .map(|(_, _, target, capture)| (target, capture))
+}
+
+fn build_package_wildcard_exports(
+    exports: &BTreeMap<String, ExternalPackageExportTarget>,
+) -> Vec<ExternalPackageWildcardExport> {
+    let mut wildcard_exports: Vec<_> = exports
+        .keys()
+        .filter(|pattern| has_single_wildcard(pattern))
+        .map(|pattern| ExternalPackageWildcardExport {
+            pattern: pattern.clone(),
+            specificity: pattern_specificity(pattern),
+        })
+        .collect();
+    wildcard_exports.sort_by(|left, right| {
+        right
+            .specificity
+            .cmp(&left.specificity)
+            .then(left.pattern.cmp(&right.pattern))
+    });
+    wildcard_exports
+}
+
+fn has_single_wildcard(pattern: &str) -> bool {
+    let Some(wildcard_index) = pattern.find('*') else {
+        return false;
+    };
+    !pattern[wildcard_index + 1..].contains('*')
 }
 
 fn resolve_package_export_path(
@@ -2675,6 +2738,36 @@ mod tests {
             .get("pkg/entry.cjs")
             .expect("normalized external key should be stored");
         assert_eq!(record.id, "external:pkg/entry.cjs");
+    }
+
+    #[test]
+    fn register_external_package_precomputes_sorted_wildcard_exports() {
+        let mut resolver = DeterministicModuleResolver::new("/repo");
+        resolver
+            .register_external_package(
+                ExternalPackageDefinition::new("wild-pkg")
+                    .with_export(".", ExternalPackageExportTarget::default())
+                    .with_export("./feature/*", ExternalPackageExportTarget::default())
+                    .with_export(
+                        "./feature/internal/*",
+                        ExternalPackageExportTarget::default(),
+                    )
+                    .with_export("./invalid/*/*", ExternalPackageExportTarget::default()),
+            )
+            .expect("wildcard package should register");
+
+        let wildcard_patterns: Vec<&str> = resolver
+            .external_package_wildcard_exports
+            .get("wild-pkg")
+            .expect("wildcard index should be stored by normalized package name")
+            .iter()
+            .map(|wildcard| wildcard.pattern.as_str())
+            .collect();
+
+        assert_eq!(
+            wildcard_patterns,
+            vec!["./feature/internal/*", "./feature/*"]
+        );
     }
 
     #[test]

@@ -1,0 +1,6 @@
+async function* renderChunks(stream, tag) {
+  for await (const chunk of stream) {
+    const label = `${tag}:${`${chunk.id ?? "missing"}:${await chunk.text()}`}`;
+    yield { label, chunk };
+  }
+}

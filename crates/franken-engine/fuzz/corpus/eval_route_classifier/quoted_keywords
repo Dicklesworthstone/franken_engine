@@ -1,0 +1,2 @@
+const literal = "import x from pkg";
+const other = 'await job()';

@@ -1,0 +1,2 @@
+const routeGuard = /import|await|export/g;
+routeGuard.test("await");

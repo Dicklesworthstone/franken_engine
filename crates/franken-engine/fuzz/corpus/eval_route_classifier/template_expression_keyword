@@ -1,0 +1,1 @@
+`template text ${import("pkg")} trailing await text`;

@@ -14,9 +14,6 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-// TODO: Import typed models for sqlmodel_rust integration
-// use crate::typed_persistence_models::{ReplacementLineageEntry, IfcProvenanceEntry, SpecializationIndexEntry};
-
 /// Current schema version for storage-adapter contracts.
 pub const STORAGE_SCHEMA_VERSION: u32 = 1;
 
@@ -1235,15 +1232,15 @@ mod tests {
             ),
             (
                 StoreKind::ReplacementLineage,
-                "frankensqlite::replacement::lineage_log",
+                "sqlmodel_rust::ReplacementLineageEntry",
             ),
             (
                 StoreKind::IfcProvenance,
-                "frankensqlite::control_plane::ifc_provenance",
+                "sqlmodel_rust::IfcProvenanceEntry",
             ),
             (
                 StoreKind::SpecializationIndex,
-                "frankensqlite::control_plane::specialization_index",
+                "sqlmodel_rust::SpecializationIndexEntry",
             ),
         ];
         for (kind, expected) in cases {

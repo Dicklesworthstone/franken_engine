@@ -271,15 +271,15 @@ fn store_kind_integration_point_exhaustive() {
         ),
         (
             StoreKind::ReplacementLineage,
-            "frankensqlite::replacement::lineage_log",
+            "sqlmodel_rust::ReplacementLineageEntry",
         ),
         (
             StoreKind::IfcProvenance,
-            "frankensqlite::control_plane::ifc_provenance",
+            "sqlmodel_rust::IfcProvenanceEntry",
         ),
         (
             StoreKind::SpecializationIndex,
-            "frankensqlite::control_plane::specialization_index",
+            "sqlmodel_rust::SpecializationIndexEntry",
         ),
     ];
     for (kind, point) in expected {

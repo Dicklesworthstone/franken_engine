@@ -706,15 +706,15 @@ fn enrichment_store_kind_integration_point_exhaustive() {
     );
     assert_eq!(
         StoreKind::ReplacementLineage.integration_point(),
-        "frankensqlite::replacement::lineage_log"
+        "sqlmodel_rust::ReplacementLineageEntry"
     );
     assert_eq!(
         StoreKind::IfcProvenance.integration_point(),
-        "frankensqlite::control_plane::ifc_provenance"
+        "sqlmodel_rust::IfcProvenanceEntry"
     );
     assert_eq!(
         StoreKind::SpecializationIndex.integration_point(),
-        "frankensqlite::control_plane::specialization_index"
+        "sqlmodel_rust::SpecializationIndexEntry"
     );
 }
 

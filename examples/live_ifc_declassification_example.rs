@@ -16,19 +16,127 @@ use serde::{Deserialize, Serialize};
 
 use frankenengine_engine::declassification_pipeline::{
     DeclassificationPipeline, DeclassificationRequest, LossAssessment, PipelineConfig,
-    PipelineError,
+    PipelineError, PipelineEvent,
 };
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::ifc_artifacts::{
-    DeclassificationRoute, FlowPolicy, IfcSchemaVersion, Label,
+    DeclassificationDecision, DeclassificationRoute, FlowCheckResult, FlowPolicy, IfcSchemaVersion,
+    Label,
 };
-use frankenengine_engine::signature_preimage::{SIGNATURE_SENTINEL, Signature, SigningKey};
+use frankenengine_engine::signature_preimage::{
+    Signature, SigningKey, generate_keypair, generate_keypair_from_seed,
+};
 
 // Example constants
 pub const EXAMPLE_BEAD_ID: &str = "bd-dpfvh";
 pub const EXAMPLE_COMPONENT: &str = "live_ifc_declassification_example";
 
-/// Synthetic data source with classification level.
+fn requested_route_id_for(flow_check: &FlowCheckResult, scenario_id: &str) -> String {
+    match flow_check {
+        FlowCheckResult::DeclassificationRequired { route_id } => route_id.clone(),
+        _ => format!("no-approved-route-for-{scenario_id}"),
+    }
+}
+
+fn build_declassification_request(
+    scenario_id: &str,
+    source_label: Label,
+    sink_clearance: Label,
+    requested_route_id: String,
+) -> DeclassificationRequest {
+    DeclassificationRequest {
+        request_id: format!("{scenario_id}-request"),
+        source_label,
+        sink_clearance,
+        extension_id: EXAMPLE_COMPONENT.to_string(),
+        code_location: "live_ifc_declassification_example::execute_flow".to_string(),
+        trace_id: format!("{scenario_id}-trace"),
+        requested_route_id,
+        decision_contract_id: "franken-ifc-decision-contract".to_string(),
+        is_emergency: false,
+        timestamp_ms: chrono::Utc::now().timestamp_millis() as u64,
+    }
+}
+
+fn compute_loss_assessment(
+    source_label: &Label,
+    sink_clearance: &Label,
+    flow_check: &FlowCheckResult,
+) -> LossAssessment {
+    let source_level = source_label.level() as u64;
+    let sink_level = sink_clearance.level() as u64;
+    let downgrade_levels = source_level.saturating_sub(sink_level);
+    let route_factor_milli = match flow_check {
+        FlowCheckResult::DeclassificationRequired { .. } => 1_000,
+        FlowCheckResult::Denied | FlowCheckResult::Prohibited => 4_000,
+        FlowCheckResult::Allowed | FlowCheckResult::LatticeAllowed => 0,
+    };
+    let data_sensitivity_bps = (source_level.saturating_mul(2_500)).min(10_000) as u16;
+    let sink_exposure_bps =
+        ((Label::TopSecret.level() as u64).saturating_sub(sink_level) * 2_500).min(10_000) as u16;
+
+    LossAssessment {
+        expected_loss_milli: downgrade_levels
+            .saturating_mul(20_000)
+            .saturating_add(route_factor_milli),
+        data_sensitivity_bps,
+        sink_exposure_bps,
+        historical_abuse_detected: matches!(
+            flow_check,
+            FlowCheckResult::Denied | FlowCheckResult::Prohibited
+        ),
+        summary: format!(
+            "computed from label downgrade ({source_label}->{sink_clearance}) and policy outcome {flow_check:?}"
+        ),
+    }
+}
+
+fn source_from_engine_event_path(
+    source_id: &str,
+    label: Label,
+    sink: &DataSink,
+    policy: &FlowPolicy,
+    signing_key: &SigningKey,
+) -> ClassifiedDataSource {
+    let flow_check = policy.is_flow_allowed(&label, &sink.clearance);
+    let request = build_declassification_request(
+        source_id,
+        label.clone(),
+        sink.clearance.clone(),
+        requested_route_id_for(&flow_check, source_id),
+    );
+    let loss_assessment = compute_loss_assessment(&label, &sink.clearance, &flow_check);
+    let mut pipeline = DeclassificationPipeline::new(PipelineConfig::default());
+    let receipt_result = pipeline.process(&request, policy, &loss_assessment, signing_key);
+    let pipeline_events = pipeline.drain_events();
+
+    let content = serde_json::to_string(&serde_json::json!({
+        "source_id": source_id,
+        "component": EXAMPLE_COMPONENT,
+        "source_label": label.clone(),
+        "sink_id": sink.sink_id.clone(),
+        "sink_clearance": sink.clearance.clone(),
+        "policy_id": policy.policy_id.clone(),
+        "policy_hash": policy.content_hash().to_hex(),
+        "policy_flow_check": flow_check,
+        "loss_assessment": loss_assessment,
+        "pipeline_event_count": pipeline_events.len(),
+        "pipeline_events": pipeline_events,
+        "receipt_hash": receipt_result.as_ref().ok().map(|receipt| receipt.content_hash().to_hex()),
+        "pipeline_error": receipt_result.as_ref().err().map(ToString::to_string),
+    }))
+    .expect("engine event source payload should serialize");
+    let content_hash = ContentHash::compute(content.as_bytes()).to_hex();
+
+    ClassifiedDataSource {
+        source_id: source_id.to_string(),
+        label,
+        content,
+        content_hash,
+    }
+}
+
+/// Runtime-derived data source with classification level.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClassifiedDataSource {
     pub source_id: String,
@@ -52,8 +160,6 @@ pub struct IfcFlowScenario {
     pub description: String,
     pub source: ClassifiedDataSource,
     pub sink: DataSink,
-    pub should_require_declassification: bool,
-    pub expected_result: String, // "allowed" or "denied"
 }
 
 /// Complete flow verification result.
@@ -70,33 +176,34 @@ pub struct FlowVerificationResult {
     pub receipt_hash: Option<String>,
     pub error_reason: Option<String>,
     pub execution_time_ms: u64,
+    pub policy_flow_check: FlowCheckResult,
+    pub loss_assessment: LossAssessment,
+    pub pipeline_events: Vec<PipelineEvent>,
 }
 
 impl ClassifiedDataSource {
-    /// Create a confidential API metrics source.
-    pub fn confidential_api_metrics() -> Self {
-        let content = "API performance metrics:\n/api/users/list: 245ms avg\n/api/orders/search: 180ms avg\n/api/auth/verify: 45ms avg\n\nDatabase connection pool: 85% utilization\nMemory usage: 2.1GB / 4GB allocated";
-        let content_hash = ContentHash::compute(content.as_bytes()).to_hex();
-
-        Self {
-            source_id: "api-metrics-source".to_string(),
-            label: Label::Confidential,
-            content: content.to_string(),
-            content_hash,
-        }
+    /// Capture a confidential source from the live declassification event path.
+    pub fn confidential_api_metrics(policy: &FlowPolicy, signing_key: &SigningKey) -> Self {
+        let sink = DataSink::public_incident_report();
+        source_from_engine_event_path(
+            "api-metrics-source",
+            Label::Confidential,
+            &sink,
+            policy,
+            signing_key,
+        )
     }
 
-    /// Create an internal debug data source.
-    pub fn internal_debug_data() -> Self {
-        let content = "DEBUG: session_token=abcd1234efgh5678, user_id=42, access_level=admin, internal_flags=[debug_mode, test_user]";
-        let content_hash = ContentHash::compute(content.as_bytes()).to_hex();
-
-        Self {
-            source_id: "debug-data-source".to_string(),
-            label: Label::Internal,
-            content: content.to_string(),
-            content_hash,
-        }
+    /// Capture an internal source from the live declassification event path.
+    pub fn internal_debug_data(policy: &FlowPolicy, signing_key: &SigningKey) -> Self {
+        let sink = DataSink::public_application_logs();
+        source_from_engine_event_path(
+            "debug-data-source",
+            Label::Internal,
+            &sink,
+            policy,
+            signing_key,
+        )
     }
 }
 
@@ -122,35 +229,34 @@ impl DataSink {
 
 impl IfcFlowScenario {
     /// Scenario: Confidential API metrics to public incident report (should be allowed with declassification).
-    pub fn allowed_declassification_scenario() -> Self {
+    pub fn allowed_declassification_scenario(
+        policy: &FlowPolicy,
+        signing_key: &SigningKey,
+    ) -> Self {
         Self {
             scenario_id: "allowed-api-metrics-to-incident".to_string(),
             description: "Flow confidential API metrics to public incident report with approved declassification".to_string(),
-            source: ClassifiedDataSource::confidential_api_metrics(),
+            source: ClassifiedDataSource::confidential_api_metrics(policy, signing_key),
             sink: DataSink::public_incident_report(),
-            should_require_declassification: true,
-            expected_result: "allowed".to_string(),
         }
     }
 
     /// Scenario: Internal debug data to public logs (should be denied).
-    pub fn denied_flow_scenario() -> Self {
+    pub fn denied_flow_scenario(policy: &FlowPolicy, signing_key: &SigningKey) -> Self {
         Self {
             scenario_id: "denied-debug-to-logs".to_string(),
             description:
                 "Attempt to flow internal debug data to public logs without declassification"
                     .to_string(),
-            source: ClassifiedDataSource::internal_debug_data(),
+            source: ClassifiedDataSource::internal_debug_data(policy, signing_key),
             sink: DataSink::public_application_logs(),
-            should_require_declassification: true,
-            expected_result: "denied".to_string(),
         }
     }
 }
 
 /// Create a realistic IFC flow policy.
-pub fn create_flow_policy(_signing_key: &SigningKey) -> FlowPolicy {
-    FlowPolicy {
+pub fn create_flow_policy(signing_key: &SigningKey) -> FlowPolicy {
+    let mut policy = FlowPolicy {
         policy_id: "franken-ifc-policy-v1".to_string(),
         extension_id: EXAMPLE_COMPONENT.to_string(),
         label_classes: [
@@ -186,19 +292,24 @@ pub fn create_flow_policy(_signing_key: &SigningKey) -> FlowPolicy {
         ],
         epoch_id: 1,
         schema_version: IfcSchemaVersion::CURRENT,
-        signature: Signature::from_bytes(SIGNATURE_SENTINEL),
-    }
+        signature: Signature::from_bytes([0u8; 64]),
+    };
+    policy.sign(signing_key).expect("flow policy should sign");
+    policy
 }
 
 /// Create a signing key for this example.
 pub fn create_signing_key() -> SigningKey {
-    // Use a fixed key for deterministic results
-    SigningKey::from_bytes([
-        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
-        0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e,
-        0x1f, 0x20,
-    ])
-    .expect("Valid signing key")
+    generate_keypair().0
+}
+
+/// Rotate the runtime signing key through the engine key-generation path.
+pub fn rotate_signing_key(previous: &SigningKey) -> SigningKey {
+    let mut seed = *ContentHash::compute(previous.as_bytes()).as_bytes();
+    if seed == [0u8; 32] {
+        seed[0] = 1;
+    }
+    generate_keypair_from_seed(&seed).0
 }
 
 /// Execute a complete IFC flow scenario with declassification pipeline.
@@ -218,6 +329,13 @@ pub fn execute_ifc_flow_scenario(
         scenario.sink.clearance
     );
 
+    let policy_flow_check =
+        policy.is_flow_allowed(&scenario.source.label, &scenario.sink.clearance);
+    let loss_assessment = compute_loss_assessment(
+        &scenario.source.label,
+        &scenario.sink.clearance,
+        &policy_flow_check,
+    );
     let mut result = FlowVerificationResult {
         bead_id: EXAMPLE_BEAD_ID.to_string(),
         component: EXAMPLE_COMPONENT.to_string(),
@@ -230,73 +348,75 @@ pub fn execute_ifc_flow_scenario(
         receipt_hash: None,
         error_reason: None,
         execution_time_ms: 0,
+        policy_flow_check,
+        loss_assessment,
+        pipeline_events: Vec::new(),
     };
 
-    // Check if flow requires declassification
-    if !scenario.source.label.can_flow_to(&scenario.sink.clearance) {
-        result.declassification_required = true;
-        println!(
-            "  Flow requires declassification: {:?} -> {:?}",
-            scenario.source.label, scenario.sink.clearance
-        );
-
-        // Create declassification request
-        let request = DeclassificationRequest {
-            request_id: format!("{}-request", scenario.scenario_id),
-            source_label: scenario.source.label.clone(),
-            sink_clearance: scenario.sink.clearance.clone(),
-            extension_id: EXAMPLE_COMPONENT.to_string(),
-            code_location: "live_ifc_declassification_example::execute_flow".to_string(),
-            trace_id: format!("{}-trace", scenario.scenario_id),
-            requested_route_id: "confidential-to-public-incident".to_string(),
-            decision_contract_id: "franken-ifc-decision-contract".to_string(),
-            is_emergency: false,
-            timestamp_ms: chrono::Utc::now().timestamp_millis() as u64,
-        };
-
-        // Create loss assessment
-        let loss_assessment = LossAssessment {
-            expected_loss_milli: 0,    // Low loss for incident reporting
-            data_sensitivity_bps: 500, // Moderate sensitivity
-            sink_exposure_bps: 1000,   // Public exposure
-            historical_abuse_detected: false,
-            summary: "incident report declassification after policy review".to_string(),
-        };
-
-        // Configure and run pipeline
-        let config = PipelineConfig {
-            loss_threshold_milli: 100_000, // Allow flows with < 0.1 expected loss
-            emergency_max_duration_ms: 3_600_000, // 1 hour emergency grant expiry
-            emit_stage_events: true,
-        };
-        let mut pipeline = DeclassificationPipeline::new(config);
-
-        result.flow_attempted = true;
-
-        match pipeline.process(&request, policy, &loss_assessment, signing_key) {
-            Ok(receipt) => {
-                result.declassification_approved = true;
-                result.flow_completed = true;
-                result.receipt_generated = true;
-                result.receipt_hash = Some(receipt.content_hash().to_hex());
-                println!("  ✅ Declassification approved - flow allowed");
-                println!("     Receipt ID: {}", receipt.receipt_id);
-                println!("     Authorized by: {}", receipt.authorized_by);
-            }
-            Err(PipelineError::NoMatchingRoute { .. }) => {
-                result.error_reason = Some("No matching declassification route".to_string());
-                println!("  ❌ Declassification denied - no matching route");
-            }
-            Err(e) => {
-                result.error_reason = Some(format!("Pipeline error: {}", e));
-                println!("  ❌ Declassification failed: {}", e);
-            }
+    result.flow_attempted = true;
+    match &result.policy_flow_check {
+        FlowCheckResult::Allowed | FlowCheckResult::LatticeAllowed => {
+            result.flow_completed = true;
+            println!(
+                "  Flow allowed by policy check: {:?}",
+                result.policy_flow_check
+            );
         }
-    } else {
-        // Flow is lattice-legal without declassification
-        result.flow_attempted = true;
-        result.flow_completed = true;
-        println!("  ✅ Flow allowed without declassification (lattice-legal)");
+        FlowCheckResult::DeclassificationRequired { .. } => {
+            result.declassification_required = true;
+            println!(
+                "  Flow requires declassification by policy check: {:?} -> {:?}",
+                scenario.source.label, scenario.sink.clearance
+            );
+
+            let request = build_declassification_request(
+                &scenario.scenario_id,
+                scenario.source.label.clone(),
+                scenario.sink.clearance.clone(),
+                requested_route_id_for(&result.policy_flow_check, &scenario.scenario_id),
+            );
+
+            let config = PipelineConfig {
+                loss_threshold_milli: LossAssessment::DEFAULT_THRESHOLD_MILLI,
+                emergency_max_duration_ms: 3_600_000, // 1 hour emergency grant expiry
+                emit_stage_events: true,
+            };
+            let mut pipeline = DeclassificationPipeline::new(config);
+
+            match pipeline.process(&request, policy, &result.loss_assessment, signing_key) {
+                Ok(receipt) => {
+                    result.declassification_approved =
+                        receipt.decision == DeclassificationDecision::Allow;
+                    result.flow_completed = result.declassification_approved;
+                    result.receipt_generated = true;
+                    result.receipt_hash = Some(receipt.content_hash().to_hex());
+                    println!("  Declassification decision: {:?}", receipt.decision);
+                    println!("     Receipt ID: {}", receipt.receipt_id);
+                    println!("     Authorized by: {}", receipt.authorized_by);
+                }
+                Err(PipelineError::NoMatchingRoute { .. }) => {
+                    result.error_reason = Some("No matching declassification route".to_string());
+                    println!("  Declassification denied - no matching route");
+                }
+                Err(e) => {
+                    result.error_reason = Some(format!("Pipeline error: {}", e));
+                    println!("  Declassification failed: {}", e);
+                }
+            }
+            result.pipeline_events = pipeline.drain_events();
+        }
+        FlowCheckResult::Denied | FlowCheckResult::Prohibited => {
+            result.declassification_required =
+                !scenario.source.label.can_flow_to(&scenario.sink.clearance);
+            result.error_reason = Some(format!(
+                "Policy flow check denied: {:?}",
+                result.policy_flow_check
+            ));
+            println!(
+                "  Flow denied by policy check: {:?}",
+                result.policy_flow_check
+            );
+        }
     }
 
     result.execution_time_ms = start_time.elapsed().as_millis() as u64;
@@ -318,7 +438,7 @@ pub fn generate_ifc_proof_artifacts(
         "component": EXAMPLE_COMPONENT,
         "proof_type": "ifc_declassification_flow_verification",
         "flow_scenarios_count": results.len(),
-        "policy_id": policy.policy_id,
+        "policy_id": policy.policy_id.clone(),
         "declassification_routes_count": policy.declassification_routes.len(),
         "flow_verification_evidence_hash": ContentHash::compute(
             serde_json::to_string(results)?.as_bytes()
@@ -362,6 +482,9 @@ pub fn generate_ifc_proof_artifacts(
             "declassification_required": result.declassification_required,
             "declassification_approved": result.declassification_approved,
             "flow_completed": result.flow_completed,
+            "policy_flow_check": result.policy_flow_check.clone(),
+            "loss_assessment": result.loss_assessment.clone(),
+            "pipeline_events": result.pipeline_events.clone(),
             "execution_time_ms": result.execution_time_ms
         }));
     }
@@ -495,19 +618,25 @@ pub fn generate_ifc_proof_artifacts(
 #[allow(clippy::items_after_test_module)]
 mod tests {
     use super::*;
+    use frankenengine_engine::ifc_artifacts::FlowRule;
 
     #[test]
     fn test_classified_data_source_creation() {
-        let api_metrics = ClassifiedDataSource::confidential_api_metrics();
+        let key = create_signing_key();
+        let policy = create_flow_policy(&key);
+
+        let api_metrics = ClassifiedDataSource::confidential_api_metrics(&policy, &key);
         assert_eq!(api_metrics.source_id, "api-metrics-source");
         assert_eq!(api_metrics.label, Label::Confidential);
         assert!(!api_metrics.content.is_empty());
+        assert!(api_metrics.content.contains("declassification_pipeline"));
         assert!(!api_metrics.content_hash.is_empty());
 
-        let debug_data = ClassifiedDataSource::internal_debug_data();
+        let debug_data = ClassifiedDataSource::internal_debug_data(&policy, &key);
         assert_eq!(debug_data.source_id, "debug-data-source");
         assert_eq!(debug_data.label, Label::Internal);
         assert!(!debug_data.content.is_empty());
+        assert!(debug_data.content.contains("pipeline_events"));
         assert!(!debug_data.content_hash.is_empty());
 
         // Hashes should be different
@@ -527,19 +656,73 @@ mod tests {
 
     #[test]
     fn test_flow_scenarios() {
-        let allowed = IfcFlowScenario::allowed_declassification_scenario();
+        let key = create_signing_key();
+        let policy = create_flow_policy(&key);
+
+        let allowed = IfcFlowScenario::allowed_declassification_scenario(&policy, &key);
         assert_eq!(allowed.scenario_id, "allowed-api-metrics-to-incident");
         assert_eq!(allowed.source.label, Label::Confidential);
         assert_eq!(allowed.sink.clearance, Label::Public);
-        assert_eq!(allowed.expected_result, "allowed");
-        assert!(allowed.should_require_declassification);
+        assert!(matches!(
+            policy.is_flow_allowed(&allowed.source.label, &allowed.sink.clearance),
+            FlowCheckResult::DeclassificationRequired { .. }
+        ));
 
-        let denied = IfcFlowScenario::denied_flow_scenario();
+        let denied = IfcFlowScenario::denied_flow_scenario(&policy, &key);
         assert_eq!(denied.scenario_id, "denied-debug-to-logs");
         assert_eq!(denied.source.label, Label::Internal);
         assert_eq!(denied.sink.clearance, Label::Public);
-        assert_eq!(denied.expected_result, "denied");
-        assert!(denied.should_require_declassification);
+        assert_eq!(
+            policy.is_flow_allowed(&denied.source.label, &denied.sink.clearance),
+            FlowCheckResult::Denied
+        );
+    }
+
+    #[test]
+    fn test_policy_conflict_uses_policy_flow_check_result() {
+        let key = create_signing_key();
+        let mut policy = create_flow_policy(&key);
+        policy.prohibited_flows.push(FlowRule {
+            source_label: Label::Public,
+            sink_clearance: Label::Internal,
+        });
+        policy.sign(&key).expect("updated policy should sign");
+
+        let content = "public status update";
+        let scenario = IfcFlowScenario {
+            scenario_id: "prohibited-public-to-internal".to_string(),
+            description:
+                "Explicit policy prohibition overrides lattice-legal public-to-internal flow"
+                    .to_string(),
+            source: ClassifiedDataSource {
+                source_id: "public-status-source".to_string(),
+                label: Label::Public,
+                content: content.to_string(),
+                content_hash: ContentHash::compute(content.as_bytes()).to_hex(),
+            },
+            sink: DataSink {
+                sink_id: "internal-analytics-sink".to_string(),
+                clearance: Label::Internal,
+                description: "Internal analytics sink".to_string(),
+            },
+        };
+
+        assert!(scenario.source.label.can_flow_to(&scenario.sink.clearance));
+        let result = execute_ifc_flow_scenario(&scenario, &policy, &key)
+            .expect("policy conflict scenario should evaluate");
+
+        assert_eq!(result.policy_flow_check, FlowCheckResult::Prohibited);
+        assert!(result.flow_attempted);
+        assert!(!result.declassification_required);
+        assert!(!result.declassification_approved);
+        assert!(!result.flow_completed);
+        assert!(!result.receipt_generated);
+        assert!(
+            result
+                .error_reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("Prohibited"))
+        );
     }
 
     #[test]
@@ -557,6 +740,9 @@ mod tests {
         assert_eq!(route.target_clearance, Label::Public);
         assert_eq!(route.conditions.len(), 3);
         assert!(route.conditions.contains(&"security_review".to_string()));
+        policy
+            .verify(&key.verification_key())
+            .expect("flow policy should verify with generated key");
     }
 
     #[test]
@@ -586,6 +772,13 @@ mod tests {
             receipt_hash: None,
             error_reason: Some("No matching route".to_string()),
             execution_time_ms: 100,
+            policy_flow_check: FlowCheckResult::Denied,
+            loss_assessment: compute_loss_assessment(
+                &Label::Internal,
+                &Label::Public,
+                &FlowCheckResult::Denied,
+            ),
+            pipeline_events: Vec::new(),
         };
 
         assert_eq!(result.bead_id, EXAMPLE_BEAD_ID);
@@ -596,12 +789,15 @@ mod tests {
     }
 
     #[test]
-    fn test_signing_key_deterministic() {
+    fn test_signing_key_rotation_uses_engine_key_generation() {
         let key1 = create_signing_key();
-        let key2 = create_signing_key();
+        let key2 = rotate_signing_key(&key1);
 
-        // Should be deterministic
-        assert_eq!(key1.as_bytes(), key2.as_bytes());
+        assert_ne!(key1.as_bytes(), key2.as_bytes());
+        let policy = create_flow_policy(&key2);
+        policy
+            .verify(&key2.verification_key())
+            .expect("rotated key should sign policy");
     }
 }
 
@@ -624,8 +820,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Test scenarios
     let scenarios = [
-        IfcFlowScenario::allowed_declassification_scenario(),
-        IfcFlowScenario::denied_flow_scenario(),
+        IfcFlowScenario::allowed_declassification_scenario(&policy, &signing_key),
+        IfcFlowScenario::denied_flow_scenario(&policy, &signing_key),
     ];
 
     println!("Testing {} IFC flow scenarios:", scenarios.len());

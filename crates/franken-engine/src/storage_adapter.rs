@@ -647,12 +647,12 @@ pub struct FrankensqliteStorageAdapter<B: FrankensqliteBackend> {
 
 impl<B: FrankensqliteBackend> FrankensqliteStorageAdapter<B> {
     pub fn new(mut backend: B) -> Result<Self, StorageError> {
-        backend
-            .apply_control_plane_profile()
-            .map_err(|detail| StorageError::BackendUnavailable {
+        backend.apply_control_plane_profile().map_err(|detail| {
+            StorageError::BackendUnavailable {
                 backend: "frankensqlite".to_string(),
                 detail,
-            })?;
+            }
+        })?;
 
         let schema_version = backend.current_schema_version().map_err(|detail| {
             StorageError::BackendUnavailable {

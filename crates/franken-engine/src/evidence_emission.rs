@@ -22,6 +22,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
+use std::io::{BufWriter, Write};
 
 use serde::{Deserialize, Serialize};
 
@@ -40,6 +41,7 @@ const SCHEMA_VERSION: &str = "evidence-v1";
 
 /// Default bounded-buffer capacity for evidence entries.
 const DEFAULT_BUFFER_CAPACITY: usize = 4096;
+const HASH_SCRATCH_CAPACITY: usize = 1024;
 
 // ---------------------------------------------------------------------------
 // ActionCategory — taxonomy of high-impact actions
@@ -221,12 +223,12 @@ pub struct CanonicalEvidenceEntry {
 impl CanonicalEvidenceEntry {
     /// Verify the artifact hash matches the ledger entry content.
     pub fn verify_artifact_integrity(&self) -> bool {
-        let mut payload =
-            serde_json::to_vec(&self.ledger_entry).expect("serde deserialization should succeed");
-        if let Ok(meta_bytes) = serde_json::to_vec(&self.metadata) {
-            payload.extend_from_slice(&meta_bytes);
-        }
-        let computed = ContentHash::compute(&payload);
+        let mut scratch = Vec::with_capacity(HASH_SCRATCH_CAPACITY);
+        let Ok(computed) =
+            compute_artifact_hash_with_buffer(&mut scratch, &self.ledger_entry, &self.metadata)
+        else {
+            return false;
+        };
         self.artifact_hash == computed
     }
 
@@ -324,6 +326,8 @@ pub struct CanonicalEvidenceEmitter {
     rolling_hash: ContentHash,
     /// Per-category emission counts.
     category_counts: BTreeMap<ActionCategory, u64>,
+    #[serde(skip, default)]
+    scratch: Vec<u8>,
 }
 
 impl CanonicalEvidenceEmitter {
@@ -336,6 +340,7 @@ impl CanonicalEvidenceEmitter {
             next_sequence: 0,
             rolling_hash: ContentHash::compute(b"evidence-genesis"),
             category_counts: BTreeMap::new(),
+            scratch: Vec::with_capacity(HASH_SCRATCH_CAPACITY),
         }
     }
 
@@ -407,12 +412,11 @@ impl CanonicalEvidenceEmitter {
 
         // Compute artifact hash covering both ledger entry AND metadata so
         // neither can be tampered with independently.
-        let mut hash_input =
-            serde_json::to_vec(&ledger_entry).expect("serde deserialization should succeed");
-        if let Ok(meta_bytes) = serde_json::to_vec(&request.metadata) {
-            hash_input.extend_from_slice(&meta_bytes);
-        }
-        let artifact_hash = ContentHash::compute(&hash_input);
+        let artifact_hash =
+            compute_artifact_hash_with_buffer(&mut self.scratch, &ledger_entry, &request.metadata)
+                .map_err(|error| EvidenceEmissionError::BuildError {
+                    detail: format!("artifact hash serialization failed: {error}"),
+                })?;
 
         // Compute chain hash.
         let prev_chain = self.entries.last().map(|e| &e.chain_hash);
@@ -448,9 +452,10 @@ impl CanonicalEvidenceEmitter {
         *count = count.saturating_add(1);
 
         // Update rolling hash.
-        let mut hash_input = self.rolling_hash.as_bytes().to_vec();
-        hash_input.extend_from_slice(artifact_hash.as_bytes());
-        self.rolling_hash = ContentHash::compute(&hash_input);
+        self.scratch.clear();
+        self.scratch.extend_from_slice(self.rolling_hash.as_bytes());
+        self.scratch.extend_from_slice(artifact_hash.as_bytes());
+        self.rolling_hash = ContentHash::compute(&self.scratch);
 
         self.push_event(request, "evidence_emit", "ok", None);
 
@@ -611,6 +616,21 @@ pub(crate) fn compute_chain_hash(prev: Option<&ContentHash>, current: &ContentHa
     }
     input.extend_from_slice(current.as_bytes());
     ContentHash::compute(&input)
+}
+
+fn compute_artifact_hash_with_buffer(
+    buffer: &mut Vec<u8>,
+    ledger_entry: &EvidenceLedger,
+    metadata: &BTreeMap<String, String>,
+) -> Result<ContentHash, serde_json::Error> {
+    buffer.clear();
+    {
+        let mut writer = BufWriter::with_capacity(0, &mut *buffer);
+        serde_json::to_writer(&mut writer, ledger_entry)?;
+        serde_json::to_writer(&mut writer, metadata)?;
+        writer.flush().map_err(serde_json::Error::io)?;
+    }
+    Ok(ContentHash::compute(buffer))
 }
 
 // ===========================================================================
@@ -789,6 +809,28 @@ mod tests {
             .expect("serde deserialization should succeed");
 
         let entry = &em.entries()[0];
+        assert!(entry.verify_artifact_integrity());
+    }
+
+    #[test]
+    fn artifact_hash_writer_matches_legacy_vec_preimage() {
+        let mut em = emitter();
+        let mut cx = mock_cx();
+        let mut req = make_request(ActionCategory::ExtensionLifecycle, "extension_load");
+        req.metadata.insert("z_key".to_string(), "z".to_string());
+        req.metadata.insert("a_key".to_string(), "a".to_string());
+        req.metadata.insert("m_key".to_string(), "m".to_string());
+
+        em.emit(&mut cx, &req)
+            .expect("serde deserialization should succeed");
+
+        let entry = &em.entries()[0];
+        let mut legacy =
+            serde_json::to_vec(&entry.ledger_entry).expect("serde deserialization should succeed");
+        legacy.extend_from_slice(
+            &serde_json::to_vec(&entry.metadata).expect("serde deserialization should succeed"),
+        );
+        assert_eq!(entry.artifact_hash, ContentHash::compute(&legacy));
         assert!(entry.verify_artifact_integrity());
     }
 

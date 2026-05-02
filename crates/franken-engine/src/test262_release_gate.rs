@@ -13,6 +13,8 @@ const TEST262_PIN_SCHEMA: &str = "franken-engine.test262-pin.v1";
 const TEST262_PROFILE_SCHEMA: &str = "franken-engine.test262-profile.v1";
 const TEST262_WAIVER_SCHEMA: &str = "franken-engine.test262-waiver.v1";
 const TEST262_HWM_SCHEMA: &str = "franken-engine.test262-high-water-mark.v1";
+const TEST262_COMPATIBILITY_PASS_RATE_SCHEMA: &str =
+    "franken-engine.test262-compatibility-pass-rate.v1";
 
 const TEST262_COMPONENT: &str = "test262_release_gate";
 
@@ -463,6 +465,296 @@ pub struct Test262GateRun {
     pub blocked: bool,
     pub logs: Vec<Test262LogEvent>,
     pub summary: Test262RunSummary,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Test262CompatibilityProofState {
+    FullOfficialSuite,
+    PinnedSubset,
+    CheckedInVectorsProvisional,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Test262CompatibilityVectorSource {
+    OfficialTest262Checkout,
+    PinnedSubsetRunner,
+    PrecomputedObservedResults,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Test262CompatibilityPassRateMetadata {
+    pub proof_state: Test262CompatibilityProofState,
+    pub vector_source: Test262CompatibilityVectorSource,
+    pub claim_scope: String,
+    pub source_provenance: String,
+    pub runner_command: String,
+    pub generated_at_utc: String,
+    pub skipped: usize,
+    pub limitations: Vec<String>,
+}
+
+impl Test262CompatibilityPassRateMetadata {
+    pub fn checked_in_observed_results(
+        source_provenance: impl Into<String>,
+        runner_command: impl Into<String>,
+        generated_at_utc: impl Into<String>,
+    ) -> Self {
+        Self {
+            proof_state: Test262CompatibilityProofState::CheckedInVectorsProvisional,
+            vector_source: Test262CompatibilityVectorSource::PrecomputedObservedResults,
+            claim_scope: "checked_in_test262_derived_vectors".to_string(),
+            source_provenance: source_provenance.into(),
+            runner_command: runner_command.into(),
+            generated_at_utc: generated_at_utc.into(),
+            skipped: 0,
+            limitations: vec![
+                "checked-in vector profile, not a full official Test262 suite run".to_string(),
+                "full official Test262 pass-rate claims require an official checkout run"
+                    .to_string(),
+            ],
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Test262CompatibilityPassRateArtifact {
+    pub schema_version: String,
+    pub generated_at_utc: String,
+    pub component: String,
+    pub proof_state: Test262CompatibilityProofState,
+    pub claim_scope: String,
+    pub selected_profile: String,
+    pub test262_source_repo: String,
+    pub test262_commit: String,
+    pub vector_source: Test262CompatibilityVectorSource,
+    pub source_provenance: String,
+    pub runner_command: String,
+    pub denominator: usize,
+    pub passed: usize,
+    pub failed: usize,
+    pub skipped: usize,
+    pub waived: usize,
+    pub timed_out: usize,
+    pub crashed: usize,
+    pub blocked_failures: usize,
+    pub pass_rate_millionths: u64,
+    pub full_suite_claim_allowed: bool,
+    pub limitations: Vec<String>,
+}
+
+impl Test262CompatibilityPassRateArtifact {
+    pub fn validate(&self) -> Result<(), Test262GateError> {
+        if self.schema_version.trim() != TEST262_COMPATIBILITY_PASS_RATE_SCHEMA {
+            return Err(Test262GateError::InvalidConfig(format!(
+                "compatibility artifact schema must be `{TEST262_COMPATIBILITY_PASS_RATE_SCHEMA}`"
+            )));
+        }
+        if chrono::DateTime::parse_from_rfc3339(self.generated_at_utc.trim()).is_err() {
+            return Err(Test262GateError::InvalidConfig(
+                "generated_at_utc must be RFC3339".to_string(),
+            ));
+        }
+        if self.component.trim() != TEST262_COMPONENT {
+            return Err(Test262GateError::InvalidConfig(format!(
+                "compatibility artifact component must be `{TEST262_COMPONENT}`"
+            )));
+        }
+        if self.claim_scope.trim().is_empty() {
+            return Err(Test262GateError::InvalidConfig(
+                "claim_scope is required".to_string(),
+            ));
+        }
+        if self.selected_profile.trim().is_empty() {
+            return Err(Test262GateError::InvalidConfig(
+                "selected_profile is required".to_string(),
+            ));
+        }
+        if self.test262_source_repo.trim().is_empty() {
+            return Err(Test262GateError::InvalidConfig(
+                "test262_source_repo is required".to_string(),
+            ));
+        }
+        if !is_hex_hash(self.test262_commit.trim(), 40) {
+            return Err(Test262GateError::InvalidConfig(
+                "test262_commit must be a 40-char lowercase hex git commit".to_string(),
+            ));
+        }
+        if self.source_provenance.trim().is_empty() {
+            return Err(Test262GateError::InvalidConfig(
+                "source_provenance is required".to_string(),
+            ));
+        }
+        if self.runner_command.trim().is_empty() {
+            return Err(Test262GateError::InvalidConfig(
+                "runner_command is required".to_string(),
+            ));
+        }
+        if self.denominator == 0 {
+            return Err(Test262GateError::InvalidConfig(
+                "pass-rate denominator must be greater than zero".to_string(),
+            ));
+        }
+
+        let counted = [
+            self.passed,
+            self.failed,
+            self.skipped,
+            self.waived,
+            self.timed_out,
+            self.crashed,
+        ]
+        .into_iter()
+        .try_fold(0usize, |acc, value| acc.checked_add(value))
+        .ok_or_else(|| {
+            Test262GateError::InvalidConfig(
+                "pass-rate counters overflowed denominator accounting".to_string(),
+            )
+        })?;
+        if counted != self.denominator {
+            return Err(Test262GateError::InvalidConfig(format!(
+                "pass-rate counters sum to {counted}, expected denominator {}",
+                self.denominator
+            )));
+        }
+
+        let expected_rate = ratio_millionths(self.passed, self.denominator);
+        if self.pass_rate_millionths != expected_rate {
+            return Err(Test262GateError::InvalidConfig(format!(
+                "pass_rate_millionths must be {expected_rate} for {}/{}",
+                self.passed, self.denominator
+            )));
+        }
+
+        let full_official_pair = matches!(
+            (
+                self.proof_state,
+                self.vector_source,
+                self.full_suite_claim_allowed
+            ),
+            (
+                Test262CompatibilityProofState::FullOfficialSuite,
+                Test262CompatibilityVectorSource::OfficialTest262Checkout,
+                true
+            )
+        );
+        if self.full_suite_claim_allowed && !full_official_pair {
+            return Err(Test262GateError::InvalidConfig(
+                "full_suite_claim_allowed requires full official Test262 checkout evidence"
+                    .to_string(),
+            ));
+        }
+
+        match self.proof_state {
+            Test262CompatibilityProofState::FullOfficialSuite => {
+                if !full_official_pair {
+                    return Err(Test262GateError::InvalidConfig(
+                        "full official Test262 pass-rate claims require official checkout evidence"
+                            .to_string(),
+                    ));
+                }
+            }
+            Test262CompatibilityProofState::PinnedSubset => {
+                if !matches!(
+                    self.vector_source,
+                    Test262CompatibilityVectorSource::PinnedSubsetRunner
+                ) || self.full_suite_claim_allowed
+                {
+                    return Err(Test262GateError::InvalidConfig(
+                        "pinned subset pass-rate artifacts cannot claim full Test262 coverage"
+                            .to_string(),
+                    ));
+                }
+            }
+            Test262CompatibilityProofState::CheckedInVectorsProvisional => {
+                if !matches!(
+                    self.vector_source,
+                    Test262CompatibilityVectorSource::PrecomputedObservedResults
+                ) || self.full_suite_claim_allowed
+                {
+                    return Err(Test262GateError::InvalidConfig(
+                        "checked-in vector artifacts cannot claim full Test262 coverage"
+                            .to_string(),
+                    ));
+                }
+            }
+        }
+
+        if self.claim_scope.trim() == "full_official_test262" && !full_official_pair {
+            return Err(Test262GateError::InvalidConfig(
+                "full_official_test262 claim scope requires official checkout evidence".to_string(),
+            ));
+        }
+
+        let provenance = self.source_provenance.to_ascii_lowercase();
+        if ["mock", "placeholder", "synthetic", "demo"]
+            .iter()
+            .any(|needle| provenance.contains(needle))
+        {
+            return Err(Test262GateError::InvalidConfig(
+                "compatibility pass-rate provenance must not be mock, placeholder, synthetic, or demo evidence"
+                    .to_string(),
+            ));
+        }
+
+        Ok(())
+    }
+}
+
+pub fn build_test262_compatibility_pass_rate_artifact(
+    run: &Test262GateRun,
+    pins: &Test262PinSet,
+    profile: &Test262Profile,
+    metadata: Test262CompatibilityPassRateMetadata,
+) -> Result<Test262CompatibilityPassRateArtifact, Test262GateError> {
+    let denominator = run
+        .summary
+        .total_profile_tests
+        .checked_add(metadata.skipped)
+        .ok_or_else(|| {
+            Test262GateError::InvalidConfig(
+                "pass-rate denominator overflowed profile plus skipped tests".to_string(),
+            )
+        })?;
+    let full_suite_claim_allowed = matches!(
+        (
+            metadata.proof_state,
+            metadata.vector_source,
+            metadata.claim_scope.as_str()
+        ),
+        (
+            Test262CompatibilityProofState::FullOfficialSuite,
+            Test262CompatibilityVectorSource::OfficialTest262Checkout,
+            "full_official_test262"
+        )
+    );
+    let artifact = Test262CompatibilityPassRateArtifact {
+        schema_version: TEST262_COMPATIBILITY_PASS_RATE_SCHEMA.to_string(),
+        generated_at_utc: metadata.generated_at_utc,
+        component: TEST262_COMPONENT.to_string(),
+        proof_state: metadata.proof_state,
+        claim_scope: metadata.claim_scope,
+        selected_profile: profile.profile_name.clone(),
+        test262_source_repo: pins.source_repo.clone(),
+        test262_commit: pins.test262_commit.clone(),
+        vector_source: metadata.vector_source,
+        source_provenance: metadata.source_provenance,
+        runner_command: metadata.runner_command,
+        denominator,
+        passed: run.summary.passed,
+        failed: run.summary.failed,
+        skipped: metadata.skipped,
+        waived: run.summary.waived,
+        timed_out: run.summary.timed_out,
+        crashed: run.summary.crashed,
+        blocked_failures: run.summary.blocked_failures,
+        pass_rate_millionths: ratio_millionths(run.summary.passed, denominator),
+        full_suite_claim_allowed,
+        limitations: metadata.limitations,
+    };
+    artifact.validate()?;
+    Ok(artifact)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1311,6 +1603,13 @@ fn is_valid_yyyy_mm_dd(value: &str) -> bool {
 
 fn is_hex_hash(value: &str, expected_len: usize) -> bool {
     value.len() == expected_len && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn ratio_millionths(numerator: usize, denominator: usize) -> u64 {
+    if denominator == 0 {
+        return 0;
+    }
+    ((numerator as u128 * 1_000_000u128) / denominator as u128) as u64
 }
 
 fn canonical_json_bytes<T: Serialize>(value: &T) -> io::Result<Vec<u8>> {

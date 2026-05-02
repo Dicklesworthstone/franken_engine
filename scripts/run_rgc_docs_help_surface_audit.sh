@@ -62,6 +62,9 @@ run_rch() {
     "RUSTUP_TOOLCHAIN=${toolchain}" \
     "CARGO_TARGET_DIR=${target_dir}" \
     "CARGO_BUILD_JOBS=${cargo_build_jobs}" \
+    "CARGO_INCREMENTAL=0" \
+    "RCH_CARGO_WRAPPER_BYPASS=1" \
+    "RUSTC_WRAPPER=" \
     "$@"
 }
 

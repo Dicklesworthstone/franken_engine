@@ -92,19 +92,19 @@
       "claim_text": "Fleet immune system with quarantine and revocation propagation plus bounded convergence SLOs.",
       "source_path": "README.md",
       "source_span": {
-        "start_line": 48,
-        "end_line": 48,
+        "start_line": 49,
+        "end_line": 49,
         "must_contain": "bounded convergence SLOs"
       },
-      "allowed_state": "observed",
-      "actual_wording_state": "observed",
-      "artifact_path": "examples/live_quarantine_propagation_example.rs",
-      "verification_command": "CARGO_TARGET_DIR=/data/projects/franken_engine/target_focused cargo run --example live_quarantine_propagation_example --no-default-features",
-      "freshness_days": 1,
-      "decision": "allow_observed",
-      "reason": "Live quarantine propagation example (bd-1py8v) generates actual fleet propagation and convergence evidence with bounded SLO artifacts.",
-      "owning_bead": "bd-1py8v",
-      "downgrade_text": "Target: quarantine and revocation propagation with bounded convergence evidence."
+      "allowed_state": "target",
+      "actual_wording_state": "target",
+      "artifact_path": null,
+      "verification_command": "TBD: replace provisional synthetic example with live runtime/CLI quarantine propagation proof",
+      "freshness_days": null,
+      "decision": "downgrade_until_live_proof",
+      "reason": "The available quarantine propagation example is explicitly PROVISIONAL synthetic documentation evidence, so it cannot back an observed fleet immune-system claim.",
+      "owning_bead": "bd-ls22h",
+      "downgrade_text": "Target: quarantine and revocation propagation with bounded convergence evidence after a live runtime/CLI proof artifact exists."
     },
     {
       "claim_id": "FE-CLAIM-006",

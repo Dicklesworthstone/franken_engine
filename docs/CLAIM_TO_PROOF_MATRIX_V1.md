@@ -32,7 +32,7 @@ proof lacks exact downgrade text.
 | `FE-CLAIM-002` | security | `README.md:38-45` | `observed` | allow observed probabilistic guardplane with live decision artifacts | `bd-1ypps` |
 | `FE-CLAIM-003` | replay | `README.md:46` | `target` | downgrade until replay coverage proof exists | `bd-2488a` |
 | `FE-CLAIM-004` | security | `README.md:47` | `hypothesis` | split receipt, transparency-log, and TEE proof before release | `bd-1qkrc` |
-| `FE-CLAIM-005` | operations | `README.md:48` | `observed` | allow observed fleet quarantine propagation with convergence SLOs | `bd-1py8v` |
+| `FE-CLAIM-005` | operations | `README.md:49` | `target` | downgrade until live quarantine propagation proof exists | `bd-ls22h` |
 | `FE-CLAIM-006` | security | `README.md:49` | `target` | downgrade until ambient-authority rejection proof exists | `bd-1bao8` |
 | `FE-CLAIM-007` | operations | `README.md:55-92` | `observed` | allow documented CLI smoke workflow reference | `bd-3tsah` |
 | `FE-CLAIM-008` | operations | `README.md:922-955` | `observed` | allow unsupported-surfaces support policy wording | `bd-1qkrc` |

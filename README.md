@@ -46,7 +46,7 @@ FrankenEngine provides one native baseline interpreter with deterministic and th
 | Probabilistic Guardplane | 🟢 OBSERVED (live proof linked) Bayesian risk updates and e-process boundaries that trigger `allow/challenge/sandbox/suspend/terminate/quarantine` |
 | Deterministic replay | 🟡 TARGETED (gate exists but baseline placeholder) Bit-stable replay for high-severity decision paths with counterfactual policy simulation |
 | Cryptographic governance | 🔴 HYPOTHESIS (claim not yet provable) Signed decision receipts with transparency-log proofs and optional TEE attestation bindings |
-| Fleet immune system | 🟢 OBSERVED (live proof linked) Quarantine and revocation propagation with bounded convergence SLOs |
+| Fleet immune system | 🟡 TARGETED (provisional example only) Quarantine and revocation propagation require live runtime/CLI proof before bounded convergence SLOs are treated as observed |
 | Capability-typed execution | 🟡 TARGETED (gate exists but baseline placeholder) TS-first workflow that compiles to capability-typed IR with ambient-authority rejection |
 | Cross-repo constitution | 🟢 OBSERVED (live proof linked) Control plane on `/dp/asupersync`, TUI on `/dp/frankentui`, SQLite on `/dp/frankensqlite` |
 | Evidence-first operations | 🟡 TARGETED (gate exists but baseline placeholder) Every published performance and security claim ships with reproducible artifact bundles |

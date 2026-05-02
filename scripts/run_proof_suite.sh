@@ -36,15 +36,16 @@ echo "   Cargo target: $CARGO_TARGET_DIR"
 echo ""
 
 # Define proof gates in deterministic order
-# Based on the beads mentioned: bd-y6v8s, bd-1vwza, bd-2488a, bd-38mby, bd-1qr4f, bd-1bao8, bd-1py8v, bd-3mp80, bd-dpfvh, bd-1ypps
+# Based on the beads mentioned: bd-y6v8s, bd-1vwza, bd-2488a, bd-38mby, bd-1qr4f, bd-1bao8, bd-3mp80, bd-dpfvh, bd-1ypps
 declare -a PROOF_GATES=(
     # Core claim matrix (foundation)
     "claim_to_proof_matrix:./scripts/run_claim_to_proof_matrix_gate.sh:bd-1qkrc"
 
-    # Live security examples (bd-1ypps, bd-1py8v, bd-dpfvh)
+    # Live security examples (bd-1ypps, bd-dpfvh). The quarantine propagation
+    # example is intentionally omitted because it is marked PROVISIONAL
+    # synthetic documentation evidence until bd-ls22h's live-proof follow-up lands.
     "live_guardplane_decision:./scripts/e2e/live_guardplane_decision_smoke.sh:bd-1ypps"
     "live_ifc_declassification:./scripts/e2e/live_ifc_declassification_smoke.sh:bd-dpfvh"
-    "live_quarantine_propagation:CARGO_TARGET_DIR=${CARGO_TARGET_DIR} cargo run --example live_quarantine_propagation_example --no-default-features:bd-1py8v"
 
     # Disruptive-floor metric gates (bd-y6v8s, bd-1vwza, bd-38mby, bd-2488a)
     "throughput_disruptive_floor:./scripts/run_throughput_disruptive_floor_metric_gate.sh:bd-y6v8s"

@@ -1,0 +1,9 @@
+<Widget
+  loader={async function* loadChunks(ids) {
+    for await (const id of ids) {
+      yield await import(`./chunks/${id}.tsx`);
+    }
+  }}
+>
+  {items.map((item) => <Item key={item.id} value={item.value ?? "missing"} />)}
+</Widget>

@@ -53,10 +53,16 @@ use crate::checkpoint::{
     CancellationToken, CheckpointAction, CheckpointGuard, DensityConfig, LoopSite,
 };
 use crate::deterministic_replay::{NondeterminismSource, NondeterminismTrace};
+use crate::engine_object_id::{EngineObjectId, ObjectDomain, SchemaId, derive_id};
 use crate::hash_tiers::ContentHash;
 use crate::ir_contract::{
     HostcallDecisionRecord, Ir0Module, Ir3Instruction, Ir3Module, IteratorCloseReason, RegRange,
     WitnessEvent, WitnessEventKind,
+};
+use crate::iterator_protocol::{
+    CloseReason, IterationCompletion, IterationEvent, IterationKind, IterationOperation,
+    IterationTrace, IteratorResult, IteratorSymbolKind, IteratorValue, make_enumerate_event,
+    make_get_iterator_event, make_next_event,
 };
 use crate::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
 use crate::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
@@ -592,6 +598,7 @@ struct RuntimeForInState {
     deleted_keys: BTreeSet<String>,
     done: bool,
     closed: bool,
+    trace_index: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -603,6 +610,7 @@ struct RuntimeForOfState {
     done: bool,
     closed: bool,
     return_called: bool,
+    trace_index: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1802,6 +1810,8 @@ pub struct ExecutionResult {
     pub events: Vec<InterpreterEvent>,
     /// Console output captured from console.log/error/warn calls.
     pub console_output: Vec<ConsoleEntry>,
+    /// Replay-visible iterator protocol traces emitted by production execution.
+    pub iteration_traces: Vec<IterationTrace>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1877,6 +1887,8 @@ pub struct InterpreterCore {
     estimated_memory_bytes: u64,
     /// Dedicated iterator runtime state used by iterator-specific IR3 ops.
     iterators: Vec<RuntimeIteratorState>,
+    /// Replay-visible iterator protocol traces keyed by runtime iterator state.
+    iteration_traces: Vec<IterationTrace>,
     /// Lazily allocated prototype objects for constructor functions.
     function_prototypes: BTreeMap<u32, ObjectId>,
     /// Current instruction pointer.
@@ -1986,6 +1998,7 @@ impl InterpreterCore {
             heap: Vec::new(),
             estimated_memory_bytes: 0,
             iterators: Vec::new(),
+            iteration_traces: Vec::new(),
             function_prototypes: BTreeMap::new(),
             ip: 0,
             instructions_executed: 0,
@@ -2073,6 +2086,7 @@ impl InterpreterCore {
             hostcall_decisions: std::mem::take(&mut self.hostcall_decisions),
             events: std::mem::take(&mut self.events),
             console_output: std::mem::take(&mut self.console_output),
+            iteration_traces: std::mem::take(&mut self.iteration_traces),
         }
     }
 
@@ -2214,6 +2228,7 @@ impl InterpreterCore {
         self.call_stack.clear();
         self.heap = seed.heap.clone();
         self.iterators.clear();
+        self.iteration_traces.clear();
         self.function_prototypes = seed.function_prototypes.clone();
         self.ip = 0;
         self.instructions_executed = 0;
@@ -6337,6 +6352,114 @@ impl InterpreterCore {
         }
     }
 
+    fn derive_iteration_engine_id(&self, label: &str, canonical: String) -> EngineObjectId {
+        let schema_id = SchemaId::from_definition(b"franken-engine.baseline.iteration-trace.v1");
+        let preimage = format!("{}|{}|{}", self.trace_id, label, canonical);
+        derive_id(
+            ObjectDomain::EvidenceRecord,
+            "baseline_interpreter.iterator_protocol",
+            &schema_id,
+            preimage.as_bytes(),
+        )
+        .unwrap_or_default()
+    }
+
+    fn start_iteration_trace(&mut self, kind: IterationKind, discriminator: String) -> usize {
+        let trace_index = self.iteration_traces.len();
+        let trace_id = self
+            .derive_iteration_engine_id("trace", format!("{trace_index}|{}|{discriminator}", kind));
+        let record_id = self.derive_iteration_engine_id(
+            "record",
+            format!("{trace_index}|{}|{discriminator}", kind),
+        );
+        self.iteration_traces
+            .push(IterationTrace::new(trace_id, record_id, kind));
+        trace_index
+    }
+
+    fn iteration_ref_for_object(&self, object_id: ObjectId) -> EngineObjectId {
+        self.derive_iteration_engine_id("object", object_id.0.to_string())
+    }
+
+    fn iteration_ref_for_value(&self, value: &Value) -> EngineObjectId {
+        match value {
+            Value::Object(object_id) => self.iteration_ref_for_object(*object_id),
+            other => {
+                self.derive_iteration_engine_id("value", format!("{}|{}", other.type_name(), other))
+            }
+        }
+    }
+
+    fn iterator_value_from_runtime(&self, value: &Value) -> IteratorValue {
+        match value {
+            Value::Undefined => IteratorValue::Undefined,
+            Value::Null => IteratorValue::Null,
+            Value::Bool(value) => IteratorValue::Boolean(*value),
+            Value::Int(value) => IteratorValue::Integer(*value),
+            Value::Float(value) => {
+                let scaled = value.inner() * 1_000_000.0;
+                let fixed = if scaled.is_finite() {
+                    scaled.round().clamp(i64::MIN as f64, i64::MAX as f64) as i64
+                } else {
+                    0
+                };
+                IteratorValue::FixedPoint(fixed)
+            }
+            Value::Str(value) => IteratorValue::String(value.clone()),
+            Value::Object(object_id) => {
+                IteratorValue::ObjectRef(self.iteration_ref_for_object(*object_id))
+            }
+            other => IteratorValue::ObjectRef(self.iteration_ref_for_value(other)),
+        }
+    }
+
+    fn record_iteration_event<F>(&mut self, trace_index: usize, make_event: F)
+    where
+        F: FnOnce(EngineObjectId, u64) -> IterationEvent,
+    {
+        if let Some(trace) = self.iteration_traces.get_mut(trace_index) {
+            let event = make_event(trace.record_id.clone(), trace.events.len() as u64);
+            trace.record_event(event);
+        }
+    }
+
+    fn record_iteration_next_result(&mut self, trace_index: usize, value: Option<Value>) {
+        let result = match value.as_ref() {
+            Some(value) => IteratorResult::value(self.iterator_value_from_runtime(value)),
+            None => IteratorResult::done(),
+        };
+        let done = result.done;
+        let value_for_event = result.value.clone();
+
+        self.record_iteration_event(trace_index, |record_id, step_index| {
+            make_next_event(record_id, step_index, result)
+        });
+        self.record_iteration_event(trace_index, |record_id, step_index| IterationEvent {
+            record_id,
+            step_index,
+            operation: IterationOperation::IteratorComplete { done },
+            completion: IterationCompletion::Normal,
+        });
+        if !done {
+            self.record_iteration_event(trace_index, |record_id, step_index| IterationEvent {
+                record_id,
+                step_index,
+                operation: IterationOperation::IteratorValue {
+                    value: value_for_event,
+                },
+                completion: IterationCompletion::Normal,
+            });
+        }
+    }
+
+    fn close_reason_from_ir(reason: IteratorCloseReason) -> CloseReason {
+        match reason {
+            IteratorCloseReason::Break => CloseReason::Break,
+            IteratorCloseReason::Return => CloseReason::Return,
+            IteratorCloseReason::Throw => CloseReason::Throw,
+        }
+    }
+
     fn init_for_in_iterator(&mut self, value: Value) -> Result<Value, InterpreterError> {
         let Value::Object(object_id) = value else {
             return Err(InterpreterError::TypeError {
@@ -6346,6 +6469,13 @@ impl InterpreterCore {
         };
 
         let keys = self.collect_for_in_keys(object_id)?;
+        let trace_index =
+            self.start_iteration_trace(IterationKind::ForIn, format!("object:{}", object_id.0));
+        let object_ref = self.iteration_ref_for_object(object_id);
+        let event_keys = keys.clone();
+        self.record_iteration_event(trace_index, |record_id, step_index| {
+            make_enumerate_event(record_id, step_index, object_ref, event_keys)
+        });
         let handle = self.alloc_iterator(RuntimeIteratorState::ForIn(RuntimeForInState {
             object_id,
             keys,
@@ -6353,6 +6483,7 @@ impl InterpreterCore {
             deleted_keys: BTreeSet::new(),
             done: false,
             closed: false,
+            trace_index,
         }))?;
         Ok(Value::Iterator(handle))
     }
@@ -6362,27 +6493,36 @@ impl InterpreterCore {
         iterator: Value,
     ) -> Result<Option<Value>, InterpreterError> {
         let handle = self.expect_iterator_handle(iterator)?;
-        match self.iterator_state_mut(handle)? {
+        let (trace_index, next_value) = match self.iterator_state_mut(handle)? {
             RuntimeIteratorState::ForIn(state) => {
                 if state.closed || state.done {
                     state.done = true;
-                    return Ok(None);
-                }
-                while state.next_index < state.keys.len() {
-                    let key = state.keys[state.next_index].clone();
-                    state.next_index += 1;
-                    if !state.deleted_keys.contains(&key) {
-                        return Ok(Some(Value::Str(key)));
+                    (state.trace_index, None)
+                } else {
+                    let mut next_value = None;
+                    while state.next_index < state.keys.len() {
+                        let key = state.keys[state.next_index].clone();
+                        state.next_index += 1;
+                        if !state.deleted_keys.contains(&key) {
+                            next_value = Some(Value::Str(key));
+                            break;
+                        }
                     }
+                    if next_value.is_none() {
+                        state.done = true;
+                    }
+                    (state.trace_index, next_value)
                 }
-                state.done = true;
-                Ok(None)
             }
-            RuntimeIteratorState::ForOf(_) => Err(InterpreterError::TypeError {
-                expected: "for..in iterator".to_string(),
-                got: "for..of iterator".to_string(),
-            }),
-        }
+            RuntimeIteratorState::ForOf(_) => {
+                return Err(InterpreterError::TypeError {
+                    expected: "for..in iterator".to_string(),
+                    got: "for..of iterator".to_string(),
+                });
+            }
+        };
+        self.record_iteration_next_result(trace_index, next_value.clone());
+        Ok(next_value)
     }
 
     fn prepare_for_of_state(
@@ -6401,6 +6541,73 @@ impl InterpreterCore {
         ))
     }
 
+    /// Look up Symbol.iterator method using multiple representation strategies
+    /// to handle various ways the symbol property might be stored.
+    fn lookup_symbol_iterator_method(
+        &mut self,
+        module: Option<&Ir3Module>,
+        object_id: ObjectId,
+        receiver: Value,
+    ) -> Result<Option<Value>, InterpreterError> {
+        // Strategy 1: Try "@@iterator" (spec notation)
+        if let Some(method) =
+            self.optional_callable_property(module, object_id, "@@iterator", receiver.clone())?
+        {
+            return Ok(Some(method));
+        }
+
+        // Strategy 2: Try "Symbol.iterator" (string representation)
+        if let Some(method) =
+            self.optional_callable_property(module, object_id, "Symbol.iterator", receiver.clone())?
+        {
+            return Ok(Some(method));
+        }
+
+        // Strategy 3: Try numeric representation of well-known symbol ID
+        // Symbol.iterator is WellKnownSymbol::Iterator which has id 1
+        if let Some(method) =
+            self.optional_callable_property(module, object_id, "Symbol(1)", receiver.clone())?
+        {
+            return Ok(Some(method));
+        }
+
+        // Strategy 4: Try direct symbol property access through heap
+        // This handles cases where [Symbol.iterator] is used as computed property key
+        if let Some(method) = self.lookup_iterator_via_heap_scan(object_id)? {
+            return Ok(Some(method));
+        }
+
+        Ok(None)
+    }
+
+    /// Scan object properties in heap for iterator-like symbol properties
+    fn lookup_iterator_via_heap_scan(
+        &mut self,
+        object_id: ObjectId,
+    ) -> Result<Option<Value>, InterpreterError> {
+        let object = self
+            .heap
+            .get(object_id.0 as usize)
+            .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+
+        // Look for properties that might be Symbol.iterator
+        for (key, value) in &object.properties {
+            // Check for various iterator symbol representations
+            if key == "@@iterator"
+                || key == "Symbol.iterator"
+                || key == "Symbol(1)"
+                || key.contains("iterator")
+                || key.starts_with("Symbol(")
+            {
+                if value.is_callable() {
+                    return Ok(Some(value.clone()));
+                }
+            }
+        }
+
+        Ok(None)
+    }
+
     fn prepare_custom_for_of_state(
         &mut self,
         module: &Ir3Module,
@@ -6410,20 +6617,11 @@ impl InterpreterCore {
             return Ok(None);
         };
         let receiver = Value::Object(*iterable_id);
-        let iterator_method = match self.optional_callable_property(
-            Some(module),
-            *iterable_id,
-            "@@iterator",
-            receiver.clone(),
-        )? {
-            Some(method) => Some(method),
-            None => self.optional_callable_property(
-                Some(module),
-                *iterable_id,
-                "Symbol.iterator",
-                receiver.clone(),
-            )?,
-        };
+
+        // Try multiple representations of Symbol.iterator for compatibility
+        let iterator_method =
+            self.lookup_symbol_iterator_method(Some(module), *iterable_id, receiver.clone())?;
+
         let Some(iterator_method) = iterator_method else {
             return Ok(None);
         };
@@ -6516,7 +6714,20 @@ impl InterpreterCore {
             return Ok(value);
         }
 
+        let iterable_ref = self.iteration_ref_for_value(&value);
         let init = self.prepare_for_of_state(module, &value)?;
+        let trace_index = self.start_iteration_trace(
+            IterationKind::ForOf,
+            format!("iterable:{}|{}", value.type_name(), value),
+        );
+        self.record_iteration_event(trace_index, |record_id, step_index| {
+            make_get_iterator_event(
+                record_id,
+                step_index,
+                IteratorSymbolKind::Iterator,
+                iterable_ref,
+            )
+        });
         let handle = self.alloc_iterator(RuntimeIteratorState::ForOf(RuntimeForOfState {
             values: init.values,
             next_index: 0,
@@ -6525,6 +6736,7 @@ impl InterpreterCore {
             done: false,
             closed: false,
             return_called: false,
+            trace_index,
         }))?;
         Ok(Value::Iterator(handle))
     }
@@ -6535,13 +6747,12 @@ impl InterpreterCore {
         iterator: Value,
     ) -> Result<Option<Value>, InterpreterError> {
         let handle = self.expect_iterator_handle(iterator)?;
-        let custom_step = match self.iterator_state_mut(handle)? {
+        let (trace_index, custom_step) = match self.iterator_state_mut(handle)? {
             RuntimeIteratorState::ForOf(state) => {
                 if state.closed || state.done {
                     state.done = true;
-                    return Ok(None);
-                }
-                if let Some(next_method) = state.next_method.clone() {
+                    (state.trace_index, None)
+                } else if let Some(next_method) = state.next_method.clone() {
                     let iterator_object =
                         state
                             .iterator_object
@@ -6549,12 +6760,19 @@ impl InterpreterCore {
                                 expected: "custom for..of iterator object".to_string(),
                                 got: "missing iterator object".to_string(),
                             })?;
-                    Some((Value::Object(iterator_object), next_method))
+                    (
+                        state.trace_index,
+                        Some((Value::Object(iterator_object), next_method)),
+                    )
                 } else if let Some(value) = state.values.get(state.next_index).cloned() {
                     state.next_index += 1;
+                    let trace_index = state.trace_index;
+                    self.record_iteration_next_result(trace_index, Some(value.clone()));
                     return Ok(Some(value));
                 } else {
                     state.done = true;
+                    let trace_index = state.trace_index;
+                    self.record_iteration_next_result(trace_index, None);
                     return Ok(None);
                 }
             }
@@ -6579,9 +6797,12 @@ impl InterpreterCore {
             if let RuntimeIteratorState::ForOf(state) = self.iterator_state_mut(handle)? {
                 state.done = true;
             }
+            self.record_iteration_next_result(trace_index, None);
             Ok(None)
         } else {
-            Ok(Some(self.iterator_result_value(module, &result)?))
+            let value = self.iterator_result_value(module, &result)?;
+            self.record_iteration_next_result(trace_index, Some(value.clone()));
+            Ok(Some(value))
         }
     }
 
@@ -8367,6 +8588,15 @@ impl InterpreterCore {
             }
         }
 
+        let trace_index = self.start_iteration_trace(
+            IterationKind::ForOf,
+            format!(
+                "array_iterator:{kind}|{}",
+                array_id
+                    .map(|id| id.0.to_string())
+                    .unwrap_or_else(|| "non_object".to_string())
+            ),
+        );
         let handle = self.alloc_iterator(RuntimeIteratorState::ForOf(RuntimeForOfState {
             values,
             next_index: 0,
@@ -8375,6 +8605,7 @@ impl InterpreterCore {
             done: false,
             closed: false,
             return_called: false,
+            trace_index,
         }))?;
         Ok(Value::Iterator(handle))
     }
@@ -18594,6 +18825,7 @@ mod active_builtin_regressions {
                 done: false,
                 closed: false,
                 return_called: false,
+                trace_index: 0,
             }))
             .expect("test iterator allocation should succeed");
 

@@ -55,6 +55,27 @@ pub struct ReplacementLineageEntry {
     pub metadata_json: String,
 }
 
+impl ReplacementLineageEntry {
+    /// Build a deterministic typed lookup for one lineage sequence entry.
+    pub fn select_by_sequence_id(sequence_id: i64) -> Select<Self> {
+        Select::<Self>::new().filter(Expr::col("sequence_id").eq(sequence_id))
+    }
+
+    /// Build a deterministic typed lookup for all lineage rows for a slot.
+    pub fn select_by_slot_id(slot_id: impl Into<String>) -> Select<Self> {
+        Select::<Self>::new()
+            .filter(Expr::col("slot_id").eq(slot_id.into()))
+            .order_by(Expr::col("sequence_id").asc())
+    }
+
+    /// Build a deterministic typed lookup by audit receipt artifact.
+    pub fn select_by_receipt_artifact_id(receipt_artifact_id: impl Into<String>) -> Select<Self> {
+        Select::<Self>::new()
+            .filter(Expr::col("receipt_artifact_id").eq(receipt_artifact_id.into()))
+            .order_by(Expr::col("sequence_id").asc())
+    }
+}
+
 // ---------------------------------------------------------------------------
 // IfcProvenance: sqlmodel_rust typed model
 // ---------------------------------------------------------------------------
@@ -97,6 +118,38 @@ pub struct IfcProvenanceEntry {
 
     /// Additional edge metadata and validation artifacts.
     pub metadata_json: String,
+}
+
+impl IfcProvenanceEntry {
+    /// Build a deterministic typed lookup for one provenance entry.
+    pub fn select_by_provenance_id(provenance_id: i64) -> Select<Self> {
+        Select::<Self>::new().filter(Expr::col("provenance_id").eq(provenance_id))
+    }
+
+    /// Build a deterministic typed lookup for all provenance rows for a trace.
+    pub fn select_by_trace_id(trace_id: impl Into<String>) -> Select<Self> {
+        Select::<Self>::new()
+            .filter(Expr::col("trace_id").eq(trace_id.into()))
+            .order_by(Expr::col("provenance_id").asc())
+    }
+
+    /// Build a deterministic typed lookup for one label-flow edge.
+    pub fn select_by_label_flow(
+        source_label: impl Into<String>,
+        target_label: impl Into<String>,
+    ) -> Select<Self> {
+        Select::<Self>::new()
+            .filter(Expr::col("source_label").eq(source_label.into()))
+            .filter(Expr::col("target_label").eq(target_label.into()))
+            .order_by(Expr::col("provenance_id").asc())
+    }
+
+    /// Build a deterministic typed lookup for declassification rows.
+    pub fn select_declassifications() -> Select<Self> {
+        Select::<Self>::new()
+            .filter(Expr::col("edge_type").eq("declassification"))
+            .order_by(Expr::col("provenance_id").asc())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -144,6 +197,42 @@ pub struct SpecializationIndexEntry {
 
     /// Metadata for specialization parameters and constraints.
     pub metadata_json: String,
+}
+
+impl SpecializationIndexEntry {
+    /// Build a deterministic typed lookup for one specialization entry.
+    pub fn select_by_specialization_id(specialization_id: i64) -> Select<Self> {
+        Select::<Self>::new().filter(Expr::col("specialization_id").eq(specialization_id))
+    }
+
+    /// Build a deterministic typed lookup for all specializations for a proof artifact.
+    pub fn select_by_proof_artifact_id(proof_artifact_id: impl Into<String>) -> Select<Self> {
+        Select::<Self>::new()
+            .filter(Expr::col("proof_artifact_id").eq(proof_artifact_id.into()))
+            .order_by(Expr::col("specialization_id").asc())
+    }
+
+    /// Build a deterministic typed lookup for all active specializations.
+    pub fn select_active() -> Select<Self> {
+        Select::<Self>::new()
+            .filter(Expr::col("status").eq("active"))
+            .order_by(Expr::col("specialization_id").asc())
+    }
+
+    /// Build a deterministic typed lookup for all invalidated specializations.
+    pub fn select_invalidated() -> Select<Self> {
+        Select::<Self>::new()
+            .filter(Expr::col("status").eq("invalidated"))
+            .order_by(Expr::col("invalidation_timestamp_ms").desc())
+            .order_by(Expr::col("specialization_id").asc())
+    }
+
+    /// Build a deterministic typed lookup by security epoch.
+    pub fn select_by_security_epoch(security_epoch: i64) -> Select<Self> {
+        Select::<Self>::new()
+            .filter(Expr::col("security_epoch").eq(security_epoch))
+            .order_by(Expr::col("specialization_id").asc())
+    }
 }
 
 #[cfg(test)]
@@ -282,6 +371,39 @@ mod tests {
                 .iter()
                 .any(|(column, value)| *column == "invalidation_reason" && *value == Value::Null)
         );
+    }
+
+    #[test]
+    fn typed_query_builders_emit_stable_sql_and_params() {
+        let (sql, params) = ReplacementLineageEntry::select_by_slot_id("slot-alpha").build();
+        assert_eq!(
+            sql,
+            r#"SELECT * FROM replacement_lineage WHERE "slot_id" = $1 ORDER BY "sequence_id" ASC"#
+        );
+        assert_eq!(params, vec![Value::Text("slot-alpha".to_string())]);
+
+        let (sql, params) =
+            IfcProvenanceEntry::select_by_label_flow("secret/model", "operator/audit").build();
+        assert_eq!(
+            sql,
+            r#"SELECT * FROM ifc_provenance WHERE "source_label" = $1 AND "target_label" = $2 ORDER BY "provenance_id" ASC"#
+        );
+        assert_eq!(
+            params,
+            vec![
+                Value::Text("secret/model".to_string()),
+                Value::Text("operator/audit".to_string())
+            ]
+        );
+
+        let (sql, params) = SpecializationIndexEntry::select_invalidated()
+            .limit(50)
+            .build();
+        assert_eq!(
+            sql,
+            r#"SELECT * FROM specialization_index WHERE "status" = $1 ORDER BY "invalidation_timestamp_ms" DESC, "specialization_id" ASC LIMIT 50"#
+        );
+        assert_eq!(params, vec![Value::Text("invalidated".to_string())]);
     }
 }
 

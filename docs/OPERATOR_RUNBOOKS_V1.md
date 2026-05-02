@@ -78,8 +78,8 @@ node problematic_script.js > reference_output.txt
 frankenctl run problematic_script.js > franken_output.txt
 diff -u reference_output.txt franken_output.txt
 
-# 4. Check containment status
-./scripts/run_rgc_quarantine_mesh_status.sh
+# 4. Verify shipped containment/quarantine surfaces
+./scripts/test_fleet_quarantine_e2e.sh
 ```
 
 **Escalation Triggers:**
@@ -175,10 +175,8 @@ For each divergence incident, capture:
 export FRANKEN_GLOBAL_QUARANTINE=enabled
 export FRANKEN_MESH_PROPAGATION=strict
 
-# 2. Isolate affected workloads
-./scripts/run_rgc_quarantine_mesh_gate.sh isolate \
-  --workload-id "$AFFECTED_WORKLOAD" \
-  --reason "divergence-containment"
+# 2. Verify fleet quarantine propagation with the shipped E2E surface
+./scripts/test_fleet_quarantine_e2e.sh
 
 # 3. Block new executions
 touch /tmp/franken_execution_blocked
@@ -200,12 +198,12 @@ echo "CONTAINMENT ACTIVE: $(date)" > /tmp/franken_containment_status
 ### 3.3 Workload Isolation
 
 ```bash
-# Isolate specific workload types
-frankenctl quarantine --workload-pattern "*.tsx" --mode strict
-frankenctl quarantine --workload-pattern "react-*" --mode fail_closed
+# Verify fleet quarantine propagation
+./scripts/test_fleet_quarantine_e2e.sh
 
-# Monitor isolation effectiveness
-watch -n 5 './scripts/run_rgc_quarantine_effectiveness.sh'
+# Monitor containment latency with measured evidence
+CONTAINMENT_LATENCY_METRIC_INPUT="$CONTAINMENT_LATENCY_METRIC_INPUT" \
+  ./scripts/run_containment_latency_metric_gate.sh ci
 ```
 
 ---

@@ -80,6 +80,8 @@ Category-creation test:
 ## 3.2 Impossible-by-Default Capability Index
 The program MUST deliver and productionize capabilities that are not available by default in incumbent runtimes:
 
+Status note: this section is the delivery target list, not the current shipped guarantee list. Current proof state lives in the README claim table and `docs/claim_to_proof_matrix_v1.json`; unproved items remain target or hypothesis wording until a live artifact promotes them.
+
 1. Posterior-explained allow/deny/escalation decisions with cryptographic receipts.
 2. Deterministic incident replay with counterfactual policy simulation.
 3. Signed policy checkpoints with rollback/fork resistance and freshness guarantees.

@@ -109,22 +109,22 @@
     {
       "claim_id": "FE-CLAIM-006",
       "claim_scope": "security",
-      "claim_text": "Capability-typed execution with ambient-authority rejection.",
+      "claim_text": "Capability-typed execution with ambient-authority rejection is a hypothesis until the TS-to-IR contract ships.",
       "source_path": "README.md",
       "source_span": {
-        "start_line": 49,
-        "end_line": 49,
-        "must_contain": "ambient-authority rejection"
+        "start_line": 50,
+        "end_line": 50,
+        "must_contain": "ambient-authority rejection are not shipped"
       },
-      "allowed_state": "target",
-      "actual_wording_state": "target",
+      "allowed_state": "hypothesis",
+      "actual_wording_state": "hypothesis",
       "artifact_path": null,
-      "verification_command": "TBD: run ambient-authority rejection live proof once bd-1bao8 closes",
+      "verification_command": "TBD: implement TS-to-capability-typed-IR compiler and live ambient-authority rejection proof before promoting beyond hypothesis",
       "freshness_days": null,
       "decision": "downgrade_until_live_proof",
-      "reason": "Capability code exists, but broad product wording needs live package/runtime proof.",
-      "owning_bead": "bd-1bao8",
-      "downgrade_text": "Target: capability-typed execution with ambient-authority rejection; live proof pending."
+      "reason": "Selected runtime capability gates exist, but the end-to-end compile-time capability-typed TS workflow and by-construction ambient-authority rejection are not shipped.",
+      "owning_bead": "bd-1zwml",
+      "downgrade_text": "Hypothesis: capability-typed TS-to-IR execution and ambient-authority rejection may be promoted only after the compiler/runtime proof lands; shipped code currently provides selected runtime capability gates."
     },
     {
       "claim_id": "FE-CLAIM-007",

@@ -47,7 +47,7 @@ FrankenEngine provides one native baseline interpreter with deterministic and th
 | Deterministic replay | 🟡 TARGETED (gate exists but baseline placeholder) Bit-stable replay for high-severity decision paths with counterfactual policy simulation |
 | Cryptographic governance | 🔴 HYPOTHESIS (claim not yet provable) Signed decision receipts with transparency-log proofs and optional TEE attestation bindings |
 | Fleet immune system | 🟡 TARGETED (provisional example only) Quarantine and revocation propagation require live runtime/CLI proof before bounded convergence SLOs are treated as observed |
-| Capability-typed execution | 🟡 TARGETED (gate exists but baseline placeholder) TS-first workflow that compiles to capability-typed IR with ambient-authority rejection |
+| Capability-typed execution | 🔴 HYPOTHESIS (end-to-end contract not shipped) Compile-time capability-typed TS-to-IR and ambient-authority rejection are not shipped; current code provides selected runtime capability gates |
 | Cross-repo constitution | 🟢 OBSERVED (live proof linked) Control plane on `/dp/asupersync`, TUI on `/dp/frankentui`, SQLite on `/dp/frankensqlite` |
 | Evidence-first operations | 🟡 TARGETED (gate exists but baseline placeholder) Every published performance and security claim ships with reproducible artifact bundles |
 
@@ -143,7 +143,7 @@ Reproducibility bundle templates (`env.json`, `manifest.json`, `repro.lock`) are
 | Probabilistic containment policy | Built in guardplane | Not default runtime behavior | Not default runtime behavior |
 | Cryptographic decision receipts | First-class runtime artifact | Not a core runtime primitive | Not a core runtime primitive |
 | Fleet quarantine convergence model | Explicit SLO + fault-injection gates | App-specific integration | App-specific integration |
-| Capability-typed extension contract | Native IR contract | Not native to runtime | Not native to runtime |
+| Capability-typed extension contract | Selected runtime capability gates; compile-time TS-to-IR contract not shipped | Not native to runtime | Not native to runtime |
 | Cross-runtime lockstep oracle | Built in Node/Bun differential harness | N/A | N/A |
 
 ## Build Modes
@@ -977,7 +977,7 @@ bundles following the templates in [`docs/templates/`](./docs/templates/).
 ## Limitations
 
 - High-security mode adds measurable overhead on latency-sensitive low-risk workloads.
-- Capability-typed extension onboarding requires explicit manifests and policy declarations; this is extra setup for small prototypes.
+- Capability-typed TS-to-IR extension onboarding is not shipped as an end-to-end contract; current capability checks cover selected runtime hostcall/import boundaries.
 - Deterministic replay and evidence retention increase storage footprint.
 - Full Node ecosystem compatibility remains an active target; edge behavior differences can still appear in low-level module or process APIs.
 - Fleet-level immune features assume stable cryptographic identity and time synchronization across participating nodes.

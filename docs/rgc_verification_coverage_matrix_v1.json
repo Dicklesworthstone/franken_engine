@@ -10,15 +10,9 @@
   "scope": {
     "project_epic": "bd-1lsy",
     "snapshot_source": "br list --json --limit 0 filtered to non-closed bd-1lsy*",
-    "snapshot_generated_at_utc": "2026-04-29T20:57:47Z",
+    "snapshot_generated_at_utc": "2026-05-02T02:39:51Z",
     "open_bead_ids": [
-      "bd-1lsy.10.12",
-      "bd-1lsy.10.8",
       "bd-1lsy.11.1",
-      "bd-1lsy.11.13",
-      "bd-1lsy.11.13.1",
-      "bd-1lsy.11.14",
-      "bd-1lsy.11.17",
       "bd-1lsy.5.7.2",
       "bd-1lsy.7.10.2",
       "bd-1lsy.7.10.4",
@@ -69,10 +63,7 @@
       "bd-1lsy.9.10.2",
       "bd-1lsy.9.10.3",
       "bd-1lsy.9.11.3",
-      "bd-1lsy.9.3",
       "bd-1lsy.9.3.2",
-      "bd-1lsy.9.3.3",
-      "bd-1lsy.9.3.4",
       "bd-1lsy.9.7",
       "bd-1lsy.9.7.1",
       "bd-1lsy.9.7.2",
@@ -100,13 +91,7 @@
     "commands.txt"
   ],
   "critical_behavior_bead_ids": [
-    "bd-1lsy.10.12",
-    "bd-1lsy.10.8",
     "bd-1lsy.11.1",
-    "bd-1lsy.11.13",
-    "bd-1lsy.11.13.1",
-    "bd-1lsy.11.14",
-    "bd-1lsy.11.17",
     "bd-1lsy.5.7.2",
     "bd-1lsy.7.10.2",
     "bd-1lsy.7.10.4",
@@ -157,10 +142,7 @@
     "bd-1lsy.9.10.2",
     "bd-1lsy.9.10.3",
     "bd-1lsy.9.11.3",
-    "bd-1lsy.9.3",
     "bd-1lsy.9.3.2",
-    "bd-1lsy.9.3.3",
-    "bd-1lsy.9.3.4",
     "bd-1lsy.9.7",
     "bd-1lsy.9.7.1",
     "bd-1lsy.9.7.2",
@@ -210,7 +192,7 @@
       "milestone": "M4",
       "description": "Tiered performance plus benchmark-governance evidence",
       "required_beads": [
-        "bd-1lsy.9.3",
+        "bd-1lsy.9.3.2",
         "bd-1lsy.9.7",
         "bd-1lsy.9.8",
         "bd-1lsy.9.9"
@@ -221,10 +203,10 @@
       "milestone": "M5",
       "description": "Conformance/differential closure and GA handoff evidence",
       "required_beads": [
-        "bd-1lsy.10.8",
-        "bd-1lsy.10.12",
-        "bd-1lsy.11.13",
-        "bd-1lsy.11.17"
+        "bd-1lsy.11.1",
+        "bd-1lsy.5.7.2",
+        "bd-1lsy.9.7",
+        "bd-1lsy.9.8"
       ],
       "stop_go_rule": "Release blocked unless artifact triad + replay commands are present in mapped rows."
     }

@@ -87,12 +87,10 @@ impl StoreState {
 
 #[derive(Debug, Default)]
 struct MockBackend {
-    wal_applied: bool,
-    pragmas: BTreeMap<String, String>,
+    control_plane_profile_applied: bool,
     schema_version: u32,
     stores: BTreeMap<StoreKind, StoreState>,
-    fail_wal: bool,
-    fail_pragma: bool,
+    fail_control_plane_profile: bool,
     fail_schema_version: bool,
     fail_migrate: bool,
     fail_put: bool,
@@ -103,19 +101,11 @@ struct MockBackend {
 }
 
 impl FrankensqliteBackend for MockBackend {
-    fn apply_wal_profile(&mut self) -> Result<(), String> {
-        if self.fail_wal {
-            return Err("wal failure".into());
+    fn apply_control_plane_profile(&mut self) -> Result<(), String> {
+        if self.fail_control_plane_profile {
+            return Err("control-plane profile failure".into());
         }
-        self.wal_applied = true;
-        Ok(())
-    }
-
-    fn set_pragma(&mut self, key: &str, value: &str) -> Result<(), String> {
-        if self.fail_pragma {
-            return Err("pragma failure".into());
-        }
-        self.pragmas.insert(key.to_string(), value.to_string());
+        self.control_plane_profile_applied = true;
         Ok(())
     }
 
@@ -1622,19 +1612,9 @@ fn frankensqlite_adapter_initializes_successfully() {
 }
 
 #[test]
-fn frankensqlite_adapter_wal_failure() {
+fn frankensqlite_adapter_control_plane_profile_failure() {
     let backend = MockBackend {
-        fail_wal: true,
-        ..Default::default()
-    };
-    let err = FrankensqliteStorageAdapter::new(backend).unwrap_err();
-    assert!(matches!(err, StorageError::BackendUnavailable { .. }));
-}
-
-#[test]
-fn frankensqlite_adapter_pragma_failure() {
-    let backend = MockBackend {
-        fail_pragma: true,
+        fail_control_plane_profile: true,
         ..Default::default()
     };
     let err = FrankensqliteStorageAdapter::new(backend).unwrap_err();

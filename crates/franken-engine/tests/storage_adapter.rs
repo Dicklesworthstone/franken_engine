@@ -207,20 +207,16 @@ fn in_memory_adapter_rejects_zero_limit_queries() {
 struct MockFrankensqlite {
     schema_version: u32,
     stores: BTreeMap<StoreKind, BTreeMap<String, StoreRecord>>,
-    fail_wal_profile: bool,
+    fail_control_plane_profile: bool,
     fail_put: bool,
     reverse_query_order: bool,
 }
 
 impl FrankensqliteBackend for MockFrankensqlite {
-    fn apply_wal_profile(&mut self) -> Result<(), String> {
-        if self.fail_wal_profile {
-            return Err("wal profile unavailable".to_string());
+    fn apply_control_plane_profile(&mut self) -> Result<(), String> {
+        if self.fail_control_plane_profile {
+            return Err("control-plane profile unavailable".to_string());
         }
-        Ok(())
-    }
-
-    fn set_pragma(&mut self, _key: &str, _value: &str) -> Result<(), String> {
         Ok(())
     }
 
@@ -348,9 +344,9 @@ fn frankensqlite_adapter_works_with_backend_contract() {
 }
 
 #[test]
-fn frankensqlite_adapter_fails_closed_when_wal_setup_fails() {
+fn frankensqlite_adapter_fails_closed_when_profile_setup_fails() {
     let backend = MockFrankensqlite {
-        fail_wal_profile: true,
+        fail_control_plane_profile: true,
         ..MockFrankensqlite::default()
     };
 

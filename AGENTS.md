@@ -66,6 +66,7 @@ Use Cargo only.
 
 - For advanced console/TUI surfaces relevant to this project, use `/dp/frankentui`.
 - For SQLite-backed persistence, use `/dp/frankensqlite`; use `/dp/sqlmodel_rust` when typed model/schema layers are beneficial.
+  - Local engine adapter traits are allowed only as narrow call-shape seams to `/dp/frankensqlite`; WAL, PRAGMA, journal-mode, and migration policy must be applied by the frankensqlite-backed implementation, not hard-coded in `franken_engine`.
 - For service/API control surfaces, prefer reuse from `/dp/fastapi_rust` when relevant.
 - Do not build parallel local replacements without explicit user approval.
 

@@ -1477,21 +1477,15 @@ fn enrichment_backend_name_in_memory() {
 
 #[derive(Debug, Default)]
 struct MockBackend {
-    wal_applied: bool,
-    pragmas: BTreeMap<String, String>,
+    control_plane_profile_applied: bool,
     schema_version: u32,
     stores: BTreeMap<StoreKind, BTreeMap<String, StoreRecord>>,
     revision_counter: u64,
 }
 
 impl FrankensqliteBackend for MockBackend {
-    fn apply_wal_profile(&mut self) -> Result<(), String> {
-        self.wal_applied = true;
-        Ok(())
-    }
-
-    fn set_pragma(&mut self, key: &str, value: &str) -> Result<(), String> {
-        self.pragmas.insert(key.to_string(), value.to_string());
+    fn apply_control_plane_profile(&mut self) -> Result<(), String> {
+        self.control_plane_profile_applied = true;
         Ok(())
     }
 
@@ -1736,8 +1730,7 @@ fn enrichment_frankensqlite_events_recorded() {
 
 #[derive(Debug, Default)]
 struct FailingBackend {
-    fail_wal: bool,
-    fail_pragma: bool,
+    fail_control_plane_profile: bool,
     fail_put: bool,
     fail_get: bool,
     fail_query: bool,
@@ -1748,18 +1741,11 @@ struct FailingBackend {
 }
 
 impl FrankensqliteBackend for FailingBackend {
-    fn apply_wal_profile(&mut self) -> Result<(), String> {
-        if self.fail_wal {
-            Err("wal failure".into())
+    fn apply_control_plane_profile(&mut self) -> Result<(), String> {
+        if self.fail_control_plane_profile {
+            Err("control-plane profile failure".into())
         } else {
-            self.inner.apply_wal_profile()
-        }
-    }
-    fn set_pragma(&mut self, key: &str, value: &str) -> Result<(), String> {
-        if self.fail_pragma {
-            Err("pragma failure".into())
-        } else {
-            self.inner.set_pragma(key, value)
+            self.inner.apply_control_plane_profile()
         }
     }
     fn current_schema_version(&self) -> Result<u32, String> {
@@ -1824,19 +1810,9 @@ impl FrankensqliteBackend for FailingBackend {
 }
 
 #[test]
-fn enrichment_failing_backend_wal_failure() {
+fn enrichment_failing_backend_control_plane_profile_failure() {
     let backend = FailingBackend {
-        fail_wal: true,
-        ..Default::default()
-    };
-    let err = FrankensqliteStorageAdapter::new(backend).unwrap_err();
-    assert!(matches!(err, StorageError::BackendUnavailable { .. }));
-}
-
-#[test]
-fn enrichment_failing_backend_pragma_failure() {
-    let backend = FailingBackend {
-        fail_pragma: true,
+        fail_control_plane_profile: true,
         ..Default::default()
     };
     let err = FrankensqliteStorageAdapter::new(backend).unwrap_err();

@@ -142,6 +142,28 @@ impl IterationStatementConformanceHarness {
             es_spec_section: "13.2.4",
             requirement_level: "MUST",
         },
+        StaticIterationStatementTestCase {
+            id: "for-statement-let-tdz",
+            category: IterationStatementTestCategory::VariableScoping,
+            description: "For loop let declaration temporal dead zone in condition",
+            source_code: "for (let x = (x = 1); x < 2; x++) { } // Should throw ReferenceError",
+            es_spec_section: "13.2.4",
+            requirement_level: "MUST",
+        },
+        StaticIterationStatementTestCase {
+            id: "for-statement-block-scope-isolation",
+            category: IterationStatementTestCategory::VariableScoping,
+            description: "For loop variable scope isolation per iteration",
+            source_code: r#"
+                let closures = [];
+                for (let i = 0; i < 3; i++) {
+                    closures.push(() => i);
+                }
+                closures[0]() + closures[1]() + closures[2](); // Should be 0+1+2=3
+            "#,
+            es_spec_section: "13.2.4",
+            requirement_level: "MUST",
+        },
         // For-in statement tests (13.2.5)
         StaticIterationStatementTestCase {
             id: "for-in-statement-basic",
@@ -259,14 +281,146 @@ impl IterationStatementConformanceHarness {
             es_spec_section: "13.13",
             requirement_level: "SHOULD",
         },
-        // Iterator protocol integration
         StaticIterationStatementTestCase {
-            id: "for-of-iterator-protocol",
+            id: "break-for-of-early-exit",
+            category: IterationStatementTestCategory::BreakContinue,
+            description: "Break statement in for-of loop to test iterator cleanup",
+            source_code: r#"
+                let seen = [];
+                for (const value of [1, 2, 3, 4, 5]) {
+                    seen.push(value);
+                    if (value === 3) break;
+                }
+                seen.length; // Should be 3
+            "#,
+            es_spec_section: "13.12",
+            requirement_level: "MUST",
+        },
+        StaticIterationStatementTestCase {
+            id: "continue-for-of-skip",
+            category: IterationStatementTestCategory::BreakContinue,
+            description: "Continue statement in for-of loop",
+            source_code: r#"
+                let sum = 0;
+                for (const value of [1, 2, 3, 4, 5]) {
+                    if (value % 2 === 0) continue;
+                    sum += value;
+                }
+                sum; // Should be 1+3+5=9
+            "#,
+            es_spec_section: "13.13",
+            requirement_level: "MUST",
+        },
+        StaticIterationStatementTestCase {
+            id: "unlabeled-break-error",
+            category: IterationStatementTestCategory::BreakContinue,
+            description: "Unlabeled break outside loop should be syntax error",
+            source_code: "break; // Should be SyntaxError",
+            es_spec_section: "13.12",
+            requirement_level: "MUST",
+        },
+        StaticIterationStatementTestCase {
+            id: "unlabeled-continue-error",
+            category: IterationStatementTestCategory::BreakContinue,
+            description: "Unlabeled continue outside loop should be syntax error",
+            source_code: "continue; // Should be SyntaxError",
+            es_spec_section: "13.13",
+            requirement_level: "MUST",
+        },
+        // Iterator protocol integration - REAL iterator protocol tests
+        StaticIterationStatementTestCase {
+            id: "for-of-custom-iterator-basic",
             category: IterationStatementTestCategory::IteratorProtocol,
-            description: "For-of with custom iterator",
-            source_code: "let customIterable = [1, 2, 3]; let seen = 0; for (let value of customIterable) { seen = value; } seen;",
+            description: "For-of with custom Symbol.iterator implementation",
+            source_code: r#"
+                let customIterable = {
+                    [Symbol.iterator]() {
+                        let count = 0;
+                        return {
+                            next() {
+                                if (count < 3) {
+                                    return { value: count++, done: false };
+                                }
+                                return { done: true };
+                            }
+                        };
+                    }
+                };
+                let seen = 0;
+                for (let value of customIterable) {
+                    seen = value;
+                }
+                seen;
+            "#,
+            es_spec_section: "13.2.6",
+            requirement_level: "MUST",
+        },
+        StaticIterationStatementTestCase {
+            id: "for-of-iterator-return-method",
+            category: IterationStatementTestCategory::IteratorProtocol,
+            description: "For-of iterator cleanup with return() method on early exit",
+            source_code: r#"
+                let cleanupCalled = false;
+                let customIterable = {
+                    [Symbol.iterator]() {
+                        let count = 0;
+                        return {
+                            next() {
+                                return count < 10 ? { value: count++, done: false } : { done: true };
+                            },
+                            return() {
+                                cleanupCalled = true;
+                                return { done: true };
+                            }
+                        };
+                    }
+                };
+                for (let value of customIterable) {
+                    if (value === 2) break;
+                }
+                cleanupCalled;
+            "#,
             es_spec_section: "13.2.6",
             requirement_level: "SHOULD",
+        },
+        StaticIterationStatementTestCase {
+            id: "for-of-iterator-throw-handling",
+            category: IterationStatementTestCategory::IteratorProtocol,
+            description: "For-of iterator with next() method throwing",
+            source_code: r#"
+                let customIterable = {
+                    [Symbol.iterator]() {
+                        let count = 0;
+                        return {
+                            next() {
+                                if (count === 0) {
+                                    count++;
+                                    return { value: 42, done: false };
+                                }
+                                throw new Error("Iterator error");
+                            }
+                        };
+                    }
+                };
+                try {
+                    for (let value of customIterable) {
+                        // Should get 42 on first iteration, then throw
+                    }
+                } catch (e) {
+                    // Expected to catch iterator error
+                    42;
+                }
+            "#,
+            es_spec_section: "13.2.6",
+            requirement_level: "SHOULD",
+        },
+        StaticIterationStatementTestCase {
+            id: "for-of-array-iterator-simple",
+            category: IterationStatementTestCategory::IteratorProtocol,
+            description: "For-of with built-in Array iterator (baseline)",
+            source_code: "let customIterable = [1, 2, 3]; let seen = 0; for (let value of customIterable) { seen = value; } seen;",
+            es_spec_section: "13.2.6",
+            requirement_level: "MUST",
         },
         // Edge cases
         StaticIterationStatementTestCase {
@@ -286,10 +440,55 @@ impl IterationStatementConformanceHarness {
             requirement_level: "MUST",
         },
         StaticIterationStatementTestCase {
-            id: "for-of-destructuring",
+            id: "for-of-destructuring-basic",
             category: IterationStatementTestCategory::EdgeCases,
-            description: "For-of loop with destructuring assignment",
+            description: "For-of loop with basic array destructuring",
             source_code: "let seen = 0; let entries = [[1, 2]]; for (const [key, value] of entries) { seen = key + value; } seen;",
+            es_spec_section: "13.2.6",
+            requirement_level: "MUST",
+        },
+        StaticIterationStatementTestCase {
+            id: "for-of-destructuring-nested",
+            category: IterationStatementTestCategory::EdgeCases,
+            description: "For-of loop with nested destructuring",
+            source_code: r#"
+                let result = 0;
+                let data = [{ coords: [1, 2] }, { coords: [3, 4] }];
+                for (const { coords: [x, y] } of data) {
+                    result += x + y;
+                }
+                result; // Should be 10
+            "#,
+            es_spec_section: "13.2.6",
+            requirement_level: "SHOULD",
+        },
+        StaticIterationStatementTestCase {
+            id: "for-of-destructuring-defaults",
+            category: IterationStatementTestCategory::EdgeCases,
+            description: "For-of loop with destructuring default values",
+            source_code: r#"
+                let result = 0;
+                let items = [{ a: 1 }, { b: 2 }, {}];
+                for (const { a = 5, b = 10 } of items) {
+                    result += a + b;
+                }
+                result; // Should be 1+10 + 5+2 + 5+10 = 33
+            "#,
+            es_spec_section: "13.2.6",
+            requirement_level: "SHOULD",
+        },
+        StaticIterationStatementTestCase {
+            id: "for-of-destructuring-rest",
+            category: IterationStatementTestCategory::EdgeCases,
+            description: "For-of loop with rest pattern destructuring",
+            source_code: r#"
+                let result = 0;
+                let arrays = [[1, 2, 3, 4], [5, 6]];
+                for (const [first, ...rest] of arrays) {
+                    result += first + rest.length;
+                }
+                result; // Should be 1+3 + 5+1 = 10
+            "#,
             es_spec_section: "13.2.6",
             requirement_level: "SHOULD",
         },

@@ -23,7 +23,9 @@ use crate::evidence_emission::{
     ActionCategory, CanonicalEvidenceEmitter, CanonicalEvidenceEntry, EmitterConfig,
     EvidenceEmissionRequest,
 };
-use crate::evidence_replay_checker::{EvidenceReplayChecker, ReplayConfig};
+use crate::evidence_replay_checker::{
+    DecisionReplayFn, EvidenceReplayChecker, ReplayConfig, ReplayedOutcome,
+};
 use crate::extension_host_lifecycle::HostLifecycleEvent;
 use crate::frankenlab_extension_lifecycle::{
     ScenarioResult, ScenarioSuiteResult, run_all_scenarios,
@@ -660,9 +662,11 @@ impl ReleaseGate {
 
         let config = ReplayConfig::default();
         let mut checker = EvidenceReplayChecker::new(config);
-        let result = checker.replay(&replay_entries, None);
+        let replay = Self::frankenlab_lifecycle_replay_evaluator();
+        let artifact = checker.replay_and_collect(&replay_entries, Some(&replay));
 
-        let passed = result.violations.is_empty();
+        let passed = artifact.gate_passed
+            && artifact.outcome_checked_count == usize_to_u64_saturating(replay_entries.len());
 
         self.push_event(
             "evidence_replay_checked",
@@ -675,8 +679,24 @@ impl ReleaseGate {
         );
 
         let mut failure_details = Vec::new();
+        if !artifact.decision_replay_executed {
+            failure_details.push(GateFailureDetail {
+                item_id: "release_gate".to_string(),
+                failure_type: "decision_replay_evaluator_missing".to_string(),
+                expected: "release evidence replay evaluator present".to_string(),
+                actual: "missing evaluator".to_string(),
+            });
+        }
+        if artifact.outcome_checked_count != usize_to_u64_saturating(replay_entries.len()) {
+            failure_details.push(GateFailureDetail {
+                item_id: "release_gate".to_string(),
+                failure_type: "decision_replay_outcome_count_mismatch".to_string(),
+                expected: replay_entries.len().to_string(),
+                actual: artifact.outcome_checked_count.to_string(),
+            });
+        }
         if !passed {
-            for violation in &result.violations {
+            for violation in &artifact.violations {
                 failure_details.push(GateFailureDetail {
                     item_id: violation.entry_id.clone(),
                     failure_type: format!("{}", violation.violation_type),
@@ -690,9 +710,10 @@ impl ReleaseGate {
             kind: GateCheckKind::EvidenceReplay,
             passed,
             summary: format!(
-                "evidence replay: {} violations, {} entries processed",
-                result.violations.len(),
-                result.entries_processed
+                "evidence replay: {} violations, {} entries processed, {} decision outcomes replayed",
+                artifact.violations.len(),
+                artifact.manifest.source_entry_count,
+                artifact.outcome_checked_count
             ),
             failure_details,
             items_checked: replay_entries.len(),
@@ -783,6 +804,28 @@ impl ReleaseGate {
             error_code: error_code.map(str::to_string),
             metadata: BTreeMap::new(),
         });
+    }
+
+    fn frankenlab_lifecycle_replay_evaluator() -> DecisionReplayFn {
+        Box::new(|entry: &CanonicalEvidenceEntry| {
+            let Some(outcome) = entry.metadata.get("outcome") else {
+                return ReplayedOutcome {
+                    action: entry.action_name.clone(),
+                    chosen_expected_loss: f64::INFINITY,
+                    calibration_score: f64::INFINITY,
+                    fallback_active: true,
+                    expected_losses: BTreeMap::new(),
+                };
+            };
+            let fallback_active = outcome != "ok";
+            ReplayedOutcome {
+                action: entry.action_name.clone(),
+                chosen_expected_loss: if fallback_active { 1.0 } else { 0.0 },
+                calibration_score: 1.0,
+                fallback_active,
+                expected_losses: BTreeMap::new(),
+            }
+        })
     }
 
     fn estimate_check_cost(&self, check: &GateCheckResult) -> u64 {
@@ -1155,7 +1198,28 @@ mod tests {
             replay_check.items_checked > 0,
             "replay gate must not pass by replaying an empty ledger"
         );
+        assert!(replay_check.summary.contains("decision outcomes replayed"));
         assert_eq!(replay_check.items_passed, replay_check.items_checked);
+    }
+
+    #[test]
+    fn evidence_replay_check_replays_decision_outcomes() {
+        let gate = ReleaseGate::new(42);
+        let mut cx = mock_cx(200000);
+        let suite = run_all_scenarios(42, &mut cx);
+        let replay_entries = gate
+            .build_replay_entries_from_scenarios(&suite)
+            .expect("serde deserialization should succeed");
+        let replay = ReleaseGate::frankenlab_lifecycle_replay_evaluator();
+        let mut checker = EvidenceReplayChecker::new(ReplayConfig::default());
+        let artifact = checker.replay_and_collect(&replay_entries, Some(&replay));
+
+        assert!(artifact.gate_passed);
+        assert!(artifact.decision_replay_executed);
+        assert_eq!(
+            artifact.outcome_checked_count,
+            usize_to_u64_saturating(replay_entries.len())
+        );
     }
 
     #[test]

@@ -212,6 +212,20 @@ pub struct ReplayedOutcome {
 pub type DecisionReplayFn = Box<dyn Fn(&CanonicalEvidenceEntry) -> ReplayedOutcome>;
 
 // ---------------------------------------------------------------------------
+// ReplayValidationMode — structural-only vs decision replay
+// ---------------------------------------------------------------------------
+
+/// Replay validation mode represented in operator-facing artifacts.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum ReplayValidationMode {
+    /// Only ledger structure, hashes, sequence, timestamp, schema, policy, and epoch were checked.
+    #[default]
+    StructuralOnly,
+    /// A decision replay evaluator was present and outcomes were checked.
+    DecisionReplay,
+}
+
+// ---------------------------------------------------------------------------
 // ReplayEvent — structured log entry
 // ---------------------------------------------------------------------------
 
@@ -315,6 +329,12 @@ pub struct PolicyVersionRecord {
 /// Detailed diagnostics collected during a replay run.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ReplayDiagnostics {
+    /// Validation mode for this replay run.
+    pub validation_mode: ReplayValidationMode,
+    /// Whether a decision replay evaluator was present.
+    pub decision_replay_executed: bool,
+    /// Number of entries whose recorded outcome was checked by the evaluator.
+    pub outcome_checked_count: u64,
     /// Schema versions encountered during replay.
     pub schema_versions_seen: BTreeSet<String>,
     /// Schema migration boundaries detected.
@@ -347,6 +367,12 @@ pub struct ReplayDiagnostics {
 pub struct ReplayManifest {
     /// Configuration used for the replay.
     pub config: ReplayConfig,
+    /// Validation mode for this replay run.
+    pub validation_mode: ReplayValidationMode,
+    /// Whether a decision replay evaluator was present.
+    pub decision_replay_executed: bool,
+    /// Number of entries whose recorded outcome was checked by the evaluator.
+    pub outcome_checked_count: u64,
     /// Number of entries in the source ledger.
     pub source_entry_count: u64,
     /// Hash of the first entry (for ledger identity).
@@ -374,6 +400,12 @@ pub struct ReplayManifest {
 pub struct ReplayEvidenceArtifact {
     /// Reproducibility manifest.
     pub manifest: ReplayManifest,
+    /// Validation mode for this replay run.
+    pub validation_mode: ReplayValidationMode,
+    /// Whether a decision replay evaluator was present.
+    pub decision_replay_executed: bool,
+    /// Number of entries whose recorded outcome was checked by the evaluator.
+    pub outcome_checked_count: u64,
     /// Detailed diagnostics.
     pub diagnostics: ReplayDiagnostics,
     /// Per-violation records.
@@ -408,6 +440,21 @@ pub struct ReplayResult {
 }
 
 impl ReplayResult {
+    /// Validation mode for this replay result.
+    pub fn validation_mode(&self) -> ReplayValidationMode {
+        self.diagnostics.validation_mode
+    }
+
+    /// Whether decision replay was executed.
+    pub fn decision_replay_executed(&self) -> bool {
+        self.diagnostics.decision_replay_executed
+    }
+
+    /// Number of entries checked by the decision replay evaluator.
+    pub fn outcome_checked_count(&self) -> u64 {
+        self.diagnostics.outcome_checked_count
+    }
+
     /// Count violations by type.
     pub fn violation_counts(&self) -> BTreeMap<ReplayViolationType, u64> {
         let mut counts = BTreeMap::new();
@@ -444,6 +491,9 @@ impl ReplayResult {
     ) -> ReplayManifest {
         ReplayManifest {
             config: config.clone(),
+            validation_mode: self.validation_mode(),
+            decision_replay_executed: self.decision_replay_executed(),
+            outcome_checked_count: self.outcome_checked_count(),
             source_entry_count: usize_to_u64_saturating(entries.len()),
             first_entry_hash: entries.first().map(|e| e.artifact_hash),
             last_entry_hash: entries.last().map(|e| e.artifact_hash),
@@ -505,7 +555,17 @@ impl EvidenceReplayChecker {
         let mut skipped: u64 = 0;
         let mut prev_entry: Option<&CanonicalEvidenceEntry> = None;
         let mut rolling_hash = ContentHash::compute(b"evidence-genesis");
-        let mut diagnostics = ReplayDiagnostics::default();
+        let decision_replay_executed = replay_fn.is_some();
+        let validation_mode = if decision_replay_executed {
+            ReplayValidationMode::DecisionReplay
+        } else {
+            ReplayValidationMode::StructuralOnly
+        };
+        let mut diagnostics = ReplayDiagnostics {
+            validation_mode,
+            decision_replay_executed,
+            ..ReplayDiagnostics::default()
+        };
         let mut trace_ids = BTreeSet::new();
         let mut decision_ids = BTreeSet::new();
         let mut halted = false;
@@ -772,6 +832,8 @@ impl EvidenceReplayChecker {
             // 8. Replay decision (if replay function provided).
             if let Some(replay) = replay_fn {
                 let replayed = replay(entry);
+                diagnostics.outcome_checked_count =
+                    diagnostics.outcome_checked_count.saturating_add(1);
                 self.check_outcome(entry, &replayed, &mut violations);
                 if self.config.halt_on_first && !violations.is_empty() {
                     halted = true;
@@ -833,12 +895,18 @@ impl EvidenceReplayChecker {
         self.clear_events();
         let result = self.replay(entries, replay_fn);
         let manifest = result.manifest(&self.config, entries);
+        if !result.decision_replay_executed() {
+            self.push_decision_replay_missing_event(entries);
+        }
         ReplayEvidenceArtifact {
             manifest,
+            validation_mode: result.validation_mode(),
+            decision_replay_executed: result.decision_replay_executed(),
+            outcome_checked_count: result.outcome_checked_count(),
             diagnostics: result.diagnostics.clone(),
             violations: result.violations.clone(),
             events: self.events.clone(),
-            gate_passed: result.passed,
+            gate_passed: result.passed && result.decision_replay_executed(),
         }
     }
 
@@ -957,6 +1025,35 @@ impl EvidenceReplayChecker {
             event: event.to_string(),
             outcome: outcome.to_string(),
             error_code: error_code.map(|s| s.to_string()),
+        });
+    }
+
+    fn push_decision_replay_missing_event(&mut self, entries: &[CanonicalEvidenceEntry]) {
+        let (trace_id, decision_id, policy_id) = entries
+            .last()
+            .map(|entry| {
+                (
+                    entry.trace_id.clone(),
+                    entry.decision_id.clone(),
+                    entry.policy_id.clone(),
+                )
+            })
+            .unwrap_or_else(|| {
+                (
+                    "structural-only".to_string(),
+                    "decision-replay-evaluator-missing".to_string(),
+                    "unknown-policy".to_string(),
+                )
+            });
+
+        self.events.push(ReplayEvent {
+            trace_id,
+            decision_id,
+            policy_id,
+            component: COMPONENT_NAME.to_string(),
+            event: "decision_replay_evaluator_missing".to_string(),
+            outcome: "fail".to_string(),
+            error_code: Some("decision_replay_evaluator_missing".to_string()),
         });
     }
 }
@@ -1114,6 +1211,12 @@ mod tests {
         assert!(result.passed);
         assert_eq!(result.entries_processed, 5);
         assert_eq!(result.violations.len(), 0);
+        assert_eq!(
+            result.validation_mode(),
+            ReplayValidationMode::StructuralOnly
+        );
+        assert!(!result.decision_replay_executed());
+        assert_eq!(result.outcome_checked_count(), 0);
     }
 
     #[test]
@@ -1124,6 +1227,12 @@ mod tests {
         let result = checker.replay(&ledger, Some(&replay));
         assert!(result.passed);
         assert_eq!(result.entries_processed, 5);
+        assert_eq!(
+            result.validation_mode(),
+            ReplayValidationMode::DecisionReplay
+        );
+        assert!(result.decision_replay_executed());
+        assert_eq!(result.outcome_checked_count(), 5);
     }
 
     // -----------------------------------------------------------------------
@@ -1662,10 +1771,37 @@ mod tests {
         let mut checker = EvidenceReplayChecker::new(ReplayConfig::default());
         let artifact = checker.replay_and_collect(&ledger, Some(&replay));
         assert!(artifact.gate_passed);
+        assert_eq!(
+            artifact.validation_mode,
+            ReplayValidationMode::DecisionReplay
+        );
+        assert!(artifact.decision_replay_executed);
+        assert_eq!(artifact.outcome_checked_count, 5);
         assert_eq!(artifact.manifest.source_entry_count, 5);
         assert!(artifact.manifest.passed);
+        assert!(artifact.manifest.decision_replay_executed);
+        assert_eq!(artifact.manifest.outcome_checked_count, 5);
         assert_eq!(artifact.violations.len(), 0);
         assert!(!artifact.events.is_empty());
+    }
+
+    #[test]
+    fn replay_and_collect_without_evaluator_is_structural_only_not_gate_passed() {
+        let ledger = build_ledger(3);
+        let mut checker = EvidenceReplayChecker::new(ReplayConfig::default());
+        let artifact = checker.replay_and_collect(&ledger, None);
+        assert!(!artifact.gate_passed);
+        assert!(artifact.manifest.passed);
+        assert_eq!(
+            artifact.validation_mode,
+            ReplayValidationMode::StructuralOnly
+        );
+        assert!(!artifact.decision_replay_executed);
+        assert_eq!(artifact.outcome_checked_count, 0);
+        assert!(artifact.events.iter().any(|event| {
+            event.event == "decision_replay_evaluator_missing"
+                && event.error_code.as_deref() == Some("decision_replay_evaluator_missing")
+        }));
     }
 
     #[test]
@@ -1684,6 +1820,11 @@ mod tests {
         let ledger = build_ledger(3);
         let mut checker = EvidenceReplayChecker::new(ReplayConfig::default());
         let artifact = checker.replay_and_collect(&ledger, None);
+        assert!(!artifact.gate_passed);
+        assert_eq!(
+            artifact.validation_mode,
+            ReplayValidationMode::StructuralOnly
+        );
         let json = serde_json::to_string(&artifact).expect("serde deserialization should succeed");
         let back: ReplayEvidenceArtifact =
             serde_json::from_str(&json).expect("serde deserialization should succeed");
@@ -1817,6 +1958,12 @@ mod tests {
         let mut checker = EvidenceReplayChecker::new(config.clone());
         let result = checker.replay(&ledger, None);
         let manifest = result.manifest(&config, &ledger);
+        assert_eq!(
+            manifest.validation_mode,
+            ReplayValidationMode::StructuralOnly
+        );
+        assert!(!manifest.decision_replay_executed);
+        assert_eq!(manifest.outcome_checked_count, 0);
         let json = serde_json::to_string(&manifest).expect("serde deserialization should succeed");
         let back: ReplayManifest =
             serde_json::from_str(&json).expect("serde deserialization should succeed");

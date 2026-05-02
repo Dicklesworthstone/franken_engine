@@ -27,7 +27,8 @@ use frankenengine_engine::evidence_emission::{
 use frankenengine_engine::evidence_replay_checker::{
     DecisionReplayFn, EvidenceReplayChecker, PolicyVersionRecord, ReplayConfig, ReplayDiagnostics,
     ReplayErrorCode, ReplayEvent, ReplayEvidenceArtifact, ReplayManifest, ReplayResult,
-    ReplayViolation, ReplayViolationType, ReplayedOutcome, SchemaMigrationRecord,
+    ReplayValidationMode, ReplayViolation, ReplayViolationType, ReplayedOutcome,
+    SchemaMigrationRecord,
 };
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::security_epoch::SecurityEpoch;
@@ -950,6 +951,9 @@ fn enrichment_diagnostics_serde_default() {
 #[test]
 fn enrichment_diagnostics_serde_with_data() {
     let diag = ReplayDiagnostics {
+        validation_mode: ReplayValidationMode::DecisionReplay,
+        decision_replay_executed: true,
+        outcome_checked_count: 10,
         schema_versions_seen: ["1.0.0".to_string(), "2.0.0".to_string()]
             .into_iter()
             .collect(),
@@ -989,6 +993,9 @@ fn enrichment_diagnostics_clone_eq() {
 fn enrichment_manifest_serde_passing() {
     let manifest = ReplayManifest {
         config: ReplayConfig::default(),
+        validation_mode: ReplayValidationMode::DecisionReplay,
+        decision_replay_executed: true,
+        outcome_checked_count: 100,
         source_entry_count: 100,
         first_entry_hash: Some(ContentHash::compute(b"first")),
         last_entry_hash: Some(ContentHash::compute(b"last")),
@@ -1005,6 +1012,9 @@ fn enrichment_manifest_serde_passing() {
 fn enrichment_manifest_serde_failing() {
     let manifest = ReplayManifest {
         config: ReplayConfig::default(),
+        validation_mode: ReplayValidationMode::DecisionReplay,
+        decision_replay_executed: true,
+        outcome_checked_count: 43,
         source_entry_count: 50,
         first_entry_hash: Some(ContentHash::compute(b"f")),
         last_entry_hash: Some(ContentHash::compute(b"l")),
@@ -1023,6 +1033,9 @@ fn enrichment_manifest_serde_failing() {
 fn enrichment_manifest_serde_empty_hashes() {
     let manifest = ReplayManifest {
         config: ReplayConfig::default(),
+        validation_mode: ReplayValidationMode::StructuralOnly,
+        decision_replay_executed: false,
+        outcome_checked_count: 0,
         source_entry_count: 0,
         first_entry_hash: None,
         last_entry_hash: None,
@@ -1040,6 +1053,9 @@ fn enrichment_manifest_serde_empty_hashes() {
 fn enrichment_manifest_clone_eq() {
     let manifest = ReplayManifest {
         config: ReplayConfig::default(),
+        validation_mode: ReplayValidationMode::StructuralOnly,
+        decision_replay_executed: false,
+        outcome_checked_count: 0,
         source_entry_count: 1,
         first_entry_hash: None,
         last_entry_hash: None,
@@ -1059,6 +1075,9 @@ fn enrichment_artifact_serde_passing() {
     let artifact = ReplayEvidenceArtifact {
         manifest: ReplayManifest {
             config: ReplayConfig::default(),
+            validation_mode: ReplayValidationMode::DecisionReplay,
+            decision_replay_executed: true,
+            outcome_checked_count: 5,
             source_entry_count: 5,
             first_entry_hash: None,
             last_entry_hash: None,
@@ -1066,6 +1085,9 @@ fn enrichment_artifact_serde_passing() {
             passed: true,
             violation_count: 0,
         },
+        validation_mode: ReplayValidationMode::DecisionReplay,
+        decision_replay_executed: true,
+        outcome_checked_count: 5,
         diagnostics: ReplayDiagnostics::default(),
         violations: vec![],
         events: vec![],
@@ -1082,6 +1104,9 @@ fn enrichment_artifact_serde_with_violations_and_events() {
     let artifact = ReplayEvidenceArtifact {
         manifest: ReplayManifest {
             config: ReplayConfig::default(),
+            validation_mode: ReplayValidationMode::DecisionReplay,
+            decision_replay_executed: true,
+            outcome_checked_count: 1,
             source_entry_count: 3,
             first_entry_hash: None,
             last_entry_hash: None,
@@ -1089,6 +1114,9 @@ fn enrichment_artifact_serde_with_violations_and_events() {
             passed: false,
             violation_count: 2,
         },
+        validation_mode: ReplayValidationMode::DecisionReplay,
+        decision_replay_executed: true,
+        outcome_checked_count: 1,
         diagnostics: ReplayDiagnostics::default(),
         violations: vec![
             make_violation(

@@ -12,11 +12,14 @@
 #![forbid(unsafe_code)]
 
 use std::collections::BTreeMap;
+use std::path::Path;
 
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use sqlmodel::prelude::*;
 use sqlmodel::{Connection, Cx, Outcome, Session, SessionConfig, SessionDebugInfo, create_table};
+use sqlmodel_core::error::ConfigError;
+use sqlmodel_frankensqlite::FrankenConnection;
 
 use crate::storage_adapter::{
     BatchPutEntry, EventContext, StorageAdapter, StorageError, StoreKind, StoreQuery, StoreRecord,
@@ -511,6 +514,11 @@ impl<C: Connection> TypedSqlModelSession<C> {
         &mut self.inner
     }
 
+    /// Borrow the concrete SQLModel connection used by this session.
+    pub fn connection(&self) -> &C {
+        self.inner.connection()
+    }
+
     /// Current SQLModel session config.
     pub fn config(&self) -> &SessionConfig {
         self.inner.config()
@@ -566,6 +574,56 @@ impl<C: Connection> TypedSqlModelSession<C> {
     pub async fn rollback(&mut self, cx: &Cx) -> Outcome<(), sqlmodel::Error> {
         self.inner.rollback(cx).await
     }
+}
+
+/// Concrete typed SQLModel session backed by sibling FrankenSQLite.
+pub type TypedFrankenSqliteSession = TypedSqlModelSession<FrankenConnection>;
+
+/// Result type for concrete SQLModel driver setup helpers.
+pub type TypedSqlModelDriverResult<T> = std::result::Result<T, Box<sqlmodel::Error>>;
+
+/// Result type for concrete FrankenSQLite typed session setup.
+pub type TypedFrankenSqliteSessionResult = TypedSqlModelDriverResult<TypedFrankenSqliteSession>;
+
+fn typed_frankensqlite_path(path: impl AsRef<Path>) -> TypedSqlModelDriverResult<String> {
+    let path = path.as_ref();
+    let Some(path) = path.to_str() else {
+        return Err(Box::new(sqlmodel::Error::Config(ConfigError {
+            message: "typed FrankenSQLite database path must be valid UTF-8".to_string(),
+            source: None,
+        })));
+    };
+    if path.trim().is_empty() {
+        return Err(Box::new(sqlmodel::Error::Config(ConfigError {
+            message: "typed FrankenSQLite database path must not be empty".to_string(),
+            source: None,
+        })));
+    }
+    Ok(path.to_string())
+}
+
+/// Initialize the concrete FrankenSQLite schema for all typed persistence tables.
+pub fn initialize_typed_frankensqlite_schema(
+    connection: &FrankenConnection,
+) -> TypedSqlModelDriverResult<()> {
+    for statement in typed_persistence_create_table_sql() {
+        connection.execute_raw(&statement)?;
+    }
+    Ok(())
+}
+
+/// Open a file-backed typed SQLModel session using the sibling FrankenSQLite driver.
+pub fn open_typed_frankensqlite_session(path: impl AsRef<Path>) -> TypedFrankenSqliteSessionResult {
+    let connection = FrankenConnection::open_file(typed_frankensqlite_path(path)?)?;
+    initialize_typed_frankensqlite_schema(&connection)?;
+    Ok(TypedSqlModelSession::new(connection))
+}
+
+/// Open an in-memory typed SQLModel session using the sibling FrankenSQLite driver.
+pub fn open_typed_frankensqlite_memory_session() -> TypedFrankenSqliteSessionResult {
+    let connection = FrankenConnection::open_memory()?;
+    initialize_typed_frankensqlite_schema(&connection)?;
+    Ok(TypedSqlModelSession::new(connection))
 }
 
 // ---------------------------------------------------------------------------
@@ -1354,6 +1412,41 @@ mod tests {
     }
 
     #[test]
+    fn typed_frankensqlite_session_initializes_real_schema() {
+        let session = open_typed_frankensqlite_memory_session()
+            .expect("real FrankenSQLite typed session initializes");
+        assert_eq!(session.connection().path(), ":memory:");
+        assert!(session.config().auto_begin);
+        assert!(!session.config().auto_flush);
+        assert!(!session.config().expire_on_commit);
+
+        for (table, primary_key) in [
+            ("replacement_lineage", "sequence_id"),
+            ("ifc_provenance", "provenance_id"),
+            ("specialization_index", "specialization_id"),
+        ] {
+            let sql = format!("PRAGMA table_info({table})");
+            let rows = session
+                .connection()
+                .query_sync(&sql, &[])
+                .expect("typed table schema is queryable through FrankenSQLite");
+            let columns = rows
+                .iter()
+                .map(|row| row.get_named::<String>("name").expect("column has name"))
+                .collect::<Vec<_>>();
+
+            assert!(
+                columns.contains(&primary_key.to_string()),
+                "{table} schema should include primary key {primary_key}; columns={columns:#?}"
+            );
+            assert!(
+                columns.len() >= 9,
+                "{table} schema should include the typed model fields; columns={columns:#?}"
+            );
+        }
+    }
+
+    #[test]
     fn typed_store_record_boundary_emits_deterministic_keys_and_metadata() {
         let model = replacement_entry(7);
         let record = model
@@ -1686,13 +1779,13 @@ mod tests {
 // TODO: Integration scaffolding
 // ---------------------------------------------------------------------------
 
-// TODO: Implement SQLModel session management for typed store operations
+// ✓ DONE: Implement SQLModel session management and FrankenSQLite initialization
 // ✓ DONE: Add explicit typed backfill dry-run planning for legacy generic StoreRecord data
 // TODO: Add store-specific lossless legacy-to-typed backfill mappers
 // ✓ DONE: Add typed StoreRecord boundaries and StorageAdapter extension methods
 // TODO: Add validation rules for each model (foreign keys, constraints)
 // ✓ DONE: Implement query builders for common access patterns
-// TODO: Add integration tests with actual sqlmodel_rust session
+// TODO: Add external integration/e2e scripts with actual sqlmodel_rust session lifecycle logging
 // TODO: Wire production SQLModel sessions behind typed adapter methods
 // TODO: Add sqlmodel_rust session initialization in storage adapter constructor
 // TODO: Update all callers to use typed store operations instead of generic record operations

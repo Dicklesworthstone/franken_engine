@@ -13,7 +13,7 @@
 //! Key components:
 //! - **Formal state/action model**: `DecisionState`, `LaneAction`, `DecisionContext`
 //! - **CVaR tail-risk guardrail**: prevents mean improvements from hiding p99/p999 regressions
-//! - **Conformal calibration layer**: anytime-valid coverage guarantees with optional-stopping safety
+//! - **Conformal calibration layer**: statistical coverage monitoring with e-value tracking (formal anytime-validity guarantees not proven)
 //! - **Drift detector**: KL-divergence and empirical-distribution shift tests with deterministic demotion
 //! - **Budgeted adaptive mode**: strict compute/memory caps with deterministic on-exhaust fallback
 //! - **Policy bundle**: machine-readable serializable decision artifacts

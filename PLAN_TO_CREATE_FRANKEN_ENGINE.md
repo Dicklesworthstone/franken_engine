@@ -584,7 +584,7 @@ The following upgrades apply graveyard primitives directly to each initiative so
     Reinforce with §11.16 key transparency, §11.17 certificate-transparency-style append-only logs, and §11.15 threshold signatures for high-assurance revocation actions. Use §13.9 anti-entropy replication patterns to propagate revocation state quickly and consistently across runtime nodes. Require deterministic precedence rules (revoke always beats allow-cache) and replay tests for emergency recall paths.
 
 ## 9C. Alien-Artifact Enhancement Map (Per Top 10)
-The following upgrades apply `alien-artifact-coding` principles so each initiative lands with mathematical rigor, explainability, and formal safety framing rather than heuristic behavior.
+The following upgrades apply `alien-artifact-coding` principles so each initiative lands with systematic rigor, explainability, and policy-driven safety framing rather than heuristic behavior. (Mathematical rigor and formal proofs remain hypothetical pending formal specification work.)
 
 1. **TS-first authoring -> native capability-typed IR execution**  
    **HYPOTHESIS**: Add a proof-carrying compilation contract: each lowering stage emits invariants and a machine-checkable witness that capability annotations are preserved end-to-end. For optimization passes, use an isomorphism ledger that records ordering/tie-break semantics and verifies behavioral equivalence on golden corpora. Expose a galaxy-brain “why this lowered shape is safe” panel that shows source capability intent, transformed IR constraints, and preserved proof obligations. *(Requires formal verification infrastructure with Lean/Coq/TLA+ proof artifacts.)*

@@ -5,11 +5,11 @@
 //! This module integrates versioned rewrite packs, translation validation,
 //! and governance controls into a cohesive certified rewrite optimization
 //! system. The optimizer can exploit sophisticated algebraic transformations
-//! while maintaining formal correctness guarantees through proof-carrying
-//! optimization and fail-closed validation.
+//! while maintaining policy-driven correctness checks through validation
+//! and fail-closed operation. (Formal proofs and proof-carrying optimization remain hypothetical.)
 //!
 //! The system provides:
-//! - Certified rewrite rule application with formal proofs
+//! - Certified rewrite rule application with hash-based validation
 //! - Translation validation for semantic preservation
 //! - Governance controls for rollback and forensics
 //! - Deterministic optimization with reproducible results

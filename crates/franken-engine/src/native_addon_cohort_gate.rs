@@ -685,6 +685,15 @@ pub fn derive_governance_action(
     security: &SecurityVerdict,
     tier: &CohortTier,
 ) -> GovernanceAction {
+    derive_governance_action_with_policy(overall, security, tier, true)
+}
+
+fn derive_governance_action_with_policy(
+    overall: &GateVerdict,
+    security: &SecurityVerdict,
+    tier: &CohortTier,
+    require_security_audit: bool,
+) -> GovernanceAction {
     // Vulnerable security always blocks critical/high tiers.
     if *security == SecurityVerdict::Vulnerable {
         return match tier {
@@ -693,9 +702,10 @@ pub fn derive_governance_action(
         };
     }
 
-    // Unassessed security on critical/high tiers requires audit.
+    // When policy requires a security audit, unassessed native-addon evidence
+    // never authorizes adoption regardless of ecosystem tier.
     if *security == SecurityVerdict::Unassessed
-        && matches!(tier, CohortTier::Critical | CohortTier::High)
+        && (require_security_audit || matches!(tier, CohortTier::Critical | CohortTier::High))
     {
         return GovernanceAction::RequireAudit;
     }
@@ -718,6 +728,27 @@ pub fn derive_governance_action(
             CohortTier::Critical | CohortTier::High => GovernanceAction::RequireAudit,
             _ => GovernanceAction::ConditionalAdoption,
         },
+    }
+}
+
+fn aggregate_security_verdict(results: &[CohortResult]) -> SecurityVerdict {
+    if results
+        .iter()
+        .any(|r| r.security_verdict == SecurityVerdict::Vulnerable)
+    {
+        SecurityVerdict::Vulnerable
+    } else if results
+        .iter()
+        .any(|r| r.security_verdict == SecurityVerdict::Unassessed)
+    {
+        SecurityVerdict::Unassessed
+    } else if results
+        .iter()
+        .any(|r| r.security_verdict == SecurityVerdict::ConditionallySecure)
+    {
+        SecurityVerdict::ConditionallySecure
+    } else {
+        SecurityVerdict::Secure
     }
 }
 
@@ -819,8 +850,12 @@ pub fn evaluate_addon(
     );
 
     let overall_verdict = combine_verdicts(&parity_verdict, &security_verdict, &throughput_verdict);
-    let governance_action =
-        derive_governance_action(&overall_verdict, &security_verdict, &addon.tier);
+    let governance_action = derive_governance_action_with_policy(
+        &overall_verdict,
+        &security_verdict,
+        &addon.tier,
+        config.require_security_audit,
+    );
 
     CohortResult {
         addon: addon.clone(),
@@ -926,8 +961,16 @@ pub fn evaluate_cohort_gate(
             && matches!(r.addon.tier, CohortTier::Critical | CohortTier::High)
     });
 
+    let observed_tiers: BTreeSet<CohortTier> = results.iter().map(|r| r.addon.tier).collect();
+    let missing_required_tier = config
+        .required_tiers
+        .iter()
+        .any(|tier| !observed_tiers.contains(tier));
+
     let overall_verdict = if has_critical_failure {
         GateVerdict::Fail
+    } else if missing_required_tier {
+        GateVerdict::InsufficientEvidence
     } else if failing > 0 {
         GateVerdict::ConditionalPass
     } else if passing == results.len() {
@@ -936,11 +979,7 @@ pub fn evaluate_cohort_gate(
         GateVerdict::InsufficientEvidence
     };
 
-    let worst_security = results
-        .iter()
-        .map(|r| r.security_verdict)
-        .min()
-        .unwrap_or(SecurityVerdict::Unassessed);
+    let worst_security = aggregate_security_verdict(&results);
 
     let worst_tier = results
         .iter()
@@ -949,8 +988,16 @@ pub fn evaluate_cohort_gate(
         .min()
         .unwrap_or(CohortTier::Unknown);
 
-    let governance_action =
-        derive_governance_action(&overall_verdict, &worst_security, &worst_tier);
+    let governance_action = if missing_required_tier {
+        GovernanceAction::RequireAudit
+    } else {
+        derive_governance_action_with_policy(
+            &overall_verdict,
+            &worst_security,
+            &worst_tier,
+            config.require_security_audit,
+        )
+    };
 
     // Compute input hash from all addon names.
     let mut input_buf = Vec::new();

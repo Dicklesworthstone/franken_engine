@@ -1275,15 +1275,13 @@ fn governance_unassessed_critical_requires_audit() {
 }
 
 #[test]
-fn governance_unassessed_medium_not_blocked() {
-    // Unassessed on medium/low/experimental: falls through to match on overall
+fn governance_unassessed_medium_requires_audit() {
     let action = derive_governance_action(
         &GateVerdict::Pass,
         &SecurityVerdict::Unassessed,
         &CohortTier::Medium,
     );
-    // Unassessed medium with Pass overall => AllowAdoption (unassessed check only for critical/high)
-    assert_eq!(action, GovernanceAction::AllowAdoption);
+    assert_eq!(action, GovernanceAction::RequireAudit);
 }
 
 #[test]
@@ -1725,6 +1723,84 @@ fn config_required_tiers_field() {
     assert_eq!(config.required_tiers.len(), 2);
     assert!(config.required_tiers.contains(&CohortTier::Critical));
     assert!(config.required_tiers.contains(&CohortTier::High));
+}
+
+#[test]
+fn required_tiers_missing_high_requires_audit() {
+    let config = GateConfig {
+        required_tiers: [CohortTier::Critical, CohortTier::High]
+            .into_iter()
+            .collect(),
+        ..GateConfig::default()
+    };
+    let addons = vec![
+        addon("medium-addon", CohortTier::Medium),
+        addon("low-addon", CohortTier::Low),
+    ];
+    let parity: Vec<_> = addons
+        .iter()
+        .flat_map(|addon| {
+            ParityDimension::ALL
+                .iter()
+                .map(move |dimension| parity_finding(&addon.name, *dimension, true))
+        })
+        .collect();
+    let security: Vec<_> = addons
+        .iter()
+        .flat_map(|addon| {
+            SecurityClass::ALL
+                .iter()
+                .map(move |class| security_finding(&addon.name, *class, SecurityVerdict::Secure))
+        })
+        .collect();
+    let throughput: Vec<_> = addons
+        .iter()
+        .flat_map(|addon| {
+            ThroughputMetric::ALL
+                .iter()
+                .map(move |metric| throughput_sample(&addon.name, *metric, MILLIONTHS, MILLIONTHS))
+        })
+        .collect();
+
+    let report = evaluate_cohort_gate(&config, &addons, &parity, &security, &throughput, epoch());
+
+    assert_eq!(report.overall_verdict, GateVerdict::InsufficientEvidence);
+    assert_eq!(report.governance_action, GovernanceAction::RequireAudit);
+}
+
+#[test]
+fn required_security_audit_blocks_unassessed_medium_cohort() {
+    let config = GateConfig::default();
+    let addons = vec![addon("medium-addon", CohortTier::Medium)];
+    let parity: Vec<_> = ParityDimension::ALL
+        .iter()
+        .map(|dimension| parity_finding("medium-addon", *dimension, true))
+        .collect();
+    let throughput: Vec<_> = ThroughputMetric::ALL
+        .iter()
+        .map(|metric| throughput_sample("medium-addon", *metric, MILLIONTHS, MILLIONTHS))
+        .collect();
+
+    let report = evaluate_cohort_gate(&config, &addons, &parity, &[], &throughput, epoch());
+
+    assert_eq!(report.overall_verdict, GateVerdict::InsufficientEvidence);
+    assert_eq!(report.governance_action, GovernanceAction::RequireAudit);
+}
+
+#[test]
+fn explicit_audit_opt_out_keeps_medium_unassessed_permissive() {
+    let config = GateConfig {
+        require_security_audit: false,
+        ..GateConfig::default()
+    };
+    let addon = addon("medium-addon", CohortTier::Medium);
+    let result = evaluate_addon(&addon, &[], &[], &[], &config);
+
+    assert_eq!(result.security_verdict, SecurityVerdict::Unassessed);
+    assert_eq!(
+        result.governance_action,
+        GovernanceAction::ConditionalAdoption
+    );
 }
 
 // ---------------------------------------------------------------------------

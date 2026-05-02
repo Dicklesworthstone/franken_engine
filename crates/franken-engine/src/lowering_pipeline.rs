@@ -454,6 +454,7 @@ pub fn validate_ir0_static_semantics(ir0: &Ir0Module) -> SemanticValidationResul
             | Statement::ForIn(_)
             | Statement::ForOf(_)
             | Statement::While(_)
+            | Statement::With(_)
             | Statement::DoWhile(_)
             | Statement::Return(_)
             | Statement::Throw(_)
@@ -902,6 +903,17 @@ pub fn lower_ir0_to_ir1(
                     &mut label_counter,
                 )?;
             }
+            Statement::With(_with_statement) => {
+                lower_statement_to_ir1(
+                    statement,
+                    &mut ir1.ops,
+                    &mut bindings,
+                    &mut binding_lookup,
+                    &mut binding_index,
+                    root_scope_id,
+                    &mut label_counter,
+                )?;
+            }
             Statement::DoWhile(_do_while_statement) => {
                 lower_statement_to_ir1(
                     statement,
@@ -1146,6 +1158,7 @@ fn reserve_root_scope_bindings(
             | Statement::If(_)
             | Statement::For(_)
             | Statement::While(_)
+            | Statement::With(_)
             | Statement::DoWhile(_)
             | Statement::Return(_)
             | Statement::Throw(_)
@@ -1998,6 +2011,15 @@ fn lower_statement_to_ir1_with_flow(
                 reason: IteratorCloseReason::Break,
             });
             ops.push(Ir1Op::Label { id: end_label });
+        }
+        Statement::With(with_stmt) => {
+            return Err(unsupported_frontier_expression_error(
+                "with_statement",
+                "FE-PARSER-GAP-WITH-0001",
+                "lower_ir0_to_ir1.with_statement_dynamic_scope",
+                "with statement lowering is not implemented; fail-closed parser-gap contract rejected dynamic-scope execution",
+                Some(with_stmt.span.clone()),
+            ));
         }
         Statement::While(while_stmt) => {
             let loop_label = alloc_label(label_counter);

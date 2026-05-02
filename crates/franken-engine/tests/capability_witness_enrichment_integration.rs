@@ -1306,7 +1306,9 @@ fn make_promotion_input(witness: &CapabilityWitness) -> PromotionTheoremInput {
 fn promote_witness(witness: &mut CapabilityWitness) {
     let input = make_promotion_input(witness);
     let report = witness.evaluate_promotion_theorems(&input).unwrap();
-    witness.apply_promotion_theorem_report(&report);
+    witness
+        .apply_promotion_theorem_report(&report)
+        .expect("promotion theorem report should be valid");
     witness.transition_to(LifecycleState::Validated).unwrap();
     witness.transition_to(LifecycleState::Promoted).unwrap();
 }
@@ -1670,7 +1672,9 @@ fn apply_promotion_theorem_report_inserts_metadata() {
     let mut witness = build_rich_witness();
     let input = make_promotion_input(&witness);
     let report = witness.evaluate_promotion_theorems(&input).unwrap();
-    witness.apply_promotion_theorem_report(&report);
+    witness
+        .apply_promotion_theorem_report(&report)
+        .expect("promotion theorem report should be valid");
     assert_eq!(
         witness
             .metadata
@@ -1705,7 +1709,9 @@ fn apply_promotion_theorem_report_adds_theorem_proofs() {
     let initial_proofs = witness.proof_obligations.len();
     let input = make_promotion_input(&witness);
     let report = witness.evaluate_promotion_theorems(&input).unwrap();
-    witness.apply_promotion_theorem_report(&report);
+    witness
+        .apply_promotion_theorem_report(&report)
+        .expect("promotion theorem report should be valid");
     let theorem_proofs = witness
         .proof_obligations
         .iter()
@@ -1917,7 +1923,9 @@ fn full_lifecycle_transition_chain() {
     let input = make_promotion_input(&witness);
     let report = witness.evaluate_promotion_theorems(&input).unwrap();
     assert!(report.all_passed);
-    witness.apply_promotion_theorem_report(&report);
+    witness
+        .apply_promotion_theorem_report(&report)
+        .expect("promotion theorem report should be valid");
     witness.transition_to(LifecycleState::Promoted).unwrap();
     assert_eq!(witness.lifecycle_state, LifecycleState::Promoted);
 
@@ -2629,7 +2637,9 @@ fn apply_promotion_theorem_report_no_proofs_on_failure() {
     let report = witness.evaluate_promotion_theorems(&input).unwrap();
     assert!(!report.all_passed);
     let proofs_before = witness.proof_obligations.len();
-    witness.apply_promotion_theorem_report(&report);
+    witness
+        .apply_promotion_theorem_report(&report)
+        .expect("promotion theorem report should be valid");
     let theorem_proofs = witness
         .proof_obligations
         .iter()
@@ -2681,7 +2691,9 @@ fn verify_integrity_stable_after_promotion_theorem_application() {
     let mut witness = build_rich_witness();
     let input = make_promotion_input(&witness);
     let report = witness.evaluate_promotion_theorems(&input).unwrap();
-    witness.apply_promotion_theorem_report(&report);
+    witness
+        .apply_promotion_theorem_report(&report)
+        .expect("promotion theorem report should be valid");
     // verify_integrity uses synthesis_unsigned_bytes which strips theorem
     // metadata, so integrity should still hold
     assert!(witness.verify_integrity().is_ok());

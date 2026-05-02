@@ -461,6 +461,7 @@ fn request_serde_roundtrip() {
         calibration_score: 0.85,
         fallback_active: false,
         top_features: vec![("severity".to_string(), 0.6)],
+        witnesses: Vec::new(),
         metadata: BTreeMap::new(),
     };
     let json = serde_json::to_string(&req).unwrap();
@@ -483,6 +484,7 @@ fn request_json_fields_present() {
         calibration_score: 0.0,
         fallback_active: true,
         top_features: vec![],
+        witnesses: Vec::new(),
         metadata: BTreeMap::new(),
     };
     let json = serde_json::to_string(&req).unwrap();
@@ -520,6 +522,7 @@ fn request_clone_equality() {
         calibration_score: 0.95,
         fallback_active: false,
         top_features: vec![],
+        witnesses: Vec::new(),
         metadata: BTreeMap::new(),
     };
     let cloned = req.clone();

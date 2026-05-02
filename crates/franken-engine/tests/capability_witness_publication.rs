@@ -132,7 +132,9 @@ fn build_promoted_witness(seed: u64, signing_key: &SigningKey) -> CapabilityWitn
         .evaluate_promotion_theorems(&theorem_input)
         .expect("evaluate promotion theorems");
     assert!(report.all_passed, "promotion theorem report must pass");
-    witness.apply_promotion_theorem_report(&report);
+    witness
+        .apply_promotion_theorem_report(&report)
+        .expect("promotion theorem report should be valid");
     rebind_witness(&mut witness, signing_key);
 
     witness

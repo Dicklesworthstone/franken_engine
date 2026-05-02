@@ -2522,6 +2522,7 @@ mod tests {
             witness_events: Vec::new(),
             events: Vec::new(),
             console_output: Vec::new(),
+            iteration_traces: Vec::new(),
         };
         let reward = ExecutionOrchestrator::execution_reward_millionths(&exec);
         assert_eq!(reward, 400_000);
@@ -3447,6 +3448,7 @@ mod tests {
             witness_events: Vec::new(),
             events: Vec::new(),
             console_output: Vec::new(),
+            iteration_traces: Vec::new(),
         };
         let reward = ExecutionOrchestrator::execution_reward_millionths(&exec);
         // Zero instructions should yield maximum reward (no cost).
@@ -3635,6 +3637,7 @@ mod tests {
             witness_events: Vec::new(),
             events: Vec::new(),
             console_output: Vec::new(),
+            iteration_traces: Vec::new(),
         };
         let update = UpdateResult {
             posterior,
@@ -3720,6 +3723,7 @@ mod tests {
             witness_events: Vec::new(),
             events: Vec::new(),
             console_output: Vec::new(),
+            iteration_traces: Vec::new(),
         };
         let ev = ExecutionOrchestrator::build_evidence(&pkg, &exec, SecurityEpoch::from_raw(1));
         assert_eq!(ev.extension_id, "test-ext-1");
@@ -3739,6 +3743,7 @@ mod tests {
             witness_events: Vec::new(),
             events: Vec::new(),
             console_output: Vec::new(),
+            iteration_traces: Vec::new(),
         };
         let ev = ExecutionOrchestrator::build_evidence(&pkg, &exec, SecurityEpoch::from_raw(1));
         assert_eq!(ev.resource_score_millionths, 1_000_000);
@@ -3762,6 +3767,7 @@ mod tests {
             witness_events: Vec::new(),
             events: Vec::new(),
             console_output: Vec::new(),
+            iteration_traces: Vec::new(),
         };
         let ev = ExecutionOrchestrator::build_evidence(&pkg, &exec, SecurityEpoch::from_raw(2));
         assert_eq!(ev.distinct_capabilities, 3);
@@ -3804,6 +3810,7 @@ mod tests {
             witness_events: Vec::new(),
             events: Vec::new(),
             console_output: Vec::new(),
+            iteration_traces: Vec::new(),
         };
         let reward = ExecutionOrchestrator::execution_reward_millionths(&exec);
         assert!(reward > 0, "reward for 1 instruction should be positive");
@@ -3983,6 +3990,7 @@ mod tests {
             witness_events: Vec::new(),
             events: Vec::new(),
             console_output: Vec::new(),
+            iteration_traces: Vec::new(),
         };
         let ev = ExecutionOrchestrator::build_evidence(&pkg, &exec, SecurityEpoch::from_raw(1));
         // Division by zero for hostcall_rate should be handled (returns 0).
@@ -4014,6 +4022,7 @@ mod tests {
             witness_events: Vec::new(),
             events: Vec::new(),
             console_output: Vec::new(),
+            iteration_traces: Vec::new(),
         };
         let reward = ExecutionOrchestrator::execution_reward_millionths(&exec);
         // 2 hostcalls => penalty = 2 * 25_000 = 50_000. Reward = 1M - 0 - 50_000 = 950_000.
@@ -4039,6 +4048,7 @@ mod tests {
             witness_events: Vec::new(),
             events: Vec::new(),
             console_output: Vec::new(),
+            iteration_traces: Vec::new(),
         };
         let reward = ExecutionOrchestrator::execution_reward_millionths(&exec);
         // 100 hostcalls => penalty = min(100*25_000, 300_000) = 300_000. Reward = 700_000.
@@ -4168,6 +4178,7 @@ mod tests {
             witness_events: Vec::new(),
             events: Vec::new(),
             console_output: Vec::new(),
+            iteration_traces: Vec::new(),
         };
         for raw_epoch in [1u64, 100, u64::MAX] {
             let epoch = SecurityEpoch::from_raw(raw_epoch);

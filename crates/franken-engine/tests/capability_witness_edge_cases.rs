@@ -151,7 +151,9 @@ fn apply_passing_promotion_theorems(witness: &mut CapabilityWitness) {
         .evaluate_promotion_theorems(&promotion_theorem_input_for(witness))
         .expect("theorem check report");
     assert!(report.all_passed, "expected passing theorem report");
-    witness.apply_promotion_theorem_report(&report);
+    witness
+        .apply_promotion_theorem_report(&report)
+        .expect("promotion theorem report should be valid");
     rebind_witness(witness, &test_signing_key());
 }
 
@@ -1073,7 +1075,9 @@ fn apply_theorem_report_does_not_add_proofs_when_failed() {
     let report = witness.evaluate_promotion_theorems(&input).unwrap();
     assert!(!report.all_passed);
 
-    witness.apply_promotion_theorem_report(&report);
+    witness
+        .apply_promotion_theorem_report(&report)
+        .expect("promotion theorem report should be valid");
 
     // Should NOT have added PolicyTheoremCheck proofs
     let theorem_proofs = witness

@@ -66,11 +66,9 @@ fn strict_mode_with_statement_function_context_rejection() {
         Err(parser_error) => {
             let error_code = format!("{:?}", parser_error.code);
             assert_eq!(
-                error_code,
-                "StrictModeWithStatement",
+                error_code, "StrictModeWithStatement",
                 "Expected strict mode with statement error, got: {} - {}",
-                error_code,
-                parser_error.to_string()
+                error_code, parser_error
             );
         }
     }
@@ -147,7 +145,7 @@ fn inspect_with_statement_error_details() {
             Err(e) => {
                 println!("❌ PARSE ERROR:");
                 println!("   Error code: {:?}", e.code);
-                println!("   Message: {}", e.to_string());
+                println!("   Message: {}", e);
                 println!("   Debug: {:?}", e);
             }
         }

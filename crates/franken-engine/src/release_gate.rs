@@ -921,6 +921,7 @@ impl ReleaseGate {
             calibration_score: 1.0,
             fallback_active,
             top_features: vec![("lifecycle_event".to_string(), 1.0)],
+            witnesses: Vec::new(),
             metadata,
         }
     }

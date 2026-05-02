@@ -43,9 +43,7 @@ fn verify_custom_iterator_support() {
             println!("❌ Custom iterator FAILED: {}", e);
             // This indicates a real conformance gap
             if e.to_string().contains("iterator") {
-                panic!(
-                    "CRITICAL: @@iterator not supported - conformance tests were fabricated"
-                );
+                panic!("CRITICAL: @@iterator not supported - conformance tests were fabricated");
             }
             // Could also be a parsing issue
             panic!("CRITICAL: For-of with custom iterator failed - {}", e);

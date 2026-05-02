@@ -63,6 +63,7 @@ fn make_request(action: &str, ts: u64) -> EvidenceEmissionRequest {
         calibration_score: 0.94,
         fallback_active: false,
         top_features: vec![("feature_a".to_string(), 0.85)],
+        witnesses: Vec::new(),
         metadata: BTreeMap::new(),
     }
 }

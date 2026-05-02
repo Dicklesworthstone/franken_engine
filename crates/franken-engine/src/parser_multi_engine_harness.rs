@@ -1879,6 +1879,9 @@ fn estimate_statement_allocation_count(statement: &Statement) -> u64 {
             .saturating_add(estimate_statement_allocation_count(
                 while_stmt.body.as_ref(),
             )),
+        Statement::With(with_stmt) => 1_u64
+            .saturating_add(estimate_expression_allocation_count(&with_stmt.object))
+            .saturating_add(estimate_statement_allocation_count(with_stmt.body.as_ref())),
         Statement::DoWhile(do_while_stmt) => 1_u64
             .saturating_add(estimate_statement_allocation_count(
                 do_while_stmt.body.as_ref(),

@@ -6,6 +6,8 @@ use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::native_addon_cohort_gate::*;
 use frankenengine_engine::security_epoch::SecurityEpoch;
 
+const MILLIONTHS: u64 = 1_000_000;
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------

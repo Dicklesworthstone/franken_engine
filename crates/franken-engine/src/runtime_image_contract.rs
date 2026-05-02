@@ -1728,8 +1728,10 @@ mod tests {
 
     #[test]
     fn best_warm_start_allows_unverified_when_integrity_not_required() {
-        let mut policy = ImagePolicy::default();
-        policy.require_integrity_check = false;
+        let policy = ImagePolicy {
+            require_integrity_check: false,
+            ..ImagePolicy::default()
+        };
         let mut reg = ImageRegistry::new(policy);
         let mut img = test_manifest("unverified-but-allowed");
         img.kind = ImageKind::AotCompiled;

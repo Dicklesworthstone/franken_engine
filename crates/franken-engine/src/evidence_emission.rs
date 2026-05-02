@@ -39,6 +39,7 @@ use crate::security_epoch::SecurityEpoch;
 
 const COMPONENT_NAME: &str = "evidence-emission";
 const SCHEMA_VERSION: &str = "evidence-v1";
+const WITNESS_METADATA_KEY: &str = "frankenengine.evidence_witnesses";
 
 /// Default bounded-buffer capacity for evidence entries.
 const DEFAULT_BUFFER_CAPACITY: usize = 4096;
@@ -309,19 +310,25 @@ pub fn create_compromise_rate_witness(gate_id: &str, rate: f64, threshold: f64) 
 pub fn create_extension_lifecycle_witness(
     extension_id: &str,
     event_type: &str,
-    state: &str
+    state: &str,
 ) -> Witness {
     Witness {
         witness_id: format!("extension_lifecycle_{}_{}", extension_id, event_type),
         witness_type: "extension_state_transition".to_string(),
-        value: format!("extension_id={},event={},state={}", extension_id, event_type, state),
+        value: format!(
+            "extension_id={},event={},state={}",
+            extension_id, event_type, state
+        ),
     }
 }
 
 /// Create a witness for parser operation results.
 pub fn create_parser_witness(operation: &str, success: bool, error_code: Option<&str>) -> Witness {
     let value = match error_code {
-        Some(code) => format!("operation={},success={},error_code={}", operation, success, code),
+        Some(code) => format!(
+            "operation={},success={},error_code={}",
+            operation, success, code
+        ),
         None => format!("operation={},success={}", operation, success),
     };
 
@@ -336,13 +343,15 @@ pub fn create_parser_witness(operation: &str, success: bool, error_code: Option<
 pub fn create_decision_artifact_witness(
     decision_id: &str,
     artifact_type: &str,
-    integrity_hash: &str
+    integrity_hash: &str,
 ) -> Witness {
     Witness {
         witness_id: format!("decision_artifact_{}", decision_id),
         witness_type: "decision_artifact_integrity".to_string(),
-        value: format!("decision_id={},artifact_type={},hash={}",
-                      decision_id, artifact_type, integrity_hash),
+        value: format!(
+            "decision_id={},artifact_type={},hash={}",
+            decision_id, artifact_type, integrity_hash
+        ),
     }
 }
 
@@ -466,10 +475,12 @@ impl CanonicalEvidenceEmitter {
             return Err(EvidenceEmissionError::ValidationFailed { errors: error_strs });
         }
 
+        let metadata = metadata_with_witnesses(request)?;
+
         // Compute artifact hash covering both ledger entry AND metadata so
         // neither can be tampered with independently.
         let artifact_hash =
-            compute_artifact_hash_with_buffer(&mut self.scratch, &ledger_entry, &request.metadata)
+            compute_artifact_hash_with_buffer(&mut self.scratch, &ledger_entry, &metadata)
                 .map_err(|error| EvidenceEmissionError::BuildError {
                     detail: format!("artifact hash serialization failed: {error}"),
                 })?;
@@ -500,7 +511,7 @@ impl CanonicalEvidenceEmitter {
             artifact_hash,
             ledger_entry,
             chain_hash,
-            metadata: request.metadata.clone(),
+            metadata,
         };
 
         self.entries.push(canonical);
@@ -634,11 +645,6 @@ impl CanonicalEvidenceEmitter {
             builder = builder.top_feature(name, *weight);
         }
 
-        // Add all witnesses from the request
-        for witness in &request.witnesses {
-            builder = builder.witness(witness.clone());
-        }
-
         builder
             .build()
             .map_err(|e| EvidenceEmissionError::BuildError {
@@ -668,6 +674,21 @@ impl CanonicalEvidenceEmitter {
 // ---------------------------------------------------------------------------
 // Chain hash computation
 // ---------------------------------------------------------------------------
+
+fn metadata_with_witnesses(
+    request: &EvidenceEmissionRequest,
+) -> Result<BTreeMap<String, String>, EvidenceEmissionError> {
+    let mut metadata = request.metadata.clone();
+    if !request.witnesses.is_empty() {
+        let witnesses_json = serde_json::to_string(&request.witnesses).map_err(|error| {
+            EvidenceEmissionError::BuildError {
+                detail: format!("witness metadata serialization failed: {error}"),
+            }
+        })?;
+        metadata.insert(WITNESS_METADATA_KEY.to_string(), witnesses_json);
+    }
+    Ok(metadata)
+}
 
 pub(crate) fn compute_chain_hash(prev: Option<&ContentHash>, current: &ContentHash) -> ContentHash {
     let mut input = Vec::with_capacity(64);
@@ -749,6 +770,7 @@ mod tests {
                 ("severity".to_string(), 0.6),
                 ("frequency".to_string(), 0.3),
             ],
+            witnesses: Vec::new(),
             metadata: BTreeMap::new(),
         }
     }

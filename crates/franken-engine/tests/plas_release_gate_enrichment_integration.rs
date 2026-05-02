@@ -151,7 +151,9 @@ fn promote_witness(
         .evaluate_promotion_theorems(&passing_theorem_input(&witness))
         .expect("theorem report");
     assert!(theorem_report.all_passed);
-    witness.apply_promotion_theorem_report(&theorem_report);
+    witness
+        .apply_promotion_theorem_report(&theorem_report)
+        .expect("promotion theorem report should be valid");
     rebind_witness(&mut witness, synthesizer_key);
     witness
         .transition_to(LifecycleState::Validated)

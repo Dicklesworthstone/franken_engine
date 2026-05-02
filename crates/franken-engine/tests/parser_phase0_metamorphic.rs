@@ -61,6 +61,7 @@ fn semantic_signature(tree: &SyntaxTree) -> Vec<String> {
             Statement::FunctionDeclaration(_) => "function_decl".to_string(),
             Statement::ForIn(_) => "for_in".to_string(),
             Statement::ForOf(_) => "for_of".to_string(),
+            Statement::With(_) => "with".to_string(),
             Statement::ClassDeclaration(_) => "class_decl".to_string(),
         })
         .collect()

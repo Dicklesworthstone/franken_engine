@@ -2476,12 +2476,14 @@ fn parse_source(
     // Check for "use strict" directive in the first statement of global scripts
     if !logical_lines.is_empty() {
         let first_line = &logical_lines[0];
-        for (_start, _end, text) in split_statement_segments(&first_line.text) {
+        if let Some((_start, _end, text)) = split_statement_segments(&first_line.text)
+            .into_iter()
+            .next()
+        {
             let trimmed_text = text.trim();
             if is_use_strict_directive(trimmed_text) {
                 context.strict_mode = true;
             }
-            break; // Only check the very first statement
         }
     }
 
@@ -7057,12 +7059,14 @@ fn parse_body_statements(
     // Check for "use strict" directive in the first statement
     if !logical_lines.is_empty() {
         let first_line = &logical_lines[0];
-        for (_start, _end, text) in split_statement_segments(&first_line.text) {
+        if let Some((_start, _end, text)) = split_statement_segments(&first_line.text)
+            .into_iter()
+            .next()
+        {
             let trimmed_text = text.trim();
             if is_use_strict_directive(trimmed_text) {
                 context.strict_mode = true;
             }
-            break; // Only check the very first statement
         }
     }
 

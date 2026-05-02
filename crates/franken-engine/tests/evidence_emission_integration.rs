@@ -77,6 +77,7 @@ fn make_request(category: ActionCategory, action: &str) -> EvidenceEmissionReque
             ("severity".to_string(), 0.6),
             ("frequency".to_string(), 0.3),
         ],
+        witnesses: Vec::new(),
         metadata: BTreeMap::new(),
     }
 }
@@ -106,6 +107,7 @@ fn make_request_with_seed(
         calibration_score: 0.85,
         fallback_active: false,
         top_features: vec![("severity".to_string(), 0.6)],
+        witnesses: Vec::new(),
         metadata: BTreeMap::new(),
     }
 }

@@ -516,6 +516,7 @@ impl ParserArena {
             | Statement::ForIn(_)
             | Statement::ForOf(_)
             | Statement::While(_)
+            | Statement::With(_)
             | Statement::DoWhile(_)
             | Statement::Return(_)
             | Statement::Throw(_)
@@ -832,6 +833,7 @@ fn statement_kind_name(statement: &Statement) -> &'static str {
         Statement::ForIn(_) => "for_in",
         Statement::ForOf(_) => "for_of",
         Statement::While(_) => "while",
+        Statement::With(_) => "with",
         Statement::DoWhile(_) => "do_while",
         Statement::Return(_) => "return",
         Statement::Throw(_) => "throw",

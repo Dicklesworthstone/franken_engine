@@ -113,7 +113,9 @@ fn apply_passing_promotion_theorems(witness: &mut CapabilityWitness) {
         .evaluate_promotion_theorems(&promotion_theorem_input_for(witness))
         .expect("theorem check report");
     assert!(report.all_passed, "expected passing theorem report");
-    witness.apply_promotion_theorem_report(&report);
+    witness
+        .apply_promotion_theorem_report(&report)
+        .expect("promotion theorem report should be valid");
     rebind_witness(witness, &test_signing_key());
 }
 
@@ -779,7 +781,9 @@ fn theorem_all_pass_enables_promotion() {
         .unwrap();
     assert!(report.all_passed);
     assert_eq!(report.results.len(), 3);
-    witness.apply_promotion_theorem_report(&report);
+    witness
+        .apply_promotion_theorem_report(&report)
+        .expect("promotion theorem report should be valid");
     witness.transition_to(LifecycleState::Validated).unwrap();
     witness.transition_to(LifecycleState::Promoted).unwrap();
     assert_eq!(witness.lifecycle_state, LifecycleState::Promoted);
@@ -969,7 +973,9 @@ fn apply_failing_report_does_not_add_theorem_proofs() {
         .iter()
         .filter(|p| p.kind == ProofKind::PolicyTheoremCheck)
         .count();
-    witness.apply_promotion_theorem_report(&report);
+    witness
+        .apply_promotion_theorem_report(&report)
+        .expect("promotion theorem report should be valid");
     let after = witness
         .proof_obligations
         .iter()

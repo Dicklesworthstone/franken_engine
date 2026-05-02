@@ -18511,6 +18511,141 @@ mod async_runtime_tests_current {
         );
     }
 
+    fn construct_weakmap_for_current_test(core: &mut InterpreterCore) -> ObjectId {
+        let result = core
+            .dispatch_builtin_hostcall("builtin:WeakMap", RegRange { start: 0, count: 0 }, None)
+            .expect("WeakMap constructor should allocate receiver and entries");
+        let Value::Object(weakmap_id) = result else {
+            panic!("WeakMap constructor should return object, got {result:?}");
+        };
+        assert_eq!(
+            core.heap[weakmap_id.0 as usize].properties.get("__type"),
+            Some(&Value::Str("WeakMap".to_string()))
+        );
+        weakmap_id
+    }
+
+    fn weakmap_entries_for_current_test(core: &InterpreterCore, weakmap_id: ObjectId) -> ObjectId {
+        match core.heap[weakmap_id.0 as usize].properties.get("__entries") {
+            Some(Value::Object(entries_id)) => *entries_id,
+            other => panic!("WeakMap should hold entries object, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn weakmap_get_has_use_constructor_entries_storage_current() {
+        let mut core = test_interpreter();
+        let weakmap_id = construct_weakmap_for_current_test(&mut core);
+        let entries_id = weakmap_entries_for_current_test(&core, weakmap_id);
+        assert_ne!(weakmap_id, entries_id);
+
+        let key_id = core
+            .alloc_object_with_prototype(None)
+            .expect("object key allocation should succeed");
+        core.set_object_property(entries_id, format!("o:{}", key_id.0), Value::Int(41))
+            .expect("test setup should write WeakMap entries storage");
+
+        core.registers[0] = Value::Object(weakmap_id);
+        core.registers[1] = Value::Object(key_id);
+        assert_eq!(
+            core.dispatch_builtin_hostcall(
+                "builtin:WeakMapPrototypeHas",
+                RegRange { start: 0, count: 2 },
+                None,
+            )
+            .expect("WeakMap.prototype.has should execute"),
+            Value::Bool(true)
+        );
+        assert_eq!(
+            core.dispatch_builtin_hostcall(
+                "builtin:WeakMapPrototypeGet",
+                RegRange { start: 0, count: 2 },
+                None,
+            )
+            .expect("WeakMap.prototype.get should execute"),
+            Value::Int(41)
+        );
+
+        let missing_key_id = core
+            .alloc_object_with_prototype(None)
+            .expect("missing object key allocation should succeed");
+        core.registers[1] = Value::Object(missing_key_id);
+        assert_eq!(
+            core.dispatch_builtin_hostcall(
+                "builtin:WeakMapPrototypeHas",
+                RegRange { start: 0, count: 2 },
+                None,
+            )
+            .expect("WeakMap.prototype.has should execute for missing key"),
+            Value::Bool(false)
+        );
+        assert_eq!(
+            core.dispatch_builtin_hostcall(
+                "builtin:WeakMapPrototypeGet",
+                RegRange { start: 0, count: 2 },
+                None,
+            )
+            .expect("WeakMap.prototype.get should execute for missing key"),
+            Value::Undefined
+        );
+    }
+
+    #[test]
+    fn weakmap_get_has_reject_plain_object_receivers_current() {
+        let mut core = test_interpreter();
+        let receiver_id = core
+            .alloc_object_with_prototype(None)
+            .expect("plain receiver allocation should succeed");
+        let key_id = core
+            .alloc_object_with_prototype(None)
+            .expect("object key allocation should succeed");
+        core.set_object_property(receiver_id, format!("o:{}", key_id.0), Value::Int(9))
+            .expect("test setup should write fake direct receiver key");
+
+        for capability in ["builtin:WeakMapPrototypeHas", "builtin:WeakMapPrototypeGet"] {
+            core.registers[0] = Value::Object(receiver_id);
+            core.registers[1] = Value::Object(key_id);
+            let err = core
+                .dispatch_builtin_hostcall(capability, RegRange { start: 0, count: 2 }, None)
+                .expect_err("WeakMap prototype method should reject non-WeakMap receiver");
+            assert!(matches!(
+                err,
+                InterpreterError::TypeError { expected, got }
+                    if expected == "WeakMap" && got == "object"
+            ));
+        }
+    }
+
+    #[test]
+    fn weakmap_get_has_ignore_primitive_keys_even_when_entries_match_current() {
+        let mut core = test_interpreter();
+        let weakmap_id = construct_weakmap_for_current_test(&mut core);
+        let entries_id = weakmap_entries_for_current_test(&core, weakmap_id);
+        core.set_object_property(entries_id, "s:primitive".to_string(), Value::Int(7))
+            .expect("test setup should write non-object-key entry");
+
+        core.registers[0] = Value::Object(weakmap_id);
+        core.registers[1] = Value::Str("primitive".to_string());
+        assert_eq!(
+            core.dispatch_builtin_hostcall(
+                "builtin:WeakMapPrototypeHas",
+                RegRange { start: 0, count: 2 },
+                None,
+            )
+            .expect("WeakMap.prototype.has should execute for primitive key"),
+            Value::Bool(false)
+        );
+        assert_eq!(
+            core.dispatch_builtin_hostcall(
+                "builtin:WeakMapPrototypeGet",
+                RegRange { start: 0, count: 2 },
+                None,
+            )
+            .expect("WeakMap.prototype.get should execute for primitive key"),
+            Value::Undefined
+        );
+    }
+
     #[test]
     fn proxy_traps_execute_via_baseline_call_path() {
         let mut module = test_module_with_functions(

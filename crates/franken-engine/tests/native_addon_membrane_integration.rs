@@ -468,8 +468,12 @@ fn route_fast_path_for_node_api() {
 #[test]
 fn route_slow_path_for_custom_ffi() {
     let mut s = MembraneState::new();
-    s.register_addon(make_registration("a", AddonAbi::CustomFfi, &[]))
-        .unwrap();
+    s.register_addon(make_registration(
+        "a",
+        AddonAbi::CustomFfi,
+        &[CapabilityKind::Buffer],
+    ))
+    .unwrap();
     let config = default_routing();
     assert_eq!(s.route_call("a", &config), RouteDecision::SlowPath);
     assert_eq!(s.slow_path_calls, 1);
@@ -526,8 +530,12 @@ fn route_fallback_at_breach_threshold_even_below_configured_fallback_threshold()
 #[test]
 fn route_wasi_on_fast_path() {
     let mut s = MembraneState::new();
-    s.register_addon(make_registration("w", AddonAbi::WasiPreview1, &[]))
-        .unwrap();
+    s.register_addon(make_registration(
+        "w",
+        AddonAbi::WasiPreview1,
+        &[CapabilityKind::Buffer],
+    ))
+    .unwrap();
     let config = default_routing();
     assert_eq!(s.route_call("w", &config), RouteDecision::FastPath);
 }
@@ -535,8 +543,12 @@ fn route_wasi_on_fast_path() {
 #[test]
 fn route_native_esm_slow_path() {
     let mut s = MembraneState::new();
-    s.register_addon(make_registration("e", AddonAbi::NativeEsm, &[]))
-        .unwrap();
+    s.register_addon(make_registration(
+        "e",
+        AddonAbi::NativeEsm,
+        &[CapabilityKind::Buffer],
+    ))
+    .unwrap();
     let config = default_routing();
     assert_eq!(s.route_call("e", &config), RouteDecision::SlowPath);
 }
@@ -554,11 +566,60 @@ fn route_call_increments_total() {
 #[test]
 fn route_with_custom_allowed_abis() {
     let mut s = MembraneState::new();
-    s.register_addon(make_registration("a", AddonAbi::CustomFfi, &[]))
-        .unwrap();
+    s.register_addon(make_registration(
+        "a",
+        AddonAbi::CustomFfi,
+        &[CapabilityKind::Buffer],
+    ))
+    .unwrap();
     let mut config = default_routing();
     config.fast_path_allowed_abis.insert(AddonAbi::CustomFfi);
     assert_eq!(s.route_call("a", &config), RouteDecision::FastPath);
+}
+
+#[test]
+fn route_denies_fast_path_when_required_capability_missing() {
+    let mut s = MembraneState::new();
+    s.register_addon(make_registration("netless", AddonAbi::NodeApi, &[]))
+        .unwrap();
+    let requested = [CapabilityKind::Network].into_iter().collect();
+    assert_eq!(
+        validate_capabilities(&s, "netless", &requested),
+        vec![CapabilityKind::Network]
+    );
+
+    let mut config = default_routing();
+    config.required_capabilities = requested;
+    let decision = s.route_call("netless", &config);
+
+    assert!(matches!(
+        decision,
+        RouteDecision::Deny { ref reason } if reason.contains("network")
+    ));
+    assert_eq!(s.denied_calls, 1);
+    assert_eq!(s.fast_path_calls, 0);
+    assert!(s.violations.iter().any(|violation| {
+        violation.kind == ViolationKind::UnauthorizedCapability
+            && violation.addon_id == "netless"
+            && violation.detail.contains("network")
+    }));
+}
+
+#[test]
+fn route_fast_path_when_required_capability_granted() {
+    let mut s = MembraneState::new();
+    s.register_addon(make_registration(
+        "netful",
+        AddonAbi::NodeApi,
+        &[CapabilityKind::Network],
+    ))
+    .unwrap();
+    let mut config = default_routing();
+    config.required_capabilities = [CapabilityKind::Network].into_iter().collect();
+
+    assert_eq!(s.route_call("netful", &config), RouteDecision::FastPath);
+    assert_eq!(s.fast_path_calls, 1);
+    assert_eq!(s.denied_calls, 0);
 }
 
 // ===========================================================================

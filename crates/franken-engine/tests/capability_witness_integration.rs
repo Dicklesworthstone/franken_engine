@@ -115,7 +115,8 @@ fn apply_passing_theorems(witness: &mut CapabilityWitness, sk: &SigningKey) {
         .evaluate_promotion_theorems(&passing_theorem_input(witness))
         .expect("theorem check report");
     assert!(report.all_passed);
-    witness.apply_promotion_theorem_report(&report)
+    witness
+        .apply_promotion_theorem_report(&report)
         .expect("promotion theorem report should be valid");
     rebind(witness, sk);
 }

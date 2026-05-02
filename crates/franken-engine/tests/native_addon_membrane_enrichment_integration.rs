@@ -485,12 +485,13 @@ fn enrichment_routing_config_json_field_names() {
     for key in &[
         "fast_path_max_latency_micros",
         "fast_path_allowed_abis",
+        "required_capabilities",
         "fallback_threshold_failures",
         "deny_unregistered",
     ] {
         assert!(obj.contains_key(*key), "missing field {key}");
     }
-    assert_eq!(obj.len(), 4);
+    assert_eq!(obj.len(), 5);
 }
 
 #[test]
@@ -507,6 +508,7 @@ fn enrichment_routing_config_default_matches_constants() {
     assert!(c.deny_unregistered);
     assert!(c.fast_path_allowed_abis.contains(&AddonAbi::NodeApi));
     assert!(c.fast_path_allowed_abis.contains(&AddonAbi::WasiPreview1));
+    assert!(c.required_capabilities.contains(&CapabilityKind::Buffer));
 }
 
 // ── AddonRegistration ───────────────────────────────────────────────────

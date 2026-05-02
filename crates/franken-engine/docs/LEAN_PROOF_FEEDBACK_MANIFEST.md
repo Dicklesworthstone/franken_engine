@@ -58,7 +58,7 @@ This manifest defines the formal verification strategy for FrankenEngine using L
 
 **Proof Export Interface**
 - Lean theorem compilation to Rust-checkable certificates
-- Runtime proof certificate validation with cryptographic signatures
+- Runtime proof certificate validation with content-hash verification (cryptographic signatures hypothetical)
 - Incremental proof checking for continuous integration performance
 - Proof dependency tracking for modular verification updates
 

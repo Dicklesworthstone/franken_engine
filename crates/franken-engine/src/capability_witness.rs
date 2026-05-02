@@ -55,6 +55,8 @@ const WITNESS_PUBLICATION_SCHEMA_DEF: &[u8] = b"CapabilityWitnessPublication.v1"
 const WITNESS_PUBLICATION_ZONE: &str = "capability-witness-publication";
 const TRUSTED_SYNTHESIZER_VERIFICATION_KEY_METADATA: &str = "trusted_synthesizer_verification_key";
 const PROMOTION_QUORUM_METADATA: &str = "promotion_quorum";
+const ACTIVE_ACCEPTANCE_TRUST_ROOT_REQUIRED: &str =
+    "active acceptance requires an external capability witness trust root";
 
 // ---------------------------------------------------------------------------
 // WitnessSchemaVersion
@@ -250,6 +252,75 @@ impl fmt::Display for WitnessError {
 }
 
 impl std::error::Error for WitnessError {}
+
+/// Externally pinned trust root for active/publishable witness acceptance.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CapabilityWitnessTrustRoot {
+    /// Synthesizer keys authorized to sign the witness synthesis preimage.
+    pub synthesizer_verification_keys: BTreeSet<VerificationKey>,
+    /// Promotion keys authorized to approve activation.
+    pub promotion_verification_keys: BTreeSet<VerificationKey>,
+    /// Number of distinct authorized promotion keys required.
+    pub required_promotion_signatures: usize,
+}
+
+impl CapabilityWitnessTrustRoot {
+    /// Build a trust root from externally pinned authorized key sets.
+    pub fn new(
+        synthesizer_verification_keys: impl IntoIterator<Item = VerificationKey>,
+        promotion_verification_keys: impl IntoIterator<Item = VerificationKey>,
+        required_promotion_signatures: usize,
+    ) -> Result<Self, WitnessError> {
+        let synthesizer_verification_keys = synthesizer_verification_keys.into_iter().collect();
+        let promotion_verification_keys = promotion_verification_keys.into_iter().collect();
+        let root = Self {
+            synthesizer_verification_keys,
+            promotion_verification_keys,
+            required_promotion_signatures,
+        };
+        root.validate()?;
+        Ok(root)
+    }
+
+    /// Single-authority trust root for tests and small deployments.
+    pub fn single_authority(verification_key: VerificationKey) -> Self {
+        let synthesizer_verification_keys = BTreeSet::from([verification_key.clone()]);
+        let promotion_verification_keys = BTreeSet::from([verification_key]);
+        Self {
+            synthesizer_verification_keys,
+            promotion_verification_keys,
+            required_promotion_signatures: 1,
+        }
+    }
+
+    fn validate(&self) -> Result<(), WitnessError> {
+        if self.synthesizer_verification_keys.is_empty() {
+            return Err(WitnessError::SignatureInvalid {
+                detail: "trust root has no authorized synthesizer keys".to_string(),
+            });
+        }
+        if self.promotion_verification_keys.is_empty() {
+            return Err(WitnessError::SignatureInvalid {
+                detail: "trust root has no authorized promotion keys".to_string(),
+            });
+        }
+        if self.required_promotion_signatures == 0 {
+            return Err(WitnessError::SignatureInvalid {
+                detail: "promotion quorum must require at least one signature".to_string(),
+            });
+        }
+        if self.required_promotion_signatures > self.promotion_verification_keys.len() {
+            return Err(WitnessError::SignatureInvalid {
+                detail: format!(
+                    "promotion quorum {} exceeds authorized key count {}",
+                    self.required_promotion_signatures,
+                    self.promotion_verification_keys.len()
+                ),
+            });
+        }
+        Ok(())
+    }
+}
 
 // ---------------------------------------------------------------------------
 // ConfidenceInterval — Wilson score bounds
@@ -774,6 +845,23 @@ impl CapabilityWitness {
 
     /// Transition to a new lifecycle state.
     pub fn transition_to(&mut self, target: LifecycleState) -> Result<(), WitnessError> {
+        self.transition_to_checked(target, None)
+    }
+
+    /// Transition using an externally pinned trust root when activating.
+    pub fn transition_to_with_trust_root(
+        &mut self,
+        target: LifecycleState,
+        trust_root: &CapabilityWitnessTrustRoot,
+    ) -> Result<(), WitnessError> {
+        self.transition_to_checked(target, Some(trust_root))
+    }
+
+    fn transition_to_checked(
+        &mut self,
+        target: LifecycleState,
+        trust_root: Option<&CapabilityWitnessTrustRoot>,
+    ) -> Result<(), WitnessError> {
         if !self.lifecycle_state.can_transition_to(target) {
             return Err(WitnessError::InvalidTransition {
                 from: self.lifecycle_state,
@@ -784,7 +872,10 @@ impl CapabilityWitness {
             self.verify_promotion_theorem_gate()?;
         }
         if target == LifecycleState::Active {
-            self.verify_active_acceptance()?;
+            let Some(trust_root) = trust_root else {
+                return Err(Self::external_trust_root_required());
+            };
+            self.verify_active_acceptance_with_trust_root(trust_root)?;
         }
         self.lifecycle_state = target;
         Ok(())
@@ -979,23 +1070,31 @@ impl CapabilityWitness {
         )
         .map_err(|err| WitnessError::IdDerivation(err.to_string()))?;
 
-        // Sign the report for authenticity verification
+        // Sign the report for authenticity verification.
         let signing_key = self.synthesizer_signing_key()?;
-        let unsigned_report_bytes = Self::theorem_report_canonical_bytes(self, &results, all_passed);
-        let signature = sign_preimage(&signing_key, &unsigned_report_bytes);
+        let unsigned_report_bytes =
+            Self::theorem_report_canonical_bytes(self, &results, all_passed);
+        let signature = sign_preimage(&signing_key, &unsigned_report_bytes).map_err(|err| {
+            WitnessError::SignatureInvalid {
+                detail: format!("promotion theorem report signing failed: {err}"),
+            }
+        })?;
 
         Ok(PromotionTheoremReport {
             results,
             all_passed,
             report_artifact_id,
             report_artifact_hash,
-            signature: signature.to_vec(),
+            signature: signature.to_bytes().to_vec(),
         })
     }
 
     /// Persist theorem-check outcomes into metadata and theorem proof obligations.
     /// Verifies report signature/provenance before accepting metadata.
-    pub fn apply_promotion_theorem_report(&mut self, report: &PromotionTheoremReport) -> Result<(), WitnessError> {
+    pub fn apply_promotion_theorem_report(
+        &mut self,
+        report: &PromotionTheoremReport,
+    ) -> Result<(), WitnessError> {
         // SECURITY: Verify report signature before accepting metadata to prevent forgery
         self.verify_promotion_theorem_report_signature(report)?;
         self.metadata.insert(
@@ -1034,7 +1133,7 @@ impl CapabilityWitness {
         }
 
         if !report.all_passed {
-            return;
+            return Ok(());
         }
 
         let required = self
@@ -1066,19 +1165,26 @@ impl CapabilityWitness {
     }
 
     /// Verify the signature of a promotion theorem report to prevent metadata forgery.
-    fn verify_promotion_theorem_report_signature(&self, report: &PromotionTheoremReport) -> Result<(), WitnessError> {
+    fn verify_promotion_theorem_report_signature(
+        &self,
+        report: &PromotionTheoremReport,
+    ) -> Result<(), WitnessError> {
         // Get the trusted verification key
         let verification_key = self.trusted_synthesizer_verification_key()?;
 
         // Verify signature length
         if report.signature.len() != 64 {
             return Err(WitnessError::SignatureInvalid {
-                detail: format!("promotion theorem report signature length is {}, expected 64", report.signature.len()),
+                detail: format!(
+                    "promotion theorem report signature length is {}, expected 64",
+                    report.signature.len()
+                ),
             });
         }
 
         // Reconstruct the canonical bytes that should have been signed
-        let unsigned_bytes = Self::theorem_report_canonical_bytes(self, &report.results, report.all_passed);
+        let unsigned_bytes =
+            Self::theorem_report_canonical_bytes(self, &report.results, report.all_passed);
 
         // Convert signature to the expected format
         let mut sig_bytes = [0u8; 64];
@@ -1219,14 +1325,7 @@ impl CapabilityWitness {
         &self,
         verification_key: &crate::signature_preimage::VerificationKey,
     ) -> Result<(), WitnessError> {
-        if self.synthesizer_signature.len() != 64 {
-            return Err(WitnessError::SignatureInvalid {
-                detail: "signature length is not 64 bytes".to_string(),
-            });
-        }
-        let mut sig_bytes = [0u8; 64];
-        sig_bytes.copy_from_slice(&self.synthesizer_signature);
-        let sig = Signature::from_bytes(sig_bytes);
+        let sig = Self::signature_from_bytes(&self.synthesizer_signature, "synthesizer")?;
         let unsigned = self.synthesis_unsigned_bytes();
         verify_signature(verification_key, &unsigned, &sig).map_err(|e| {
             WitnessError::SignatureInvalid {
@@ -1282,6 +1381,32 @@ impl CapabilityWitness {
     /// Verify every gate required before a promoted witness can become active,
     /// indexed as active/publishable, or published.
     pub fn verify_active_acceptance(&self) -> Result<(), WitnessError> {
+        self.verify_active_acceptance_gates()?;
+        Err(Self::external_trust_root_required())
+    }
+
+    /// Verify active acceptance using an externally pinned trust root.
+    pub fn verify_active_acceptance_with_trust_root(
+        &self,
+        trust_root: &CapabilityWitnessTrustRoot,
+    ) -> Result<(), WitnessError> {
+        trust_root.validate()?;
+        self.verify_active_acceptance_gates()?;
+
+        let synthesizer_authorized = trust_root
+            .synthesizer_verification_keys
+            .iter()
+            .any(|key| self.verify_synthesizer_signature(key).is_ok());
+        if !synthesizer_authorized {
+            return Err(WitnessError::SignatureInvalid {
+                detail: "synthesizer signature is not authorized by the trust root".to_string(),
+            });
+        }
+
+        self.verify_promotion_signature_quorum(trust_root)
+    }
+
+    fn verify_active_acceptance_gates(&self) -> Result<(), WitnessError> {
         self.verify_integrity()?;
         self.verify_proof_coverage()?;
         self.verify_promotion_theorem_gate()?;
@@ -1306,8 +1431,55 @@ impl CapabilityWitness {
             });
         }
 
-        let trusted_key = self.trusted_synthesizer_verification_key()?;
-        self.verify_synthesizer_signature(&trusted_key)
+        Ok(())
+    }
+
+    fn verify_promotion_signature_quorum(
+        &self,
+        trust_root: &CapabilityWitnessTrustRoot,
+    ) -> Result<(), WitnessError> {
+        let unsigned = self.synthesis_unsigned_bytes();
+        let mut accepted_keys = BTreeSet::new();
+        for raw_signature in &self.promotion_signatures {
+            let signature = Self::signature_from_bytes(raw_signature, "promotion")?;
+            let Some(authorized_key) = trust_root.promotion_verification_keys.iter().find(|key| {
+                !accepted_keys.contains(*key)
+                    && verify_signature(key, &unsigned, &signature).is_ok()
+            }) else {
+                return Err(WitnessError::SignatureInvalid {
+                    detail: "promotion signature is not authorized by the trust root".to_string(),
+                });
+            };
+            accepted_keys.insert(authorized_key.clone());
+        }
+
+        if accepted_keys.len() < trust_root.required_promotion_signatures {
+            return Err(WitnessError::SignatureInvalid {
+                detail: format!(
+                    "promotion quorum has {} trusted signatures, required {}",
+                    accepted_keys.len(),
+                    trust_root.required_promotion_signatures
+                ),
+            });
+        }
+        Ok(())
+    }
+
+    fn signature_from_bytes(raw: &[u8], label: &str) -> Result<Signature, WitnessError> {
+        if raw.len() != 64 {
+            return Err(WitnessError::SignatureInvalid {
+                detail: format!("{label} signature length is {}, expected 64", raw.len()),
+            });
+        }
+        let mut sig_bytes = [0u8; 64];
+        sig_bytes.copy_from_slice(raw);
+        Ok(Signature::from_bytes(sig_bytes))
+    }
+
+    fn external_trust_root_required() -> WitnessError {
+        WitnessError::SignatureInvalid {
+            detail: ACTIVE_ACCEPTANCE_TRUST_ROOT_REQUIRED.to_string(),
+        }
     }
 
     /// Verify content hash integrity.
@@ -1475,9 +1647,6 @@ impl WitnessBuilder {
         });
         let mut metadata = self.metadata;
         metadata
-            .entry(TRUSTED_SYNTHESIZER_VERIFICATION_KEY_METADATA.to_string())
-            .or_insert_with(|| self.signing_key.verification_key().to_hex());
-        metadata
             .entry(PROMOTION_QUORUM_METADATA.to_string())
             .or_insert_with(|| "theorem_gate".to_string());
 
@@ -1640,6 +1809,9 @@ pub struct WitnessStore {
     witnesses: Vec<CapabilityWitness>,
     /// Active witness ID per extension (extension_id, witness_id).
     active_pairs: Vec<(EngineObjectId, EngineObjectId)>,
+    /// External trust root required for active witness acceptance.
+    #[serde(default)]
+    active_acceptance_trust_root: Option<CapabilityWitnessTrustRoot>,
 }
 
 impl WitnessStore {
@@ -1648,11 +1820,31 @@ impl WitnessStore {
         Self::default()
     }
 
+    /// Create an empty store with an externally pinned active-acceptance trust root.
+    pub fn with_trust_root(trust_root: CapabilityWitnessTrustRoot) -> Self {
+        Self {
+            active_acceptance_trust_root: Some(trust_root),
+            ..Self::default()
+        }
+    }
+
+    /// Replace the active-acceptance trust root.
+    pub fn set_trust_root(&mut self, trust_root: CapabilityWitnessTrustRoot) {
+        self.active_acceptance_trust_root = Some(trust_root);
+    }
+
     /// Insert a witness into the store.
     pub fn insert(&mut self, mut witness: CapabilityWitness) {
         let wid = witness.witness_id.clone();
         let active_verified = witness.lifecycle_state == LifecycleState::Active
-            && witness.verify_active_acceptance().is_ok();
+            && self
+                .active_acceptance_trust_root
+                .as_ref()
+                .is_some_and(|trust_root| {
+                    witness
+                        .verify_active_acceptance_with_trust_root(trust_root)
+                        .is_ok()
+                });
         if witness.lifecycle_state == LifecycleState::Active && !active_verified {
             witness.lifecycle_state = LifecycleState::Promoted;
         }
@@ -1715,16 +1907,26 @@ impl WitnessStore {
         witness_id: &EngineObjectId,
         target: LifecycleState,
     ) -> Result<(), WitnessError> {
+        let trust_root = if target == LifecycleState::Active {
+            Some(
+                self.active_acceptance_trust_root
+                    .clone()
+                    .ok_or_else(CapabilityWitness::external_trust_root_required)?,
+            )
+        } else {
+            None
+        };
         let witness = self
             .get_mut(witness_id)
             .ok_or_else(|| WitnessError::IdDerivation("witness not found".to_string()))?;
 
         let old_state = witness.lifecycle_state;
         let ext_id = witness.extension_id.clone();
-        if target == LifecycleState::Active {
-            witness.verify_active_acceptance()?;
+        if let Some(trust_root) = trust_root.as_ref() {
+            witness.transition_to_with_trust_root(target, trust_root)?;
+        } else {
+            witness.transition_to(target)?;
         }
-        witness.transition_to(target)?;
 
         // Track active witness per extension.
         if target == LifecycleState::Active {
@@ -1960,6 +2162,7 @@ impl From<StorageError> for WitnessIndexError {
 pub struct WitnessIndexStore<A: StorageAdapter> {
     adapter: A,
     events: Vec<WitnessIndexEvent>,
+    active_acceptance_trust_root: Option<CapabilityWitnessTrustRoot>,
 }
 
 impl<A: StorageAdapter> WitnessIndexStore<A> {
@@ -1967,6 +2170,15 @@ impl<A: StorageAdapter> WitnessIndexStore<A> {
         Self {
             adapter,
             events: Vec::new(),
+            active_acceptance_trust_root: None,
+        }
+    }
+
+    pub fn with_trust_root(adapter: A, trust_root: CapabilityWitnessTrustRoot) -> Self {
+        Self {
+            adapter,
+            events: Vec::new(),
+            active_acceptance_trust_root: Some(trust_root),
         }
     }
 
@@ -2023,11 +2235,16 @@ impl<A: StorageAdapter> WitnessIndexStore<A> {
                 witness.lifecycle_state,
                 LifecycleState::Promoted | LifecycleState::Active
             ) {
-                witness.verify_active_acceptance().map_err(|err| {
+                let trust_root = self.active_acceptance_trust_root.as_ref().ok_or_else(|| {
                     WitnessIndexError::InvalidInput {
-                        detail: format!("active witness verification failed: {err}"),
+                        detail: ACTIVE_ACCEPTANCE_TRUST_ROOT_REQUIRED.to_string(),
                     }
                 })?;
+                witness
+                    .verify_active_acceptance_with_trust_root(trust_root)
+                    .map_err(|err| WitnessIndexError::InvalidInput {
+                        detail: format!("active witness verification failed: {err}"),
+                    })?;
             }
 
             let record = WitnessIndexRecord {
@@ -2992,6 +3209,7 @@ pub struct WitnessPublicationPipeline {
     config: WitnessPublicationConfig,
     current_epoch: SecurityEpoch,
     head_signing_key: SigningKey,
+    witness_trust_root: Option<CapabilityWitnessTrustRoot>,
     log_entries: Vec<PublicationLogEntry>,
     mmr: MerkleMountainRange,
     checkpoints: Vec<WitnessTreeHead>,
@@ -3032,6 +3250,7 @@ impl WitnessPublicationPipeline {
             config,
             current_epoch,
             head_signing_key,
+            witness_trust_root: None,
             log_entries: Vec::new(),
             mmr: MerkleMountainRange::new(current_epoch.as_u64()),
             checkpoints: Vec::new(),
@@ -3066,6 +3285,11 @@ impl WitnessPublicationPipeline {
         self.governance_ledger.as_ref()
     }
 
+    /// Configure the externally pinned trust root used for witness publication.
+    pub fn set_witness_trust_root(&mut self, trust_root: CapabilityWitnessTrustRoot) {
+        self.witness_trust_root = Some(trust_root);
+    }
+
     /// Publish a promoted witness into the transparency log.
     pub fn publish_witness(
         &mut self,
@@ -3080,11 +3304,16 @@ impl WitnessPublicationPipeline {
                 state: witness.lifecycle_state,
             });
         }
-        witness.verify_active_acceptance().map_err(|err| {
+        let trust_root = self.witness_trust_root.as_ref().ok_or_else(|| {
             WitnessPublicationError::WitnessVerificationFailed {
-                detail: format!("active witness verification failed: {err}"),
+                detail: ACTIVE_ACCEPTANCE_TRUST_ROOT_REQUIRED.to_string(),
             }
         })?;
+        witness
+            .verify_active_acceptance_with_trust_root(trust_root)
+            .map_err(|err| WitnessPublicationError::WitnessVerificationFailed {
+                detail: format!("active witness verification failed: {err}"),
+            })?;
         if self
             .publications
             .iter()
@@ -3723,7 +3952,8 @@ mod tests {
             .evaluate_promotion_theorems(&promotion_theorem_input_for(witness))
             .expect("theorem check report");
         assert!(report.all_passed, "expected passing theorem report");
-        witness.apply_promotion_theorem_report(&report)
+        witness
+            .apply_promotion_theorem_report(&report)
             .expect("promotion theorem report should be valid");
         rebind_witness(witness, &test_signing_key());
     }
@@ -3951,7 +4181,8 @@ mod tests {
             .evaluate_promotion_theorems(&input)
             .expect("serde deserialization should succeed");
         assert!(report.all_passed);
-        witness.apply_promotion_theorem_report(&report)
+        witness
+            .apply_promotion_theorem_report(&report)
             .expect("promotion theorem report should be valid");
         witness
             .transition_to(LifecycleState::Promoted)
@@ -6554,7 +6785,8 @@ mod tests {
             .iter()
             .filter(|p| p.kind == ProofKind::PolicyTheoremCheck)
             .count();
-        witness.apply_promotion_theorem_report(&report)
+        witness
+            .apply_promotion_theorem_report(&report)
             .expect("promotion theorem report should be valid");
         let proofs_after = witness
             .proof_obligations
@@ -8114,14 +8346,16 @@ mod tests {
             .evaluate_promotion_theorems(&input)
             .expect("serde deserialization should succeed");
         assert!(report.all_passed);
-        witness.apply_promotion_theorem_report(&report)
+        witness
+            .apply_promotion_theorem_report(&report)
             .expect("promotion theorem report should be valid");
         let count_after_first = witness
             .proof_obligations
             .iter()
             .filter(|p| p.kind == ProofKind::PolicyTheoremCheck)
             .count();
-        witness.apply_promotion_theorem_report(&report)
+        witness
+            .apply_promotion_theorem_report(&report)
             .expect("promotion theorem report should be valid");
         let count_after_second = witness
             .proof_obligations

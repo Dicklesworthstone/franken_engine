@@ -1024,7 +1024,8 @@ impl MembraneState {
             }
         };
 
-        let denied_capabilities = validate_capabilities(self, addon_id, &config.required_capabilities);
+        let denied_capabilities =
+            validate_capabilities(self, addon_id, &config.required_capabilities);
         if !denied_capabilities.is_empty() {
             let denied = denied_capabilities
                 .iter()

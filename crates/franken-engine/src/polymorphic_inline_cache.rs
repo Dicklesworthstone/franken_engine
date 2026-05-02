@@ -7,7 +7,7 @@
 //! - **IC site profiles**: per-instruction IC history with stable ordering.
 //! - **Promotion/demotion policy**: when to widen (mono→poly→mega) and
 //!   shrink (prune cold entries), all with explicit replay receipts.
-//! - **Bailout decisions**: deterministic deopt verdicts with cryptographic
+//! - **Bailout decisions**: deterministic deopt verdicts with deterministic hash
 //!   evidence so the decision is replayable.
 //! - **IC replay log**: a deterministic trace of every state transition that
 //!   can be diffed across runs for regression detection.
@@ -441,7 +441,7 @@ impl Default for IcPolicyConfig {
 // ---------------------------------------------------------------------------
 
 /// Evaluate the current IC site profile and produce a deterministic bailout
-/// decision with cryptographic evidence.
+/// decision with deterministic hash evidence (not cryptographic).
 pub fn decide_bailout(
     profile: &IcSiteProfile,
     config: &IcPolicyConfig,

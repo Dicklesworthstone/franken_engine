@@ -200,11 +200,11 @@ impl Default for ConvergenceConfig {
 // ContainmentReceipt — signed audit receipt for executed actions
 // ---------------------------------------------------------------------------
 
-/// Signed receipt for an executed containment action.
+/// Provisional receipt for an executed containment action.
 ///
-/// Each receipt is a cryptographic proof that a specific containment action
+/// Each receipt is a provisional attestation that a specific containment action
 /// was executed at a specific time by a specific node, with supporting
-/// evidence chain.
+/// evidence chain. Note: Uses HMAC-based authenticity hash, not cryptographic signatures.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContainmentReceipt {
     /// Unique action identifier.
@@ -229,7 +229,7 @@ pub struct ContainmentReceipt {
     pub degraded_mode: bool,
     /// Escalation depth (0 = initial action, 1+ = escalated).
     pub escalation_depth: u32,
-    /// Cryptographic signature over the receipt.
+    /// HMAC-based authenticity hash over the receipt (not cryptographic signature).
     pub signature: AuthenticityHash,
 }
 

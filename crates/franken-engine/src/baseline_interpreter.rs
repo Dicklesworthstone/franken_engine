@@ -6896,7 +6896,7 @@ impl InterpreterCore {
     }
 
     fn proxy_trap_value(
-        &self,
+        &mut self,
         handler_id: ObjectId,
         trap_name: &str,
     ) -> Result<Option<Value>, InterpreterError> {

@@ -431,7 +431,8 @@ fn build_promoted_witness(
     if !theorem_report.all_passed {
         return Err("synthetic witness promotion theorem report failed".to_string());
     }
-    witness.apply_promotion_theorem_report(&theorem_report);
+    witness.apply_promotion_theorem_report(&theorem_report)
+        .map_err(|error| format!("apply promotion theorem report: {error}"))?;
     witness
         .transition_to(LifecycleState::Validated)
         .map_err(|error| format!("validate witness: {error}"))?;

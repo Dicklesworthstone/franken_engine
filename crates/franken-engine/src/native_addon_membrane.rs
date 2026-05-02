@@ -560,10 +560,19 @@ pub struct RoutingConfig {
     pub fast_path_max_latency_micros: u64,
     /// Set of ABIs allowed on the fast path.
     pub fast_path_allowed_abis: BTreeSet<AddonAbi>,
+    /// Capabilities required before any routed native-addon invocation may run.
+    #[serde(default = "default_required_routing_capabilities")]
+    pub required_capabilities: BTreeSet<CapabilityKind>,
     /// Number of recent failures before triggering fallback.
     pub fallback_threshold_failures: u64,
     /// Whether to deny invocations from unregistered addons.
     pub deny_unregistered: bool,
+}
+
+fn default_required_routing_capabilities() -> BTreeSet<CapabilityKind> {
+    let mut capabilities = BTreeSet::new();
+    capabilities.insert(CapabilityKind::Buffer);
+    capabilities
 }
 
 impl Default for RoutingConfig {
@@ -574,6 +583,7 @@ impl Default for RoutingConfig {
         Self {
             fast_path_max_latency_micros: DEFAULT_FAST_PATH_MAX_LATENCY_MICROS,
             fast_path_allowed_abis: allowed,
+            required_capabilities: default_required_routing_capabilities(),
             fallback_threshold_failures: DEFAULT_FALLBACK_THRESHOLD_FAILURES,
             deny_unregistered: true,
         }
@@ -1013,6 +1023,25 @@ impl MembraneState {
                 return RouteDecision::SlowPath;
             }
         };
+
+        let denied_capabilities = validate_capabilities(self, addon_id, &config.required_capabilities);
+        if !denied_capabilities.is_empty() {
+            let denied = denied_capabilities
+                .iter()
+                .map(CapabilityKind::as_str)
+                .collect::<Vec<_>>()
+                .join(",");
+            self.denied_calls += 1;
+            self.violations.push(Violation::new(
+                ViolationKind::UnauthorizedCapability,
+                addon_id,
+                &format!("missing required capabilities: {denied}"),
+                self.total_calls,
+            ));
+            return RouteDecision::Deny {
+                reason: format!("missing required capabilities: {denied}"),
+            };
+        }
 
         // Check failure count for fallback.
         let failure_count = self
@@ -1735,6 +1764,7 @@ mod tests {
             r.fallback_threshold_failures,
             DEFAULT_FALLBACK_THRESHOLD_FAILURES
         );
+        assert!(r.required_capabilities.contains(&CapabilityKind::Buffer));
         assert!(r.deny_unregistered);
     }
 
@@ -2106,13 +2136,59 @@ mod tests {
     #[test]
     fn route_call_slow_path_non_fast_abi() {
         let mut s = MembraneState::new();
-        let reg = make_registration("a", AddonAbi::CustomFfi, &[]);
+        let reg = make_registration("a", AddonAbi::CustomFfi, &[CapabilityKind::Buffer]);
         s.register_addon(reg)
             .expect("serde deserialization should succeed");
         let config = default_routing();
         let decision = s.route_call("a", &config);
         assert_eq!(decision, RouteDecision::SlowPath);
         assert_eq!(s.slow_path_calls, 1);
+    }
+
+    #[test]
+    fn route_call_denies_missing_required_capability() {
+        let mut s = MembraneState::new();
+        let reg = make_registration("netless", AddonAbi::NodeApi, &[]);
+        s.register_addon(reg)
+            .expect("serde deserialization should succeed");
+        let mut required = BTreeSet::new();
+        required.insert(CapabilityKind::Network);
+        assert_eq!(
+            validate_capabilities(&s, "netless", &required),
+            vec![CapabilityKind::Network]
+        );
+
+        let mut config = default_routing();
+        config.required_capabilities = required;
+        let decision = s.route_call("netless", &config);
+
+        assert!(matches!(
+            decision,
+            RouteDecision::Deny { ref reason } if reason.contains("network")
+        ));
+        assert_eq!(s.denied_calls, 1);
+        assert_eq!(s.fast_path_calls, 0);
+        assert!(s.violations.iter().any(|violation| {
+            violation.kind == ViolationKind::UnauthorizedCapability
+                && violation.addon_id == "netless"
+                && violation.detail.contains("network")
+        }));
+    }
+
+    #[test]
+    fn route_call_fast_path_when_required_capability_granted() {
+        let mut s = MembraneState::new();
+        let reg = make_registration("netful", AddonAbi::NodeApi, &[CapabilityKind::Network]);
+        s.register_addon(reg)
+            .expect("serde deserialization should succeed");
+        let mut config = default_routing();
+        config.required_capabilities = [CapabilityKind::Network].into_iter().collect();
+
+        let decision = s.route_call("netful", &config);
+
+        assert_eq!(decision, RouteDecision::FastPath);
+        assert_eq!(s.fast_path_calls, 1);
+        assert_eq!(s.denied_calls, 0);
     }
 
     #[test]
@@ -2536,10 +2612,18 @@ mod tests {
     #[test]
     fn multiple_addons_independent_routing() {
         let mut s = MembraneState::new();
-        s.register_addon(make_registration("fast", AddonAbi::NodeApi, &[]))
-            .expect("serde deserialization should succeed");
-        s.register_addon(make_registration("slow", AddonAbi::CustomFfi, &[]))
-            .expect("serde deserialization should succeed");
+        s.register_addon(make_registration(
+            "fast",
+            AddonAbi::NodeApi,
+            &[CapabilityKind::Buffer],
+        ))
+        .expect("serde deserialization should succeed");
+        s.register_addon(make_registration(
+            "slow",
+            AddonAbi::CustomFfi,
+            &[CapabilityKind::Buffer],
+        ))
+        .expect("serde deserialization should succeed");
         let config = default_routing();
         let d1 = s.route_call("fast", &config);
         let d2 = s.route_call("slow", &config);
@@ -2550,10 +2634,18 @@ mod tests {
     #[test]
     fn crash_isolation_per_addon() {
         let mut s = MembraneState::new();
-        s.register_addon(make_registration("a", AddonAbi::NodeApi, &[]))
-            .expect("serde deserialization should succeed");
-        s.register_addon(make_registration("b", AddonAbi::NodeApi, &[]))
-            .expect("serde deserialization should succeed");
+        s.register_addon(make_registration(
+            "a",
+            AddonAbi::NodeApi,
+            &[CapabilityKind::Buffer],
+        ))
+        .expect("serde deserialization should succeed");
+        s.register_addon(make_registration(
+            "b",
+            AddonAbi::NodeApi,
+            &[CapabilityKind::Buffer],
+        ))
+        .expect("serde deserialization should succeed");
         for _ in 0..DEFAULT_FALLBACK_THRESHOLD_FAILURES {
             s.record_crash("a", "crash", 100);
         }

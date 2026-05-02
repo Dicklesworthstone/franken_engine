@@ -1,0 +1,19 @@
+{
+  "schema_version": "franken-engine.frankenctl.v1",
+  "trace_id": "frankenctl-replay-trace-replay-demo-session-001",
+  "decision_id": "frankenctl-replay-decision-replay-demo-session-001",
+  "policy_id": "frankenctl.replay.strict.v1",
+  "trace_path": "sample_trace.json",
+  "mode": "strict",
+  "session_id": "replay-demo-session-001",
+  "event_count": 1,
+  "replayed_events": 1,
+  "divergence_count": 0,
+  "critical_divergences": 0,
+  "complete": true,
+  "observability_mode": {
+    "mode_id": "default_capture",
+    "capture_semantics": "default_mixed_capture",
+    "lossless": false
+  }
+}

@@ -9,6 +9,15 @@
 //! All arithmetic uses fixed-point millionths (1_000_000 = 1.0) for
 //! deterministic cross-platform computation.
 //!
+//! ## PROVISIONAL LIMITATIONS
+//!
+//! **Fleet De-escalation Unimplemented**: The `FailurePlaybook::allows_deescalation`
+//! field is persisted and tested but not wired to live containment recovery.
+//! Current containment actions (quarantine, suspend, terminate) operate as a
+//! permanent ratchet with no de-escalation path. This gap is documented in
+//! audit recommendation R16. Operators requiring recovery from false-positive
+//! containment must use manual intervention outside the policy framework.
+//!
 //! Plan reference: FRX-08.3 (Policy-as-Data Security).
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -578,6 +587,11 @@ pub struct FailurePlaybook {
     /// Ordered escalation steps.
     pub steps: Vec<PlaybookStep>,
     /// Whether the playbook allows de-escalation.
+    ///
+    /// **PROVISIONAL**: This field is persisted but not wired to live containment
+    /// recovery. De-escalation implementation is tracked in audit gap R16.
+    /// Current containment (quarantine/suspend/terminate) operates as a permanent
+    /// ratchet - once contained, no automatic recovery path exists.
     pub allows_deescalation: bool,
     /// Content hash.
     pub content_hash: String,

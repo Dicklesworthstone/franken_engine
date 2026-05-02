@@ -142,7 +142,7 @@ Reproducibility bundle templates (`env.json`, `manifest.json`, `repro.lock`) are
 | Deterministic replay for high-severity decisions | Built in, mandatory release gate | External tooling only | External tooling only |
 | Probabilistic containment policy | Built in guardplane | Not default runtime behavior | Not default runtime behavior |
 | Cryptographic decision receipts | HYPOTHESIS until transparency-log and optional TEE proof artifacts promote the claim | Not a core runtime primitive | Not a core runtime primitive |
-| Fleet quarantine convergence model | TARGETED/provisional SLO and fault-injection gates; live bounded convergence is not yet an observed production claim | App-specific integration | App-specific integration |
+| Fleet quarantine convergence model | TARGETED/provisional SLO and fault-injection gates; live bounded convergence is not yet an observed production claim. **Note**: De-escalation unimplemented - containment operates as permanent ratchet | App-specific integration | App-specific integration |
 | Capability-typed extension contract | Selected runtime capability gates; compile-time TS-to-IR contract not shipped | Not native to runtime | Not native to runtime |
 | Cross-runtime lockstep oracle | Built in Node/Bun differential harness | N/A | N/A |
 
@@ -182,7 +182,7 @@ In standalone mode:
 - Suitable for development and testing
 
 ### Full Integration Mode
-For production deployments with the complete asupersync ecosystem:
+For integration builds with the complete asupersync ecosystem:
 
 ```bash
 # Build with all external dependencies
@@ -194,8 +194,8 @@ cargo test --all-features
 ```
 
 In full integration mode:
-- Complete governance and policy enforcement
-- Cross-repository coordination enabled
+- Governance and policy enforcement integration surfaces compile and run behind their current proof gates
+- Cross-repository coordination surfaces are enabled where sibling repositories are present
 - TEE attestation bindings and bounded fleet quarantine remain HYPOTHESIS/TARGETED security claims until promoted by live proof artifacts
 - Cryptographic decision receipts compile their integration seams and validation gates, but transparency-log and TEE-backed production guarantees remain governed by the claim-to-proof matrix
 
@@ -948,7 +948,7 @@ relied upon in production environments:
 
 ### CLI Surfaces Not Recommended for Production Use
 - Advanced policy debugging surfaces requiring TEE attestation
-- Fleet-wide quarantine orchestration beyond local containment  
+- Fleet-wide quarantine orchestration beyond local containment (Note: de-escalation unimplemented - permanent ratchet)  
 - Cross-repository governance coordination tools (use asupersync control plane)
 - Live policy modification interfaces (use static policy manifests)
 - Cryptographic key rotation automation (use dedicated key management)

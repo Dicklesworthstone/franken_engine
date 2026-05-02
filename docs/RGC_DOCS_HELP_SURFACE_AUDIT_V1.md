@@ -59,7 +59,9 @@ stale audit text.
   `doctor`, `verify`, `benchmark`, and `replay` remediation flows
 - `readme-claim-sensitive-build-mode`: narrowed cryptographic decision receipt,
   TEE attestation, and fleet quarantine language so all-features describes
-  integration seams and proof gates rather than unobserved production guarantees
+  integration seams and proof gates rather than unobserved production guarantees;
+  the section now describes integration builds and proof-gated surfaces instead
+  of production deployment availability
 - `frankenctl-top-level-help`: accurate and treated as the authoritative command
   source of truth
 

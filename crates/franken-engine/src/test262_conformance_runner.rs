@@ -888,6 +888,15 @@ pub mod differential_testing {
         pub exit_code: i32,
         /// Whether the reference engine is available for this test.
         pub available: bool,
+        /// Reference corpus path or executable used to produce this output.
+        #[serde(default)]
+        pub source_corpus_ref: Option<String>,
+        /// Exact command argv used for reference-engine execution.
+        #[serde(default)]
+        pub command_ledger: Vec<String>,
+        /// Hash of stdout/stderr/exit_code for auditability.
+        #[serde(default)]
+        pub output_hash: Option<String>,
     }
 
     /// Differential test categories.
@@ -1280,31 +1289,43 @@ pub mod differential_testing {
         /// Generate golden fixtures by running tests against reference engines.
         /// This would be called manually when reference engines are available.
         pub fn generate_golden_fixtures(&mut self) -> Result<(), String> {
-            // This is a placeholder for the fixture generation process
-            // In a real implementation, this would:
-            // 1. Check for d8 and qjs binaries in legacy_v8/legacy_quickjs
-            // 2. Execute each test case and capture outputs
-            // 3. Store results as golden fixtures
-            // 4. Update test cases with expected outputs
+            let repo_root = default_repo_root();
+            self.generate_golden_fixtures_from_roots(
+                &repo_root.join("legacy_v8"),
+                &repo_root.join("legacy_quickjs"),
+            )
+        }
 
+        fn generate_golden_fixtures_from_roots(
+            &mut self,
+            legacy_v8_root: &Path,
+            legacy_quickjs_root: &Path,
+        ) -> Result<(), String> {
             std::fs::create_dir_all(&self.golden_path)
                 .map_err(|e| format!("Failed to create golden fixtures directory: {}", e))?;
 
-            // Mock golden fixture generation
             for test in &mut self.tests {
-                test.v8_expected = ExpectedOutput {
-                    stdout: format!("V8 output for {}\n", test.id),
-                    stderr: String::new(),
-                    exit_code: 0,
-                    available: false, // Set to false since we're just mocking
-                };
+                test.v8_expected =
+                    reference_engine_output(ReferenceEngine::V8, legacy_v8_root, &test.source);
+                test.quickjs_expected = reference_engine_output(
+                    ReferenceEngine::QuickJs,
+                    legacy_quickjs_root,
+                    &test.source,
+                );
 
-                test.quickjs_expected = ExpectedOutput {
-                    stdout: format!("QuickJS output for {}\n", test.id),
-                    stderr: String::new(),
-                    exit_code: 0,
-                    available: false, // Set to false since we're just mocking
-                };
+                let fixture_path = self
+                    .golden_path
+                    .join(format!("{}.json", sanitize_fixture_name(&test.id)));
+                let fixture = serde_json::to_vec_pretty(test).map_err(|err| {
+                    format!("Failed to serialize golden fixture {}: {}", test.id, err)
+                })?;
+                std::fs::write(&fixture_path, fixture).map_err(|err| {
+                    format!(
+                        "Failed to write golden fixture {}: {}",
+                        fixture_path.display(),
+                        err
+                    )
+                })?;
             }
 
             Ok(())
@@ -1319,8 +1340,166 @@ pub mod differential_testing {
                 stderr: String::new(),
                 exit_code: 0,
                 available: false,
+                source_corpus_ref: None,
+                command_ledger: Vec::new(),
+                output_hash: None,
             }
         }
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    enum ReferenceEngine {
+        V8,
+        QuickJs,
+    }
+
+    impl ReferenceEngine {
+        fn display_name(self) -> &'static str {
+            match self {
+                Self::V8 => "V8",
+                Self::QuickJs => "QuickJS",
+            }
+        }
+
+        fn env_var(self) -> &'static str {
+            match self {
+                Self::V8 => "FRANKENENGINE_D8",
+                Self::QuickJs => "FRANKENENGINE_QJS",
+            }
+        }
+
+        fn candidate_paths(self, legacy_root: &Path) -> Vec<PathBuf> {
+            match self {
+                Self::V8 => vec![
+                    legacy_root.join("v8/out/x64.release/d8"),
+                    legacy_root.join("v8/out/x64.debug/d8"),
+                    legacy_root.join("v8/out/Release/d8"),
+                    legacy_root.join("v8/out/Debug/d8"),
+                ],
+                Self::QuickJs => vec![
+                    legacy_root.join("quickjs/qjs"),
+                    legacy_root.join("quickjs/qjs-debug"),
+                    legacy_root.join("quickjs/quickjs"),
+                ],
+            }
+        }
+    }
+
+    fn reference_engine_output(
+        engine: ReferenceEngine,
+        legacy_root: &Path,
+        source: &str,
+    ) -> ExpectedOutput {
+        let Some(executable) = find_reference_executable(engine, legacy_root) else {
+            return unavailable_reference_output(
+                engine,
+                legacy_root,
+                "reference executable not found in legacy corpus",
+            );
+        };
+
+        let wrapped_source = wrap_reference_source(source);
+        let command_ledger = vec![
+            executable.display().to_string(),
+            "-e".to_string(),
+            "<test-source>".to_string(),
+        ];
+        let output = Command::new(&executable)
+            .arg("-e")
+            .arg(&wrapped_source)
+            .output();
+
+        match output {
+            Ok(output) => {
+                let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+                let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+                let exit_code = output.status.code().unwrap_or(-1);
+                ExpectedOutput {
+                    output_hash: Some(reference_output_hash(&stdout, &stderr, exit_code)),
+                    stdout,
+                    stderr,
+                    exit_code,
+                    available: true,
+                    source_corpus_ref: Some(executable.display().to_string()),
+                    command_ledger,
+                }
+            }
+            Err(err) => unavailable_reference_output(
+                engine,
+                &executable,
+                &format!("reference command failed to launch: {err}"),
+            ),
+        }
+    }
+
+    fn find_reference_executable(engine: ReferenceEngine, legacy_root: &Path) -> Option<PathBuf> {
+        if let Ok(path) = std::env::var(engine.env_var()) {
+            let path = PathBuf::from(path);
+            if path.is_file() {
+                return Some(path);
+            }
+        }
+
+        engine
+            .candidate_paths(legacy_root)
+            .into_iter()
+            .find(|path| path.is_file())
+    }
+
+    fn unavailable_reference_output(
+        engine: ReferenceEngine,
+        reference_path: &Path,
+        reason: &str,
+    ) -> ExpectedOutput {
+        ExpectedOutput {
+            stdout: String::new(),
+            stderr: format!(
+                "{} reference unavailable: {} ({})",
+                engine.display_name(),
+                reason,
+                reference_path.display()
+            ),
+            exit_code: -1,
+            available: false,
+            source_corpus_ref: Some(reference_path.display().to_string()),
+            command_ledger: Vec::new(),
+            output_hash: None,
+        }
+    }
+
+    fn wrap_reference_source(source: &str) -> String {
+        format!(
+            "if (typeof globalThis.console === 'undefined') {{ globalThis.console = {{ log: (...args) => print(args.join(' ')) }}; }}\n{}",
+            source
+        )
+    }
+
+    fn reference_output_hash(stdout: &str, stderr: &str, exit_code: i32) -> String {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(stdout.as_bytes());
+        bytes.push(0xff);
+        bytes.extend_from_slice(stderr.as_bytes());
+        bytes.push(0xfe);
+        bytes.extend_from_slice(&exit_code.to_be_bytes());
+        ContentHash::compute(&bytes).to_hex()
+    }
+
+    fn sanitize_fixture_name(test_id: &str) -> String {
+        test_id
+            .chars()
+            .map(|ch| match ch {
+                'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '_' => ch,
+                _ => '_',
+            })
+            .collect()
+    }
+
+    fn default_repo_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."))
     }
 
     /// Comprehensive differential testing report.
@@ -1523,6 +1702,7 @@ pub mod differential_testing {
     #[cfg(test)]
     mod tests {
         use super::*;
+        use tempfile::tempdir;
 
         #[test]
         fn differential_harness_creates_minimal_test_suite() {
@@ -1578,6 +1758,9 @@ pub mod differential_testing {
                 stderr: String::new(),
                 exit_code: 0,
                 available: true,
+                source_corpus_ref: Some("legacy_v8/v8/out/x64.release/d8".to_string()),
+                command_ledger: vec!["d8".to_string(), "-e".to_string()],
+                output_hash: Some("fixture-hash".to_string()),
             };
 
             let comparison = harness.compare_outputs(&actual, &expected);
@@ -1601,6 +1784,91 @@ pub mod differential_testing {
             assert!(summary.contains("Cross-Engine Differential Testing Report"));
             assert!(summary.contains("**Total Tests:** 8"));
             assert!(summary.contains("bd-3rbnw"));
+        }
+
+        #[test]
+        fn golden_generation_without_reference_engines_fails_closed() {
+            let temp_dir = tempdir().expect("temp dir");
+            let mut harness = DifferentialHarness::new();
+            harness.golden_path = temp_dir.path().join("goldens");
+
+            harness
+                .generate_golden_fixtures_from_roots(
+                    &temp_dir.path().join("missing-v8"),
+                    &temp_dir.path().join("missing-qjs"),
+                )
+                .expect(
+                    "unavailable reference engines should produce explicit unavailable records",
+                );
+
+            for test in &harness.tests {
+                assert!(!test.v8_expected.available);
+                assert!(!test.quickjs_expected.available);
+                assert!(test.v8_expected.stdout.is_empty());
+                assert!(test.quickjs_expected.stdout.is_empty());
+                assert!(!test.v8_expected.stdout.contains("V8 output for"));
+                assert!(!test.quickjs_expected.stdout.contains("QuickJS output for"));
+                assert!(
+                    test.v8_expected
+                        .stderr
+                        .contains("reference executable not found")
+                );
+                assert!(
+                    test.quickjs_expected
+                        .stderr
+                        .contains("reference executable not found")
+                );
+            }
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn golden_generation_uses_reference_corpus_executables() {
+            use std::fs;
+            use std::os::unix::fs::PermissionsExt;
+
+            let temp_dir = tempdir().expect("temp dir");
+            let v8_bin = temp_dir.path().join("legacy_v8/v8/out/x64.release/d8");
+            let qjs_bin = temp_dir.path().join("legacy_quickjs/quickjs/qjs");
+            fs::create_dir_all(v8_bin.parent().expect("v8 parent")).expect("mkdir v8");
+            fs::create_dir_all(qjs_bin.parent().expect("qjs parent")).expect("mkdir qjs");
+            fs::write(&v8_bin, "#!/bin/sh\nprintf 'v8-reference\\n'\n").expect("write d8");
+            fs::write(&qjs_bin, "#!/bin/sh\nprintf 'qjs-reference\\n'\n").expect("write qjs");
+            fs::set_permissions(&v8_bin, fs::Permissions::from_mode(0o755)).expect("chmod d8");
+            fs::set_permissions(&qjs_bin, fs::Permissions::from_mode(0o755)).expect("chmod qjs");
+
+            let mut harness = DifferentialHarness::new();
+            harness.tests.truncate(1);
+            harness.golden_path = temp_dir.path().join("goldens");
+            harness
+                .generate_golden_fixtures_from_roots(
+                    &temp_dir.path().join("legacy_v8"),
+                    &temp_dir.path().join("legacy_quickjs"),
+                )
+                .expect("reference corpus commands should run");
+
+            let test = &harness.tests[0];
+            assert!(test.v8_expected.available);
+            assert!(test.quickjs_expected.available);
+            assert_eq!(test.v8_expected.stdout, "v8-reference\n");
+            assert_eq!(test.quickjs_expected.stdout, "qjs-reference\n");
+            assert!(
+                test.v8_expected
+                    .source_corpus_ref
+                    .as_deref()
+                    .expect("v8 corpus ref")
+                    .ends_with("legacy_v8/v8/out/x64.release/d8")
+            );
+            assert!(
+                test.quickjs_expected
+                    .source_corpus_ref
+                    .as_deref()
+                    .expect("qjs corpus ref")
+                    .ends_with("legacy_quickjs/quickjs/qjs")
+            );
+            assert!(test.v8_expected.output_hash.is_some());
+            assert!(test.quickjs_expected.output_hash.is_some());
+            assert!(harness.golden_path.join("literals-basic.json").is_file());
         }
     }
 }

@@ -11,8 +11,8 @@
 use std::collections::BTreeMap;
 
 use frankenengine_engine::runtime_decision_theory::{
-    BudgetConfig, ConformalConfig, CvarConfig, DecisionContext, DecisionContextConfig,
-    DriftConfig, LaneId, PolicyBundle, RiskFactor,
+    BudgetConfig, ConformalConfig, CvarConfig, DecisionContext, DecisionContextConfig, DriftConfig,
+    LaneId, PolicyBundle, RiskFactor,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
 
@@ -59,12 +59,12 @@ fn test_policy_bundle_round_trip_serialization() {
     let original_bundle = create_test_policy_bundle();
 
     // Serialize to JSON
-    let json_string = serde_json::to_string(&original_bundle)
-        .expect("Should serialize PolicyBundle");
+    let json_string =
+        serde_json::to_string(&original_bundle).expect("Should serialize PolicyBundle");
 
     // Deserialize back
-    let deserialized_bundle: PolicyBundle = serde_json::from_str(&json_string)
-        .expect("Should deserialize PolicyBundle from JSON");
+    let deserialized_bundle: PolicyBundle =
+        serde_json::from_str(&json_string).expect("Should deserialize PolicyBundle from JSON");
 
     // Verify round-trip preservation
     assert_eq!(
@@ -77,12 +77,30 @@ fn test_policy_bundle_round_trip_serialization() {
     assert_eq!(original_bundle.epoch, deserialized_bundle.epoch);
     assert_eq!(original_bundle.lanes, deserialized_bundle.lanes);
     assert_eq!(original_bundle.cvar_config, deserialized_bundle.cvar_config);
-    assert_eq!(original_bundle.conformal_config, deserialized_bundle.conformal_config);
-    assert_eq!(original_bundle.drift_config, deserialized_bundle.drift_config);
-    assert_eq!(original_bundle.budget_config, deserialized_bundle.budget_config);
-    assert_eq!(original_bundle.risk_weights, deserialized_bundle.risk_weights);
-    assert_eq!(original_bundle.default_action, deserialized_bundle.default_action);
-    assert_eq!(original_bundle.fallback_action, deserialized_bundle.fallback_action);
+    assert_eq!(
+        original_bundle.conformal_config,
+        deserialized_bundle.conformal_config
+    );
+    assert_eq!(
+        original_bundle.drift_config,
+        deserialized_bundle.drift_config
+    );
+    assert_eq!(
+        original_bundle.budget_config,
+        deserialized_bundle.budget_config
+    );
+    assert_eq!(
+        original_bundle.risk_weights,
+        deserialized_bundle.risk_weights
+    );
+    assert_eq!(
+        original_bundle.default_action,
+        deserialized_bundle.default_action
+    );
+    assert_eq!(
+        original_bundle.fallback_action,
+        deserialized_bundle.fallback_action
+    );
 
     println!("✅ PolicyBundle round-trip serialization preserved all fields");
 }
@@ -101,8 +119,7 @@ fn test_policy_bundle_with_different_configs() {
         println!("Testing configuration: {}", test_name);
 
         // Each configuration should have deterministic serialization
-        let json1 = serde_json::to_string_pretty(bundle)
-            .expect("Should serialize PolicyBundle");
+        let json1 = serde_json::to_string_pretty(bundle).expect("Should serialize PolicyBundle");
         let json2 = serde_json::to_string_pretty(bundle)
             .expect("Should serialize PolicyBundle consistently");
 
@@ -118,7 +135,10 @@ fn test_policy_bundle_with_different_configs() {
         assert!(!json1.contains("uuid"));
         assert!(!json1.contains("nonce"));
 
-        println!("✅ Configuration {} produces deterministic output", test_name);
+        println!(
+            "✅ Configuration {} produces deterministic output",
+            test_name
+        );
     }
 }
 
@@ -127,8 +147,7 @@ fn test_policy_bundle_golden_snapshot() {
     println!("Testing PolicyBundle against golden snapshot...");
 
     let bundle = create_test_policy_bundle();
-    let actual_json = serde_json::to_string_pretty(&bundle)
-        .expect("Should serialize PolicyBundle");
+    let actual_json = serde_json::to_string_pretty(&bundle).expect("Should serialize PolicyBundle");
 
     // Expected golden JSON structure (deterministic)
     let expected_json_structure = vec![
@@ -177,8 +196,7 @@ fn test_policy_bundle_cross_platform_determinism() {
     // Test multiple serialization attempts to catch any non-determinism
     let mut json_outputs = Vec::new();
     for i in 0..10 {
-        let json = serde_json::to_string(&bundle)
-            .expect("Should serialize PolicyBundle");
+        let json = serde_json::to_string(&bundle).expect("Should serialize PolicyBundle");
         json_outputs.push((i, json));
     }
 
@@ -187,7 +205,8 @@ fn test_policy_bundle_cross_platform_determinism() {
     for (iteration, json) in &json_outputs[1..] {
         assert_eq!(
             reference_json, json,
-            "Cross-platform determinism violation at iteration {}", iteration
+            "Cross-platform determinism violation at iteration {}",
+            iteration
         );
     }
 

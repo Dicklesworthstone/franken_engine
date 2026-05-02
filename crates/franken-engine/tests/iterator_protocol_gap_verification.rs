@@ -33,13 +33,9 @@ fn verify_custom_iterator_support() {
 
     let result = engine.eval(custom_iterator_code);
     match result {
-        Ok(value) => {
-            println!("✅ Custom iterator PASSED: {}", value);
-            assert_eq!(
-                value.to_string(),
-                "2",
-                "Iterator should produce values 0, 1, 2"
-            );
+        Ok(outcome) => {
+            println!("✅ Custom iterator PASSED: {}", outcome.value);
+            assert_eq!(outcome.value, "2", "Iterator should produce values 0, 1, 2");
         }
         Err(e) => {
             println!("❌ Custom iterator FAILED: {}", e);
@@ -71,9 +67,9 @@ fn verify_built_in_array_iterator() {
 
     let result = engine.eval(array_iterator_code);
     match result {
-        Ok(value) => {
-            println!("✅ Array iterator PASSED: {}", value);
-            assert_eq!(value.to_string(), "3", "Should iterate through array");
+        Ok(outcome) => {
+            println!("✅ Array iterator PASSED: {}", outcome.value);
+            assert_eq!(outcome.value, "3", "Should iterate through array");
         }
         Err(e) => {
             println!("❌ Array iterator FAILED: {}", e);
@@ -111,9 +107,9 @@ fn verify_iterator_return_cleanup() {
 
     let result = engine.eval(cleanup_code);
     match result {
-        Ok(value) => {
-            println!("✅ Iterator cleanup test PASSED: {}", value);
-            if value.to_string() == "true" {
+        Ok(outcome) => {
+            println!("✅ Iterator cleanup test PASSED: {}", outcome.value);
+            if outcome.value == "true" {
                 println!("✅ Iterator.return() properly called on early exit");
             } else {
                 println!("⚠️  Iterator.return() NOT called - spec violation but not critical");

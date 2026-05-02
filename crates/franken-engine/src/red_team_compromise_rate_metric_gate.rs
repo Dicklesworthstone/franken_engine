@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
 use crate::disruptive_floor_metric_gate::{
-    DisruptiveMetricId, MetricArtifact, DEFAULT_MAX_FRESHNESS_DAYS, DEFAULT_MIN_COVERAGE_MILLIONTHS,
+    DEFAULT_MAX_FRESHNESS_DAYS, DEFAULT_MIN_COVERAGE_MILLIONTHS, DisruptiveMetricId, MetricArtifact,
 };
 use crate::proof_artifact::validate_sha256;
 
@@ -1117,8 +1117,8 @@ pub const fn reduction_factor_x(baseline_millionths: u64, candidate_millionths: 
 mod tests {
     use super::*;
     use crate::disruptive_floor_metric_gate::{
-        evaluate_disruptive_floor_gate, DisruptiveFloorGateConfig, DisruptiveMetricId,
-        GateDecisionState, MetricArtifact,
+        DisruptiveFloorGateConfig, DisruptiveMetricId, GateDecisionState, MetricArtifact,
+        evaluate_disruptive_floor_gate,
     };
 
     #[test]
@@ -1289,10 +1289,12 @@ mod tests {
 
         let input = metric_input_from_harness_output(&harness_output).unwrap();
         assert_eq!(input.scenarios.len(), 5);
-        assert!(input
-            .scenarios
-            .iter()
-            .all(RedTeamScenarioEvidence::has_valid_harness_measurement_provenance));
+        assert!(
+            input
+                .scenarios
+                .iter()
+                .all(RedTeamScenarioEvidence::has_valid_harness_measurement_provenance)
+        );
         let report = evaluate_red_team_compromise_rate_metric(&input);
         assert_eq!(report.decision, RedTeamCompromiseRateDecision::Pass);
         assert_eq!(report.scenarios_total, 5);

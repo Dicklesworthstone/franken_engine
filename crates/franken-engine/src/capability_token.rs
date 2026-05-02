@@ -10,9 +10,10 @@
 //! 2. Canonicality
 //! 3. Audience
 //! 4. Temporal validity (nbf, expiry)
-//! 5. Checkpoint binding
-//! 6. Revocation freshness binding
-//! 7. Revocation status (deferred to caller)
+//! 5. Security epoch validity
+//! 6. Checkpoint binding
+//! 7. Revocation freshness binding
+//! 8. Revocation status (deferred to caller)
 //!
 //! Plan references: Section 10.10 item 9, 9E.4 (authority chain hardening
 //! with non-ambient capability delegation).
@@ -27,7 +28,7 @@ use crate::deterministic_serde::{self, CanonicalValue, SchemaHash};
 use crate::engine_object_id::{self, EngineObjectId, ObjectDomain, SchemaId};
 use crate::hash_tiers::ContentHash;
 use crate::policy_checkpoint::DeterministicTimestamp;
-use crate::security_epoch::SecurityEpoch;
+use crate::security_epoch::{EpochMetadata, EpochTracker, EpochValidationError, SecurityEpoch};
 use crate::signature_preimage::{
     SIGNATURE_SENTINEL, Signature, SignaturePreimage, SigningKey, VerificationKey, sign_preimage,
     verify_signature,
@@ -167,6 +168,8 @@ pub enum TokenError {
     NotYetValid { current_tick: u64, not_before: u64 },
     /// Token has expired (current time > expiry).
     Expired { current_tick: u64, expiry: u64 },
+    /// Security epoch metadata is outside the verifier's accepted window.
+    EpochValidationFailed { errors: Vec<EpochValidationError> },
     /// Verifier's checkpoint frontier is below the token's binding.
     CheckpointBindingFailed {
         required_seq: u64,
@@ -218,6 +221,14 @@ impl fmt::Display for TokenError {
                 current_tick,
                 expiry,
             } => write!(f, "expired: current tick={current_tick}, expiry={expiry}"),
+            Self::EpochValidationFailed { errors } => {
+                let details = errors
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                write!(f, "epoch validation failed: {details}")
+            }
             Self::CheckpointBindingFailed {
                 required_seq,
                 verifier_seq,
@@ -290,6 +301,10 @@ pub struct CapabilityToken {
     pub expiry: DeterministicTimestamp,
     /// Security epoch at issuance.
     pub epoch: SecurityEpoch,
+    /// Earliest security epoch at which this token is valid.
+    pub valid_from_epoch: SecurityEpoch,
+    /// Latest security epoch at which this token is valid (inclusive).
+    pub valid_until_epoch: Option<SecurityEpoch>,
     /// Checkpoint frontier binding (if set).
     pub checkpoint_binding: Option<CheckpointRef>,
     /// Revocation freshness binding (if set).
@@ -324,6 +339,17 @@ impl SignaturePreimage for CapabilityToken {
         preimage.extend_from_slice(schema.as_bytes());
         preimage.extend_from_slice(&value_bytes);
         preimage
+    }
+}
+
+impl CapabilityToken {
+    /// Epoch metadata used by the runtime security-epoch validator.
+    pub fn epoch_metadata(&self) -> EpochMetadata {
+        EpochMetadata {
+            epoch_id: self.epoch,
+            valid_from_epoch: self.valid_from_epoch,
+            valid_until_epoch: self.valid_until_epoch,
+        }
     }
 }
 
@@ -373,6 +399,19 @@ fn build_unsigned_view(token: &CapabilityToken) -> CanonicalValue {
     map.insert(
         "epoch".to_string(),
         CanonicalValue::U64(token.epoch.as_u64()),
+    );
+
+    // epoch validity window
+    map.insert(
+        "valid_from_epoch".to_string(),
+        CanonicalValue::U64(token.valid_from_epoch.as_u64()),
+    );
+    map.insert(
+        "valid_until_epoch".to_string(),
+        token
+            .valid_until_epoch
+            .map(|epoch| CanonicalValue::U64(epoch.as_u64()))
+            .unwrap_or(CanonicalValue::Null),
     );
 
     // expiry
@@ -445,6 +484,8 @@ pub struct TokenBuilder {
     nbf: DeterministicTimestamp,
     expiry: DeterministicTimestamp,
     epoch: SecurityEpoch,
+    valid_from_epoch: SecurityEpoch,
+    valid_until_epoch: Option<SecurityEpoch>,
     checkpoint_binding: Option<CheckpointRef>,
     revocation_freshness: Option<RevocationFreshnessRef>,
     zone: String,
@@ -466,6 +507,8 @@ impl TokenBuilder {
             nbf,
             expiry,
             epoch,
+            valid_from_epoch: epoch,
+            valid_until_epoch: None,
             checkpoint_binding: None,
             revocation_freshness: None,
             zone: zone.to_string(),
@@ -502,6 +545,29 @@ impl TokenBuilder {
         self
     }
 
+    /// Set the first security epoch at which this token may be accepted.
+    pub fn valid_from_epoch(mut self, epoch: SecurityEpoch) -> Self {
+        self.valid_from_epoch = epoch;
+        self
+    }
+
+    /// Set the last security epoch at which this token may be accepted.
+    pub fn valid_until_epoch(mut self, epoch: SecurityEpoch) -> Self {
+        self.valid_until_epoch = Some(epoch);
+        self
+    }
+
+    /// Set the inclusive security-epoch validity window.
+    pub fn valid_epoch_window(
+        mut self,
+        valid_from: SecurityEpoch,
+        valid_until: SecurityEpoch,
+    ) -> Self {
+        self.valid_from_epoch = valid_from;
+        self.valid_until_epoch = Some(valid_until);
+        self
+    }
+
     /// Build and sign the token.
     pub fn build(self) -> Result<CapabilityToken, TokenError> {
         // Validate.
@@ -517,6 +583,16 @@ impl TokenBuilder {
                 expiry: self.expiry.0,
             });
         }
+        if let Some(valid_until) = self.valid_until_epoch
+            && self.valid_from_epoch > valid_until
+        {
+            return Err(TokenError::EpochValidationFailed {
+                errors: vec![EpochValidationError::InvertedWindow {
+                    valid_from: self.valid_from_epoch,
+                    valid_until,
+                }],
+            });
+        }
 
         let issuer_vk = self.issuer_sk.verification_key();
 
@@ -530,6 +606,8 @@ impl TokenBuilder {
             nbf: self.nbf,
             expiry: self.expiry,
             epoch: self.epoch,
+            valid_from_epoch: self.valid_from_epoch,
+            valid_until_epoch: self.valid_until_epoch,
             checkpoint_binding: self.checkpoint_binding,
             revocation_freshness: self.revocation_freshness,
             signature: Signature::from_bytes(SIGNATURE_SENTINEL),
@@ -581,6 +659,8 @@ pub struct VerificationContext {
     pub verifier_checkpoint_seq: u64,
     /// Verifier's revocation head sequence.
     pub verifier_revocation_seq: u64,
+    /// Verifier's current security-epoch tracker.
+    pub epoch_tracker: EpochTracker,
     /// Checkpoint identities accepted by the verifier's frontier or ancestry proof.
     pub accepted_checkpoint_ids: BTreeSet<EngineObjectId>,
     /// Revocation head hashes accepted by the verifier's frontier or ancestry proof.
@@ -598,9 +678,22 @@ impl VerificationContext {
             current_tick,
             verifier_checkpoint_seq,
             verifier_revocation_seq,
+            epoch_tracker: EpochTracker::new(),
             accepted_checkpoint_ids: BTreeSet::new(),
             accepted_revocation_head_hashes: BTreeSet::new(),
         }
+    }
+
+    /// Set the verifier's current security epoch.
+    pub fn with_current_epoch(mut self, current_epoch: SecurityEpoch) -> Self {
+        self.epoch_tracker = EpochTracker::from_persisted(current_epoch);
+        self
+    }
+
+    /// Set the verifier's epoch tracker.
+    pub fn with_epoch_tracker(mut self, epoch_tracker: EpochTracker) -> Self {
+        self.epoch_tracker = epoch_tracker;
+        self
     }
 
     /// Record that this verifier has accepted the checkpoint identity.
@@ -633,8 +726,9 @@ impl VerificationContext {
 /// 1. Signature
 /// 2. Audience
 /// 3. Temporal validity (nbf, expiry)
-/// 4. Checkpoint binding
-/// 5. Revocation freshness binding
+/// 4. Security epoch validity
+/// 5. Checkpoint binding
+/// 6. Revocation freshness binding
 ///
 /// Returns `Ok(())` if all checks pass. Callers should additionally
 /// check revocation status (whether the jti has been revoked).
@@ -676,7 +770,12 @@ pub fn verify_token(
         });
     }
 
-    // 4. Checkpoint binding.
+    // 4. Security epoch validity.
+    if let Err(errors) = ctx.epoch_tracker.validate_artifact(&token.epoch_metadata()) {
+        return Err(TokenError::EpochValidationFailed { errors });
+    }
+
+    // 5. Checkpoint binding.
     if let Some(ref binding) = token.checkpoint_binding
         && ctx.verifier_checkpoint_seq < binding.min_checkpoint_seq
     {
@@ -693,7 +792,7 @@ pub fn verify_token(
         });
     }
 
-    // 5. Revocation freshness binding.
+    // 6. Revocation freshness binding.
     if let Some(ref freshness) = token.revocation_freshness
         && ctx.verifier_revocation_seq < freshness.min_revocation_seq
     {

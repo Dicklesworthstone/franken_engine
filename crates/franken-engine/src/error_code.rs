@@ -638,6 +638,7 @@ impl HasErrorCode for TokenError {
             | TokenError::AudienceRejected { .. }
             | TokenError::NotYetValid { .. }
             | TokenError::Expired { .. }
+            | TokenError::EpochValidationFailed { .. }
             | TokenError::CheckpointBindingFailed { .. }
             | TokenError::CheckpointIdentityMismatch { .. }
             | TokenError::RevocationFreshnessStale { .. }

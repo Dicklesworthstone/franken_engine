@@ -6,7 +6,6 @@
 
 #![forbid(unsafe_code)]
 
-use frankenengine_engine::parser::ParseError;
 use frankenengine_engine::parser_api_stability::parse_script;
 
 #[test]

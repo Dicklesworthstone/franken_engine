@@ -63,10 +63,18 @@ pub enum NondeterminismSource {
     /// x87 extended precision, ARM NEON rounding, or compiler optimizations).
     /// Stored as IEEE 754 bits (u64) for exact comparison.
     FloatingPointResult,
+    /// Array cache invalidation decision for dense array operations.
+    ArrayCacheInvalidation,
+    /// Security violation or capability restriction enforcement.
+    SecurityViolation,
+    /// Object property resolution via prototype chain traversal.
+    PropertyResolution,
+    /// Stack limit enforcement for execution depth control.
+    StackLimitEnforcement,
 }
 
 impl NondeterminismSource {
-    pub const ALL: [NondeterminismSource; 7] = [
+    pub const ALL: [NondeterminismSource; 11] = [
         NondeterminismSource::LaneSelectionRandom,
         NondeterminismSource::TimerRead,
         NondeterminismSource::ExternalApiResponse,
@@ -74,6 +82,10 @@ impl NondeterminismSource {
         NondeterminismSource::ResourceCheck,
         NondeterminismSource::UserInteractionTiming,
         NondeterminismSource::FloatingPointResult,
+        NondeterminismSource::ArrayCacheInvalidation,
+        NondeterminismSource::SecurityViolation,
+        NondeterminismSource::PropertyResolution,
+        NondeterminismSource::StackLimitEnforcement,
     ];
 
     pub fn as_str(&self) -> &'static str {
@@ -85,6 +97,10 @@ impl NondeterminismSource {
             Self::ResourceCheck => "resource_check",
             Self::UserInteractionTiming => "user_interaction_timing",
             Self::FloatingPointResult => "floating_point_result",
+            Self::ArrayCacheInvalidation => "array_cache_invalidation",
+            Self::SecurityViolation => "security_violation",
+            Self::PropertyResolution => "property_resolution",
+            Self::StackLimitEnforcement => "stack_limit_enforcement",
         }
     }
 }
@@ -512,7 +528,11 @@ fn classify_divergence(
         }
         NondeterminismSource::LaneSelectionRandom
         | NondeterminismSource::ExternalApiResponse
-        | NondeterminismSource::ResourceCheck => DivergenceSeverity::Critical,
+        | NondeterminismSource::ResourceCheck
+        | NondeterminismSource::ArrayCacheInvalidation
+        | NondeterminismSource::SecurityViolation
+        | NondeterminismSource::PropertyResolution
+        | NondeterminismSource::StackLimitEnforcement => DivergenceSeverity::Critical,
     }
 }
 
@@ -1932,6 +1952,19 @@ mod tests {
     fn classify_divergence_resource_check_is_critical() {
         let s = classify_divergence(&NondeterminismSource::ResourceCheck, &[1], &[2]);
         assert_eq!(s, DivergenceSeverity::Critical);
+    }
+
+    #[test]
+    fn classify_divergence_runtime_integrity_sources_are_critical() {
+        for source in [
+            NondeterminismSource::ArrayCacheInvalidation,
+            NondeterminismSource::SecurityViolation,
+            NondeterminismSource::PropertyResolution,
+            NondeterminismSource::StackLimitEnforcement,
+        ] {
+            let severity = classify_divergence(&source, &[1], &[2]);
+            assert_eq!(severity, DivergenceSeverity::Critical);
+        }
     }
 
     // ── JSON field-name stability ──────────────────────────────

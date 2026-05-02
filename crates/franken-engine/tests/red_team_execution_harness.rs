@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 const SCENARIO_DIR: &str = "tests/red_team_scenarios";
 const EXPECTED_SCENARIOS: &[&str] = &[

@@ -16,7 +16,7 @@ use std::thread;
 use std::time::Duration;
 
 use frankenengine_engine::runtime_decision_core::{
-    AsymmetricLossPolicy, RegimeEstimate, RiskDimension, default_routing_loss_policy,
+    AsymmetricLossPolicy, RegimeEstimate, default_routing_loss_policy,
 };
 
 /// Number of decision iterations to test determinism

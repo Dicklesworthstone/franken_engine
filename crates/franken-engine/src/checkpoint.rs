@@ -13,7 +13,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::{Deserialize, Serialize};
 
@@ -164,30 +164,55 @@ impl Default for DensityConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CancellationToken {
     #[serde(skip)]
-    cancelled: Arc<AtomicBool>,
+    state: Arc<CancellationState>,
+}
+
+#[derive(Debug, Default)]
+struct CancellationState {
+    cancel_epoch: AtomicU64,
+    reset_epoch: AtomicU64,
 }
 
 impl CancellationToken {
     /// Create a new non-cancelled token.
     pub fn new() -> Self {
         Self {
-            cancelled: Arc::new(AtomicBool::new(false)),
+            state: Arc::new(CancellationState::default()),
         }
     }
 
     /// Signal cancellation.
     pub fn cancel(&self) {
-        self.cancelled.store(true, Ordering::Release);
+        self.state.cancel_epoch.fetch_add(1, Ordering::AcqRel);
     }
 
     /// Check if cancellation has been requested.
     pub fn is_cancelled(&self) -> bool {
-        self.cancelled.load(Ordering::Acquire)
+        self.cancel_epoch() > self.state.reset_epoch.load(Ordering::Acquire)
     }
 
-    /// Reset the token (for reuse after drain/finalize).
+    /// Reset the token for new sessions after existing guards drain/finalize.
+    ///
+    /// Reset clears the public cancelled state, but it does not erase a
+    /// cancellation epoch from guards that were already using this token.
     pub fn reset(&self) {
-        self.cancelled.store(false, Ordering::Release);
+        let epoch = self.cancel_epoch();
+        self.state.reset_epoch.store(epoch, Ordering::Release);
+    }
+
+    fn cancel_epoch(&self) -> u64 {
+        self.state.cancel_epoch.load(Ordering::Acquire)
+    }
+
+    fn pending_cancel_epoch_for_guard(&self, observed_cancel_epoch: u64) -> Option<u64> {
+        let cancel_epoch = self.cancel_epoch();
+        if cancel_epoch > observed_cancel_epoch
+            || cancel_epoch > self.state.reset_epoch.load(Ordering::Acquire)
+        {
+            Some(cancel_epoch)
+        } else {
+            None
+        }
     }
 }
 
@@ -221,6 +246,8 @@ pub struct CheckpointGuard {
     trace_id: String,
     config: DensityConfig,
     token: CancellationToken,
+    /// Highest cancellation epoch this guard has already drained.
+    observed_cancel_epoch: u64,
     /// Iterations since last checkpoint.
     iterations_since_checkpoint: u64,
     /// Total iterations in this loop invocation.
@@ -240,12 +267,14 @@ impl CheckpointGuard {
         config: DensityConfig,
         token: CancellationToken,
     ) -> Self {
+        let observed_cancel_epoch = token.cancel_epoch();
         Self {
             loop_site,
             component: component.into(),
             trace_id: trace_id.into(),
             config,
             token,
+            observed_cancel_epoch,
             iterations_since_checkpoint: 0,
             total_iterations: 0,
             virtual_time: 0,
@@ -265,9 +294,13 @@ impl CheckpointGuard {
     /// Call after `tick()` on each iteration.
     pub fn check(&mut self) -> CheckpointAction {
         // Priority 1: cancellation pending
-        if self.token.is_cancelled() {
+        if let Some(cancel_epoch) = self
+            .token
+            .pending_cancel_epoch_for_guard(self.observed_cancel_epoch)
+        {
             let action = CheckpointAction::Drain;
             self.emit_event(CheckpointReason::CancelPending, action);
+            self.observed_cancel_epoch = cancel_epoch;
             self.iterations_since_checkpoint = 0;
             return action;
         }
@@ -297,14 +330,28 @@ impl CheckpointGuard {
     /// limits so a loop cannot bypass hard-stop policy by only using manual
     /// checkpoint sites.
     pub fn explicit_checkpoint(&mut self) -> CheckpointAction {
-        let (reason, action) = if self.token.is_cancelled() {
-            (CheckpointReason::CancelPending, CheckpointAction::Drain)
+        let (reason, action, cancel_epoch) = if let Some(cancel_epoch) = self
+            .token
+            .pending_cancel_epoch_for_guard(self.observed_cancel_epoch)
+        {
+            (
+                CheckpointReason::CancelPending,
+                CheckpointAction::Drain,
+                Some(cancel_epoch),
+            )
         } else if self.total_iterations >= self.config.max_total_iterations {
-            (CheckpointReason::BudgetExhausted, CheckpointAction::Abort)
+            (
+                CheckpointReason::BudgetExhausted,
+                CheckpointAction::Abort,
+                None,
+            )
         } else {
-            (CheckpointReason::Explicit, CheckpointAction::Continue)
+            (CheckpointReason::Explicit, CheckpointAction::Continue, None)
         };
         self.emit_event(reason, action);
+        if let Some(cancel_epoch) = cancel_epoch {
+            self.observed_cancel_epoch = cancel_epoch;
+        }
         self.iterations_since_checkpoint = 0;
         action
     }
@@ -492,6 +539,45 @@ mod tests {
         let token2 = token1.clone();
         token1.cancel();
         assert!(token2.is_cancelled());
+    }
+
+    #[test]
+    fn reset_does_not_hide_unseen_cancellation_from_existing_guard() {
+        let token = CancellationToken::new();
+        let mut guard = CheckpointGuard::new(
+            LoopSite::ReplayStep,
+            "replay",
+            "trace-race",
+            DensityConfig {
+                max_iterations: 10,
+                max_total_iterations: 100,
+            },
+            token.clone(),
+        );
+        let reset_clone = token.clone();
+
+        token.cancel();
+        reset_clone.reset();
+        assert!(!token.is_cancelled());
+
+        guard.tick();
+        assert_eq!(guard.check(), CheckpointAction::Drain);
+        let events = guard.drain_events();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].reason, CheckpointReason::CancelPending);
+
+        let mut fresh_guard = CheckpointGuard::new(
+            LoopSite::ReplayStep,
+            "replay",
+            "trace-fresh",
+            DensityConfig {
+                max_iterations: 10,
+                max_total_iterations: 100,
+            },
+            token,
+        );
+        fresh_guard.tick();
+        assert_eq!(fresh_guard.check(), CheckpointAction::Continue);
     }
 
     // -- CheckpointGuard: periodic checkpoints --

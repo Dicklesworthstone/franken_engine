@@ -30,7 +30,7 @@ use frankenengine_engine::capability_token::{
 use frankenengine_engine::engine_object_id::EngineObjectId;
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::policy_checkpoint::DeterministicTimestamp;
-use frankenengine_engine::security_epoch::SecurityEpoch;
+use frankenengine_engine::security_epoch::{EpochValidationError, SecurityEpoch};
 use frankenengine_engine::signature_preimage::{
     SignaturePreimage, SigningKey, VerificationKey, sign_preimage,
 };
@@ -234,6 +234,8 @@ fn builder_creates_token_with_correct_fields() {
     assert_eq!(token.nbf, DeterministicTimestamp(100));
     assert_eq!(token.expiry, DeterministicTimestamp(1000));
     assert_eq!(token.epoch, SecurityEpoch::GENESIS);
+    assert_eq!(token.valid_from_epoch, SecurityEpoch::GENESIS);
+    assert_eq!(token.valid_until_epoch, None);
     assert_eq!(token.zone, "zone-a");
     assert!(token.capabilities.contains(&RuntimeCapability::VmDispatch));
     assert!(token.audience.contains(&make_principal(10)));
@@ -411,6 +413,34 @@ fn builder_rejects_inverted_temporal_window() {
             assert_eq!(*expiry, 100);
         }
         other => panic!("expected InvertedTemporalWindow, got {other:?}"),
+    }
+}
+
+#[test]
+fn builder_rejects_inverted_epoch_window() {
+    let sk = make_sk(1);
+    let err = TokenBuilder::new(
+        sk,
+        DeterministicTimestamp(100),
+        DeterministicTimestamp(1000),
+        SecurityEpoch::from_raw(3),
+        "zone-a",
+    )
+    .add_audience(make_principal(10))
+    .add_capability(RuntimeCapability::VmDispatch)
+    .valid_epoch_window(SecurityEpoch::from_raw(10), SecurityEpoch::from_raw(4))
+    .build()
+    .unwrap_err();
+
+    match err {
+        TokenError::EpochValidationFailed { errors } => {
+            assert!(
+                errors
+                    .iter()
+                    .any(|error| matches!(error, EpochValidationError::InvertedWindow { .. }))
+            );
+        }
+        other => panic!("expected EpochValidationFailed, got {other:?}"),
     }
 }
 
@@ -791,6 +821,17 @@ fn modifying_epoch_invalidates_signature() {
     assert!(matches!(err, TokenError::SignatureInvalid { .. }));
 }
 
+#[test]
+fn modifying_epoch_validity_window_invalidates_signature() {
+    let sk = make_sk(1);
+    let mut token = build_basic_token(&sk);
+    token.valid_until_epoch = Some(SecurityEpoch::from_raw(7));
+
+    let ctx = basic_ctx();
+    let err = verify_token(&token, &make_principal(10), &ctx).unwrap_err();
+    assert!(matches!(err, TokenError::SignatureInvalid { .. }));
+}
+
 // ---------------------------------------------------------------------------
 // Verification — audience failures
 // ---------------------------------------------------------------------------
@@ -922,6 +963,118 @@ fn verify_fails_one_tick_after_expiry() {
     let ctx = VerificationContext::new(1001, 10, 5);
     let err = verify_token(&token, &make_principal(10), &ctx).unwrap_err();
     assert!(matches!(err, TokenError::Expired { .. }));
+}
+
+// ---------------------------------------------------------------------------
+// Verification — security epoch failures
+// ---------------------------------------------------------------------------
+
+#[test]
+fn verify_rejects_future_epoch_token() {
+    let sk = make_sk(1);
+    let token = TokenBuilder::new(
+        sk.clone(),
+        DeterministicTimestamp(100),
+        DeterministicTimestamp(1000),
+        SecurityEpoch::from_raw(99),
+        "zone-a",
+    )
+    .add_audience(make_principal(10))
+    .add_capability(RuntimeCapability::VmDispatch)
+    .build()
+    .unwrap();
+
+    let ctx = basic_ctx().with_current_epoch(SecurityEpoch::from_raw(1));
+    let err = verify_token(&token, &make_principal(10), &ctx).unwrap_err();
+    match err {
+        TokenError::EpochValidationFailed { errors } => {
+            assert!(
+                errors
+                    .iter()
+                    .any(|error| matches!(error, EpochValidationError::FutureArtifact { .. }))
+            );
+        }
+        other => panic!("expected EpochValidationFailed, got {other:?}"),
+    }
+}
+
+#[test]
+fn verify_rejects_epoch_window_before_valid_from() {
+    let sk = make_sk(1);
+    let token = TokenBuilder::new(
+        sk.clone(),
+        DeterministicTimestamp(100),
+        DeterministicTimestamp(1000),
+        SecurityEpoch::from_raw(3),
+        "zone-a",
+    )
+    .add_audience(make_principal(10))
+    .add_capability(RuntimeCapability::VmDispatch)
+    .valid_epoch_window(SecurityEpoch::from_raw(5), SecurityEpoch::from_raw(8))
+    .build()
+    .unwrap();
+
+    let ctx = basic_ctx().with_current_epoch(SecurityEpoch::from_raw(4));
+    let err = verify_token(&token, &make_principal(10), &ctx).unwrap_err();
+    match err {
+        TokenError::EpochValidationFailed { errors } => {
+            assert!(
+                errors
+                    .iter()
+                    .any(|error| matches!(error, EpochValidationError::NotYetValid { .. }))
+            );
+        }
+        other => panic!("expected EpochValidationFailed, got {other:?}"),
+    }
+}
+
+#[test]
+fn verify_rejects_epoch_window_after_valid_until() {
+    let sk = make_sk(1);
+    let token = TokenBuilder::new(
+        sk.clone(),
+        DeterministicTimestamp(100),
+        DeterministicTimestamp(1000),
+        SecurityEpoch::from_raw(3),
+        "zone-a",
+    )
+    .add_audience(make_principal(10))
+    .add_capability(RuntimeCapability::VmDispatch)
+    .valid_epoch_window(SecurityEpoch::from_raw(2), SecurityEpoch::from_raw(4))
+    .build()
+    .unwrap();
+
+    let ctx = basic_ctx().with_current_epoch(SecurityEpoch::from_raw(5));
+    let err = verify_token(&token, &make_principal(10), &ctx).unwrap_err();
+    match err {
+        TokenError::EpochValidationFailed { errors } => {
+            assert!(
+                errors
+                    .iter()
+                    .any(|error| matches!(error, EpochValidationError::Expired { .. }))
+            );
+        }
+        other => panic!("expected EpochValidationFailed, got {other:?}"),
+    }
+}
+
+#[test]
+fn verify_accepts_matching_non_genesis_epoch() {
+    let sk = make_sk(1);
+    let token = TokenBuilder::new(
+        sk.clone(),
+        DeterministicTimestamp(100),
+        DeterministicTimestamp(1000),
+        SecurityEpoch::from_raw(5),
+        "zone-a",
+    )
+    .add_audience(make_principal(10))
+    .add_capability(RuntimeCapability::VmDispatch)
+    .build()
+    .unwrap();
+
+    let ctx = basic_ctx().with_current_epoch(SecurityEpoch::from_raw(5));
+    verify_token(&token, &make_principal(10), &ctx).unwrap();
 }
 
 // ---------------------------------------------------------------------------
@@ -1107,6 +1260,12 @@ fn token_error_serde_round_trip_all_variants() {
             current_tick: 2000,
             expiry: 1000,
         },
+        TokenError::EpochValidationFailed {
+            errors: vec![EpochValidationError::Expired {
+                current_epoch: SecurityEpoch::from_raw(8),
+                valid_until: SecurityEpoch::from_raw(7),
+            }],
+        },
         TokenError::CheckpointBindingFailed {
             required_seq: 20,
             verifier_seq: 15,
@@ -1186,6 +1345,19 @@ fn token_error_display_expired() {
     assert!(s.contains("expired"));
     assert!(s.contains("2000"));
     assert!(s.contains("1000"));
+}
+
+#[test]
+fn token_error_display_epoch_validation_failed() {
+    let err = TokenError::EpochValidationFailed {
+        errors: vec![EpochValidationError::FutureArtifact {
+            current_epoch: SecurityEpoch::from_raw(1),
+            artifact_epoch: SecurityEpoch::from_raw(9),
+        }],
+    };
+    let s = err.to_string();
+    assert!(s.contains("epoch validation failed"));
+    assert!(s.contains("future epoch"));
 }
 
 #[test]

@@ -33,8 +33,12 @@ impl RuntimeDenominator {
     pub const fn baseline_compromise_rate_millionths(self) -> u64 {
         match self {
             // Production paths must use live red-team measurement integration
-            Self::Node => panic!("Node baseline compromise rate requires live red-team integration - placeholder removed"),
-            Self::Bun => panic!("Bun baseline compromise rate requires live red-team integration - placeholder removed"),
+            Self::Node => panic!(
+                "Node baseline compromise rate requires live red-team integration - placeholder removed"
+            ),
+            Self::Bun => panic!(
+                "Bun baseline compromise rate requires live red-team integration - placeholder removed"
+            ),
         }
     }
 
@@ -589,7 +593,8 @@ pub fn generate_compromise_rate_metric_artifact(
                 .then(|| evidence.output_hash.clone())
         })
         .ok_or_else(|| {
-            "Missing valid output hash: cannot generate artifact without authentic evidence".to_string()
+            "Missing valid output hash: cannot generate artifact without authentic evidence"
+                .to_string()
         })?;
     let verification_command = input
         .evidence

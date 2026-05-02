@@ -115,6 +115,48 @@ fn cloned_tokens_share_state() {
     assert!(t2.is_cancelled());
 }
 
+#[test]
+fn reset_from_clone_does_not_erase_existing_guard_cancel_epoch() {
+    let token = CancellationToken::new();
+    let reset_clone = token.clone();
+    let mut existing_guard = CheckpointGuard::new(
+        LoopSite::ReplayStep,
+        "replay",
+        "trace-reset-race",
+        DensityConfig {
+            max_iterations: 100,
+            max_total_iterations: 1_000,
+        },
+        token.clone(),
+    );
+
+    token.cancel();
+    reset_clone.reset();
+    assert!(
+        !token.is_cancelled(),
+        "reset should clear public state for new sessions"
+    );
+
+    existing_guard.tick();
+    assert_eq!(existing_guard.check(), CheckpointAction::Drain);
+    let events = existing_guard.drain_events();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].reason, CheckpointReason::CancelPending);
+
+    let mut new_guard = CheckpointGuard::new(
+        LoopSite::ReplayStep,
+        "replay",
+        "trace-after-reset",
+        DensityConfig {
+            max_iterations: 100,
+            max_total_iterations: 1_000,
+        },
+        token,
+    );
+    new_guard.tick();
+    assert_eq!(new_guard.check(), CheckpointAction::Continue);
+}
+
 // ---------------------------------------------------------------------------
 // CheckpointGuard — periodic checkpoints
 // ---------------------------------------------------------------------------

@@ -52,6 +52,7 @@ use crate::capability::RuntimeCapability;
 use crate::checkpoint::{
     CancellationToken, CheckpointAction, CheckpointGuard, DensityConfig, LoopSite,
 };
+use crate::deterministic_replay::{NondeterminismSource, NondeterminismTrace};
 use crate::hash_tiers::ContentHash;
 use crate::ir_contract::{
     HostcallDecisionRecord, Ir0Module, Ir3Instruction, Ir3Module, IteratorCloseReason, RegRange,
@@ -558,7 +559,7 @@ pub struct ObjectId(pub u32);
 // ---------------------------------------------------------------------------
 
 /// A heap-allocated object with string-keyed properties.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HeapObject {
     /// Property storage (BTreeMap for deterministic ordering).
     pub properties: BTreeMap<String, Value>,
@@ -570,18 +571,6 @@ pub struct HeapObject {
     pub is_array: bool,
     /// Cached dense length for arrays (None = sparse, compute from properties).
     pub cached_dense_length: Option<u32>,
-}
-
-impl Default for HeapObject {
-    fn default() -> Self {
-        Self {
-            properties: BTreeMap::new(),
-            prototype: None,
-            constructor_function: None,
-            is_array: false,
-            cached_dense_length: None,
-        }
-    }
 }
 
 impl HeapObject {
@@ -609,8 +598,36 @@ struct RuntimeForInState {
 struct RuntimeForOfState {
     values: Vec<Value>,
     next_index: usize,
+    iterator_object: Option<ObjectId>,
+    next_method: Option<Value>,
     done: bool,
     closed: bool,
+    return_called: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RuntimeForOfInit {
+    values: Vec<Value>,
+    iterator_object: Option<ObjectId>,
+    next_method: Option<Value>,
+}
+
+impl RuntimeForOfInit {
+    fn from_values(values: Vec<Value>) -> Self {
+        Self {
+            values,
+            iterator_object: None,
+            next_method: None,
+        }
+    }
+
+    fn from_custom(iterator_object: ObjectId, next_method: Value) -> Self {
+        Self {
+            values: Vec::new(),
+            iterator_object: Some(iterator_object),
+            next_method: Some(next_method),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1952,12 +1969,15 @@ pub struct InterpreterCore {
     containment_evidence: Vec<WitnessEvent>,
     /// Decision receipt log for signed evidence chain.
     decision_receipts: EvidenceLog,
+    /// Nondeterminism trace for deterministic replay.
+    nondeterminism_trace: NondeterminismTrace,
 }
 
 impl InterpreterCore {
     /// Create a new interpreter core with the given configuration.
     pub fn new(config: InterpreterConfig, trace_id: impl Into<String>) -> Self {
         let max_regs = config.max_registers as usize;
+        let trace_id = trace_id.into();
         Self {
             config,
             hook: None,
@@ -1973,7 +1993,7 @@ impl InterpreterCore {
             hostcall_decisions: Vec::new(),
             events: Vec::new(),
             witness_seq: 0,
-            trace_id: trace_id.into(),
+            trace_id: trace_id.clone(),
             register_base: 0,
             catch_frames: Vec::new(),
             pending_exception: None,
@@ -2006,6 +2026,7 @@ impl InterpreterCore {
             pending_challenges: Vec::new(),
             containment_evidence: Vec::new(),
             decision_receipts: EvidenceLog::new(),
+            nondeterminism_trace: NondeterminismTrace::new(trace_id),
         }
     }
 
@@ -2065,12 +2086,19 @@ impl InterpreterCore {
         self.finish_execution_result(result)
     }
 
-    fn ensure_vm_dispatch_capability(&self) -> Result<(), InterpreterError> {
+    fn ensure_vm_dispatch_capability(&mut self) -> Result<(), InterpreterError> {
         if !self
             .config
             .granted_capabilities
             .contains(&RuntimeCapability::VmDispatch)
         {
+            // Capture security violation for deterministic replay
+            self.nondeterminism_trace.capture(
+                NondeterminismSource::SecurityViolation,
+                b"vm_dispatch_capability_denied".to_vec(),
+                self.instructions_executed,
+                "baseline_interpreter",
+            );
             return Err(InterpreterError::CapabilityDenied {
                 capability: "VmDispatch".to_string(),
             });
@@ -2803,7 +2831,8 @@ impl InterpreterCore {
                             expected: "iterator-bound builtin".to_string(),
                             got: "missing iterator handle".to_string(),
                         })?;
-                let next_value = self.advance_for_of_iterator(Value::Iterator(iterator_handle))?;
+                let next_value =
+                    self.advance_for_of_iterator(Some(module), Value::Iterator(iterator_handle))?;
                 self.alloc_iterator_result_object(next_value)
             }
             BuiltinFunctionKind::IteratorSelf => {
@@ -3925,7 +3954,7 @@ impl InterpreterCore {
                 }
                 Ir3Instruction::ForOfInit { src, dst } => {
                     let value = self.read_reg(src)?;
-                    let iterator = self.init_for_of_iterator(value)?;
+                    let iterator = self.init_for_of_iterator(Some(module), value)?;
                     self.write_reg(dst, iterator)?;
                     self.ip += 1;
                 }
@@ -3935,7 +3964,7 @@ impl InterpreterCore {
                     done_target,
                 } => {
                     let iterator = self.read_reg(iterator)?;
-                    if let Some(value) = self.advance_for_of_iterator(iterator)? {
+                    if let Some(value) = self.advance_for_of_iterator(Some(module), iterator)? {
                         self.write_reg(value_dst, value)?;
                         self.ip += 1;
                     } else {
@@ -3944,7 +3973,7 @@ impl InterpreterCore {
                 }
                 Ir3Instruction::IteratorClose { iterator, reason } => {
                     let iterator = self.read_reg(iterator)?;
-                    self.close_iterator(iterator, reason)?;
+                    self.close_iterator(module, iterator, reason)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::Move { dst, src } => {
@@ -4054,6 +4083,18 @@ impl InterpreterCore {
                         )?;
 
                         if self.call_stack.len() >= self.config.max_call_depth {
+                            // Capture stack limit enforcement for deterministic replay
+                            self.nondeterminism_trace.capture(
+                                NondeterminismSource::StackLimitEnforcement,
+                                format!(
+                                    "async_stack_overflow:depth={},max={}",
+                                    self.call_stack.len(),
+                                    self.config.max_call_depth
+                                )
+                                .into_bytes(),
+                                self.instructions_executed,
+                                "baseline_interpreter",
+                            );
                             return Err(InterpreterError::StackOverflow {
                                 depth: self.call_stack.len(),
                                 max: self.config.max_call_depth,
@@ -4860,17 +4901,33 @@ impl InterpreterCore {
                         let next_idx = self
                             .heap
                             .get(arr_id.0 as usize)
-                            .and_then(|obj| {
+                            .map(|obj| {
                                 // Fast path: use cached dense length if available
                                 if let Some(cached_len) = obj.cached_dense_length {
-                                    Some(cached_len)
+                                    // Capture cache hit decision for deterministic replay
+                                    self.nondeterminism_trace.capture(
+                                        NondeterminismSource::ArrayCacheInvalidation,
+                                        format!("cache_hit:{}", cached_len).into_bytes(),
+                                        self.instructions_executed,
+                                        "baseline_interpreter",
+                                    );
+                                    cached_len
                                 } else {
                                     // Sparse fallback: scan all properties (original slow path)
-                                    Some(obj.properties.keys().fold(0u32, |current, key| {
-                                        key.parse::<u32>()
-                                            .ok()
-                                            .map_or(current, |n| current.max(n + 1))
-                                    }))
+                                    let sparse_len =
+                                        obj.properties.keys().fold(0u32, |current, key| {
+                                            key.parse::<u32>()
+                                                .ok()
+                                                .map_or(current, |n| current.max(n + 1))
+                                        });
+                                    // Capture cache miss decision for deterministic replay
+                                    self.nondeterminism_trace.capture(
+                                        NondeterminismSource::ArrayCacheInvalidation,
+                                        format!("cache_miss:{}", sparse_len).into_bytes(),
+                                        self.instructions_executed,
+                                        "baseline_interpreter",
+                                    );
+                                    sparse_len
                                 }
                             })
                             .unwrap_or(0);
@@ -6328,44 +6385,203 @@ impl InterpreterCore {
         }
     }
 
-    fn init_for_of_iterator(&mut self, value: Value) -> Result<Value, InterpreterError> {
+    fn prepare_for_of_state(
+        &mut self,
+        module: Option<&Ir3Module>,
+        iterable: &Value,
+    ) -> Result<RuntimeForOfInit, InterpreterError> {
+        if let Some(module) = module
+            && let Some(init) = self.prepare_custom_for_of_state(module, iterable)?
+        {
+            return Ok(init);
+        }
+
+        Ok(RuntimeForOfInit::from_values(
+            self.collect_for_of_values(iterable)?,
+        ))
+    }
+
+    fn prepare_custom_for_of_state(
+        &mut self,
+        module: &Ir3Module,
+        iterable: &Value,
+    ) -> Result<Option<RuntimeForOfInit>, InterpreterError> {
+        let Value::Object(iterable_id) = iterable else {
+            return Ok(None);
+        };
+        let receiver = Value::Object(*iterable_id);
+        let iterator_method = match self.optional_callable_property(
+            Some(module),
+            *iterable_id,
+            "@@iterator",
+            receiver.clone(),
+        )? {
+            Some(method) => Some(method),
+            None => self.optional_callable_property(
+                Some(module),
+                *iterable_id,
+                "Symbol.iterator",
+                receiver.clone(),
+            )?,
+        };
+        let Some(iterator_method) = iterator_method else {
+            return Ok(None);
+        };
+
+        let iterator_value =
+            self.invoke_inline_method_call(Some(module), iterator_method, receiver, Vec::new())?;
+        let Value::Object(iterator_object) = iterator_value else {
+            return Err(InterpreterError::TypeError {
+                expected: "object returned by @@iterator".to_string(),
+                got: iterator_value.type_name().to_string(),
+            });
+        };
+        let iterator_receiver = Value::Object(iterator_object);
+        let Some(next_method) = self.optional_callable_property(
+            Some(module),
+            iterator_object,
+            "next",
+            iterator_receiver.clone(),
+        )?
+        else {
+            return Err(InterpreterError::TypeError {
+                expected: "callable iterator.next".to_string(),
+                got: "undefined".to_string(),
+            });
+        };
+
+        Ok(Some(RuntimeForOfInit::from_custom(
+            iterator_object,
+            next_method,
+        )))
+    }
+
+    fn optional_callable_property(
+        &mut self,
+        module: Option<&Ir3Module>,
+        object_id: ObjectId,
+        key: &str,
+        receiver: Value,
+    ) -> Result<Option<Value>, InterpreterError> {
+        let value = self.proxy_aware_get_property(module, object_id, key, receiver, 0)?;
+        match value {
+            Value::Undefined | Value::Null => Ok(None),
+            value if value.is_callable() => Ok(Some(value)),
+            other => Err(InterpreterError::TypeError {
+                expected: format!("callable property '{key}' or undefined"),
+                got: other.type_name().to_string(),
+            }),
+        }
+    }
+
+    fn iterator_result_property(
+        &mut self,
+        module: &Ir3Module,
+        result: &Value,
+        key: &str,
+    ) -> Result<Value, InterpreterError> {
+        let Value::Object(result_id) = result else {
+            return Err(InterpreterError::TypeError {
+                expected: "iterator result object".to_string(),
+                got: result.type_name().to_string(),
+            });
+        };
+        self.proxy_aware_get_property(Some(module), *result_id, key, result.clone(), 0)
+    }
+
+    fn iterator_result_done(
+        &mut self,
+        module: &Ir3Module,
+        result: &Value,
+    ) -> Result<bool, InterpreterError> {
+        Ok(self
+            .iterator_result_property(module, result, "done")?
+            .is_truthy())
+    }
+
+    fn iterator_result_value(
+        &mut self,
+        module: &Ir3Module,
+        result: &Value,
+    ) -> Result<Value, InterpreterError> {
+        self.iterator_result_property(module, result, "value")
+    }
+
+    fn init_for_of_iterator(
+        &mut self,
+        module: Option<&Ir3Module>,
+        value: Value,
+    ) -> Result<Value, InterpreterError> {
         if matches!(value, Value::Iterator(_)) {
             return Ok(value);
         }
 
-        let values = self.collect_for_of_values(&value)?;
+        let init = self.prepare_for_of_state(module, &value)?;
         let handle = self.alloc_iterator(RuntimeIteratorState::ForOf(RuntimeForOfState {
-            values,
+            values: init.values,
             next_index: 0,
+            iterator_object: init.iterator_object,
+            next_method: init.next_method,
             done: false,
             closed: false,
+            return_called: false,
         }))?;
         Ok(Value::Iterator(handle))
     }
 
     fn advance_for_of_iterator(
         &mut self,
+        module: Option<&Ir3Module>,
         iterator: Value,
     ) -> Result<Option<Value>, InterpreterError> {
         let handle = self.expect_iterator_handle(iterator)?;
-        match self.iterator_state_mut(handle)? {
+        let custom_step = match self.iterator_state_mut(handle)? {
             RuntimeIteratorState::ForOf(state) => {
                 if state.closed || state.done {
                     state.done = true;
                     return Ok(None);
                 }
-                if let Some(value) = state.values.get(state.next_index).cloned() {
+                if let Some(next_method) = state.next_method.clone() {
+                    let iterator_object =
+                        state
+                            .iterator_object
+                            .ok_or_else(|| InterpreterError::TypeError {
+                                expected: "custom for..of iterator object".to_string(),
+                                got: "missing iterator object".to_string(),
+                            })?;
+                    Some((Value::Object(iterator_object), next_method))
+                } else if let Some(value) = state.values.get(state.next_index).cloned() {
                     state.next_index += 1;
-                    Ok(Some(value))
+                    return Ok(Some(value));
                 } else {
                     state.done = true;
-                    Ok(None)
+                    return Ok(None);
                 }
             }
-            RuntimeIteratorState::ForIn(_) => Err(InterpreterError::TypeError {
-                expected: "for..of iterator".to_string(),
-                got: "for..in iterator".to_string(),
-            }),
+            RuntimeIteratorState::ForIn(_) => {
+                return Err(InterpreterError::TypeError {
+                    expected: "for..of iterator".to_string(),
+                    got: "for..in iterator".to_string(),
+                });
+            }
+        };
+
+        let Some((receiver, next_method)) = custom_step else {
+            return Ok(None);
+        };
+        let module = module.ok_or_else(|| InterpreterError::TypeError {
+            expected: "module-backed iterator.next dispatch".to_string(),
+            got: "missing module context".to_string(),
+        })?;
+        let result =
+            self.invoke_inline_method_call(Some(module), next_method, receiver, Vec::new())?;
+        if self.iterator_result_done(module, &result)? {
+            if let RuntimeIteratorState::ForOf(state) = self.iterator_state_mut(handle)? {
+                state.done = true;
+            }
+            Ok(None)
+        } else {
+            Ok(Some(self.iterator_result_value(module, &result)?))
         }
     }
 
@@ -6406,19 +6622,53 @@ impl InterpreterCore {
 
     fn close_iterator(
         &mut self,
+        module: &Ir3Module,
         iterator: Value,
         _reason: IteratorCloseReason,
     ) -> Result<(), InterpreterError> {
         let handle = self.expect_iterator_handle(iterator)?;
-        match self.iterator_state_mut(handle)? {
+        let return_target = match self.iterator_state_mut(handle)? {
             RuntimeIteratorState::ForIn(state) => {
                 state.closed = true;
                 state.done = true;
+                None
             }
             RuntimeIteratorState::ForOf(state) => {
+                let return_target = if state.return_called {
+                    None
+                } else {
+                    state.iterator_object
+                };
                 state.closed = true;
                 state.done = true;
+                return_target
             }
+        };
+
+        let Some(iterator_object) = return_target else {
+            return Ok(());
+        };
+        let receiver = Value::Object(iterator_object);
+        let Some(return_method) = self.optional_callable_property(
+            Some(module),
+            iterator_object,
+            "return",
+            receiver.clone(),
+        )?
+        else {
+            return Ok(());
+        };
+
+        if let RuntimeIteratorState::ForOf(state) = self.iterator_state_mut(handle)? {
+            state.return_called = true;
+        }
+        let result =
+            self.invoke_inline_method_call(Some(module), return_method, receiver, Vec::new())?;
+        if !matches!(result, Value::Object(_)) {
+            return Err(InterpreterError::TypeError {
+                expected: "object returned by iterator.return".to_string(),
+                got: result.type_name().to_string(),
+            });
         }
         Ok(())
     }
@@ -6457,7 +6707,7 @@ impl InterpreterCore {
 
     /// Walk the prototype chain to find a property value.
     fn prototype_chain_get(
-        &self,
+        &mut self,
         object_id: ObjectId,
         key: &str,
     ) -> Result<Value, InterpreterError> {
@@ -6467,6 +6717,13 @@ impl InterpreterCore {
 
         while let Some(id) = current {
             if depth >= MAX_PROTOTYPE_CHAIN_DEPTH || !visited.insert(id) {
+                // Capture property resolution decision for deterministic replay
+                self.nondeterminism_trace.capture(
+                    NondeterminismSource::PropertyResolution,
+                    format!("chain_limit_reached:key={},depth={}", key, depth).into_bytes(),
+                    self.instructions_executed,
+                    "baseline_interpreter",
+                );
                 return Ok(Value::Undefined);
             }
             let object = self
@@ -6474,12 +6731,30 @@ impl InterpreterCore {
                 .get(id.0 as usize)
                 .ok_or(InterpreterError::ObjectNotFound { id: id.0 })?;
             if let Some(val) = object.properties.get(key) {
+                // Capture property resolution success for deterministic replay
+                self.nondeterminism_trace.capture(
+                    NondeterminismSource::PropertyResolution,
+                    format!(
+                        "property_found:key={},object_id={},depth={}",
+                        key, id.0, depth
+                    )
+                    .into_bytes(),
+                    self.instructions_executed,
+                    "baseline_interpreter",
+                );
                 return Ok(val.clone());
             }
             current = object.prototype;
             depth += 1;
         }
 
+        // Capture property resolution failure for deterministic replay
+        self.nondeterminism_trace.capture(
+            NondeterminismSource::PropertyResolution,
+            format!("property_not_found:key={},final_depth={}", key, depth).into_bytes(),
+            self.instructions_executed,
+            "baseline_interpreter",
+        );
         Ok(Value::Undefined)
     }
 
@@ -8095,8 +8370,11 @@ impl InterpreterCore {
         let handle = self.alloc_iterator(RuntimeIteratorState::ForOf(RuntimeForOfState {
             values,
             next_index: 0,
+            iterator_object: None,
+            next_method: None,
             done: false,
             closed: false,
+            return_called: false,
         }))?;
         Ok(Value::Iterator(handle))
     }
@@ -17261,7 +17539,14 @@ impl InterpreterCore {
                     .iter()
                     .map(Self::estimate_value_bytes)
                     .sum::<u64>();
-                MEMORY_ESTIMATE_ITERATOR_BASE_BYTES.saturating_add(values)
+                let next_method = state
+                    .next_method
+                    .as_ref()
+                    .map(Self::estimate_value_bytes)
+                    .unwrap_or(0);
+                MEMORY_ESTIMATE_ITERATOR_BASE_BYTES
+                    .saturating_add(values)
+                    .saturating_add(next_method)
             }
         }
     }
@@ -18248,6 +18533,89 @@ mod active_builtin_regressions {
             function_table: Vec::new(),
             specialization: None,
             required_capabilities: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn iterator_close_calls_return_method_on_runtime_iterator() {
+        let mut module = halted_test_module();
+        module.constant_pool = vec!["closed".to_string(), "done".to_string()];
+        module.instructions = vec![
+            Ir3Instruction::LoadThis { dst: 0 },
+            Ir3Instruction::LoadStr {
+                dst: 1,
+                pool_index: 0,
+            },
+            Ir3Instruction::LoadBool {
+                dst: 2,
+                value: true,
+            },
+            Ir3Instruction::SetProperty {
+                obj: 0,
+                key: 1,
+                val: 2,
+            },
+            Ir3Instruction::NewObject { dst: 3 },
+            Ir3Instruction::LoadStr {
+                dst: 4,
+                pool_index: 1,
+            },
+            Ir3Instruction::LoadBool {
+                dst: 5,
+                value: true,
+            },
+            Ir3Instruction::SetProperty {
+                obj: 3,
+                key: 4,
+                val: 5,
+            },
+            Ir3Instruction::Return { value: 3 },
+        ];
+        module.function_table = vec![crate::ir_contract::Ir3FunctionDesc {
+            entry: 0,
+            arity: 0,
+            frame_size: 6,
+            name: Some("iterator_return".to_string()),
+            is_generator: false,
+        }];
+
+        let mut core = test_core();
+        let iterator_object = core
+            .alloc_object_with_prototype(None)
+            .expect("test iterator object allocation should succeed");
+        core.set_object_property(iterator_object, "return".to_string(), Value::Function(0))
+            .expect("test iterator return method write should succeed");
+        let handle = core
+            .alloc_iterator(RuntimeIteratorState::ForOf(RuntimeForOfState {
+                values: vec![Value::Int(1)],
+                next_index: 0,
+                iterator_object: Some(iterator_object),
+                next_method: None,
+                done: false,
+                closed: false,
+                return_called: false,
+            }))
+            .expect("test iterator allocation should succeed");
+
+        core.close_iterator(&module, Value::Iterator(handle), IteratorCloseReason::Break)
+            .expect("IteratorClose should dispatch iterator.return");
+
+        let iterator_properties = &core
+            .heap
+            .get(iterator_object.0 as usize)
+            .expect("iterator object should remain allocated")
+            .properties;
+        assert_eq!(iterator_properties.get("closed"), Some(&Value::Bool(true)));
+        match core
+            .iterator_state_mut(handle)
+            .expect("runtime iterator should remain registered")
+        {
+            RuntimeIteratorState::ForOf(state) => {
+                assert!(state.closed);
+                assert!(state.done);
+                assert!(state.return_called);
+            }
+            RuntimeIteratorState::ForIn(_) => panic!("expected for..of iterator state"),
         }
     }
 
@@ -21168,13 +21536,13 @@ mod tests {
             .expect("serde deserialization should succeed");
         assert!(matches!(iterator, Value::Iterator(_)));
         assert_eq!(
-            core.init_for_of_iterator(iterator.clone())
+            core.init_for_of_iterator(None, iterator.clone())
                 .expect("serde deserialization should succeed"),
             iterator
         );
 
         let first = core
-            .advance_for_of_iterator(iterator.clone())
+            .advance_for_of_iterator(None, iterator.clone())
             .expect("serde deserialization should succeed");
         assert_entry_pair(
             &core,
@@ -21183,7 +21551,7 @@ mod tests {
             Value::Str("first".to_string()),
         );
         let second = core
-            .advance_for_of_iterator(iterator.clone())
+            .advance_for_of_iterator(None, iterator.clone())
             .expect("serde deserialization should succeed");
         assert_entry_pair(
             &core,
@@ -21192,7 +21560,7 @@ mod tests {
             Value::Undefined,
         );
         let third = core
-            .advance_for_of_iterator(iterator.clone())
+            .advance_for_of_iterator(None, iterator.clone())
             .expect("serde deserialization should succeed");
         assert_entry_pair(
             &core,
@@ -21201,9 +21569,76 @@ mod tests {
             Value::Str("third".to_string()),
         );
         assert_eq!(
-            core.advance_for_of_iterator(iterator)
+            core.advance_for_of_iterator(None, iterator)
                 .expect("serde deserialization should succeed"),
             None
+        );
+    }
+
+    #[test]
+    fn for_of_init_prefers_custom_iterator_over_array_like_properties() {
+        let mut module = test_module_with_functions(
+            vec![
+                Ir3Instruction::LoadThis { dst: 0 },
+                Ir3Instruction::Return { value: 0 },
+                Ir3Instruction::LoadThis { dst: 0 },
+                Ir3Instruction::LoadStr {
+                    dst: 1,
+                    pool_index: 0,
+                },
+                Ir3Instruction::GetProperty {
+                    obj: 0,
+                    key: 1,
+                    dst: 2,
+                },
+                Ir3Instruction::Return { value: 2 },
+            ],
+            vec![
+                Ir3FunctionDesc {
+                    entry: 0,
+                    arity: 0,
+                    frame_size: 1,
+                    name: Some("custom_iterator".to_string()),
+                    is_generator: false,
+                },
+                Ir3FunctionDesc {
+                    entry: 2,
+                    arity: 0,
+                    frame_size: 3,
+                    name: Some("custom_next".to_string()),
+                    is_generator: false,
+                },
+            ],
+        );
+        module.constant_pool.push("result".to_string());
+
+        let mut core = quickjs_test_core();
+        let iterable_id = core
+            .alloc_object_with_prototype(None)
+            .expect("custom iterable allocation should succeed");
+        let result_id = core
+            .alloc_object_with_prototype(None)
+            .expect("iterator result allocation should succeed");
+        core.set_object_property(result_id, "done".to_string(), Value::Bool(false))
+            .expect("iterator result done write should succeed");
+        core.set_object_property(result_id, "value".to_string(), Value::Int(42))
+            .expect("iterator result value write should succeed");
+        core.set_object_property(iterable_id, "@@iterator".to_string(), Value::Function(0))
+            .expect("custom iterator method write should succeed");
+        core.set_object_property(iterable_id, "next".to_string(), Value::Function(1))
+            .expect("custom next method write should succeed");
+        core.set_object_property(iterable_id, "result".to_string(), Value::Object(result_id))
+            .expect("custom next result write should succeed");
+        core.set_object_property(iterable_id, "0".to_string(), Value::Int(99))
+            .expect("array-like fallback sentinel write should succeed");
+
+        let iterator = core
+            .init_for_of_iterator(Some(&module), Value::Object(iterable_id))
+            .expect("custom @@iterator should initialize for..of");
+        assert_eq!(
+            core.advance_for_of_iterator(Some(&module), iterator)
+                .expect("custom iterator.next should advance"),
+            Some(Value::Int(42))
         );
     }
 
@@ -21236,42 +21671,42 @@ mod tests {
             .expect("serde deserialization should succeed");
 
         assert_eq!(
-            core.advance_for_of_iterator(keys.clone())
+            core.advance_for_of_iterator(None, keys.clone())
                 .expect("serde deserialization should succeed"),
             Some(Value::Int(0))
         );
         assert_eq!(
-            core.advance_for_of_iterator(keys.clone())
+            core.advance_for_of_iterator(None, keys.clone())
                 .expect("serde deserialization should succeed"),
             Some(Value::Int(1))
         );
         assert_eq!(
-            core.advance_for_of_iterator(keys.clone())
+            core.advance_for_of_iterator(None, keys.clone())
                 .expect("serde deserialization should succeed"),
             Some(Value::Int(2))
         );
         assert_eq!(
-            core.advance_for_of_iterator(keys)
+            core.advance_for_of_iterator(None, keys)
                 .expect("serde deserialization should succeed"),
             None
         );
         assert_eq!(
-            core.advance_for_of_iterator(values.clone())
+            core.advance_for_of_iterator(None, values.clone())
                 .expect("serde deserialization should succeed"),
             Some(Value::Str("first".to_string()))
         );
         assert_eq!(
-            core.advance_for_of_iterator(values.clone())
+            core.advance_for_of_iterator(None, values.clone())
                 .expect("serde deserialization should succeed"),
             Some(Value::Undefined)
         );
         assert_eq!(
-            core.advance_for_of_iterator(values.clone())
+            core.advance_for_of_iterator(None, values.clone())
                 .expect("serde deserialization should succeed"),
             Some(Value::Str("third".to_string()))
         );
         assert_eq!(
-            core.advance_for_of_iterator(values)
+            core.advance_for_of_iterator(None, values)
                 .expect("serde deserialization should succeed"),
             None
         );
@@ -21366,7 +21801,7 @@ mod tests {
         assert_iterator_result(&core, first_result, false, Value::Int(10));
 
         assert_eq!(
-            core.advance_for_of_iterator(iterator.clone())
+            core.advance_for_of_iterator(None, iterator.clone())
                 .expect("serde deserialization should succeed"),
             Some(Value::Int(20))
         );
@@ -21375,7 +21810,7 @@ mod tests {
         assert_iterator_result(&core, third_result, false, Value::Int(30));
 
         assert_eq!(
-            core.advance_for_of_iterator(iterator)
+            core.advance_for_of_iterator(None, iterator)
                 .expect("serde deserialization should succeed"),
             None
         );
@@ -21435,7 +21870,8 @@ mod tests {
             )
             .expect("serde deserialization should succeed");
 
-        core.close_iterator(iterator.clone(), IteratorCloseReason::Break)
+        let module = test_module(Vec::new());
+        core.close_iterator(&module, iterator.clone(), IteratorCloseReason::Break)
             .expect("serde deserialization should succeed");
 
         let done_result = iterator_next_via_property(&mut core, iterator.clone());

@@ -18,6 +18,8 @@ This spec captures observable ECMAScript and runtime-facing semantics harvested 
 
 This spec does not authorize donor architecture mirroring. It is strictly a semantic contract for native Rust implementations.
 
+Security-epoch semantics are FrankenEngine runtime-security semantics, not donor-engine behavior. The current executable contract is fail-closed validation of explicit epoch metadata against a caller-supplied current epoch or persisted frontier. A local `EpochTracker` instance is not, by itself, a durable cross-restart authority; any claim of restart-monotonic epoch enforcement must cite the persistent checkpoint/frontier store that supplies the epoch floor at startup.
+
 ## 2. Semantic Entry Schema (Machine-Readable Contract)
 
 Each semantic requirement is represented by a canonical entry. Entries must be serializable to JSON/YAML for conformance tooling.
@@ -71,6 +73,7 @@ The following semantic domains are mandatory for compatibility tracking.
 | numeric-and-bigint | `NaN`, `-0`, bigint conversion and overflow-visible semantics | medium |
 | json-and-serialization | `JSON.stringify/parse` edge behavior and ordering constraints where mandated | medium |
 | regexp-and-strings | unicode/escape semantics and match group behavior | medium |
+| runtime-trust-epochs | explicit epoch metadata is validated fail-closed against an authoritative current epoch/frontier | high |
 
 ## 4. Compatibility-Critical Semantic Entries
 
@@ -115,6 +118,10 @@ Each entry below is binding for conformance and lockstep gates.
 - `SEM-JSN-004`: unsupported JSON extension surfaces (`reviver`, `replacer`, `space`, unsupported numeric forms) are explicit and fail closed rather than being silently approximated.
 - `SEM-REG-001`: regexp unicode class/match group behavior aligns with test262 coverage target.
 
+### Runtime trust-state semantics
+- `SEM-SEC-001`: signed runtime artifacts carrying epoch metadata are accepted only when the verifier supplies an authoritative current epoch/frontier and the artifact's validity window contains that epoch; future, expired, inverted-window, or regressed-frontier cases fail closed.
+- `SEM-SEC-002`: cross-restart monotonic epoch claims require a durable persisted frontier/checkpoint source. In-process trackers may stamp and validate metadata but must not be treated as evidence that the runtime survives restart rollback without that persisted frontier.
+
 Compound JSON representation and unsupported-edge policy are defined in
 [`docs/RGC_COMPOUND_JSON_RUNTIME_CONTRACT_V1.md`](./RGC_COMPOUND_JSON_RUNTIME_CONTRACT_V1.md).
 
@@ -142,6 +149,10 @@ Minimum edge-case families:
 6. Serialization edge behavior.
 - non-enumerables, sparse arrays, duplicate object keys, replacer behavior,
   top-level unsupported returns, cycle handling, and key ordering constraints.
+
+7. Security-epoch rollback boundaries.
+- future-epoch artifacts, expired windows, inverted windows, stale persisted
+  frontiers, and restarts without an authoritative epoch floor.
 
 ## 6. test262 And Lockstep Mapping Rules
 
